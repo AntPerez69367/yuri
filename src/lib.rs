@@ -17,6 +17,8 @@ pub mod network;
 pub mod database;
 /// Server implementations (login, char, map)
 pub mod servers;
+/// Session management (replaces session.c)
+pub mod session;
 
 // ============================================
 // FFI Layer (Temporary - for C interop)
