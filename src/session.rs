@@ -6,8 +6,10 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::time::Instant;
-use tokio::net::TcpStream;
+use std::time::{Duration, Instant};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::runtime::Runtime;
 use tokio::sync::{Mutex, RwLock};
 
 /// Buffer size constants
@@ -163,6 +165,16 @@ pub static SESSION_MANAGER: OnceLock<SessionManager> = OnceLock::new();
 /// Get the global session manager
 pub fn get_session_manager() -> &'static SessionManager {
     SESSION_MANAGER.get_or_init(SessionManager::new)
+}
+
+/// Global Tokio runtime
+pub static RUNTIME: OnceLock<Runtime> = OnceLock::new();
+
+/// Initialize the Tokio runtime
+pub fn init_runtime() -> &'static Runtime {
+    RUNTIME.get_or_init(|| {
+        Runtime::new().expect("Failed to create Tokio runtime")
+    })
 }
 
 /// Session state for a single client connection
@@ -440,6 +452,218 @@ impl Session {
 // by C code. All other fields (Vec, Option, primitives) are already Send/Sync.
 unsafe impl Send for Session {}
 unsafe impl Sync for Session {}
+
+/// Run the async game server
+pub async fn run_async_server(port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    tracing::info!("[rust_server] Starting on port {}", port);
+
+    // Initialize session manager
+    get_session_manager();
+
+    // Bind to port
+    let listener = TcpListener::bind(("0.0.0.0", port)).await?;
+    tracing::info!("[rust_server] Listening on port {}", port);
+
+    // Accept loop
+    loop {
+        // Check for shutdown signal
+        if crate::ffi::core::rust_should_shutdown() != 0 {
+            tracing::info!("[rust_server] Shutdown requested");
+            break;
+        }
+
+        // Accept connection with timeout
+        match tokio::time::timeout(Duration::from_millis(100), listener.accept()).await {
+            Ok(Ok((socket, addr))) => {
+                tracing::debug!("[rust_server] New connection from {}", addr);
+                // Spawn handler task (will implement in next task)
+                tokio::spawn(handle_connection(socket, addr));
+            }
+            Ok(Err(e)) => {
+                tracing::error!("[rust_server] Accept error: {}", e);
+            }
+            Err(_) => {
+                // Timeout - check shutdown flag again
+                continue;
+            }
+        }
+    }
+
+    // Graceful shutdown
+    shutdown_all_sessions().await;
+
+    Ok(())
+}
+
+/// Shutdown all active sessions
+async fn shutdown_all_sessions() {
+    tracing::info!("[rust_server] Shutting down all sessions");
+
+    let manager = get_session_manager();
+    let sessions = manager.sessions.read().await;
+
+    for (fd, session_arc) in sessions.iter() {
+        let session = session_arc.lock().await;
+
+        // Call shutdown callback if set
+        if let Some(shutdown_cb) = session.callbacks.shutdown {
+            tracing::debug!("[rust_server] Calling shutdown callback for fd={}", fd);
+            drop(session); // Release lock before C call
+            unsafe { shutdown_cb(*fd) };
+        }
+    }
+}
+
+/// Handle a single client connection
+async fn handle_connection(socket: TcpStream, addr: SocketAddr) {
+    // TODO: Add throttle check in later task
+
+    // Create session
+    let manager = get_session_manager();
+    let fd = match manager.allocate_fd().await {
+        Ok(fd) => fd,
+        Err(e) => {
+            tracing::error!("[session] Failed to allocate FD: {}", e);
+            return;
+        }
+    };
+
+    let mut session = Session::new(fd);
+    session.socket = Some(Arc::new(Mutex::new(socket)));
+    session.client_addr = Some(addr);
+
+    // Apply default callbacks
+    session.callbacks = manager.get_default_callbacks().await;
+
+    let session_arc = Arc::new(Mutex::new(session));
+    if let Err(e) = manager.insert_session(fd, session_arc.clone()).await {
+        tracing::error!("[session] Failed to insert session: {}", e);
+        return;
+    }
+
+    tracing::info!("[session] New connection: fd={}, addr={}", fd, addr);
+
+    // Main session loop
+    if let Err(e) = session_loop(fd, session_arc.clone()).await {
+        tracing::error!("[session] fd={} error: {}", fd, e);
+    }
+
+    // Cleanup
+    manager.remove_session(fd).await;
+    tracing::info!("[session] Closed: fd={}", fd);
+}
+
+/// Main event loop for a single session
+async fn session_loop(
+    fd: i32,
+    session_arc: Arc<Mutex<Session>>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut read_buf = vec![0u8; 4096];
+    let mut timeout_check = tokio::time::interval(Duration::from_secs(1));
+
+    loop {
+        let session = session_arc.lock().await;
+
+        // Check if session marked for closure
+        if session.eof != 0 {
+            tracing::debug!("[session] fd={} eof={}, closing", fd, session.eof);
+            break;
+        }
+
+        // Get socket (must exist)
+        let socket_arc = session
+            .socket
+            .as_ref()
+            .ok_or("Socket not initialized")?
+            .clone();
+
+        drop(session); // Release session lock
+
+        tokio::select! {
+            // Read from socket
+            result = async {
+                let mut socket = socket_arc.lock().await;
+                socket.read(&mut read_buf).await
+            } => {
+                let mut session = session_arc.lock().await;
+
+                match result {
+                    Ok(0) => {
+                        // Connection closed
+                        tracing::debug!("[session] fd={} connection closed by peer", fd);
+                        session.eof = 4;
+                        break;
+                    }
+                    Ok(n) => {
+                        // Append to read buffer
+                        session.rdata.extend_from_slice(&read_buf[..n]);
+                        session.rdata_size += n;
+                        session.last_activity = Instant::now();
+
+                        tracing::trace!("[session] fd={} read {} bytes", fd, n);
+
+                        // Call parse callback
+                        if let Some(parse_cb) = session.callbacks.parse {
+                            drop(session);
+
+                            tracing::trace!("[session] fd={} calling parse callback", fd);
+                            unsafe { parse_cb(fd) };
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("[session] fd={} read error: {}", fd, e);
+                        session.eof = 3;
+                        break;
+                    }
+                }
+            }
+
+            // Write to socket (if data pending)
+            _ = async {
+                let session = session_arc.lock().await;
+
+                if session.wdata_size > 0 {
+                    let data_to_send = session.wdata[..session.wdata_size].to_vec();
+                    drop(session);
+
+                    let mut socket = socket_arc.lock().await;
+                    match socket.write_all(&data_to_send).await {
+                        Ok(_) => {
+                            let mut session = session_arc.lock().await;
+                            tracing::trace!("[session] fd={} sent {} bytes", fd, data_to_send.len());
+                            session.wdata.clear();
+                            session.wdata_size = 0;
+                        }
+                        Err(e) => {
+                            let mut session = session_arc.lock().await;
+                            tracing::error!("[session] fd={} write error: {}", fd, e);
+                            session.eof = 2;
+                        }
+                    }
+                }
+            } => {}
+
+            // Timeout check
+            _ = timeout_check.tick() => {
+                let session = session_arc.lock().await;
+
+                let idle = session.last_activity.elapsed();
+                if idle > Duration::from_secs(60) {
+                    tracing::warn!("[session] fd={} timeout (idle {}s)", fd, idle.as_secs());
+
+                    // Call timeout callback
+                    if let Some(timeout_cb) = session.callbacks.timeout {
+                        drop(session);
+
+                        unsafe { timeout_cb(fd) };
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
 
 #[cfg(test)]
 mod tests {
