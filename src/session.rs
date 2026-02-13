@@ -467,6 +467,7 @@ pub async fn run_async_server(port: u16) -> Result<(), Box<dyn std::error::Error
     // Accept loop
     loop {
         // Check for shutdown signal
+        #[cfg(not(test))]
         if crate::ffi::core::rust_should_shutdown() != 0 {
             tracing::info!("[rust_server] Shutdown requested");
             break;
