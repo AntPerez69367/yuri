@@ -151,7 +151,12 @@ int do_init(int argc, char **argv) {
     }
   }
 
-  rust_config_read(CONF_FILE);
+  if (rust_config_read(CONF_FILE) != 0) {
+    fprintf(stderr, "[login] [error] Failed to load configuration from %s\n", CONF_FILE);
+    fprintf(stderr, "[login] [error] Aborting startup - fix configuration and retry\n");
+    exit(EXIT_FAILURE);
+  }
+
   sql_handle = Sql_Malloc();
   if (sql_handle == NULL) {
     Sql_ShowDebug(sql_handle);

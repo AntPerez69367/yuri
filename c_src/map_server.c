@@ -21,6 +21,7 @@
 #include "config.h"
 #include "core.h"
 #include "creation_db.h"
+#include "gm_command.h"
 #include "db.h"
 #include "db_mysql.h"
 #include "item_db.h"
@@ -1726,7 +1727,13 @@ int do_init(int argc, char** argv) {
     }
   }
 
-  rust_config_read(CONF_FILE);
+  // Load configuration - fail fast if config is invalid
+  if (rust_config_read(CONF_FILE) != 0) {
+    fprintf(stderr, "[map] [error] Failed to load configuration from %s\n", CONF_FILE);
+    fprintf(stderr, "[map] [error] Aborting startup - fix configuration and retry\n");
+    exit(EXIT_FAILURE);
+  }
+
   lang_read(LANG_FILE);
   set_termfunc(do_term);
   // CALLOC(userlist,struct userlist_data,1);
@@ -2468,7 +2475,12 @@ int map_reset_timer(int v1, int v2) {
 
     // Flush the stupid pipe for saving everyones stupid character
 
-    server_shutdown = 1;
+    // Request shutdown through Rust (replaces: server_shutdown = 1)
+    rust_request_shutdown();
+
+    // Reset static variables so next shutdown works correctly
+    reset = 0;
+    diff = 0;
 
     // EnableReset=1;
     // exit(0);
