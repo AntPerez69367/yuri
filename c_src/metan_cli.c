@@ -1,3 +1,4 @@
+#include "yuri.h"
 #include "metan_cli.h"
 
 #include <stdio.h>
@@ -207,7 +208,7 @@ int main(int argc, char **argv) {
   int ii_count = 0;
   int a, c;
 
-  config_read("conf/server.yaml");
+  rust_config_read("conf/server.yaml");
   // sql_init();
   sql_handle = Sql_Malloc();
   if (sql_handle == NULL) {

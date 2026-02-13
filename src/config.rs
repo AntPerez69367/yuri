@@ -98,7 +98,7 @@ pub struct ServerConfig {
     // ============================================
     // Encryption & Security
     // ============================================
-    /// XOR encryption key (9 chars max)
+    /// XOR encryption key (max 9 chars)
     #[serde(default)]
     pub xor_key: String,
 
@@ -284,11 +284,11 @@ impl ServerConfig {
             TOWN_MAX
         );
 
-        // Check XOR key length (9 chars max including null terminator in C)
+        // Check XOR key length (max 9 chars + null terminator in C)
         if !self.xor_key.is_empty() {
             anyhow::ensure!(
-                self.xor_key.len() <= 8,
-                "xor_key too long: {} chars (max 8)",
+                self.xor_key.len() <= 9,
+                "xor_key too long: {} chars (max 9)",
                 self.xor_key.len()
             );
         }

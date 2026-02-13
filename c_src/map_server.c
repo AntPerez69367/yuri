@@ -1,3 +1,5 @@
+#include "yuri.h"
+
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -1724,7 +1726,7 @@ int do_init(int argc, char** argv) {
     }
   }
 
-  config_read(CONF_FILE);
+  rust_config_read(CONF_FILE);
   lang_read(LANG_FILE);
   set_termfunc(do_term);
   // CALLOC(userlist,struct userlist_data,1);

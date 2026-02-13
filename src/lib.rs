@@ -9,6 +9,8 @@
 
 /// Server configuration (replaces config.c)
 pub mod config;
+/// Core utilities and server lifecycle (replaces core.c)
+pub mod core;
 /// Network utilities (encryption, session management)
 pub mod network;
 /// Database modules (item_db, class_db, etc.)

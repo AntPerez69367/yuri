@@ -12,7 +12,7 @@ cmake:
 	@cmake -H. -Bbuild
 common: deps
 	@cmake --build build --target common --parallel --
-deps: cmake libyuri
+deps: cmake libyuri yuri.h
 	@cmake --build build --target deps --parallel --
 metan_cli: common
 	@cmake --build build --target metan_cli --parallel --

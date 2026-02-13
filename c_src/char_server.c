@@ -1,3 +1,4 @@
+#include "yuri.h"
 #include "char_server.h"
 
 #include <arpa/inet.h>
@@ -150,7 +151,7 @@ int do_init(int argc, char **argv) {
     }
   }
 
-  config_read(CONF_FILE);
+  rust_config_read(CONF_FILE);
   set_termfunc(do_term);
 
   printf("[char] [started] Char Server Started.\n");

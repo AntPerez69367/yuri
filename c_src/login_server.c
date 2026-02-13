@@ -1,3 +1,4 @@
+#include "yuri.h"
 #include "login_server.h"
 
 #include <ctype.h>
@@ -150,7 +151,7 @@ int do_init(int argc, char **argv) {
     }
   }
 
-  config_read(CONF_FILE);
+  rust_config_read(CONF_FILE);
   sql_handle = Sql_Malloc();
   if (sql_handle == NULL) {
     Sql_ShowDebug(sql_handle);
