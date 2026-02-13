@@ -56,10 +56,19 @@ Mkfile.old
 dkms.conf
 
 *.lua
-
-
+*.txt
+*.bkup
+*.bak
+*.png
 /build
 
 # Added by cargo
 
 /target
+
+# Logs
+logs/
+*.log
+*_pid.txt
+.env
+.claude/

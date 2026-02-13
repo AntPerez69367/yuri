@@ -7,10 +7,16 @@ edition = "2018"
 [lib]
 crate-type = ["staticlib"] 
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-toml = "0.5"
-md-5 = "0.9.1"
-hex = "0.4.2"
-libc = "0.2.80"
+toml = "0.9.8"
+md-5 = "0.10.6"
+hex = "0.4.3"
+libc = "0.2.181"
+
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9.34-deprecated"
+anyhow = "1.0"
+
+# For database migrations
+sqlx = { version = "0.8", features = ["runtime-tokio", "mysql", "macros", "migrate"] }
+tokio = { version = "1.43", features = ["full"] }
