@@ -209,11 +209,9 @@ int main(int argc, char **argv) {
   int a, c;
 
   if (rust_config_read("conf/server.yaml") != 0) {
-    fprintf(stderr, "[metan] [error] Failed to load configuration from conf/server.yaml\n");
-    fprintf(stderr, "[metan] [error] Aborting - fix configuration and retry\n");
+    printf("[metan] [config_error] conf/server.yaml\n");
     return EXIT_FAILURE;
   }
-
   // sql_init();
   sql_handle = Sql_Malloc();
   if (sql_handle == NULL) {

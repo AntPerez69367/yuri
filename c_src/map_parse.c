@@ -1,5 +1,6 @@
 #include "map_parse.h"
 
+#include "yuri.h"
 #include <arpa/inet.h>
 #include <math.h>
 #include <stdarg.h>
@@ -247,7 +248,7 @@ int clif_accept2(int fd, char *name, int name_len) {
     return 0;
   }
 
-  if (server_shutdown) {
+  if (rust_should_shutdown()) {
     session[fd]->eof = 1;
     return 0;
   }

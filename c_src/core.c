@@ -9,12 +9,13 @@
 #include <sys/time.h>
 #include <time.h>
 
+#include "yuri.h"
 #include "db.h"
 #include "session.h"
 #include "timer.h"
 
 extern int do_init(int, char **);
-static term_func_t term_func;
+// term_func is now managed by Rust - removed static variable
 
 // Main server entry point that runs the networking/logic loop for the
 // map/login/char servers
@@ -25,7 +26,8 @@ int main(int argc, char **argv) {
 
   gettimeofday(&start, NULL);
 
-  server_shutdown = 0;
+  // Initialize Rust core state (replaces server_shutdown = 0)
+  rust_core_init();
 
   do_socket();
 
@@ -56,38 +58,42 @@ int main(int argc, char **argv) {
     do_sendrecv();
     do_parsepacket();
 
-    if (server_shutdown == 1) {
+    // Check Rust shutdown flag instead of C global variable
+    if (rust_should_shutdown()) {
       run = false;
     }
 
     nanosleep((struct timespec[]){{0, SERVER_TICK_RATE_NS}}, NULL);
   }
 
+  // Cleanup Rust state before exiting normally
+  rust_core_cleanup();
+
   return 0;
 }
 
 void handle_signal(int signal) {
-  switch (signal) {
-    case SIGINT:
-    case SIGTERM:
-      printf("[core] [signal] signal=SIGTERM\n");
-      if (term_func != NULL) {
-        term_func();
+  // Delegate all signal handling to Rust
+  // Rust will call the termination callback if set and request shutdown
+  rust_handle_signal(signal);
+
+  // For SIGINT/SIGTERM, do cleanup and exit
+  // (SIGPIPE is ignored by Rust, so we won't reach here for it)
+  if (signal == SIGINT || signal == SIGTERM) {
+    timer_clear();
+    for (int i = 0; i < fd_max; i++) {
+      if (!session[i]) {
+        continue;
       }
-      timer_clear();
-      for (int i = 0; i < fd_max; i++) {
-        if (!session[i]) {
-          continue;
-        }
-        // close(i);
-        session_eof(i);
-      }
-      exit(0);
-      break;
-    case SIGPIPE:
-    default:
-      break;
+      // close(i);
+      session_eof(i);
+    }
+    rust_core_cleanup();  // Clean up Rust state before exit
+    exit(0);
   }
 }
 
-void set_termfunc(term_func_t new_term_func) { term_func = new_term_func; }
+void set_termfunc(term_func_t new_term_func) {
+  // Delegate to Rust - it will store the callback safely
+  rust_set_termfunc(new_term_func);
+}

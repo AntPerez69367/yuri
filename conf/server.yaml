@@ -48,8 +48,8 @@ server_id: 0
 # ============================================
 # Security & Encryption
 # ============================================
-# Client-server XOR encryption key (max 8 chars)
-xor_key: Urk#nI7ni
+# Client-server XOR encryption key (max 9 chars)
+xor_key: "Urk#nI7ni"
 
 # ============================================
 # Game Settings

@@ -29,8 +29,6 @@
  */
 #define SERVER_TICK_RATE_NS 10000000
 
-typedef struct Option_CTermFunc Option_CTermFunc;
-
 /**
  * A point in 3D space (map, x, y)
  *
@@ -181,8 +179,14 @@ void rust_core_cleanup(void);
  *
  * # Safety
  * The callback function pointer must be valid for the lifetime of the server
+ * Pass NULL to clear the termination function
+ *
+ * Note: We use Option<extern "C" fn()> directly here because:
+ * 1. In Rust, Option<fn> has guaranteed NULL representation (None = NULL pointer)
+ * 2. This is the standard way to represent nullable function pointers in FFI
+ * 3. cbindgen will generate the correct C signature
  */
-void rust_set_termfunc(struct Option_CTermFunc func);
+void rust_set_termfunc(void (*func)(void));
 
 /**
  * Handle a signal (called from C signal handlers)
@@ -190,12 +194,28 @@ void rust_set_termfunc(struct Option_CTermFunc func);
  *
  * # Safety
  * Should only be called from signal handlers
+ *
+ * # Async-signal-safety
+ * This function is async-signal-safe - it only sets an atomic flag.
+ * The actual shutdown processing happens in rust_should_shutdown()
+ * which is called from the main loop.
  */
 void rust_handle_signal(int signum);
 
 /**
+ * Request server shutdown
+ * This should be called by C code to trigger graceful shutdown
+ * Equivalent to the old `server_shutdown = 1` pattern
+ */
+void rust_request_shutdown(void);
+
+/**
  * Check if server shutdown has been requested
  * Returns 1 if shutdown requested, 0 otherwise
+ *
+ * This function also processes pending shutdown requests from signals.
+ * It performs the non-async-signal-safe work (logging, mutex locking,
+ * calling termination callbacks) that couldn't be done in the signal handler.
  */
 int rust_should_shutdown(void);
 
