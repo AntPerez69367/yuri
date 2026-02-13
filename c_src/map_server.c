@@ -43,12 +43,7 @@
 
 Sql* sql_handle = NULL;
 
-DBMap* item_db;
 DBMap* id_db;
-DBMap* class_db;
-DBMap* magic_db;
-DBMap* board_db;
-DBMap* clan_db;
 DBMap* mobsearch_db;
 DBMap* mobid_db = NULL;
 struct map_msg_data map_msg[MSG_MAX];
@@ -87,6 +82,8 @@ int map_n = 0;
 int oldHour;
 int oldMinute;
 int cronjobtimer;
+unsigned char *objectFlags;
+int old_time, cur_time, cur_year, cur_day, cur_season;
 
 #define BL_LIST_MAX 32768
 

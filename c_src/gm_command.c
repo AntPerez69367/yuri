@@ -131,8 +131,6 @@ struct {
                {command_reloadwarps, "reloadwarps", 99},
                {command_transfer, "transfer", 99}};
 
-struct userlist_data userlist;
-
 int command_report(USER *sd, char *line, lua_State *state) {
   USER *tsd = NULL;
   int x;

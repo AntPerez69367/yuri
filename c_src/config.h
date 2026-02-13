@@ -6,7 +6,7 @@
 // Maximum number of meta files
 #define META_MAX 20
 
-char xor_key[9];
+extern char xor_key[9];
 
 extern struct point start_pos;
 
