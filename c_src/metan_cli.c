@@ -1,3 +1,4 @@
+#include "yuri.h"
 #include "metan_cli.h"
 
 #include <stdio.h>
@@ -207,7 +208,12 @@ int main(int argc, char **argv) {
   int ii_count = 0;
   int a, c;
 
-  config_read("conf/server.yaml");
+  if (rust_config_read("conf/server.yaml") != 0) {
+    fprintf(stderr, "[metan] [error] Failed to load configuration from conf/server.yaml\n");
+    fprintf(stderr, "[metan] [error] Aborting - fix configuration and retry\n");
+    return EXIT_FAILURE;
+  }
+
   // sql_init();
   sql_handle = Sql_Malloc();
   if (sql_handle == NULL) {

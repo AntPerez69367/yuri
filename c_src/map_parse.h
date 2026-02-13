@@ -6,7 +6,7 @@
 #include "mmo.h"
 
 extern unsigned int groups[MAX_GROUPS][MAX_GROUP_MEMBERS];
-int val[32];
+extern int val[32];
 
 enum {
   ALL_CLIENT,
@@ -24,7 +24,7 @@ enum { LOOK_GET, LOOK_SEND };
 
 #define META_MAX 20
 
-char meta_file[META_MAX][256];
+extern char meta_file[META_MAX][256];
 
 int send_metalist(USER *);
 int clif_sendurl(USER *, int, const char *);

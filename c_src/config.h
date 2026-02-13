@@ -6,7 +6,7 @@
 // Maximum number of meta files
 #define META_MAX 20
 
-char xor_key[9];
+extern char xor_key[10];  // 9 chars + null terminator
 
 extern struct point start_pos;
 
@@ -54,4 +54,4 @@ extern char *lua_dir;
 extern char *maps_dir;
 extern char *meta_dir;
 
-int config_read(const char *cfg_file);
+// int config_read(const char *cfg_file);

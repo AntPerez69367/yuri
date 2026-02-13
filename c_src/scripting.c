@@ -39,6 +39,8 @@
 #include "strlib.h"
 #include "timer.h"
 
+lua_State *sl_gstate;
+
 #define sl_redtext(text) "\033[31;1m" text "\033[0m"
 #define sl_err(text) printf(sl_redtext("Lua error:") " %s\n", text)
 #define sl_err_print(state) sl_err(lua_tostring(state, -1))

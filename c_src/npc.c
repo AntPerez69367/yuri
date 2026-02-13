@@ -14,6 +14,8 @@
 #include "mob.h"
 #include "scripting.h"
 
+unsigned int npc_id;
+
 struct npc_src_list *npc_src_first = NULL;
 struct npc_src_list *npc_src_last = NULL;
 struct npc_src_list *warp_src_first = NULL;

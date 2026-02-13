@@ -1,17 +1,27 @@
-mod network;
+//! Yuri - MMORPG Server
+//!
+//! A Rust reimplementation of a legacy C MMORPG server.
+//! Migrating incrementally from C to Rust for memory safety and performance.
 
-use libc::c_char;
-use std::ffi::CStr;
-use std::ffi::CString;
+// ============================================
+// Core Modules (Pure Rust)
+// ============================================
 
-#[no_mangle]
-pub extern "C" fn rust_generate_hashvalues(name: *const c_char, mut buffer: *mut c_char) {
-    let c_name = unsafe {
-        assert!(!name.is_null());
+/// Server configuration (replaces config.c)
+pub mod config;
+/// Core utilities and server lifecycle (replaces core.c)
+pub mod core;
+/// Network utilities (encryption, session management)
+pub mod network;
+/// Database modules (item_db, class_db, etc.)
+pub mod database;
+/// Server implementations (login, char, map)
+pub mod servers;
 
-        CStr::from_ptr(name)
-    };
-    let hashed = network::crypt::generate_hash(c_name.to_str().unwrap());
-    let c_hash_ptr = CString::new(hashed).unwrap();
-    buffer = c_hash_ptr.into_raw();
-}
+// ============================================
+// FFI Layer (Temporary - for C interop)
+// ============================================
+
+/// C-compatible wrapper functions
+/// This entire module will be deleted once C code is fully ported
+mod ffi;

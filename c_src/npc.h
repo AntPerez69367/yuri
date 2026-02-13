@@ -10,7 +10,7 @@ struct npc_src_list {
 int npc_src_clear();
 int npc_src_add(const char *);
 int npc_init();
-unsigned int npc_id;
+extern unsigned int npc_id;
 unsigned int npc_get_new_npctempid();
 int npc_idlower(int);
 int npc_runtimers(int, int);

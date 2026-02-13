@@ -1,3 +1,4 @@
+#include "yuri.h"
 #include "char_server.h"
 
 #include <arpa/inet.h>
@@ -150,7 +151,12 @@ int do_init(int argc, char **argv) {
     }
   }
 
-  config_read(CONF_FILE);
+  if (rust_config_read(CONF_FILE) != 0) {
+    fprintf(stderr, "[char] [error] Failed to load configuration from %s\n", CONF_FILE);
+    fprintf(stderr, "[char] [error] Aborting startup - fix configuration and retry\n");
+    exit(EXIT_FAILURE);
+  }
+
   set_termfunc(do_term);
 
   printf("[char] [started] Char Server Started.\n");
