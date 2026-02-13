@@ -2,11 +2,13 @@
 //!
 //! This module replaces session.c with memory-safe async Rust implementation.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::time::Instant;
 use tokio::net::TcpStream;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 /// Buffer size constants
 pub const RFIFO_SIZE: usize = 16 * 1024;
@@ -14,6 +16,9 @@ pub const WFIFO_SIZE: usize = 16 * 1024;
 
 /// Maximum number of sessions
 pub const MAX_SESSIONS: usize = 1024;
+
+/// Maximum write buffer size (256KB)
+const MAX_WDATA_SIZE: usize = 256 * 1024;
 
 /// Error types for session operations
 #[derive(Debug, thiserror::Error)]
@@ -35,8 +40,24 @@ pub enum SessionError {
         available: usize,
     },
 
+    #[error("Write position overflow: fd={fd}, wdata_size={wdata_size}, pos={pos}")]
+    WritePositionOverflow {
+        fd: i32,
+        wdata_size: usize,
+        pos: usize,
+    },
+
+    #[error("Write buffer too large: fd={fd}, requested_pos={requested_pos}, max=262144")]
+    WriteBufferTooLarge { fd: i32, requested_pos: usize },
+
     #[error("Session not found: fd={0}")]
     SessionNotFound(i32),
+
+    #[error("Maximum sessions exceeded (limit: {MAX_SESSIONS})")]
+    MaxSessionsExceeded,
+
+    #[error("File descriptor overflow")]
+    FdOverflow,
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -51,6 +72,97 @@ pub struct SessionCallbacks {
     pub timeout: Option<unsafe extern "C" fn(i32) -> i32>,
     /// Called when session is being shut down
     pub shutdown: Option<unsafe extern "C" fn(i32) -> i32>,
+}
+
+/// Global session manager (thread-safe)
+pub struct SessionManager {
+    sessions: Arc<RwLock<HashMap<i32, Arc<Mutex<Session>>>>>,
+    next_fd: Arc<Mutex<i32>>,
+    default_callbacks: Arc<Mutex<SessionCallbacks>>,
+}
+
+impl SessionManager {
+    /// Create a new session manager
+    pub fn new() -> Self {
+        Self {
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            next_fd: Arc::new(Mutex::new(1)), // Start at 1 (0 reserved)
+            default_callbacks: Arc::new(Mutex::new(SessionCallbacks::default())),
+        }
+    }
+
+    /// Allocate a new file descriptor
+    pub async fn allocate_fd(&self) -> Result<i32, SessionError> {
+        let mut next = self.next_fd.lock().await;
+        let fd = *next;
+
+        // Check against MAX_SESSIONS before incrementing
+        if fd >= MAX_SESSIONS as i32 {
+            return Err(SessionError::MaxSessionsExceeded);
+        }
+
+        *next = next.checked_add(1)
+            .ok_or(SessionError::FdOverflow)?;
+
+        Ok(fd)
+    }
+
+    /// Insert a session into the manager
+    pub async fn insert_session(&self, fd: i32, session: Arc<Mutex<Session>>)
+        -> Result<(), SessionError> {
+        let mut sessions = self.sessions.write().await;
+
+        if sessions.len() >= MAX_SESSIONS {
+            return Err(SessionError::MaxSessionsExceeded);
+        }
+
+        sessions.insert(fd, session);
+        Ok(())
+    }
+
+    /// Get a session by file descriptor
+    pub async fn get_session(&self, fd: i32) -> Option<Arc<Mutex<Session>>> {
+        let sessions = self.sessions.read().await;
+        sessions.get(&fd).cloned()
+    }
+
+    /// Remove a session
+    pub async fn remove_session(&self, fd: i32) {
+        let mut sessions = self.sessions.write().await;
+        sessions.remove(&fd);
+    }
+
+    /// Get default callbacks
+    pub async fn get_default_callbacks(&self) -> SessionCallbacks {
+        let callbacks = self.default_callbacks.lock().await;
+        *callbacks
+    }
+
+    /// Set default callbacks
+    pub async fn set_default_callbacks(&self, callbacks: SessionCallbacks) {
+        let mut default = self.default_callbacks.lock().await;
+        *default = callbacks;
+    }
+
+    /// Get session count
+    pub async fn session_count(&self) -> usize {
+        let sessions = self.sessions.read().await;
+        sessions.len()
+    }
+}
+
+impl Default for SessionManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Global session manager instance
+pub static SESSION_MANAGER: OnceLock<SessionManager> = OnceLock::new();
+
+/// Get the global session manager
+pub fn get_session_manager() -> &'static SessionManager {
+    SESSION_MANAGER.get_or_init(SessionManager::new)
 }
 
 /// Session state for a single client connection
@@ -174,6 +286,152 @@ impl Session {
     pub fn available(&self) -> usize {
         self.rdata_size - self.rdata_pos
     }
+
+    /// Write u8 with automatic buffer growth
+    pub fn write_u8(&mut self, pos: usize, val: u8) -> Result<(), SessionError> {
+        let actual_pos = self
+            .wdata_size
+            .checked_add(pos)
+            .ok_or(SessionError::WritePositionOverflow {
+                fd: self.fd,
+                wdata_size: self.wdata_size,
+                pos,
+            })?;
+
+        if actual_pos >= MAX_WDATA_SIZE {
+            return Err(SessionError::WriteBufferTooLarge {
+                fd: self.fd,
+                requested_pos: actual_pos,
+            });
+        }
+
+        // Auto-grow in 1KB chunks
+        if actual_pos + 1 > self.wdata.len() {
+            self.wdata.resize(actual_pos + 1024, 0);
+        }
+
+        self.wdata[actual_pos] = val;
+        Ok(())
+    }
+
+    /// Write u16 (little-endian) with automatic buffer growth
+    pub fn write_u16(&mut self, pos: usize, val: u16) -> Result<(), SessionError> {
+        let actual_pos = self
+            .wdata_size
+            .checked_add(pos)
+            .ok_or(SessionError::WritePositionOverflow {
+                fd: self.fd,
+                wdata_size: self.wdata_size,
+                pos,
+            })?;
+
+        if actual_pos >= MAX_WDATA_SIZE {
+            return Err(SessionError::WriteBufferTooLarge {
+                fd: self.fd,
+                requested_pos: actual_pos,
+            });
+        }
+
+        if actual_pos + 2 > self.wdata.len() {
+            self.wdata.resize(actual_pos + 1024, 0);
+        }
+
+        let bytes = val.to_le_bytes();
+        self.wdata[actual_pos..actual_pos + 2].copy_from_slice(&bytes);
+
+        Ok(())
+    }
+
+    /// Write u32 (little-endian) with automatic buffer growth
+    pub fn write_u32(&mut self, pos: usize, val: u32) -> Result<(), SessionError> {
+        let actual_pos = self
+            .wdata_size
+            .checked_add(pos)
+            .ok_or(SessionError::WritePositionOverflow {
+                fd: self.fd,
+                wdata_size: self.wdata_size,
+                pos,
+            })?;
+
+        if actual_pos >= MAX_WDATA_SIZE {
+            return Err(SessionError::WriteBufferTooLarge {
+                fd: self.fd,
+                requested_pos: actual_pos,
+            });
+        }
+
+        if actual_pos + 4 > self.wdata.len() {
+            self.wdata.resize(actual_pos + 1024, 0);
+        }
+
+        let bytes = val.to_le_bytes();
+        self.wdata[actual_pos..actual_pos + 4].copy_from_slice(&bytes);
+
+        Ok(())
+    }
+
+    /// Commit write buffer (like WFIFOSET)
+    pub fn commit_write(&mut self, len: usize) -> Result<(), SessionError> {
+        let new_size = self.wdata_size + len;
+
+        if new_size > self.wdata.len() {
+            return Err(SessionError::WriteCommitTooLarge {
+                fd: self.fd,
+                requested: len,
+                available: self.wdata.len() - self.wdata_size,
+            });
+        }
+
+        self.wdata_size = new_size;
+        Ok(())
+    }
+
+    /// Skip N bytes in read buffer (like RFIFOSKIP)
+    pub fn skip(&mut self, len: usize) -> Result<(), SessionError> {
+        let new_pos = self.rdata_pos.saturating_add(len);
+
+        if new_pos > self.rdata_size {
+            return Err(SessionError::SkipOutOfBounds {
+                fd: self.fd,
+                skip_len: len,
+                available: self.rdata_size - self.rdata_pos,
+            });
+        }
+
+        self.rdata_pos = new_pos;
+
+        // Auto-compact when fully read
+        if self.rdata_pos == self.rdata_size {
+            self.rdata_pos = 0;
+            self.rdata_size = 0;
+            self.rdata.clear();
+        }
+
+        Ok(())
+    }
+
+    /// Compacts the read buffer by moving unread data to the beginning.
+    ///
+    /// If all data has been consumed (rdata_pos == rdata_size), clears the buffer.
+    /// Otherwise, moves unread bytes to the front and updates positions.
+    ///
+    /// This is equivalent to the C macro RFIFOFLUSH.
+    ///
+    /// # Note
+    /// This operation is infallible - it always succeeds.
+    pub fn flush_read_buffer(&mut self) {
+        if self.rdata_pos == self.rdata_size {
+            // All data read - reset
+            self.rdata_pos = 0;
+            self.rdata_size = 0;
+            self.rdata.clear();
+        } else if self.rdata_pos > 0 {
+            // Compact: move unread data to front
+            self.rdata.copy_within(self.rdata_pos..self.rdata_size, 0);
+            self.rdata_size -= self.rdata_pos;
+            self.rdata_pos = 0;
+        }
+    }
 }
 
 // SAFETY: session_data is an opaque pointer to C-managed memory. It is only accessed
@@ -236,5 +494,215 @@ mod tests {
 
         // Not enough bytes
         assert!(session.read_u32(1).is_err());
+    }
+
+    #[test]
+    fn test_write_u8_auto_grow() {
+        let mut session = Session::new(1);
+
+        // Write at position 0
+        assert!(session.write_u8(0, 0xAA).is_ok());
+
+        // Write beyond current buffer - should auto-grow
+        assert!(session.write_u8(100, 0xBB).is_ok());
+
+        // Buffer should have grown
+        assert!(session.wdata.len() >= 101);
+    }
+
+    #[test]
+    fn test_write_u16_little_endian() {
+        let mut session = Session::new(1);
+
+        assert!(session.write_u16(0, 0x1234).is_ok());
+
+        // Verify little-endian byte order
+        assert_eq!(session.wdata[0], 0x34);
+        assert_eq!(session.wdata[1], 0x12);
+    }
+
+    #[test]
+    fn test_write_u32_little_endian() {
+        let mut session = Session::new(1);
+
+        assert!(session.write_u32(0, 0x12345678).is_ok());
+
+        // Verify little-endian
+        assert_eq!(session.wdata[0], 0x78);
+        assert_eq!(session.wdata[1], 0x56);
+        assert_eq!(session.wdata[2], 0x34);
+        assert_eq!(session.wdata[3], 0x12);
+    }
+
+    #[test]
+    fn test_commit_write() {
+        let mut session = Session::new(1);
+
+        session.write_u8(0, 0xAA).unwrap();
+        session.write_u8(1, 0xBB).unwrap();
+
+        // Commit 2 bytes
+        assert!(session.commit_write(2).is_ok());
+        assert_eq!(session.wdata_size, 2);
+
+        // Can't commit more than buffer has
+        assert!(session.commit_write(1023).is_err());
+    }
+
+    #[test]
+    fn test_write_buffer_size_limit() {
+        let mut session = Session::new(1);
+
+        // Writing beyond 256KB should fail
+        let result = session.write_u8(300_000, 0xFF);
+        assert!(matches!(
+            result,
+            Err(SessionError::WriteBufferTooLarge { .. })
+        ));
+    }
+
+    #[test]
+    fn test_write_overflow_check() {
+        let mut session = Session::new(1);
+        session.wdata_size = usize::MAX - 10;
+
+        // This should overflow and be caught
+        let result = session.write_u8(100, 0xFF);
+        assert!(matches!(
+            result,
+            Err(SessionError::WritePositionOverflow { .. })
+        ));
+    }
+
+    #[test]
+    fn test_skip_bounds_check() {
+        let mut session = Session::new(1);
+        session.rdata = vec![1, 2, 3, 4, 5];
+        session.rdata_size = 5;
+        session.rdata_pos = 0;
+
+        // Valid skip
+        assert!(session.skip(2).is_ok());
+        assert_eq!(session.rdata_pos, 2);
+
+        // Read should now start at pos 2
+        assert_eq!(session.read_u8(0).unwrap(), 3);
+
+        // Out of bounds skip
+        assert!(session.skip(10).is_err());
+    }
+
+    #[test]
+    fn test_skip_auto_compact() {
+        let mut session = Session::new(1);
+        session.rdata = vec![1, 2, 3, 4, 5];
+        session.rdata_size = 5;
+
+        // Skip to end
+        assert!(session.skip(5).is_ok());
+
+        // Should auto-compact (clear buffer)
+        assert_eq!(session.rdata_pos, 0);
+        assert_eq!(session.rdata_size, 0);
+        assert_eq!(session.rdata.len(), 0);
+    }
+
+    #[test]
+    fn test_flush_read_buffer() {
+        let mut session = Session::new(1);
+        session.rdata = vec![1, 2, 3, 4, 5, 6];
+        session.rdata_size = 6;
+        session.rdata_pos = 0;
+
+        // Skip first 2 bytes
+        session.skip(2).unwrap();
+
+        // Flush should compact
+        session.flush_read_buffer();
+
+        assert_eq!(session.rdata_pos, 0);
+        assert_eq!(session.rdata_size, 4);
+        assert_eq!(session.rdata[0], 3);  // Data moved to front
+    }
+
+    #[test]
+    fn test_skip_rejects_overflow() {
+        let mut session = Session::new(1);
+        session.rdata_size = 100;
+        session.rdata_pos = 50;
+
+        // Attempt to skip a huge amount that would overflow
+        let result = session.skip(usize::MAX);
+
+        assert!(result.is_err());
+        match result {
+            Err(SessionError::SkipOutOfBounds { skip_len, available, .. }) => {
+                assert_eq!(skip_len, usize::MAX);
+                assert_eq!(available, 50);
+            }
+            _ => panic!("Expected SkipOutOfBounds error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_session_manager_allocate_fd() {
+        let manager = SessionManager::new();
+
+        let fd1 = manager.allocate_fd().await.unwrap();
+        let fd2 = manager.allocate_fd().await.unwrap();
+
+        assert!(fd1 > 0);
+        assert!(fd2 > 0);
+        assert_ne!(fd1, fd2);
+    }
+
+    #[tokio::test]
+    async fn test_session_manager_insert_and_get() {
+        let manager = SessionManager::new();
+
+        let session = Session::new(5);
+        let session_arc = Arc::new(Mutex::new(session));
+
+        manager.insert_session(5, session_arc.clone()).await.unwrap();
+
+        let retrieved = manager.get_session(5).await;
+        assert!(retrieved.is_some());
+
+        let session_arc_retrieved = retrieved.unwrap();
+        let sess = session_arc_retrieved.lock().await;
+        assert_eq!(sess.fd, 5);
+    }
+
+    #[tokio::test]
+    async fn test_session_manager_remove() {
+        let manager = SessionManager::new();
+
+        let session = Session::new(10);
+        manager.insert_session(10, Arc::new(Mutex::new(session))).await.unwrap();
+
+        assert!(manager.get_session(10).await.is_some());
+
+        manager.remove_session(10).await;
+
+        assert!(manager.get_session(10).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_session_manager_max_sessions() {
+        let manager = SessionManager::new();
+
+        // Fill to limit
+        for i in 0..MAX_SESSIONS {
+            let session = Session::new(i as i32);
+            manager.insert_session(i as i32, Arc::new(Mutex::new(session)))
+                .await
+                .unwrap();
+        }
+
+        // Next insert should fail
+        let session = Session::new(9999);
+        let result = manager.insert_session(9999, Arc::new(Mutex::new(session))).await;
+        assert!(result.is_err());
+        assert!(matches!(result, Err(SessionError::MaxSessionsExceeded)));
     }
 }
