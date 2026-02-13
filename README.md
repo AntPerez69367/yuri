@@ -5,6 +5,7 @@
 Provide a clean fork/drop-in replacement of the Mithia server that is 100% compatible with existing LUA files and database. Slowly improve the codebase from spaghetti C to C11 to Rust.
 
 ### Benefits over Mithia
+
 - Builds/runs as a 64-bit binary on a modern toolchain
 - Significantly cleaned up, unsafe C removed (buffer overflows, etc), ZERO COMPILER WARNINGS!
 - Uses LuaJIT instead of interpreted Lua, providing 2-20x speed-up in lua execution
@@ -26,6 +27,61 @@ The C currently has the following external library dependencies that must be ins
 If you plan on developing the rust, you will need to install `cbindgen` in order to regenerate yuri.h (`cargo install cbindgen`)
 
 Once the dependencies are installed, just run `make all`
+
+## Database Setup
+
+Yuri uses **SQLx** for database migrations with compile-time checked SQL queries. SQLx provides type-safe database access and automatic schema migrations.
+
+### Install SQLx CLI
+
+```bash
+cargo install sqlx-cli --features mysql
+```
+
+### Database Migration
+
+#### Step 1: Create Database Manually
+
+```bash
+# Connect to MySQL/MariaDB as root
+mysql -u root -p
+```
+
+```sql
+-- Create database
+CREATE DATABASE tk CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- Create user (change password!)
+CREATE USER 'tk'@'localhost' IDENTIFIED BY 'your_secure_password';
+CREATE USER 'tk'@'%' IDENTIFIED BY 'your_secure_password';
+
+-- Grant privileges
+GRANT ALL PRIVILEGES ON tk.* TO 'tk'@'localhost';
+GRANT ALL PRIVILEGES ON tk.* TO 'tk'@'%';
+FLUSH PRIVILEGES;
+
+EXIT;
+```
+
+#### Step 2: Configure Environment
+
+```bash
+# Copy example config
+cp .env.example .env
+
+# Edit .env and update DATABASE_URL with your credentials
+# DATABASE_URL=mysql://tk:your_secure_password@localhost:3306/tk
+```
+
+#### Step 3: Run Migrations
+
+```bash
+# Run migrations
+sqlx migrate run --source migrations_sqlx
+
+# Check migration status
+sqlx migrate info --source migrations_sqlx
+```
 
 ## Non Goals
 
@@ -63,6 +119,7 @@ Game state is stored in MySQL, maps and lua scripts are stored on disk.
 - Runs as a single, serial thread! Code is too unsafe to run multi-threaded, but even slow/blocking processes are executed on the main thread.
 
 ## Cleanup TODO
+
 - [x] Remove bundled zlib
 - [x] Fix pointer to int casts for 64-bit support
 - [x] Compile with Clang
@@ -86,6 +143,7 @@ Game state is stored in MySQL, maps and lua scripts are stored on disk.
 - [ ] Include SQL Migration & Minimum amount of LUA to run server
 
 ## Future State
+
 - Capture performance metrics for slow lua, slow queries, etc.
 - Fully defined structures for all client packets
 - Concurrent packet parsing and networking
@@ -93,3 +151,13 @@ Game state is stored in MySQL, maps and lua scripts are stored on disk.
 - Web editor
 - Use HTTP or GRPC for internal server communication
 - Allow for map server to be gracefully restarted without dropping clients or game state
+
+# Updating client to point to your server
+
+Using a Hex Editor (HxD, 010 Editor, etc.):
+
+1. Open ddraw.dll in hex editor
+2. Search for the original server IP (as ASCII string, e.g., game.nexon.com or 208.100.42.193)
+3. Replace with your IP: 192.168.1.68 (pad with null bytes if shorter)
+4. Search for port 07D0 (hex for 2000) if hardcoded
+5. Save and test
