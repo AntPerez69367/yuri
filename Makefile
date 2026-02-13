@@ -16,6 +16,7 @@ deps: cmake libyuri
 	@cmake --build build --target deps --parallel --
 metan_cli: common
 	@cmake --build build --target metan_cli --parallel --
+	@ln -sf metan_cli bin/metan
 decrypt_cli: common 
 	@cmake --build build --target decrypt_cli --parallel --
 char_server: common
