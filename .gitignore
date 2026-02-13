@@ -60,6 +60,7 @@ dkms.conf
 *.bkup
 *.bak
 *.png
+*.sh
 /build
 
 # Added by cargo

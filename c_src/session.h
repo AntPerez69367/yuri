@@ -92,7 +92,7 @@ struct socket_data {
   unsigned char increment;
   char name[32];
 };
-extern int server_shutdown;
+// server_shutdown removed - use rust_should_shutdown() instead
 // Data prototype declaration
 
 extern struct socket_data *session[FD_SETSIZE];

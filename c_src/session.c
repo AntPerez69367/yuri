@@ -1,5 +1,6 @@
 #include "session.h"
 
+#include "yuri.h"  // Rust FFI functions (rust_should_shutdown)
 #include <errno.h>
 #include <netinet/in.h>
 #include <stdbool.h>
@@ -32,7 +33,7 @@ size_t wfifo_size = (16 * 1024);
 time_t last_tick;
 time_t stall_time = 60;
 
-int server_shutdown = 0;
+// server_shutdown removed - now managed by Rust via rust_should_shutdown()
 
 struct socket_data* session[FD_SETSIZE];
 
@@ -760,7 +761,7 @@ int do_sendrecv() {
       }
     }
 
-    if (server_shutdown && (!FD_ISSET(i, &wfd)) && session[i]) {
+    if (rust_should_shutdown() && (!FD_ISSET(i, &wfd)) && session[i]) {
       if (session[i]->func_shutdown) {
         session[i]->func_shutdown(i);
       }

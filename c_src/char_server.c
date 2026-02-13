@@ -152,11 +152,9 @@ int do_init(int argc, char **argv) {
   }
 
   if (rust_config_read(CONF_FILE) != 0) {
-    fprintf(stderr, "[char] [error] Failed to load configuration from %s\n", CONF_FILE);
-    fprintf(stderr, "[char] [error] Aborting startup - fix configuration and retry\n");
+    printf("[char] [config_error] %s\n", CONF_FILE);
     exit(EXIT_FAILURE);
   }
-
   set_termfunc(do_term);
 
   printf("[char] [started] Char Server Started.\n");
