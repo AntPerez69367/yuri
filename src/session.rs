@@ -80,7 +80,7 @@ pub struct SessionCallbacks {
 pub struct SessionManager {
     sessions: Arc<RwLock<HashMap<i32, Arc<Mutex<Session>>>>>,
     next_fd: Arc<Mutex<i32>>,
-    default_callbacks: Arc<Mutex<SessionCallbacks>>,
+    pub default_callbacks: Arc<Mutex<SessionCallbacks>>,
 }
 
 impl SessionManager {

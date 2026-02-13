@@ -30,6 +30,18 @@
 #define SERVER_TICK_RATE_NS 10000000
 
 /**
+ * Buffer size constants
+ */
+#define RFIFO_SIZE (16 * 1024)
+
+#define WFIFO_SIZE (16 * 1024)
+
+/**
+ * Maximum number of sessions
+ */
+#define MAX_SESSIONS 1024
+
+/**
  * A point in 3D space (map, x, y)
  *
  * This matches the C struct exactly due to #[repr(C)]
@@ -228,5 +240,120 @@ uint64_t rust_get_tick_rate_ns(void);
  * Legacy hash generation function (to be replaced)
  */
 void rust_generate_hashvalues(const char *name, char *_buffer);
+
+/**
+ * Initialize and run the async game server
+ * Blocks until server shuts down
+ *
+ * # Safety
+ * Must be called from C main thread
+ */
+int rust_server_run(uint16_t port);
+
+/**
+ * Create a listening socket on the specified port
+ * Returns fd on success, -1 on failure
+ *
+ * Note: In the async model, this is handled by run_async_server
+ * This is here for compatibility but may not be used
+ */
+int rust_make_listen_port(int _port);
+
+/**
+ * Create an outgoing connection to ip:port
+ * Returns fd on success, -1 on failure
+ *
+ * TODO: Implement in later task for client connections
+ */
+int rust_make_connection(uint32_t _ip, int _port);
+
+/**
+ * Close a session
+ */
+int rust_session_eof(int fd);
+
+/**
+ * Read unsigned 8-bit value from read buffer
+ * Returns 0 if out of bounds or invalid fd
+ */
+uint8_t rust_session_read_u8(int fd, uintptr_t pos);
+
+/**
+ * Read unsigned 16-bit value (little-endian)
+ * Returns 0 if out of bounds or invalid fd
+ */
+uint16_t rust_session_read_u16(int fd, uintptr_t pos);
+
+/**
+ * Read unsigned 32-bit value (little-endian)
+ * Returns 0 if out of bounds or invalid fd
+ */
+uint32_t rust_session_read_u32(int fd, uintptr_t pos);
+
+/**
+ * Write unsigned 8-bit value to write buffer
+ * Returns 0 on success, -1 on error
+ */
+int rust_session_write_u8(int fd, uintptr_t pos, uint8_t val);
+
+/**
+ * Write unsigned 16-bit value (little-endian)
+ * Returns 0 on success, -1 on error
+ */
+int rust_session_write_u16(int fd, uintptr_t pos, uint16_t val);
+
+/**
+ * Write unsigned 32-bit value (little-endian)
+ * Returns 0 on success, -1 on error
+ */
+int rust_session_write_u32(int fd, uintptr_t pos, uint32_t val);
+
+/**
+ * Skip N bytes in read buffer (like RFIFOSKIP)
+ * Returns 0 on success, -1 on error
+ */
+int rust_session_skip(int fd, uintptr_t len);
+
+/**
+ * Get number of unread bytes (like RFIFOREST)
+ */
+uintptr_t rust_session_available(int fd);
+
+/**
+ * Commit write buffer (like WFIFOSET)
+ * Returns 0 on success, -1 on error
+ */
+int rust_session_commit(int fd, uintptr_t len);
+
+/**
+ * Flush write buffer - trigger send
+ * In async model, writes happen automatically
+ * This is a no-op for compatibility
+ */
+int rust_session_flush(int _fd);
+
+/**
+ * Set default parse callback for all new sessions
+ *
+ * # Safety
+ * Callback must be a valid C function pointer
+ */
+void rust_session_set_default_parse(int (*callback)(int));
+
+/**
+ * Set default timeout callback
+ *
+ * # Safety
+ * Callback must be a valid C function pointer
+ */
+void rust_session_set_default_timeout(int (*callback)(int));
+
+/**
+ * Set default shutdown callback
+ *
+ * # Safety
+ * Callback must be a valid C function pointer
+ */
+void rust_session_set_default_shutdown(int (*callback)(int));
 
 #endif  /* YURI_RS_H */
