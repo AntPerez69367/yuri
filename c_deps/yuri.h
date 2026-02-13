@@ -333,6 +333,37 @@ int rust_session_commit(int fd, uintptr_t len);
 int rust_session_flush(int _fd);
 
 /**
+ * Get a raw pointer to the read buffer at offset (like RFIFOP)
+ * Returns NULL if fd invalid or out of bounds
+ *
+ * # Safety
+ * The returned pointer is only valid until the next FFI call that modifies the session.
+ * Caller must not hold this pointer across other rust_session_* calls.
+ */
+const uint8_t *rust_session_rdata_ptr(int fd, uintptr_t pos);
+
+/**
+ * Get a mutable raw pointer to the write buffer at offset (like WFIFOP)
+ * Returns NULL if fd invalid or out of bounds
+ *
+ * # Safety
+ * The returned pointer is only valid until the next FFI call that modifies the session.
+ * Caller must call rust_session_commit() after writing.
+ */
+uint8_t *rust_session_wdata_ptr(int fd, uintptr_t pos);
+
+/**
+ * Ensure write buffer has room for `size` bytes (like WFIFOHEAD)
+ * Returns 0 on success, -1 on error
+ */
+int rust_session_wfifohead(int fd, uintptr_t size);
+
+/**
+ * Flush read buffer - compact unread data (like RFIFOFLUSH)
+ */
+int rust_session_rfifoflush(int fd);
+
+/**
  * Set default parse callback for all new sessions
  *
  * # Safety

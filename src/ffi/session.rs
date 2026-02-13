@@ -337,6 +337,119 @@ pub extern "C" fn rust_session_flush(_fd: c_int) -> c_int {
     0
 }
 
+/// Get a raw pointer to the read buffer at offset (like RFIFOP)
+/// Returns NULL if fd invalid or out of bounds
+///
+/// # Safety
+/// The returned pointer is only valid until the next FFI call that modifies the session.
+/// Caller must not hold this pointer across other rust_session_* calls.
+#[no_mangle]
+pub extern "C" fn rust_session_rdata_ptr(fd: c_int, pos: usize) -> *const u8 {
+    let runtime = match crate::session::RUNTIME.get() {
+        Some(rt) => rt,
+        None => return std::ptr::null(),
+    };
+
+    runtime.block_on(async {
+        let manager = crate::session::get_session_manager();
+
+        if let Some(session_arc) = manager.get_session(fd).await {
+            let session = session_arc.lock().await;
+
+            match session.rdata_ptr(pos) {
+                Ok(ptr) => ptr,
+                Err(e) => {
+                    tracing::error!("[FFI] rdata_ptr error: {}", e);
+                    std::ptr::null()
+                }
+            }
+        } else {
+            std::ptr::null()
+        }
+    })
+}
+
+/// Get a mutable raw pointer to the write buffer at offset (like WFIFOP)
+/// Returns NULL if fd invalid or out of bounds
+///
+/// # Safety
+/// The returned pointer is only valid until the next FFI call that modifies the session.
+/// Caller must call rust_session_commit() after writing.
+#[no_mangle]
+pub extern "C" fn rust_session_wdata_ptr(fd: c_int, pos: usize) -> *mut u8 {
+    let runtime = match crate::session::RUNTIME.get() {
+        Some(rt) => rt,
+        None => return std::ptr::null_mut(),
+    };
+
+    runtime.block_on(async {
+        let manager = crate::session::get_session_manager();
+
+        if let Some(session_arc) = manager.get_session(fd).await {
+            let mut session = session_arc.lock().await;
+
+            match session.wdata_ptr(pos) {
+                Ok(ptr) => ptr,
+                Err(e) => {
+                    tracing::error!("[FFI] wdata_ptr error: {}", e);
+                    std::ptr::null_mut()
+                }
+            }
+        } else {
+            std::ptr::null_mut()
+        }
+    })
+}
+
+/// Ensure write buffer has room for `size` bytes (like WFIFOHEAD)
+/// Returns 0 on success, -1 on error
+#[no_mangle]
+pub extern "C" fn rust_session_wfifohead(fd: c_int, size: usize) -> c_int {
+    let runtime = match crate::session::RUNTIME.get() {
+        Some(rt) => rt,
+        None => return -1,
+    };
+
+    runtime.block_on(async {
+        let manager = crate::session::get_session_manager();
+
+        if let Some(session_arc) = manager.get_session(fd).await {
+            let mut session = session_arc.lock().await;
+
+            match session.ensure_wdata_capacity(size) {
+                Ok(_) => 0,
+                Err(e) => {
+                    tracing::error!("[FFI] wfifohead error: {}", e);
+                    -1
+                }
+            }
+        } else {
+            -1
+        }
+    })
+}
+
+/// Flush read buffer - compact unread data (like RFIFOFLUSH)
+#[no_mangle]
+pub extern "C" fn rust_session_rfifoflush(fd: c_int) -> c_int {
+    let runtime = match crate::session::RUNTIME.get() {
+        Some(rt) => rt,
+        None => return -1,
+    };
+
+    runtime.block_on(async {
+        let manager = crate::session::get_session_manager();
+
+        if let Some(session_arc) = manager.get_session(fd).await {
+            let mut session = session_arc.lock().await;
+            session.flush_read_buffer();
+            0
+        } else {
+            -1
+        }
+    })
+}
+
 /// Set default parse callback for all new sessions
 ///
 /// # Safety

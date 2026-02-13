@@ -422,6 +422,125 @@ impl Session {
         Ok(())
     }
 
+    /// Get a raw pointer to the read buffer at the given offset (like RFIFOP)
+    ///
+    /// # Safety
+    /// The returned pointer is only valid while the Session lock is held.
+    /// The caller must not read past `available()` bytes from this pointer.
+    pub fn rdata_ptr(&self, pos: usize) -> Result<*const u8, SessionError> {
+        let actual_pos = self.rdata_pos + pos;
+
+        if actual_pos > self.rdata_size {
+            return Err(SessionError::ReadOutOfBounds {
+                fd: self.fd,
+                pos: actual_pos,
+                size: self.rdata_size,
+            });
+        }
+
+        Ok(self.rdata.as_ptr().wrapping_add(actual_pos))
+    }
+
+    /// Get a mutable raw pointer to the write buffer at the given offset (like WFIFOP)
+    ///
+    /// # Safety
+    /// The returned pointer is only valid while the Session lock is held.
+    /// The caller must call `commit_write()` after writing to commit the data.
+    pub fn wdata_ptr(&mut self, pos: usize) -> Result<*mut u8, SessionError> {
+        let actual_pos = self
+            .wdata_size
+            .checked_add(pos)
+            .ok_or(SessionError::WritePositionOverflow {
+                fd: self.fd,
+                wdata_size: self.wdata_size,
+                pos,
+            })?;
+
+        if actual_pos >= MAX_WDATA_SIZE {
+            return Err(SessionError::WriteBufferTooLarge {
+                fd: self.fd,
+                requested_pos: actual_pos,
+            });
+        }
+
+        // Ensure buffer is large enough
+        if actual_pos + 1 > self.wdata.len() {
+            self.wdata.resize(actual_pos + 1024, 0);
+        }
+
+        Ok(self.wdata.as_mut_ptr().wrapping_add(actual_pos))
+    }
+
+    /// Ensure write buffer has room for `size` bytes (like WFIFOHEAD)
+    pub fn ensure_wdata_capacity(&mut self, size: usize) -> Result<(), SessionError> {
+        let needed = self
+            .wdata_size
+            .checked_add(size)
+            .ok_or(SessionError::WritePositionOverflow {
+                fd: self.fd,
+                wdata_size: self.wdata_size,
+                pos: size,
+            })?;
+
+        if needed > MAX_WDATA_SIZE {
+            return Err(SessionError::WriteBufferTooLarge {
+                fd: self.fd,
+                requested_pos: needed,
+            });
+        }
+
+        if needed > self.wdata.len() {
+            self.wdata.resize(needed + 1024, 0);
+        }
+
+        Ok(())
+    }
+
+    /// Copy data from read buffer into a destination buffer (safe RFIFOP + memcpy)
+    pub fn read_buf(&self, pos: usize, dst: &mut [u8]) -> Result<(), SessionError> {
+        let actual_pos = self.rdata_pos + pos;
+        let end = actual_pos + dst.len();
+
+        if end > self.rdata_size {
+            return Err(SessionError::ReadOutOfBounds {
+                fd: self.fd,
+                pos: actual_pos,
+                size: self.rdata_size,
+            });
+        }
+
+        dst.copy_from_slice(&self.rdata[actual_pos..end]);
+        Ok(())
+    }
+
+    /// Copy data into the write buffer (safe WFIFOP + memcpy)
+    pub fn write_buf(&mut self, pos: usize, src: &[u8]) -> Result<(), SessionError> {
+        let actual_pos = self
+            .wdata_size
+            .checked_add(pos)
+            .ok_or(SessionError::WritePositionOverflow {
+                fd: self.fd,
+                wdata_size: self.wdata_size,
+                pos,
+            })?;
+
+        let end = actual_pos + src.len();
+
+        if end > MAX_WDATA_SIZE {
+            return Err(SessionError::WriteBufferTooLarge {
+                fd: self.fd,
+                requested_pos: end,
+            });
+        }
+
+        if end > self.wdata.len() {
+            self.wdata.resize(end + 1024, 0);
+        }
+
+        self.wdata[actual_pos..end].copy_from_slice(src);
+        Ok(())
+    }
+
     /// Compacts the read buffer by moving unread data to the beginning.
     ///
     /// If all data has been consumed (rdata_pos == rdata_size), clears the buffer.
