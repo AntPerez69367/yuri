@@ -1182,8 +1182,8 @@ int sl_throw(struct block_list *bl, va_list ap) {
   char *buf = va_arg(ap, char *);
   int len = va_arg(ap, int);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -1270,8 +1270,8 @@ int setweather(lua_State *state) {
           timer == 0) {
         map[x].weather = mapweather;
         for (i = 1; i < fd_max; i++) {
-          if (session[i] && (tmpsd = (USER *)session[i]->session_data) &&
-              !session[i]->eof) {
+          if (session[i] && (tmpsd = (USER *)rust_session_get_data(i)) &&
+              !rust_session_get_eof(i)) {
             if (tmpsd->bl.m == x) {
               clif_sendweather(tmpsd);
             }
@@ -1307,8 +1307,8 @@ int setweatherm(lua_State *state) {
     if (timer == 0) {
       map[mapnum].weather = mapweather;
       for (i = 1; i < fd_max; i++) {
-        if (session[i] && (tmpsd = (USER *)session[i]->session_data) &&
-            !session[i]->eof) {
+        if (session[i] && (tmpsd = (USER *)rust_session_get_data(i)) &&
+            !rust_session_get_eof(i)) {
           if (tmpsd->bl.m == mapnum) {
             clif_sendweather(tmpsd);
           }
@@ -1387,8 +1387,8 @@ int setlight(lua_State *state) {
         if (map[x].light == 0) map[x].light = maplight;
 
         for (int i = 0; i < fd_max; i++) {
-          if (session[i] && (tmpsd = (USER *)session[i]->session_data) &&
-              !session[i]->eof) {
+          if (session[i] && (tmpsd = (USER *)rust_session_get_data(i)) &&
+              !rust_session_get_eof(i)) {
             if (tmpsd->bl.m == x) {
               // clif_refreshnoclick(tmpsd);
             }
@@ -1736,7 +1736,7 @@ int sendMeta(lua_State *state) {
   USER *tsd = NULL;
 
   for (int i = 0; i < fd_max; i++) {
-    if (session[i] && (tsd = session[i]->session_data)) send_metalist(tsd);
+    if (session[i] && (tsd = rust_session_get_data(i))) send_metalist(tsd);
   }
 
   return 1;
@@ -2756,8 +2756,8 @@ int sl_setMapTitle(lua_State *state) {
     strcpy(map[m].title, title);
 
     for (int i = 1; i < fd_max; i++) {
-      if (session[i] && (tsd = (USER *)session[i]->session_data) &&
-          !session[i]->eof) {
+      if (session[i] && (tsd = (USER *)rust_session_get_data(i)) &&
+          !rust_session_get_eof(i)) {
         if (tsd->bl.m == m) {
           clif_refreshnoclick(tsd);
         }
@@ -8399,7 +8399,7 @@ int pcl_setAccountBan(lua_State *state, void *self) {
     char name[16];
     memcpy(name, sd->status.name, 16);
 
-    if (banned == 1) session[sd->fd]->eof = 1;
+    if (banned == 1) rust_session_set_eof(sd->fd, 1);
 
     if (SQL_ERROR ==
         Sql_Query(
@@ -8456,7 +8456,7 @@ int pcl_setAccountBan(lua_State *state, void *self) {
            i++) {  // disconnect all now banned chars
         if (ChaIds[i] > 0) {
           USER *tsd = map_id2sd(ChaIds[i]);
-          if (tsd != NULL) session[tsd->fd]->eof = 1;
+          if (tsd != NULL) rust_session_set_eof(tsd->fd, 1);
         }
       }
     }
@@ -12895,8 +12895,8 @@ int pcl_testpacket(lua_State *state, void *self) {
 
   lua_pushnil(state);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 

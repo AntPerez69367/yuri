@@ -1076,8 +1076,8 @@ int pc_warp(USER *sd, int m, int x, int y) {
   if (!map_isloaded(m)) {
     // printf("Tried to warp failed\n");
 
-    if (!session[sd->fd]) {
-      session[sd->fd]->eof = 20;
+    if (!rust_session_exists(sd->fd)) {
+      rust_session_set_eof(sd->fd, 20);
       return 0;
     }
 

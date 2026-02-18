@@ -244,12 +244,12 @@ int clif_accept2(int fd, char *name, int name_len) {
   // printf("Namelen: %d\n",name_len);
 
   if (name_len <= 0 || name_len > 16) {
-    session[fd]->eof = 11;
+    rust_session_set_eof(fd, 11);
     return 0;
   }
 
   if (rust_should_shutdown()) {
-    session[fd]->eof = 1;
+    rust_session_set_eof(fd, 1);
     return 0;
   }
   memset(n, 0, 16);
@@ -258,7 +258,7 @@ int clif_accept2(int fd, char *name, int name_len) {
 
   /*for(i=0;i<AUTH_FIFO_SIZE;i++) {
           if((auth_fifo[i].ip == (unsigned
-  int)session[fd]->client_addr.sin_addr.s_addr)) {
+  int)rust_session_get_client_ip(fd))) {
                   if(!strcasecmp(n,auth_fifo[i].name)) {
                   intif_load(fd, auth_fifo[i].id, auth_fifo[i].name);
                   auth_fifo[i].ip = 0;
@@ -297,11 +297,12 @@ int clif_accept2(int fd, char *name, int name_len) {
     SqlStmt_Free(stmt);
   }
 
-  memcpy(session[fd]->name, n, name_len);
+  if (session[fd] != NULL)
+    memcpy(session[fd]->name, n, name_len);
   intif_load(fd, id, n);
   auth_delete(n);
 
-  /*t=auth_check(n,session[fd]->client_addr.sin_addr.s_addr);
+  /*t=auth_check(n,rust_session_get_client_ip(fd));
 
 
   if(t) {
@@ -309,14 +310,14 @@ int clif_accept2(int fd, char *name, int name_len) {
           intif_load(fd,t,n);
           auth_delete(n);
   } else {
-  a=b=c=d=session[fd]->client_addr.sin_addr.s_addr;
+  a=b=c=d=rust_session_get_client_ip(fd);
   a &=0xff;
   b=(b>>8)&0xff;
   c=(c>>16)&0xff;
   d=(d>>24)&0xff;
 
   printf("Denied access to "CL_CYAN"%s"CL_NORMAL"
-  (ip:"CL_MAGENTA"%u.%u.%u.%u)\n",n,a,b,c,d); session[fd]->eof = 1;
+  (ip:"CL_MAGENTA"%u.%u.%u.%u)\n",n,a,b,c,d); rust_session_set_eof(fd, 1);
   }*/
   return 0;
 }
@@ -327,11 +328,11 @@ int clif_timeout(int fd) {
 
   if (fd == char_fd) return 0;
   if (fd <= 1) return 0;
-  if (!session[fd]) return 0;
-  if (!session[fd]->session_data) session[fd]->eof = 12;
+  if (!rust_session_exists(fd)) return 0;
+  if (!rust_session_get_data(fd)) rust_session_set_eof(fd, 12);
 
-  nullpo_ret(0, sd = (USER *)session[fd]->session_data);
-  a = b = c = d = session[fd]->client_addr.sin_addr.s_addr;
+  nullpo_ret(0, sd = (USER *)rust_session_get_data(fd));
+  a = b = c = d = rust_session_get_client_ip(fd);
   a &= 0xff;
   b = (b >> 8) & 0xff;
   c = (c >> 16) & 0xff;
@@ -339,12 +340,12 @@ int clif_timeout(int fd) {
 
   printf("\033[1;32m%s \033[0m(IP: \033[1;40m%u.%u.%u.%u\033[0m) timed out!\n",
          sd->status.name, a, b, c, d);
-  session[fd]->eof = 1;
+  rust_session_set_eof(fd, 1);
   return 0;
 }
 int clif_popup(USER *sd, const char *buf) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -361,8 +362,8 @@ int clif_popup(USER *sd, const char *buf) {
 }
 
 int clif_paperpopup(USER *sd, const char *buf, int width, int height) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -382,8 +383,8 @@ int clif_paperpopup(USER *sd, const char *buf, int width, int height) {
 
 int clif_paperpopupwrite(USER *sd, const char *buf, int width, int height,
                          int invslot) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -402,8 +403,8 @@ int clif_paperpopupwrite(USER *sd, const char *buf, int width, int height,
 }
 
 int clif_paperpopupwrite_save(USER *sd) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -429,8 +430,8 @@ int stringTruncate(char *buffer, int maxLength) {
 int clif_transfer(USER *sd, int serverid, int m, int x, int y) {
   int len = 0;
   int dest_port;
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -464,8 +465,8 @@ int clif_transfer(USER *sd, int serverid, int m, int x, int y) {
 
 int clif_transfer_test(USER *sd, int m, int x, int y) {
   int len = 0;
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -497,8 +498,8 @@ int clif_transfer_test(USER *sd, int m, int x, int y) {
 
 int clif_sendBoardQuestionaire(USER *sd, struct board_questionaire *q,
                                int count) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
   // Player(2):sendBoardQuestions("Defendant :","Name of Person who commited the
@@ -548,8 +549,8 @@ int clif_sendBoardQuestionaire(USER *sd, struct board_questionaire *q,
 int clif_closeit(USER *sd) {
   int len = 0;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -636,9 +637,9 @@ int clif_addtokillreg(USER *sd, int mob) {
         for(x=0;x<256;x++) {
                 if(sd->status.guide[x]) {
 
-                if (!session[sd->fd])
+                if (!rust_session_exists(sd->fd))
                 {
-                        session[sd->fd]->eof = 8;
+                        rust_session_set_eof(sd->fd, 8);
                         return 0;
                 }
 
@@ -661,8 +662,8 @@ int clif_sendheartbeat(int id, int none) {
   USER *sd = map_id2sd((unsigned int)id);
   nullpo_ret(1, sd);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -683,12 +684,12 @@ int pc_sendpong(int id, int none) {
   USER *sd = map_id2sd((unsigned int)id);
   nullpo_ret(1, sd);
 
-  // if (DIFF_TICK(gettick(), sd->LastPongStamp) >= 300000) session[sd->fd]->eof
+  // if (DIFF_TICK(gettick(), sd->LastPongStamp) >= 300000) rust_session_get_eof(sd->fd)
   // = 12;
 
   if (sd) {
-    if (!session[sd->fd]) {
-      session[sd->fd]->eof = 8;
+    if (!rust_session_exists(sd->fd)) {
+      rust_session_set_eof(sd->fd, 8);
       return 0;
     }
 
@@ -708,8 +709,8 @@ int pc_sendpong(int id, int none) {
 }
 
 int clif_sendguidespecific(USER *sd, int guide) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -737,8 +738,8 @@ int clif_broadcast_sub(struct block_list *bl, va_list ap) {
   msg = va_arg(ap, char *);
   len = strlen(msg);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -767,8 +768,8 @@ int clif_gmbroadcast_sub(struct block_list *bl, va_list ap) {
   msg = va_arg(ap, char *);
   len = strlen(msg);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -796,8 +797,8 @@ int clif_broadcasttogm_sub(struct block_list *bl, va_list ap) {
     msg = va_arg(ap, char *);
     len = strlen(msg);
 
-    if (!session[sd->fd]) {
-      session[sd->fd]->eof = 8;
+    if (!rust_session_exists(sd->fd)) {
+      rust_session_set_eof(sd->fd, 8);
       return 0;
     }
 
@@ -979,8 +980,8 @@ int clif_sendtowns(USER *sd) {
   int x;
   int len = 0;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -1007,13 +1008,13 @@ int clif_sendtowns(USER *sd) {
 }
 
 int clif_user_list(USER *sd) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -1290,8 +1291,8 @@ void clif_send_selfbar(USER *sd) {
 
   if ((int)percentage == 0 && sd->status.hp != 0) percentage = (float)1;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return;
   }
 
@@ -1322,8 +1323,8 @@ void clif_send_groupbars(USER *sd, USER *tsd) {
 
   if ((int)percentage == 0 && tsd->status.hp != 0) percentage = (float)1;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return;
   }
 
@@ -1359,8 +1360,8 @@ int clif_send_mobbars(struct block_list *bl, va_list ap) {
 
   if ((int)percentage == 0 && mob->current_vita != 0) percentage = (float)1;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 1;
   }
 
@@ -1450,8 +1451,8 @@ int clif_mob_look_start_func(struct block_list *bl, va_list ap) {
   sd->mob_count = 0;
   sd->mob_item = 0;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -1629,8 +1630,8 @@ int clif_object_look_sub2(struct block_list *bl, va_list ap) {
     nullpo_ret(0, b = bl);
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -1834,8 +1835,8 @@ int clif_mob_look_start(USER *sd) {
   sd->mob_len = 0;
   sd->mob_item = 0;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -1890,8 +1891,8 @@ int clif_send_duration(USER *sd, int id, int time, USER *tsd) {
     len = strlen(name);
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -1923,8 +1924,8 @@ int clif_send_aether(USER *sd, int id, int time) {
   pos = clif_findspell_pos(sd, id);
   if (pos < 0) return 0;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -1987,8 +1988,8 @@ int clif_mob_move(struct block_list *bl, va_list ap) {
     if (mob->state == MOB_DEAD) return 0;
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -2090,8 +2091,8 @@ int clif_send_mob_health_sub(struct block_list *bl, va_list ap) {
     }
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -2117,8 +2118,8 @@ int clif_send_mob_health_sub_nosd(struct block_list *bl, va_list ap) {
   damage = va_arg(ap, int);
   nullpo_ret(0, sd = (USER *)bl);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -2435,8 +2436,8 @@ int clif_send_destroy(struct block_list *bl, va_list ap) {
   nullpo_ret(0, sd = (USER *)bl);
   nullpo_ret(0, mob = va_arg(ap, MOB *));
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -2461,8 +2462,8 @@ int clif_send_destroy(struct block_list *bl, va_list ap) {
 }
 
 void clif_send_timer(USER *sd, char type, unsigned int length) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return;
   }
 
@@ -2552,8 +2553,8 @@ int clif_send_sub(struct block_list *bl, va_list ap) {
       break;
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -2780,8 +2781,8 @@ int clif_mystaytus(USER *sd) {
   int len = 0;
   nullpo_ret(0, sd);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -2790,8 +2791,8 @@ int clif_mystaytus(USER *sd) {
 
   class_name = classdb_name(sd->status.class, sd->status.mark);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -3016,8 +3017,8 @@ int clif_cnpclook_sub(struct block_list *bl, va_list ap) {
     return 0;
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -3259,8 +3260,8 @@ int clif_cmoblook_sub(struct block_list *bl, va_list ap) {
     return 0;
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -3540,8 +3541,8 @@ int clif_charlook_sub(struct block_list *bl, va_list ap) {
     }
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -3901,8 +3902,8 @@ int clif_charlook_sub(struct block_list *bl, va_list ap) {
 int clif_blockmovement(USER *sd, int flag) {
   nullpo_ret(0, sd);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -3968,8 +3969,8 @@ int clif_charspecific(int sender, int id) {
 
   // if (!clif_show_ghost(src_sd,sd)) return 0;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -4294,8 +4295,8 @@ int clif_charspecific(int sender, int id) {
 }
 
 int clif_sendack(USER *sd) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -4330,8 +4331,8 @@ int clif_retrieveprofile(USER *sd) {
 }
 
 int clif_screensaver(USER *sd, int screen) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -4348,8 +4349,8 @@ int clif_screensaver(USER *sd, int screen) {
 }
 
 int clif_sendtime(USER *sd) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -4366,8 +4367,8 @@ int clif_sendtime(USER *sd) {
 }
 
 int clif_sendid(USER *sd) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -4387,8 +4388,8 @@ int clif_sendid(USER *sd) {
   return 0;
 }
 int clif_sendweather(USER *sd) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -4406,8 +4407,8 @@ int clif_sendmapinfo(USER *sd) {
 
   if (!sd) return 0;
   // Map Title and Map X-Y
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -4491,8 +4492,8 @@ int clif_sendmapinfo(USER *sd) {
 }
 
 int clif_sendxy(USER *sd) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -4536,8 +4537,8 @@ int clif_sendxy(USER *sd) {
 }
 
 int clif_sendxynoclick(USER *sd) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -4580,8 +4581,8 @@ int clif_sendxynoclick(USER *sd) {
 int clif_sendxychange(USER *sd, int dx, int dy) {
   nullpo_ret(0, sd);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -4625,8 +4626,8 @@ int clif_sendstatus(USER *sd, int flags) {
   if (sd->status.gm_level && sd->optFlags & optFlag_walkthrough)
     f |= SFLAG_GMON;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -4700,8 +4701,8 @@ int clif_sendstatus(USER *sd, int flags) {
 }
 
 int clif_sendoptions(USER *sd) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -4753,7 +4754,7 @@ int clif_parsewalk(USER *sd) {
 
   // if (sd->LastWalk && RFIFOB(sd->fd, 6) == sd->LastWalk) {
   //	clif_Hacker(sd->status.name, "Walk Editing.");
-  //	session[sd->fd]->eof = 14;
+  //	rust_session_set_eof(sd->fd, 14);
   //	return 0;
   //}
 
@@ -4856,8 +4857,8 @@ int clif_parsewalk(USER *sd) {
 
   // Fast Walk, will flag later.
   if (!(sd->status.settingFlags & FLAG_FASTMOVE)) {
-    if (!session[sd->fd]) {
-      session[sd->fd]->eof = 8;
+    if (!rust_session_exists(sd->fd)) {
+      rust_session_set_eof(sd->fd, 8);
       return 0;
     }
 
@@ -4946,7 +4947,6 @@ int clif_parsewalk(USER *sd) {
                        y0 + (y1 - 1), BL_PC, LOOK_SEND, sd);
   }
 
-  if (session[sd->fd]->eof) printf("%s eof set on.  19", sd->status.name);
 
   for (i = 0; i < 14; i++) {
     if (sd->status.equip[i].id > 0) {
@@ -5156,8 +5156,8 @@ int clif_noparsewalk(USER *sd, char speed) {
     flag = 1;
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -5218,7 +5218,6 @@ int clif_noparsewalk(USER *sd, char speed) {
                        y0 + (y1 - 1), BL_PC, LOOK_SEND, sd);
   }
 
-  if (session[sd->fd]->eof) printf("%s eof set on.  19", sd->status.name);
 
   sl_doscript_blargs("onScriptedTile", NULL, 1, &sd->bl);
   pc_runfloor_sub(sd);
@@ -5290,8 +5289,8 @@ int clif_noparsewalk(USER *sd, char speed) {
 }
 
 int clif_guitextsd(const char *msg, USER *sd) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -5323,8 +5322,8 @@ int clif_guitext(struct block_list *bl, va_list ap) {
 
   msg = va_arg(ap, char *);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -6648,8 +6647,8 @@ int clif_sendmapdata(USER *sd, int m, int x0, int y0, int x1, int y1,
   short checksum;
   short buf[65536];
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -6823,8 +6822,8 @@ int clif_sendmsg(USER *sd, int type, const char *buf) {
   if (len > strlen(buf)) len = strlen(buf);
 
   WFIFOHEAD(sd->fd, 8 + len);
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -7393,8 +7392,8 @@ int clif_senddelitem(USER *sd, int num, int type) {
   sd->status.inventory[num].time = 0;
   strcpy(sd->status.inventory[num].real_name, "");
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -7453,8 +7452,8 @@ int clif_sendadditem(USER *sd, int num) {
     sprintf(buf, "%s", name);
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -7555,8 +7554,8 @@ int clif_equipit(USER *sd, int id) {
     nameof = itemdb_name(sd->status.equip[id].id);
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -7775,7 +7774,7 @@ int clif_sendsubpathmessage(USER *sd, unsigned char *msg, int msglen) {
   }
 
   for (i = 0; i < fd_max; i++) {
-    if (session[i] && (tsd = session[i]->session_data) &&
+    if (session[i] && (tsd = rust_session_get_data(i)) &&
         clif_isignore(sd, tsd)) {
       if (tsd->status.class == sd->status.class) {
         if (tsd->status.subpath_chat) {
@@ -7815,7 +7814,7 @@ int clif_sendclanmessage(USER *sd, unsigned char *msg, int msglen) {
   }
 
   for (i = 0; i < fd_max; i++) {
-    if (session[i] && (tsd = session[i]->session_data) &&
+    if (session[i] && (tsd = rust_session_get_data(i)) &&
         clif_isignore(sd, tsd)) {
       if (tsd->status.clan == sd->status.clan) {
         if (tsd->status.clan_chat) {
@@ -7859,7 +7858,7 @@ int clif_sendnovicemessage(USER *sd, unsigned char *msg, int msglen) {
   }
 
   for (i = 0; i < fd_max; i++) {
-    if (session[i] && (tsd = session[i]->session_data) &&
+    if (session[i] && (tsd = rust_session_get_data(i)) &&
         clif_isignore(sd, tsd)) {
       if ((tsd->status.tutor || tsd->status.gm_level > 0) &&
           tsd->status.novice_chat) {
@@ -8244,8 +8243,8 @@ int clif_sendscriptsay(USER *sd, const char *msg, int msglen, int type) {
   if (type >= 10) {
     namelen += 4;
 
-    if (!session[sd->fd]) {
-      session[sd->fd]->eof = 8;
+    if (!rust_session_exists(sd->fd)) {
+      rust_session_set_eof(sd->fd, 8);
       return 0;
     }
 
@@ -8287,8 +8286,8 @@ int clif_sendscriptsay(USER *sd, const char *msg, int msglen, int type) {
     // crypt(WBUFP(buf, 0));
     clif_send(buf, 16 + namelen + msglen, &sd->bl, SAMEAREA);
   } else {
-    if (!session[sd->fd]) {
-      session[sd->fd]->eof = 8;
+    if (!rust_session_exists(sd->fd)) {
+      rust_session_set_eof(sd->fd, 8);
       return 0;
     }
 
@@ -8450,8 +8449,8 @@ int clif_speak(struct block_list *bl, va_list ap) {
   nullpo_ret(0, sd = (USER *)bl);
   len = strlen(msg);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -8534,8 +8533,8 @@ int clif_parsesay(USER *sd) {
   return 0;
 }
 int clif_destroyold(USER *sd) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -8561,8 +8560,8 @@ int clif_refresh(USER *sd) {
   clif_sendchararea(sd);
   clif_getchararea(sd);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -8606,8 +8605,8 @@ int clif_refreshnoclick(USER *sd) {
   clif_sendchararea(sd);
   clif_getchararea(sd);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -8641,8 +8640,8 @@ int clif_refreshnoclick(USER *sd) {
 }
 
 int clif_sendupdatestatus(USER *sd) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -8670,8 +8669,8 @@ int clif_sendupdatestatus(USER *sd) {
 }
 
 int clif_sendupdatestatus2(USER *sd) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -8701,8 +8700,8 @@ int clif_sendupdatestatus_onkill(USER *sd) {
   nullpo_ret(0, sd);
   float percentage = clif_getXPBarPercent(sd);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -8787,8 +8786,8 @@ int clif_sendupdatestatus_onequip(USER *sd) {
   nullpo_ret(0, sd);
   float percentage = clif_getXPBarPercent(sd);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -8850,8 +8849,8 @@ int clif_sendupdatestatus_onunequip(USER *sd) {
   nullpo_ret(0, sd);
   float percentage = clif_getXPBarPercent(sd);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -8903,8 +8902,8 @@ int clif_sendupdatestatus_onunequip(USER *sd) {
 }
 
 int clif_sendbluemessage(USER *sd, char *msg) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -9013,8 +9012,8 @@ int clif_sendanimation_xy(struct block_list *bl, va_list ap) {
   y = va_arg(ap, int);
   nullpo_ret(0, src = (USER *)bl);
 
-  if (!session[src->fd]) {
-    session[src->fd]->eof = 8;
+  if (!rust_session_exists(src->fd)) {
+    rust_session_set_eof(src->fd, 8);
     return 0;
   }
 
@@ -9042,8 +9041,8 @@ int clif_sendanimation(struct block_list *bl, va_list ap) {
   times = va_arg(ap, int);
 
   if (sd->status.settingFlags & FLAG_MAGIC) {
-    if (!session[sd->fd]) {
-      session[sd->fd]->eof = 8;
+    if (!rust_session_exists(sd->fd)) {
+      rust_session_set_eof(sd->fd, 8);
       return 0;
     }
 
@@ -9061,8 +9060,8 @@ int clif_sendanimation(struct block_list *bl, va_list ap) {
 }
 
 int clif_animation(USER *src, USER *sd, int animation, int duration) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -9104,8 +9103,8 @@ int clif_sendmagic(USER *sd, int pos) {
   question = magicdb_question(id);
   type = magicdb_type(id);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -9344,8 +9343,8 @@ int clif_scriptmes(USER *sd, int id, const char *msg, int previous, int next) {
     nd->lastaction = time(NULL);
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -9598,8 +9597,8 @@ int clif_scriptmenu(
     nd->lastaction = time(NULL);
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -9875,8 +9874,8 @@ int clif_scriptmenuseq(USER *sd, int id, const char *dialog, const char *menu[],
     nd->lastaction = time(NULL);
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -10159,8 +10158,8 @@ int clif_inputseq(USER *sd, int id, const char *dialog, const char *dialog2,
     nd->lastaction = time(NULL);
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -10256,8 +10255,8 @@ int clif_parsegetitem(USER *sd) {
 }
 
 int clif_unequipit(USER *sd, int spot) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -10378,7 +10377,7 @@ int clif_parselookat_scriptsub(USER *sd, struct block_list *bl) {
           }
   } else if(bl->type==BL_PC) {
           tsd=(USER*)bl;
-          a=b=c=d=session[tsd->fd]->client_addr.sin_addr.s_addr;
+          a=b=c=d=rust_session_get_client_ip(tsd->fd);
           a &=0xff;
           b=(b>>8)&0xff;
           c=(c>>16)&0xff;
@@ -10603,9 +10602,9 @@ int clif_parsechangepos(USER *sd) {
         int x;
         int len=0;
 
-        if (!session[sd->fd])
+        if (!rust_session_exists(sd->fd))
         {
-                session[sd->fd]->eof = 8;
+                rust_session_set_eof(sd->fd, 8);
                 return 0;
         }
 
@@ -10849,8 +10848,8 @@ int clif_parsechangespell(USER *sd) {
 }
 
 int clif_removespell(USER *sd, int pos) {
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -11217,12 +11216,12 @@ int clif_changeprofile(USER *sd) {
 
 // this is for preventing hackers
 int check_packet_size(int fd, int len) {
-  // USER *sd=session[fd]->session_data;
+  // USER *sd=rust_session_get_data(fd);
 
-  if (session[fd]->rdata_size >
-      len) {  // there is more here, so check for congruity
+  if ((size_t)RFIFOREST(fd) >
+      (size_t)len) {  // there is more here, so check for congruity
     if (RFIFOB(fd, len) != 0xAA) {
-      session[fd]->eof = 1;
+      rust_session_set_eof(fd, 1);
       return 1;
     }
   }
@@ -11531,11 +11530,11 @@ int clif_handle_boards(USER *sd) {
 }
 
 int clif_print_disconnect(int fd) {
-  if (session[fd]->eof == 4)  // Ignore this.
+  if (rust_session_get_eof(fd) == 4)  // Ignore this.
     return 0;
 
   printf(CL_NORMAL "(Reason: " CL_GREEN);
-  switch (session[fd]->eof) {
+  switch (rust_session_get_eof(fd)) {
     case 0x00:
     case 0x01:
       printf("NORMAL_EOF");
@@ -11591,28 +11590,28 @@ int clif_parse(int fd) {
   USER *sd = NULL;
   unsigned char CurrentSeed;
 
-  if (fd < 0 || fd > fd_max) return 0;
-  if (!session[fd]) return 0;
+  if (fd < 0) return 0;
+  if (!rust_session_exists(fd)) return 0;
 
-  sd = (USER *)session[fd]->session_data;
+  sd = (USER *)rust_session_get_data(fd);
 
-  // for(pnum=0;pnum<3 && session[fd] && session[fd]->rdata_size;pnum++) {
-  if (session[fd]->eof) {
+  // for(pnum=0;pnum<3 && rust_session_exists(fd) && session[fd]->rdata_size;pnum++) {
+  if (rust_session_get_eof(fd)) {
     if (sd) {
       printf("[map] [session_eof] name=%s\n", sd->status.name);
       clif_handle_disconnect(sd);
       clif_closeit(sd);
       // sd->fd=0;
     }
-    // printf("Reason for disconnect: %d\n",session[fd]->eof);
+    // printf("Reason for disconnect: %d\n",rust_session_get_eof(fd));
     clif_print_disconnect(fd);
     session_eof(fd);
     return 0;
   }
 
   // if(!session[fd]->rdata_size) return 0;
-  if (session[fd]->rdata_size > 0 && RFIFOB(fd, 0) != 0xAA) {
-    session[fd]->eof = 13;
+  if (RFIFOREST(fd) > 0 && RFIFOB(fd, 0) != 0xAA) {
+    rust_session_set_eof(fd, 13);
     return 0;
   }
 
@@ -11656,7 +11655,7 @@ int clif_parse(int fd) {
           clif_Hacker(sd->status.name, AlertStr);
           WPEtimes = pc_readglobalreg(sd, RegStr) + 1;
           pc_setglobalreg(sd, RegStr, WPEtimes);
-          session[sd->fd]->eof = 14;
+          rust_session_set_eof(sd->fd, 14);
           return 0;
   }*/
 
@@ -11666,14 +11665,14 @@ int clif_parse(int fd) {
   int logincount = 0;
   USER *tsd = NULL;
   for (int i = 0; i < fd_max; i++) {
-    if (session[i] && (tsd = session[i]->session_data)) {
+    if (session[i] && (tsd = rust_session_get_data(i))) {
       if (sd->status.id == tsd->status.id) logincount++;
 
       if (logincount >= 2) {
         printf("%s attempted dual login on IP:%s\n", sd->status.name,
                sd->status.ipaddress);
-        session[sd->fd]->eof = 1;
-        session[tsd->fd]->eof = 1;
+        rust_session_set_eof(sd->fd, 1);
+        rust_session_set_eof(tsd->fd, 1);
         break;
       }
     }
@@ -12231,8 +12230,8 @@ int clif_handle_obstruction(USER *sd) {
 int clif_sendtest(USER *sd) {
   static int number;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -12269,8 +12268,8 @@ int clif_updatestate(struct block_list *bl, va_list ap) {
   // if( (sd->optFlags & optFlag_stealth && !src_sd->status.gm_level) &&
   // src_sd->status.id != sd->status.id)return 0;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -12650,8 +12649,8 @@ int clif_showboards(USER *sd) {
   int x, i;
   int b_count;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -12696,8 +12695,8 @@ int clif_buydialog(USER *sd, unsigned int id, const char *dialog,
   char name[64];
   char buff[64];
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -12991,8 +12990,8 @@ int clif_selldialog(USER *sd, unsigned int id, const char *dialog, int item[],
   int len;
   int i;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -13258,8 +13257,8 @@ int clif_input(USER *sd, int id, const char *dialog, const char *item) {
     nd->lastaction = time(NULL);
   }
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -13541,8 +13540,8 @@ int clif_clickonplayer(USER *sd, struct block_list *bl) {
   tsd = map_id2sd(bl->id);
   equip_status[0] = '\0';
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -13965,8 +13964,8 @@ int clif_groupstatus(USER *sd) {
   count = 0;
   // if(sd->group_count==1) sd->group_count==0;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -14192,8 +14191,8 @@ int clif_grouphealth_update(USER *sd) {
     tsd = map_id2sd(groups[sd->groupid][x]);
     if (!tsd) continue;
 
-    if (!session[sd->fd]) {
-      session[sd->fd]->eof = 8;
+    if (!rust_session_exists(sd->fd)) {
+      rust_session_set_eof(sd->fd, 8);
       return 0;
     }
 
@@ -14994,8 +14993,8 @@ int clif_exchange_message(USER *sd, char *message, int type, int extra) {
   nullpo_ret(0, sd);
   len = strlen(message) + 5;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -15061,8 +15060,8 @@ int clif_parse_exchange(USER *sd) {
     case 1:  // amount?
       id = RFIFOB(sd->fd, 10) - 1;
       if (sd->status.inventory[id].amount > 1) {
-        if (!session[sd->fd]) {
-          session[sd->fd]->eof = 8;
+        if (!rust_session_exists(sd->fd)) {
+          rust_session_set_eof(sd->fd, 8);
           return 0;
         }
 
@@ -15120,7 +15119,7 @@ int clif_parse_exchange(USER *sd) {
         if (tsd && tsd->exchange.target == sd->bl.id) {
           clif_exchange_message(tsd, "Exchange cancelled.", 4, 0);
           clif_exchange_close(tsd);
-          session[sd->fd]->eof = 10;
+          rust_session_set_eof(sd->fd, 10);
           break;
         }
         // clif_exchange_close(tsd);
@@ -15171,8 +15170,8 @@ int clif_startexchange(USER *sd, unsigned int target) {
       sprintf(buff, "%s()", tsd->status.name);
     }
 
-    if (!session[sd->fd]) {
-      session[sd->fd]->eof = 8;
+    if (!rust_session_exists(sd->fd)) {
+      rust_session_set_eof(sd->fd, 8);
       return 0;
     }
 
@@ -15192,8 +15191,8 @@ int clif_startexchange(USER *sd, unsigned int target) {
     WFIFOW(sd->fd, 1) = SWAP16(len + 3);
     WFIFOSET(sd->fd, encrypt(sd->fd));
 
-    if (!session[sd->fd]) {
-      session[sd->fd]->eof = 8;
+    if (!rust_session_exists(sd->fd)) {
+      rust_session_set_eof(sd->fd, 8);
       return 0;
     }
 
@@ -15245,8 +15244,8 @@ int clif_exchange_additem_else(USER *sd, USER *tsd, int id) {
   sd->exchange.list_count++;
   stringTruncate(nameof, 15);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -15270,8 +15269,8 @@ int clif_exchange_additem_else(USER *sd, USER *tsd, int id) {
   WFIFOSET(sd->fd, encrypt(sd->fd));
   len = 0;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -15335,8 +15334,8 @@ int clif_exchange_additem(USER *sd, USER *tsd, int id, int amount) {
   sd->exchange.list_count++;
   stringTruncate(nameof, 15);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -15389,8 +15388,8 @@ int clif_exchange_additem(USER *sd, USER *tsd, int id, int amount) {
   WFIFOSET(sd->fd, encrypt(sd->fd));
   len = 0;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -15472,13 +15471,13 @@ int clif_exchange_money(USER *sd, USER *tsd) {
   tsd->exchange.gold)) { Sql_ShowDebug(sql_handle);
   }*/
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
-  if (!session[tsd->fd]) {
-    session[tsd->fd]->eof = 8;
+  if (!rust_session_exists(tsd->fd)) {
+    rust_session_set_eof(tsd->fd, 8);
     return 0;
   }
 
@@ -15607,9 +15606,9 @@ int clif_canmove(USER *sd, int direct) {
 /*int clif_clanBankWithdraw(USER *sd,struct item_data *items,int count) {
 
 
-        if (!session[sd->fd])
+        if (!rust_session_exists(sd->fd))
         {
-                session[sd->fd]->eof = 8;
+                rust_session_set_eof(sd->fd, 8);
                 return 0;
         }
 
@@ -15700,8 +15699,8 @@ int clif_mapselect(USER *sd, const char *wm, int *x0, int *y0,
   int len = 0;
   int x, y;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -15782,8 +15781,8 @@ int clif_sendpowerboard(USER *sd) {
   len[0] = 0;
   len[1] = 0;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -15841,8 +15840,8 @@ int clif_huntertoggle(USER *sd) {
 
   // if (SQL_SUCCESS == SqlStmt_NextRow(stmt)) SqlStmt_Free(stmt);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 

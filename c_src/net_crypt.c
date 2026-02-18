@@ -36,7 +36,7 @@ bool is_key_server(int opcode) {
 int encrypt(int fd) {
   USER *sd = NULL;
   char key[16];
-  sd = session[fd]->session_data;
+  sd = rust_session_get_data(fd);
 
   if (sd == NULL) return 1;
 
@@ -54,7 +54,7 @@ int encrypt(int fd) {
 int decrypt(int fd) {
   USER *sd = NULL;
   char key[16];
-  sd = (USER *)session[fd]->session_data;
+  sd = (USER *)rust_session_get_data(fd);
 
   if (sd == NULL) return 1;
 
