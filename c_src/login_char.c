@@ -161,7 +161,7 @@ int intif_parse_connectconfirm(int fd) {
            CONVIP(rust_session_get_client_ip(RFIFOW(fd, 2))));
     if (setInvalidCount(rust_session_get_client_ip(RFIFOW(fd, 2))) >=
         10) {
-      add_ip_lockout(rust_session_get_client_ip(RFIFOW(fd, 2)));
+      rust_add_ip_lockout(rust_session_get_client_ip(RFIFOW(fd, 2)));
       rust_session_set_eof(RFIFOW(fd, 2), 1);
     }
     clif_message(RFIFOW(fd, 2), 0x03, login_msg[LGN_WRONGPASS]);
@@ -199,7 +199,7 @@ int intif_parse_changepass(int fd) {
            CONVIP(rust_session_get_client_ip(RFIFOW(fd, 2))));
     if (setInvalidCount(rust_session_get_client_ip(RFIFOW(fd, 2))) >=
         10) {
-      add_ip_lockout(rust_session_get_client_ip(RFIFOW(fd, 2)));
+      rust_add_ip_lockout(rust_session_get_client_ip(RFIFOW(fd, 2)));
       rust_session_set_eof(RFIFOW(fd, 2), 1);
     }
     clif_message(RFIFOW(fd, 2), 0x03, login_msg[LGN_WRONGPASS]);

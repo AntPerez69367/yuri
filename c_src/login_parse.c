@@ -17,8 +17,6 @@
 #include "strlib.h"
 #include "timer.h"
 
-extern int Check_Throttle(struct sockaddr_in S);
-extern void Add_Throttle(struct sockaddr_in S);
 
 bool bannedIPCheck(char *ip) {
   SqlStmt *stmt = SqlStmt_Malloc(sql_handle);
@@ -59,7 +57,7 @@ int clif_accept(int fd) {
   printf("[login] [accept] ip=%s\n", ip);
 
   if (DDOS) {
-    { struct sockaddr_in _taddr; memset(&_taddr, 0, sizeof(_taddr)); _taddr.sin_addr.s_addr = rust_session_get_client_ip(fd); Add_Throttle(_taddr); }
+    rust_add_throttle(rust_session_get_client_ip(fd));
     printf("[login] [ddos_throttle] ip=%u.%u.%u.%u\n",
            CONVIP2(rust_session_get_client_ip(fd)));
 

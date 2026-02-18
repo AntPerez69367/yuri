@@ -176,7 +176,7 @@ int do_init(int argc, char **argv) {
   set_defaultaccept(clif_accept);
   set_defaultparse(clif_parse);
   login_fd = make_listen_port(login_port);
-  timer_insert(10 * 60 * 1000, 10 * 60 * 1000, Remove_Throttle, 0, 0);
+  // Throttle reset timer registered by Rust in run_async_server.
   // Lockout DB
   bf_lockout = uidb_alloc(DB_OPT_BASE);
 
