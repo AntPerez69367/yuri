@@ -49,8 +49,8 @@ target_link_libraries(map_server ${PROJECT_SOURCE_DIR}/target/debug/libyuri.a m 
 
 add_executable(decrypt_cli c_src/decrypt_cli.c)
 target_link_libraries(decrypt_cli common)
-target_link_libraries(decrypt_cli deps)
 target_link_libraries(decrypt_cli ${PROJECT_SOURCE_DIR}/target/debug/libyuri.a m dl pthread)
+target_link_libraries(decrypt_cli deps)
 
 add_executable(metan_cli c_src/metan_cli.c c_src/item_db.c c_src/class_db.c)
 target_link_libraries(metan_cli common)
