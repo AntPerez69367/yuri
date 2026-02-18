@@ -56,8 +56,8 @@ pub enum SessionError {
         pos: usize,
     },
 
-    #[error("Write buffer too large: fd={fd}, requested_pos={requested_pos}, max=262144")]
-    WriteBufferTooLarge { fd: i32, requested_pos: usize },
+    #[error("Write buffer too large: fd={fd}, requested_pos={requested_pos}, max={max}")]
+    WriteBufferTooLarge { fd: i32, requested_pos: usize, max: usize },
 
     #[error("Session not found: fd={0}")]
     SessionNotFound(i32),
@@ -398,6 +398,7 @@ impl Session {
             return Err(SessionError::WriteBufferTooLarge {
                 fd: self.fd,
                 requested_pos: actual_pos,
+                max: MAX_WDATA_SIZE,
             });
         }
 
@@ -425,6 +426,7 @@ impl Session {
             return Err(SessionError::WriteBufferTooLarge {
                 fd: self.fd,
                 requested_pos: actual_pos,
+                max: MAX_WDATA_SIZE,
             });
         }
 
@@ -453,6 +455,7 @@ impl Session {
             return Err(SessionError::WriteBufferTooLarge {
                 fd: self.fd,
                 requested_pos: actual_pos,
+                max: MAX_WDATA_SIZE,
             });
         }
 
@@ -549,6 +552,7 @@ impl Session {
             return Err(SessionError::WriteBufferTooLarge {
                 fd: self.fd,
                 requested_pos: actual_pos,
+                max: MAX_WDATA_SIZE,
             });
         }
 
@@ -575,6 +579,7 @@ impl Session {
             return Err(SessionError::WriteBufferTooLarge {
                 fd: self.fd,
                 requested_pos: needed,
+                max: MAX_WDATA_SIZE,
             });
         }
 
@@ -619,6 +624,7 @@ impl Session {
             return Err(SessionError::WriteBufferTooLarge {
                 fd: self.fd,
                 requested_pos: end,
+                max: MAX_WDATA_SIZE,
             });
         }
 
@@ -936,12 +942,7 @@ async fn session_io_task(fd: i32) {
     let mut read_buf = vec![0u8; 4096];
 
     // Get the write_notify Arc once (it never changes for the lifetime of the session)
-    let write_notify = {
-        match session_arc.try_lock() {
-            Ok(s) => s.write_notify.clone(),
-            Err(_) => Arc::new(tokio::sync::Notify::new()),
-        }
-    };
+    let write_notify = session_arc.lock().await.write_notify.clone();
 
     loop {
         // Check eof
