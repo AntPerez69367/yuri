@@ -524,3 +524,40 @@ pub extern "C" fn rust_session_get_all_fds(buf: *mut c_int, buf_len: c_int) -> c
     }
     count
 }
+
+/// Mark an IP as DDoS-locked.
+///
+/// `ip` is in network byte order (sin_addr.s_addr), as returned by
+/// `rust_session_get_client_ip`.
+#[no_mangle]
+pub extern "C" fn rust_add_ip_lockout(ip: u32) {
+    crate::network::ddos::add_ip_lockout(ip);
+}
+
+/// Timer callback: prune stale DDoS history entries.
+///
+/// Registered with timer_insert at server startup (interval 1 s).
+/// Signature matches C's `int (*func)(int, int)`.
+#[no_mangle]
+pub extern "C" fn rust_connect_check_clear(_id: c_int, _data: c_int) -> c_int {
+    crate::network::ddos::connect_check_clear()
+}
+
+/// Record a throttled connection attempt from an IP.
+///
+/// `ip` is in network byte order (sin_addr.s_addr), as returned by
+/// `rust_session_get_client_ip`.
+#[no_mangle]
+pub extern "C" fn rust_add_throttle(ip: u32) {
+    crate::network::throttle::add_throttle(ip);
+}
+
+/// Timer callback: reset all throttle counts.
+///
+/// Registered with timer_insert at server startup (interval 10 min).
+/// Signature matches C's `int (*func)(int, int)`.
+#[no_mangle]
+pub extern "C" fn rust_remove_throttle(_id: c_int, _data: c_int) -> c_int {
+    crate::network::throttle::remove_throttle();
+    0
+}

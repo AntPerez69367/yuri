@@ -30,6 +30,16 @@
 #define SERVER_TICK_RATE_NS 10000000
 
 /**
+ * Non-DDoS entries expire after 3× this interval (ms).
+ */
+#define DDOS_INTERVAL (3 * 1000)
+
+/**
+ * DDoS-locked entries are cleared after this interval (ms).
+ */
+#define DDOS_AUTORESET ((10 * 60) * 1000)
+
+/**
  * Buffer size constants
  */
 #define RFIFO_SIZE (16 * 1024)
@@ -475,6 +485,38 @@ void rust_log_c(int level, const char *msg);
 int rust_session_get_all_fds(int *buf, int buf_len);
 
 /**
+ * Mark an IP as DDoS-locked.
+ *
+ * `ip` is in network byte order (sin_addr.s_addr), as returned by
+ * `rust_session_get_client_ip`.
+ */
+void rust_add_ip_lockout(uint32_t ip);
+
+/**
+ * Timer callback: prune stale DDoS history entries.
+ *
+ * Registered with timer_insert at server startup (interval 1 s).
+ * Signature matches C's `int (*func)(int, int)`.
+ */
+int rust_connect_check_clear(int _id, int _data);
+
+/**
+ * Record a throttled connection attempt from an IP.
+ *
+ * `ip` is in network byte order (sin_addr.s_addr), as returned by
+ * `rust_session_get_client_ip`.
+ */
+void rust_add_throttle(uint32_t ip);
+
+/**
+ * Timer callback: reset all throttle counts.
+ *
+ * Registered with timer_insert at server startup (interval 10 min).
+ * Signature matches C's `int (*func)(int, int)`.
+ */
+int rust_remove_throttle(int _id, int _data);
+
+/**
  * Get current tick count in milliseconds (monotonic clock)
  */
 extern uint32_t gettick_nocache(void);
@@ -498,5 +540,14 @@ extern void timer_init(void);
  * Free all timer memory
  */
 extern int timer_clear(void);
+
+/**
+ * Insert a recurring or one-shot timer.
+ * `tick` — initial delay (ms), `interval` — repeat interval (ms, 0 = one-shot),
+ * `func` — callback `int (*)(int id, int data)`,
+ * `id` / `data` — passed through to callback.
+ * Returns a timer handle (used with timer_remove).
+ */
+extern int timer_insert(uint32_t tick, uint32_t interval, int (*func)(int, int), int id, int data);
 
 #endif  /* YURI_RS_H */

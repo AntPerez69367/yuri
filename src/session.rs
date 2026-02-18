@@ -664,6 +664,30 @@ pub async fn run_async_server(_port: u16) -> Result<(), Box<dyn std::error::Erro
 
     let manager = get_session_manager();
 
+    // Register the DDoS history cleanup timer (1s interval, matching C's do_socket).
+    #[cfg(not(test))]
+    unsafe {
+        crate::ffi::timer::timer_insert(
+            1000,
+            1000,
+            Some(crate::ffi::session::rust_connect_check_clear),
+            0,
+            0,
+        );
+    }
+
+    // Register throttle reset timer (10 min interval, matching login_server.c).
+    #[cfg(not(test))]
+    unsafe {
+        crate::ffi::timer::timer_insert(
+            10 * 60 * 1000,
+            10 * 60 * 1000,
+            Some(crate::ffi::session::rust_remove_throttle),
+            0,
+            0,
+        );
+    }
+
     // Take all registered std::net listeners, convert to tokio, spawn accept tasks
     let listen_fds = manager.listen_fds.lock().unwrap().clone();
 
@@ -721,12 +745,79 @@ async fn accept_loop(listener: tokio::net::TcpListener, _listen_fd: i32) {
     loop {
         match listener.accept().await {
             Ok((stream, addr)) => {
+                // Reject DDoS-locked IPs before allocating any resources.
+                let ip_net = match addr.ip() {
+                    std::net::IpAddr::V4(ipv4) => u32::from(ipv4).to_be(),
+                    _ => 0,
+                };
+                if crate::network::ddos::is_ip_locked(ip_net) {
+                    tracing::warn!("[accept] DDoS-locked IP {}, refusing connection", addr);
+                    continue;
+                }
+                if crate::network::throttle::is_throttled(ip_net) {
+                    tracing::warn!("[accept] Throttled IP {}, refusing connection", addr);
+                    continue;
+                }
+                apply_socket_opts(&stream);
                 tracing::debug!("[accept] New connection from {} on fd={}", addr, _listen_fd);
                 tokio::task::spawn_local(session_io_task_from_accept(stream, addr));
             }
             Err(e) => {
                 tracing::error!("[accept] fd={} accept error: {}", _listen_fd, e);
             }
+        }
+    }
+}
+
+/// Apply the same socket options as the old C `setsocketopts()`.
+///
+/// - `SO_REUSEADDR` / `SO_REUSEPORT` (unix): allows the port to be reused
+///   after a quick server restart.
+/// - `IPPROTO_TCP / 0`: matches what the C code did (TCP_NODELAY was
+///   intentionally commented out; the `0` call was kept as-is).
+/// - `SO_LINGER` with `l_onoff=0`: graceful close, no hard timeout.
+fn apply_socket_opts(stream: &TcpStream) {
+    use std::os::unix::io::AsRawFd;
+    let fd = stream.as_raw_fd();
+    let yes: libc::c_int = 1;
+    unsafe {
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEADDR,
+            &yes as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&yes) as libc::socklen_t,
+        );
+        #[cfg(target_os = "linux")]
+        libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_REUSEPORT,
+            &yes as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&yes) as libc::socklen_t,
+        );
+        // Matches C's setsockopt(fd, IPPROTO_TCP, 0, ...) (TCP_NODELAY was
+        // commented out in the original; the zero option-name is kept verbatim).
+        libc::setsockopt(
+            fd,
+            libc::IPPROTO_TCP,
+            0,
+            &yes as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&yes) as libc::socklen_t,
+        );
+        let linger = libc::linger {
+            l_onoff: 0,
+            l_linger: 0,
+        };
+        if libc::setsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_LINGER,
+            &linger as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&linger) as libc::socklen_t,
+        ) != 0
+        {
+            tracing::warn!("[accept] Unable to set SO_LINGER for fd={}", fd);
         }
     }
 }
@@ -859,7 +950,17 @@ async fn session_io_task(fd: i32) {
             session.eof
         };
         if eof != 0 {
-            tracing::debug!("[session] fd={} eof={}, closing", fd, eof);
+            tracing::info!("[session] fd={} server-initiated eof={}, invoking parse for cleanup", fd, eof);
+            // Give C one final parse call so clif_handle_disconnect / clif_closeit
+            // can run and free the player's session_data (sd).  This mirrors
+            // what happens for peer-initiated closes (Ok(0) branch below).
+            let parse_cb = {
+                let session = session_arc.lock().await;
+                session.callbacks.parse
+            };
+            if let Some(cb) = parse_cb {
+                unsafe { cb(fd); }
+            }
             break;
         }
 

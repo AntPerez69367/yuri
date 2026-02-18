@@ -20,4 +20,17 @@ extern "C" {
 
     /// Free all timer memory
     pub fn timer_clear() -> c_int;
+
+    /// Insert a recurring or one-shot timer.
+    /// `tick` — initial delay (ms), `interval` — repeat interval (ms, 0 = one-shot),
+    /// `func` — callback `int (*)(int id, int data)`,
+    /// `id` / `data` — passed through to callback.
+    /// Returns a timer handle (used with timer_remove).
+    pub fn timer_insert(
+        tick: u32,
+        interval: u32,
+        func: Option<unsafe extern "C" fn(c_int, c_int) -> c_int>,
+        id: c_int,
+        data: c_int,
+    ) -> c_int;
 }
