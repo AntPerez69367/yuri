@@ -4,13 +4,14 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Mutex as StdMutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 
 /// Buffer size constants
 pub const RFIFO_SIZE: usize = 16 * 1024;
@@ -19,8 +20,14 @@ pub const WFIFO_SIZE: usize = 16 * 1024;
 /// Maximum number of sessions
 pub const MAX_SESSIONS: usize = 1024;
 
-/// Maximum write buffer size (256KB)
-const MAX_WDATA_SIZE: usize = 256 * 1024;
+/// Maximum write buffer size (4MB).
+///
+/// Must accommodate inter-server packets that compress struct mmo_charstatus
+/// (~3MB uncompressed) via compressBound: the WFIFOHEAD call reserves the
+/// worst-case compressed size before compress2 runs, which is ~3.17MB.
+/// The old C session.c used dynamic realloc with no hard cap; 4MB matches
+/// the original behaviour while providing a reasonable upper bound.
+const MAX_WDATA_SIZE: usize = 4 * 1024 * 1024;
 
 /// Error types for session operations
 #[derive(Debug, thiserror::Error)]
@@ -68,6 +75,8 @@ pub enum SessionError {
 /// Callback function pointers for C interop
 #[derive(Clone, Copy, Default)]
 pub struct SessionCallbacks {
+    /// Called once when a new connection is accepted (before any data is read)
+    pub accept: Option<unsafe extern "C" fn(i32) -> i32>,
     /// Called when packet data is received and ready to parse
     pub parse: Option<unsafe extern "C" fn(i32) -> i32>,
     /// Called when session has been idle for too long
@@ -76,80 +85,89 @@ pub struct SessionCallbacks {
     pub shutdown: Option<unsafe extern "C" fn(i32) -> i32>,
 }
 
-/// Global session manager (thread-safe)
+/// Global session manager (thread-safe, sync-accessible from C callbacks)
 pub struct SessionManager {
-    sessions: Arc<RwLock<HashMap<i32, Arc<Mutex<Session>>>>>,
-    next_fd: Arc<Mutex<i32>>,
-    pub default_callbacks: Arc<Mutex<SessionCallbacks>>,
+    /// Active sessions: std::sync::RwLock so FFI can access without block_on
+    sessions: RwLock<HashMap<i32, Arc<Mutex<Session>>>>,
+    /// Next fd counter: atomic so FFI can allocate without block_on
+    next_fd: AtomicI32,
+    /// Default callbacks for new sessions: std::sync::Mutex
+    pub default_callbacks: StdMutex<SessionCallbacks>,
+    /// Pending listening sockets (std::net, converted to tokio at server start)
+    pub listeners: StdMutex<HashMap<i32, std::net::TcpListener>>,
+    /// Ordered list of listener fds
+    pub listen_fds: StdMutex<Vec<i32>>,
 }
 
 impl SessionManager {
-    /// Create a new session manager
     pub fn new() -> Self {
         Self {
-            sessions: Arc::new(RwLock::new(HashMap::new())),
-            next_fd: Arc::new(Mutex::new(1)), // Start at 1 (0 reserved)
-            default_callbacks: Arc::new(Mutex::new(SessionCallbacks::default())),
+            sessions: RwLock::new(HashMap::new()),
+            next_fd: AtomicI32::new(1), // 0 reserved
+            default_callbacks: StdMutex::new(SessionCallbacks::default()),
+            listeners: StdMutex::new(HashMap::new()),
+            listen_fds: StdMutex::new(Vec::new()),
         }
     }
 
-    /// Allocate a new file descriptor
-    pub async fn allocate_fd(&self) -> Result<i32, SessionError> {
-        let mut next = self.next_fd.lock().await;
-        let fd = *next;
-
-        // Check against MAX_SESSIONS before incrementing
+    /// Allocate a new file descriptor (sync)
+    pub fn allocate_fd(&self) -> Result<i32, SessionError> {
+        let fd = self.next_fd.fetch_add(1, Ordering::Relaxed);
         if fd >= MAX_SESSIONS as i32 {
             return Err(SessionError::MaxSessionsExceeded);
         }
-
-        *next = next.checked_add(1)
-            .ok_or(SessionError::FdOverflow)?;
-
         Ok(fd)
     }
 
-    /// Insert a session into the manager
-    pub async fn insert_session(&self, fd: i32, session: Arc<Mutex<Session>>)
-        -> Result<(), SessionError> {
-        let mut sessions = self.sessions.write().await;
-
+    /// Insert a session (sync)
+    pub fn insert_session(&self, fd: i32, session: Arc<Mutex<Session>>) -> Result<(), SessionError> {
+        let mut sessions = self.sessions.write().unwrap();
         if sessions.len() >= MAX_SESSIONS {
             return Err(SessionError::MaxSessionsExceeded);
         }
-
         sessions.insert(fd, session);
         Ok(())
     }
 
-    /// Get a session by file descriptor
-    pub async fn get_session(&self, fd: i32) -> Option<Arc<Mutex<Session>>> {
-        let sessions = self.sessions.read().await;
-        sessions.get(&fd).cloned()
+    /// Get a session by fd (sync)
+    pub fn get_session(&self, fd: i32) -> Option<Arc<Mutex<Session>>> {
+        self.sessions.read().unwrap().get(&fd).cloned()
     }
 
-    /// Remove a session
-    pub async fn remove_session(&self, fd: i32) {
-        let mut sessions = self.sessions.write().await;
-        sessions.remove(&fd);
+    /// Remove a session (sync)
+    pub fn remove_session(&self, fd: i32) {
+        self.sessions.write().unwrap().remove(&fd);
     }
 
-    /// Get default callbacks
-    pub async fn get_default_callbacks(&self) -> SessionCallbacks {
-        let callbacks = self.default_callbacks.lock().await;
-        *callbacks
+    /// Get default callbacks (sync)
+    pub fn get_default_callbacks(&self) -> SessionCallbacks {
+        *self.default_callbacks.lock().unwrap()
     }
 
-    /// Set default callbacks
-    pub async fn set_default_callbacks(&self, callbacks: SessionCallbacks) {
-        let mut default = self.default_callbacks.lock().await;
-        *default = callbacks;
+    /// Set default callbacks (sync)
+    pub fn set_default_callbacks(&self, callbacks: SessionCallbacks) {
+        *self.default_callbacks.lock().unwrap() = callbacks;
     }
 
-    /// Get session count
-    pub async fn session_count(&self) -> usize {
-        let sessions = self.sessions.read().await;
-        sessions.len()
+    /// Get session count (sync)
+    pub fn session_count(&self) -> usize {
+        self.sessions.read().unwrap().len()
+    }
+
+    /// Get snapshot of all active session fds (sync)
+    pub fn get_all_fds(&self) -> Vec<i32> {
+        self.sessions.read().unwrap().keys().copied().collect()
+    }
+
+    /// Register a listener socket (sync, called before server starts)
+    pub fn add_listener(&self, fd: i32, listener: std::net::TcpListener) {
+        self.listeners.lock().unwrap().insert(fd, listener);
+        self.listen_fds.lock().unwrap().push(fd);
+    }
+
+    /// Take ownership of a listener (sync, called by accept loop at startup)
+    pub fn take_listener(&self, fd: i32) -> Option<std::net::TcpListener> {
+        self.listeners.lock().unwrap().remove(&fd)
     }
 }
 
@@ -167,13 +185,63 @@ pub fn get_session_manager() -> &'static SessionManager {
     SESSION_MANAGER.get_or_init(SessionManager::new)
 }
 
+/// Outgoing connections created from timer callbacks, pending session_io_task spawn.
+/// Timer callbacks run synchronously inside the Tokio select! arm, so they cannot
+/// use block_on or spawn_local directly. Instead they push fds here and
+/// run_async_server drains this queue after each timer_do() call.
+pub static PENDING_CONNECTIONS: OnceLock<StdMutex<Vec<i32>>> = OnceLock::new();
+
+pub fn push_pending_connection(fd: i32) {
+    PENDING_CONNECTIONS
+        .get_or_init(|| StdMutex::new(Vec::new()))
+        .lock()
+        .unwrap()
+        .push(fd);
+}
+
+fn drain_pending_connections() -> Vec<i32> {
+    PENDING_CONNECTIONS
+        .get()
+        .map(|m| std::mem::take(&mut *m.lock().unwrap()))
+        .unwrap_or_default()
+}
+
+/// Set up a new session from an established TCP connection (sync).
+pub fn setup_connection(
+    stream: TcpStream,
+    addr: SocketAddr,
+    manager: &SessionManager,
+) -> Result<i32, SessionError> {
+    let fd = manager.allocate_fd()?;
+
+    let mut session = Session::new(fd);
+    session.client_addr = Some(addr);
+    session.client_addr_raw = match addr.ip() {
+        std::net::IpAddr::V4(ipv4) => u32::from(ipv4).to_be(),
+        _ => 0,
+    };
+    session.socket = Some(Arc::new(Mutex::new(stream)));
+    session.callbacks = manager.get_default_callbacks();
+
+    let session_arc = Arc::new(Mutex::new(session));
+    manager.insert_session(fd, session_arc)?;
+
+    tracing::info!("[session] New connection: fd={}, addr={}", fd, addr);
+    #[cfg(not(test))]
+    crate::ffi::session::update_fd_max_pub(fd);
+    Ok(fd)
+}
+
 /// Global Tokio runtime
 pub static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 
-/// Initialize the Tokio runtime
+/// Initialize the Tokio runtime (single-threaded for C callback safety)
 pub fn init_runtime() -> &'static Runtime {
     RUNTIME.get_or_init(|| {
-        Runtime::new().expect("Failed to create Tokio runtime")
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create Tokio runtime")
     })
 }
 
@@ -187,6 +255,14 @@ pub struct Session {
 
     /// Client address
     pub client_addr: Option<SocketAddr>,
+
+    /// Client address as raw u32 (for C compatibility with sin_addr.s_addr)
+    pub client_addr_raw: u32,
+
+    /// Pending outgoing connection address.
+    /// Set by rust_make_connection when called from inside the runtime.
+    /// session_io_task performs the actual async connect before starting I/O.
+    pub connect_addr: Option<SocketAddr>,
 
     /// Read buffer (FIFO)
     pub rdata: Vec<u8>,
@@ -218,6 +294,11 @@ pub struct Session {
 
     /// Callbacks
     pub callbacks: SessionCallbacks,
+
+    /// Notified when C code writes data to this session's write buffer.
+    /// session_io_task selects on this to flush pending writes immediately
+    /// instead of waiting for the next read event.
+    pub write_notify: Arc<tokio::sync::Notify>,
 }
 
 impl Session {
@@ -227,6 +308,9 @@ impl Session {
             fd,
             socket: None,
             client_addr: None,
+            client_addr_raw: 0,
+            connect_addr: None,
+            write_notify: Arc::new(tokio::sync::Notify::new()),
             rdata: Vec::with_capacity(RFIFO_SIZE),
             rdata_pos: 0,
             rdata_size: 0,
@@ -395,6 +479,11 @@ impl Session {
         }
 
         self.wdata_size = new_size;
+        // Wake session_io_task so it flushes immediately rather than waiting for
+        // the next read event. This is critical when a C parse callback writes
+        // to a *different* session's buffer (e.g. login server writing to char_fd
+        // while handling a client packet).
+        self.write_notify.notify_one();
         Ok(())
     }
 
@@ -542,22 +631,12 @@ impl Session {
     }
 
     /// Compacts the read buffer by moving unread data to the beginning.
-    ///
-    /// If all data has been consumed (rdata_pos == rdata_size), clears the buffer.
-    /// Otherwise, moves unread bytes to the front and updates positions.
-    ///
-    /// This is equivalent to the C macro RFIFOFLUSH.
-    ///
-    /// # Note
-    /// This operation is infallible - it always succeeds.
     pub fn flush_read_buffer(&mut self) {
         if self.rdata_pos == self.rdata_size {
-            // All data read - reset
             self.rdata_pos = 0;
             self.rdata_size = 0;
             self.rdata.clear();
         } else if self.rdata_pos > 0 {
-            // Compact: move unread data to front
             self.rdata.copy_within(self.rdata_pos..self.rdata_size, 0);
             self.rdata_size -= self.rdata_pos;
             self.rdata_pos = 0;
@@ -572,217 +651,332 @@ impl Session {
 unsafe impl Send for Session {}
 unsafe impl Sync for Session {}
 
-/// Run the async game server
-pub async fn run_async_server(port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    tracing::info!("[rust_server] Starting on port {}", port);
+/// Run the async game server.
+///
+/// Replaces the C main loop in core.c:
+/// - Spawns accept tasks for all registered listeners
+/// - Calls C timer_do() every 10ms
+/// - Session I/O is handled by per-connection tasks (session_io_task)
+/// - Drains PENDING_CONNECTIONS after each timer tick (for connections
+///   made from timer callbacks via rust_make_connection)
+pub async fn run_async_server(_port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    tracing::info!("[rust_server] Starting event loop");
 
-    // Initialize session manager
-    get_session_manager();
+    let manager = get_session_manager();
 
-    // Bind to port
-    let listener = TcpListener::bind(("0.0.0.0", port)).await?;
-    tracing::info!("[rust_server] Listening on port {}", port);
+    // Take all registered std::net listeners, convert to tokio, spawn accept tasks
+    let listen_fds = manager.listen_fds.lock().unwrap().clone();
 
-    // Accept loop
-    loop {
-        // Check for shutdown signal
-        #[cfg(not(test))]
-        if crate::ffi::core::rust_should_shutdown() != 0 {
-            tracing::info!("[rust_server] Shutdown requested");
-            break;
+    for fd in listen_fds {
+        if let Some(std_listener) = manager.take_listener(fd) {
+            std_listener.set_nonblocking(true)?;
+            let listener = tokio::net::TcpListener::from_std(std_listener)?;
+            tracing::info!("[rust_server] Spawning accept loop for listener fd={}", fd);
+            tokio::task::spawn_local(accept_loop(listener, fd));
         }
+    }
 
-        // Accept connection with timeout
-        match tokio::time::timeout(Duration::from_millis(100), listener.accept()).await {
-            Ok(Ok((socket, addr))) => {
-                tracing::debug!("[rust_server] New connection from {}", addr);
-                // Spawn handler task (will implement in next task)
-                tokio::spawn(handle_connection(socket, addr));
-            }
-            Ok(Err(e)) => {
-                tracing::error!("[rust_server] Accept error: {}", e);
-            }
-            Err(_) => {
-                // Timeout - check shutdown flag again
-                continue;
+    // Timer tick interval (10ms, matching C's SERVER_TICK_RATE_NS)
+    let mut timer_interval = tokio::time::interval(Duration::from_millis(10));
+
+    loop {
+        tokio::select! {
+            _ = timer_interval.tick() => {
+                // Drive C timer system (synchronous call - no block_on needed)
+                #[cfg(not(test))]
+                unsafe {
+                    let tick = crate::ffi::timer::gettick_nocache();
+                    crate::ffi::timer::timer_do(tick);
+                }
+
+                // Spawn I/O tasks for connections made during timer callbacks.
+                // rust_make_connection pushes fds here instead of using block_on.
+                for fd in drain_pending_connections() {
+                    tracing::debug!("[rust_server] Spawning io task for pending fd={}", fd);
+                    tokio::task::spawn_local(session_io_task(fd));
+                }
+
+                // Check shutdown signal
+                #[cfg(not(test))]
+                if crate::ffi::core::rust_should_shutdown() != 0 {
+                    tracing::info!("[rust_server] Shutdown requested");
+                    break;
+                }
             }
         }
     }
 
-    // Graceful shutdown
-    shutdown_all_sessions().await;
+    #[allow(unreachable_code)]
+    {
+        shutdown_all_sessions().await;
+    }
 
     Ok(())
 }
 
-/// Shutdown all active sessions
-async fn shutdown_all_sessions() {
-    tracing::info!("[rust_server] Shutting down all sessions");
+/// Accept loop for a single listener socket
+async fn accept_loop(listener: tokio::net::TcpListener, _listen_fd: i32) {
+    tracing::info!("[accept] Listening on fd={}", _listen_fd);
 
-    let manager = get_session_manager();
-    let sessions = manager.sessions.read().await;
-
-    for (fd, session_arc) in sessions.iter() {
-        let session = session_arc.lock().await;
-
-        // Call shutdown callback if set
-        if let Some(shutdown_cb) = session.callbacks.shutdown {
-            tracing::debug!("[rust_server] Calling shutdown callback for fd={}", fd);
-            drop(session); // Release lock before C call
-            unsafe { shutdown_cb(*fd) };
+    loop {
+        match listener.accept().await {
+            Ok((stream, addr)) => {
+                tracing::debug!("[accept] New connection from {} on fd={}", addr, _listen_fd);
+                tokio::task::spawn_local(session_io_task_from_accept(stream, addr));
+            }
+            Err(e) => {
+                tracing::error!("[accept] fd={} accept error: {}", _listen_fd, e);
+            }
         }
     }
 }
 
-/// Handle a single client connection
-async fn handle_connection(socket: TcpStream, addr: SocketAddr) {
-    // TODO: Add throttle check in later task
-
-    // Create session
+/// Set up session from an accepted connection and run its I/O task.
+/// Calls the accept callback (e.g. clif_accept) before entering the I/O loop
+/// so the server can send its initial handshake packet.
+async fn session_io_task_from_accept(stream: TcpStream, addr: SocketAddr) {
     let manager = get_session_manager();
-    let fd = match manager.allocate_fd().await {
+    let fd = match setup_connection(stream, addr, manager) {
         Ok(fd) => fd,
         Err(e) => {
-            tracing::error!("[session] Failed to allocate FD: {}", e);
+            tracing::error!("[session] Failed to set up connection from {}: {}", addr, e);
             return;
         }
     };
 
-    let mut session = Session::new(fd);
-    session.socket = Some(Arc::new(Mutex::new(socket)));
-    session.client_addr = Some(addr);
+    // Call the accept callback — servers use this to send the initial handshake.
+    // The callback may write to the session's write buffer; we flush it below.
+    let accept_cb = {
+        match manager.get_session(fd) {
+            Some(arc) => arc.try_lock().ok().and_then(|s| s.callbacks.accept),
+            None => None,
+        }
+    };
+    if let Some(cb) = accept_cb {
+        unsafe { cb(fd); }
 
-    // Apply default callbacks
-    session.callbacks = manager.get_default_callbacks().await;
-
-    let session_arc = Arc::new(Mutex::new(session));
-    if let Err(e) = manager.insert_session(fd, session_arc.clone()).await {
-        tracing::error!("[session] Failed to insert session: {}", e);
-        return;
+        // Flush whatever the accept callback wrote
+        flush_wdata_to_socket(fd, manager).await;
     }
 
-    tracing::info!("[session] New connection: fd={}, addr={}", fd, addr);
-
-    // Main session loop
-    if let Err(e) = session_loop(fd, session_arc.clone()).await {
-        tracing::error!("[session] fd={} error: {}", fd, e);
-    }
-
-    // Cleanup
-    manager.remove_session(fd).await;
-    tracing::info!("[session] Closed: fd={}", fd);
+    session_io_task(fd).await;
 }
 
-/// Main event loop for a single session
-async fn session_loop(
-    fd: i32,
-    session_arc: Arc<Mutex<Session>>,
-) -> Result<(), Box<dyn std::error::Error>> {
+/// Flush session write buffer to socket immediately (used after accept callback).
+async fn flush_wdata_to_socket(fd: i32, manager: &SessionManager) {
+    let session_arc = match manager.get_session(fd) {
+        Some(a) => a,
+        None => return,
+    };
+
+    let (socket_arc, wdata) = {
+        let mut session = session_arc.lock().await;
+        let socket_arc = match session.socket.as_ref() {
+            Some(s) => s.clone(),
+            None => return,
+        };
+        let wdata = if session.wdata_size > 0 {
+            let data = session.wdata[..session.wdata_size].to_vec();
+            session.wdata_size = 0;
+            session.wdata.clear();
+            data
+        } else {
+            return;
+        };
+        (socket_arc, wdata)
+    };
+
+    let mut socket = socket_arc.lock().await;
+    if let Err(e) = socket.write_all(&wdata).await {
+        tracing::error!("[session] fd={} accept flush write error: {}", fd, e);
+        if let Some(arc) = manager.get_session(fd) {
+            arc.lock().await.eof = 2;
+        }
+    }
+}
+
+/// Per-session I/O task.
+///
+/// For outgoing connections (made via rust_make_connection from timer callbacks),
+/// the TCP connect is deferred: session.connect_addr is set and socket is None.
+/// This task performs the actual connect before entering the I/O loop.
+async fn session_io_task(fd: i32) {
+    let manager = get_session_manager();
+    let session_arc = match manager.get_session(fd) {
+        Some(s) => s,
+        None => {
+            tracing::error!("[session] fd={} not found in manager", fd);
+            return;
+        }
+    };
+
+    // Handle deferred outgoing connection (set by rust_make_connection)
+    let connect_addr = {
+        match session_arc.try_lock() {
+            Ok(session) => if session.socket.is_none() { session.connect_addr } else { None },
+            Err(_) => None,
+        }
+    };
+
+    if let Some(addr) = connect_addr {
+        match TcpStream::connect(addr).await {
+            Ok(stream) => {
+                if let Ok(mut session) = session_arc.try_lock() {
+                    session.socket = Some(Arc::new(Mutex::new(stream)));
+                    tracing::info!("[session] fd={} connected to {}", fd, addr);
+                }
+                // Flush any write data queued before the connection was established
+                // (e.g. auth packet written by check_connect_login before connect completes)
+                flush_wdata_to_socket(fd, manager).await;
+            }
+            Err(e) => {
+                tracing::error!("[session] fd={} connect to {} failed: {}", fd, addr, e);
+                let shutdown_cb = session_arc.try_lock().ok()
+                    .and_then(|s| s.callbacks.shutdown);
+                if let Some(cb) = shutdown_cb {
+                    unsafe { cb(fd); }
+                }
+                manager.remove_session(fd);
+                return;
+            }
+        }
+    }
+
     let mut read_buf = vec![0u8; 4096];
-    let mut timeout_check = tokio::time::interval(Duration::from_secs(1));
+
+    // Get the write_notify Arc once (it never changes for the lifetime of the session)
+    let write_notify = {
+        match session_arc.try_lock() {
+            Ok(s) => s.write_notify.clone(),
+            Err(_) => Arc::new(tokio::sync::Notify::new()),
+        }
+    };
 
     loop {
-        let session = session_arc.lock().await;
-
-        // Check if session marked for closure
-        if session.eof != 0 {
-            tracing::debug!("[session] fd={} eof={}, closing", fd, session.eof);
+        // Check eof
+        let eof = {
+            let session = session_arc.lock().await;
+            session.eof
+        };
+        if eof != 0 {
+            tracing::debug!("[session] fd={} eof={}, closing", fd, eof);
             break;
         }
 
-        // Get socket (must exist)
-        let socket_arc = session
-            .socket
-            .as_ref()
-            .ok_or("Socket not initialized")?
-            .clone();
+        // Get socket reference
+        let socket_arc = {
+            let session = session_arc.lock().await;
+            match session.socket.as_ref() {
+                Some(s) => s.clone(),
+                None => break,
+            }
+        };
 
-        drop(session); // Release session lock
+        // Select on either incoming data OR a write_notify signal.
+        // write_notify fires when C code commits data to this session's write
+        // buffer from another session's parse callback (e.g. login server
+        // writing to char_fd while handling a client packet).
+        enum Event {
+            Read(std::io::Result<usize>),
+            WriteReady,
+        }
 
-        tokio::select! {
-            // Read from socket
-            result = async {
-                let mut socket = socket_arc.lock().await;
-                socket.read(&mut read_buf).await
-            } => {
-                let mut session = session_arc.lock().await;
+        let event = {
+            let mut socket = socket_arc.lock().await;
+            tokio::select! {
+                result = socket.read(&mut read_buf) => Event::Read(result),
+                _ = write_notify.notified() => Event::WriteReady,
+            }
+        };
 
-                match result {
-                    Ok(0) => {
-                        // Connection closed
-                        tracing::debug!("[session] fd={} connection closed by peer", fd);
-                        session.eof = 4;
-                        break;
-                    }
-                    Ok(n) => {
-                        // Append to read buffer
-                        session.rdata.extend_from_slice(&read_buf[..n]);
-                        session.rdata_size += n;
-                        session.last_activity = Instant::now();
+        match event {
+            Event::WriteReady => {
+                // Just flush — no read data, no parse callback.
+                flush_wdata_to_socket(fd, manager).await;
+            }
+            Event::Read(Ok(0)) => {
+                // Peer closed connection — set eof and give C one last parse call
+                {
+                    let mut session = session_arc.lock().await;
+                    session.eof = 4;
+                }
+                let parse_cb = {
+                    let session = session_arc.lock().await;
+                    session.callbacks.parse
+                };
+                if let Some(cb) = parse_cb {
+                    unsafe { cb(fd); }
+                }
+                break;
+            }
+            Event::Read(Ok(n)) => {
+                // Append data and update activity timestamp
+                {
+                    let mut session = session_arc.lock().await;
+                    session.rdata.extend_from_slice(&read_buf[..n]);
+                    session.rdata_size += n;
+                    session.last_activity = Instant::now();
+                }
 
-                        tracing::trace!("[session] fd={} read {} bytes", fd, n);
+                // Call C parse callback (lock released — C accesses buffers via FFI try_lock)
+                let parse_cb = {
+                    let session = session_arc.lock().await;
+                    session.callbacks.parse
+                };
+                if let Some(cb) = parse_cb {
+                    unsafe { cb(fd); }
+                }
 
-                        // Call parse callback
-                        if let Some(parse_cb) = session.callbacks.parse {
-                            drop(session);
+                // Flush this session's write buffer (may have been written by parse cb)
+                flush_wdata_to_socket(fd, manager).await;
 
-                            tracing::trace!("[session] fd={} calling parse callback", fd);
-                            unsafe { parse_cb(fd) };
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("[session] fd={} read error: {}", fd, e);
-                        session.eof = 3;
-                        break;
-                    }
+                // Compact read buffer
+                {
+                    let mut session = session_arc.lock().await;
+                    session.flush_read_buffer();
                 }
             }
-
-            // Write to socket (if data pending)
-            _ = async {
-                let session = session_arc.lock().await;
-
-                if session.wdata_size > 0 {
-                    let data_to_send = session.wdata[..session.wdata_size].to_vec();
-                    drop(session);
-
-                    let mut socket = socket_arc.lock().await;
-                    match socket.write_all(&data_to_send).await {
-                        Ok(_) => {
-                            let mut session = session_arc.lock().await;
-                            tracing::trace!("[session] fd={} sent {} bytes", fd, data_to_send.len());
-                            session.wdata.clear();
-                            session.wdata_size = 0;
-                        }
-                        Err(e) => {
-                            let mut session = session_arc.lock().await;
-                            tracing::error!("[session] fd={} write error: {}", fd, e);
-                            session.eof = 2;
-                        }
-                    }
-                }
-            } => {}
-
-            // Timeout check
-            _ = timeout_check.tick() => {
-                let session = session_arc.lock().await;
-
-                let idle = session.last_activity.elapsed();
-                if idle > Duration::from_secs(60) {
-                    tracing::warn!("[session] fd={} timeout (idle {}s)", fd, idle.as_secs());
-
-                    // Call timeout callback
-                    if let Some(timeout_cb) = session.callbacks.timeout {
-                        drop(session);
-
-                        unsafe { timeout_cb(fd) };
-                    }
-                }
+            Event::Read(Err(e)) => {
+                tracing::error!("[session] fd={} read error: {}", fd, e);
+                let mut session = session_arc.lock().await;
+                session.eof = 3;
+                break;
             }
         }
     }
 
-    Ok(())
+    // Invoke C shutdown callback then remove session
+    let shutdown_cb = {
+        let session = session_arc.lock().await;
+        session.callbacks.shutdown
+    };
+    if let Some(cb) = shutdown_cb {
+        unsafe { cb(fd); }
+    }
+    manager.remove_session(fd);
+    tracing::info!("[session] fd={} closed", fd);
+}
+
+/// Shutdown all active sessions (called on server exit)
+async fn shutdown_all_sessions() {
+    tracing::info!("[rust_server] Shutting down all sessions");
+
+    let manager = get_session_manager();
+    let fds = manager.get_all_fds();
+
+    for fd in fds {
+        if let Some(session_arc) = manager.get_session(fd) {
+            let shutdown_cb = {
+                let session = session_arc.lock().await;
+                session.callbacks.shutdown
+            };
+            if let Some(cb) = shutdown_cb {
+                tracing::debug!("[rust_server] Calling shutdown callback for fd={}", fd);
+                unsafe { cb(fd); }
+            }
+            manager.remove_session(fd);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -897,8 +1091,8 @@ mod tests {
     fn test_write_buffer_size_limit() {
         let mut session = Session::new(1);
 
-        // Writing beyond 256KB should fail
-        let result = session.write_u8(300_000, 0xFF);
+        // Writing beyond 4MB should fail
+        let result = session.write_u8(5_000_000, 0xFF);
         assert!(matches!(
             result,
             Err(SessionError::WriteBufferTooLarge { .. })
@@ -988,64 +1182,63 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_session_manager_allocate_fd() {
+    #[test]
+    fn test_session_manager_allocate_fd() {
         let manager = SessionManager::new();
 
-        let fd1 = manager.allocate_fd().await.unwrap();
-        let fd2 = manager.allocate_fd().await.unwrap();
+        let fd1 = manager.allocate_fd().unwrap();
+        let fd2 = manager.allocate_fd().unwrap();
 
         assert!(fd1 > 0);
         assert!(fd2 > 0);
         assert_ne!(fd1, fd2);
     }
 
-    #[tokio::test]
-    async fn test_session_manager_insert_and_get() {
+    #[test]
+    fn test_session_manager_insert_and_get() {
         let manager = SessionManager::new();
 
         let session = Session::new(5);
         let session_arc = Arc::new(Mutex::new(session));
 
-        manager.insert_session(5, session_arc.clone()).await.unwrap();
+        manager.insert_session(5, session_arc.clone()).unwrap();
 
-        let retrieved = manager.get_session(5).await;
+        let retrieved = manager.get_session(5);
         assert!(retrieved.is_some());
 
-        let session_arc_retrieved = retrieved.unwrap();
-        let sess = session_arc_retrieved.lock().await;
+        let arc = retrieved.unwrap();
+        let sess = arc.try_lock().unwrap();
         assert_eq!(sess.fd, 5);
     }
 
-    #[tokio::test]
-    async fn test_session_manager_remove() {
+    #[test]
+    fn test_session_manager_remove() {
         let manager = SessionManager::new();
 
         let session = Session::new(10);
-        manager.insert_session(10, Arc::new(Mutex::new(session))).await.unwrap();
+        manager.insert_session(10, Arc::new(Mutex::new(session))).unwrap();
 
-        assert!(manager.get_session(10).await.is_some());
+        assert!(manager.get_session(10).is_some());
 
-        manager.remove_session(10).await;
+        manager.remove_session(10);
 
-        assert!(manager.get_session(10).await.is_none());
+        assert!(manager.get_session(10).is_none());
     }
 
-    #[tokio::test]
-    async fn test_session_manager_max_sessions() {
+    #[test]
+    fn test_session_manager_max_sessions() {
         let manager = SessionManager::new();
 
         // Fill to limit
         for i in 0..MAX_SESSIONS {
             let session = Session::new(i as i32);
             manager.insert_session(i as i32, Arc::new(Mutex::new(session)))
-                .await
                 .unwrap();
         }
 
         // Next insert should fail
         let session = Session::new(9999);
-        let result = manager.insert_session(9999, Arc::new(Mutex::new(session))).await;
+        let result = manager.insert_session(9999, Arc::new(Mutex::new(session)));
         assert!(result.is_err());
         assert!(matches!(result, Err(SessionError::MaxSessionsExceeded)));
     }
