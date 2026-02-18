@@ -7,6 +7,7 @@
 #include <sys/types.h>
 
 #include "yuri.h"
+#include "net_crypt.h"
 
 // Route all C printf() calls through Rust's tracing system for unified output.
 // snprintf into a fixed buffer then hand off to rust_log_c(level=2 = INFO).
@@ -20,27 +21,8 @@
 #define FD_SETSIZE 4096
 #endif  // __INTERIX
 
-// Struct declaration
-struct socket_data {
-  int eof;
-  unsigned char *rdata, *wdata;
-  size_t max_rdata, max_wdata;
-  size_t rdata_size, wdata_size;
-  size_t rdata_pos;
-  time_t rdata_tick;
-  struct sockaddr_in client_addr;
-  int (*func_recv)(int);
-  int (*func_send)(int);
-  int (*func_parse)(int);
-  int (*func_timeout)(int);
-  int (*func_shutdown)(int);
-  void *session_data;
-  unsigned char increment;
-  char name[32];
-};
+// struct socket_data removed — C session[] array replaced by Rust SessionManager.
 
-extern struct socket_data *session[FD_SETSIZE];
-extern size_t rfifo_size, wfifo_size;
 extern int fd_max;
 
 // Buffer access macros - Rust-backed via FFI
@@ -77,23 +59,51 @@ extern int fd_max;
   ((ip) >> 24) & 0xFF, ((ip) >> 16) & 0xFF, ((ip) >> 8) & 0xFF, \
       ((ip) >> 0) & 0xFF
 
-// C session functions (from session.c)
-void create_session(int);
-int WFIFOHEADER(int, int, int);
-int make_listen_port(int);
-int make_connection(long, int);
-int session_eof(int);
-int realloc_fifo(int, size_t);
-void log_session(int, const char *);
-int add_ip_lockout(unsigned int);
-int do_sendrecv();
-int do_parsepacket(void);
-void do_socket(void);
-int realloc_rfifo(int fd, unsigned int rfifo_sizen, unsigned int wfifo_sizen);
-void set_defaultparse(int (*)(int));
-void set_defaultaccept(int (*)(int));
-void set_defaulttimeout(int (*)(int));
-void set_defaultshutdown(int (*)(int));
+// session.c deleted — all functions inlined here.
+// rust_add_ip_lockout is declared in yuri.h (cbindgen-generated)
 
-int Remove_Throttle(int none, int nonetoo);
-void c_update_fd_max(int fd);
+static inline int null_accept(int fd) { (void)fd; return 0; }
+static inline int null_shutdown(int fd) { (void)fd; return 0; }
+static inline int null_timeout(int fd) { (void)fd; return 0; }
+static inline int null_parse(int fd) {
+  if (rust_session_get_eof(fd)) {
+    rust_session_set_eof(fd, 1);
+    return 0;
+  }
+  printf("[session] null_parse fd=%d\n", fd);
+  RFIFOSKIP(fd, RFIFOREST(fd));
+  return 0;
+}
+
+static inline void set_defaultparse(int (*cb)(int))    { rust_session_set_default_parse(cb); }
+static inline void set_defaultaccept(int (*cb)(int))   { rust_session_set_default_accept(cb); }
+static inline void set_defaulttimeout(int (*cb)(int))  { rust_session_set_default_timeout(cb); }
+static inline void set_defaultshutdown(int (*cb)(int)) { rust_session_set_default_shutdown(cb); }
+
+static inline int make_listen_port(int port) { return rust_make_listen_port(port); }
+static inline int make_connection(long ip, int port) { return rust_make_connection((uint32_t)ip, port); }
+
+static inline int session_eof(int fd) {
+  if (fd < 0 || fd >= FD_SETSIZE) return -1;
+  rust_session_set_eof(fd, 1);
+  return 0;
+}
+
+static inline int realloc_rfifo(int fd, unsigned int rfifo_sizen, unsigned int wfifo_sizen) {
+  (void)fd; (void)rfifo_sizen; (void)wfifo_sizen;
+  return 0;
+}
+
+static inline int WFIFOHEADER(int fd, int packetID, int packetSize) {
+  if (!rust_session_exists(fd)) return 0;
+  WFIFOHEAD(fd, packetSize + 3);
+  WFIFOB(fd, 0) = 0xAA;
+  WFIFOW(fd, 1) = SWAP16(packetSize);
+  WFIFOB(fd, 3) = packetID;
+  WFIFOB(fd, 4) = rust_session_increment(fd);
+  return 0;
+}
+
+static inline void c_update_fd_max(int fd) {
+  if (fd + 1 > fd_max) fd_max = fd + 1;
+}

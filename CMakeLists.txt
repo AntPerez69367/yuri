@@ -26,7 +26,7 @@ include_directories("${PROJECT_SOURCE_DIR}/c_deps")
 include_directories("${PROJECT_SOURCE_DIR}/c_src")
 add_subdirectory("${PROJECT_SOURCE_DIR}/c_deps")
 
-add_library(common STATIC c_src/config.c c_src/core.c c_src/net_crypt.c c_src/session.c)
+add_library(common STATIC c_src/config.c c_src/core.c c_src/net_crypt.c)
 
 add_executable(char_server c_src/char_db.c c_src/char_server.c c_src/char_login.c c_src/char_map.c)
 target_link_libraries(char_server common)

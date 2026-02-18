@@ -14,6 +14,8 @@
 #include "session.h"
 #include "timer.h"
 
+int fd_max;  // Highest active fd + 1; updated via c_update_fd_max callback.
+
 extern int do_init(int, char **);
 // term_func is now managed by Rust - removed static variable
 

@@ -297,8 +297,7 @@ int clif_accept2(int fd, char *name, int name_len) {
     SqlStmt_Free(stmt);
   }
 
-  if (session[fd] != NULL)
-    memcpy(session[fd]->name, n, name_len);
+  // session[fd]->name removed — name field is write-only (all reads are commented out)
   intif_load(fd, id, n);
   auth_delete(n);
 
