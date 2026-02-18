@@ -2615,15 +2615,13 @@ int clif_send(const unsigned char *buf, int len, struct block_list *bl,
               int type) {
   USER *sd = NULL;
   USER *tsd = NULL;
-  struct socket_data *p = NULL;
   int i;
 
   switch (type) {
     case ALL_CLIENT:
     case SAMESRV:
       for (i = 0; i < fd_max; i++) {
-        p = session[i];
-        if (p && (sd = p->session_data)) {
+        if (rust_session_exists(i) && (sd = rust_session_get_data(i))) {
           if (bl->type == BL_PC) tsd = (USER *)bl;
 
           if (tsd && RBUFB(buf, 3) == 0x0D && !clif_isignore(tsd, sd)) continue;
@@ -2636,8 +2634,7 @@ int clif_send(const unsigned char *buf, int len, struct block_list *bl,
       break;
     case SAMEMAP:
       for (i = 0; i < fd_max; i++) {
-        p = session[i];
-        if (p && (sd = p->session_data) && sd->bl.m == bl->m) {
+        if (rust_session_exists(i) && (sd = rust_session_get_data(i)) && sd->bl.m == bl->m) {
           if (bl->type == BL_PC) tsd = (USER *)bl;
 
           if (tsd && RBUFB(buf, 3) == 0x0D && !clif_isignore(tsd, sd)) continue;
@@ -2650,8 +2647,7 @@ int clif_send(const unsigned char *buf, int len, struct block_list *bl,
       break;
     case SAMEMAP_WOS:
       for (i = 0; i < fd_max; i++) {
-        p = session[i];
-        if (p && (sd = p->session_data) && sd->bl.m == bl->m &&
+        if (rust_session_exists(i) && (sd = rust_session_get_data(i)) && sd->bl.m == bl->m &&
             sd != (USER *)bl) {
           if (bl->type == BL_PC) tsd = (USER *)bl;
 
@@ -2691,15 +2687,13 @@ int clif_send(const unsigned char *buf, int len, struct block_list *bl,
 int clif_sendtogm(unsigned char *buf, int len, struct block_list *bl,
                   int type) {
   USER *sd = NULL;
-  struct socket_data *p = NULL;
   int i;
 
   switch (type) {
     case ALL_CLIENT:
     case SAMESRV:
       for (i = 0; i < fd_max; i++) {
-        p = session[i];
-        if (p && (sd = p->session_data)) {
+        if (rust_session_exists(i) && (sd = rust_session_get_data(i))) {
           WFIFOHEAD(i, len + 3);
           memcpy(WFIFOP(i, 0), buf, len);
           WFIFOSET(i, encrypt(i));
@@ -2708,8 +2702,7 @@ int clif_sendtogm(unsigned char *buf, int len, struct block_list *bl,
       break;
     case SAMEMAP:
       for (i = 0; i < fd_max; i++) {
-        p = session[i];
-        if (p && (sd = p->session_data) && sd->bl.m == bl->m) {
+        if (rust_session_exists(i) && (sd = rust_session_get_data(i)) && sd->bl.m == bl->m) {
           WFIFOHEAD(i, len + 3);
           memcpy(WFIFOP(i, 0), buf, len);
           WFIFOSET(i, encrypt(i));
@@ -2718,8 +2711,7 @@ int clif_sendtogm(unsigned char *buf, int len, struct block_list *bl,
       break;
     case SAMEMAP_WOS:
       for (i = 0; i < fd_max; i++) {
-        p = session[i];
-        if (p && (sd = p->session_data) && sd->bl.m == bl->m &&
+        if (rust_session_exists(i) && (sd = rust_session_get_data(i)) && sd->bl.m == bl->m &&
             sd != (USER *)bl) {
           WFIFOHEAD(i, len + 3);
           memcpy(WFIFOP(i, 0), buf, len);
@@ -7773,7 +7765,7 @@ int clif_sendsubpathmessage(USER *sd, unsigned char *msg, int msglen) {
   }
 
   for (i = 0; i < fd_max; i++) {
-    if (session[i] && (tsd = rust_session_get_data(i)) &&
+    if (rust_session_exists(i) && (tsd = rust_session_get_data(i)) &&
         clif_isignore(sd, tsd)) {
       if (tsd->status.class == sd->status.class) {
         if (tsd->status.subpath_chat) {
@@ -7813,7 +7805,7 @@ int clif_sendclanmessage(USER *sd, unsigned char *msg, int msglen) {
   }
 
   for (i = 0; i < fd_max; i++) {
-    if (session[i] && (tsd = rust_session_get_data(i)) &&
+    if (rust_session_exists(i) && (tsd = rust_session_get_data(i)) &&
         clif_isignore(sd, tsd)) {
       if (tsd->status.clan == sd->status.clan) {
         if (tsd->status.clan_chat) {
@@ -7857,7 +7849,7 @@ int clif_sendnovicemessage(USER *sd, unsigned char *msg, int msglen) {
   }
 
   for (i = 0; i < fd_max; i++) {
-    if (session[i] && (tsd = rust_session_get_data(i)) &&
+    if (rust_session_exists(i) && (tsd = rust_session_get_data(i)) &&
         clif_isignore(sd, tsd)) {
       if ((tsd->status.tutor || tsd->status.gm_level > 0) &&
           tsd->status.novice_chat) {
@@ -11664,7 +11656,7 @@ int clif_parse(int fd) {
   int logincount = 0;
   USER *tsd = NULL;
   for (int i = 0; i < fd_max; i++) {
-    if (session[i] && (tsd = rust_session_get_data(i))) {
+    if (rust_session_exists(i) && (tsd = rust_session_get_data(i))) {
       if (sd->status.id == tsd->status.id) logincount++;
 
       if (logincount >= 2) {

@@ -141,8 +141,8 @@ int command_report(USER *sd, char *line, lua_State *state) {
   sprintf(buf, "<REPORT>%s: %s", sd->status.name, line);
   for (x = 1; x < fd_max; x++) {
     tsd = NULL;
-    if (session[x] && (tsd = (USER *)rust_session_get_data(x)) &&
-        !session[x]->eof && tsd->status.gm_level) {
+    if (rust_session_exists(x) && (tsd = (USER *)rust_session_get_data(x)) &&
+        !rust_session_get_eof(x) && tsd->status.gm_level) {
       clif_sendmsg(tsd, 12, buf);
     }
   }
@@ -166,8 +166,8 @@ int command_gm(USER *sd, char *line, lua_State *state) {
 
   for (x = 1; x < fd_max; x++) {
     tsd = NULL;
-    if (session[x] && (tsd = (USER *)rust_session_get_data(x)) &&
-        !session[x]->eof && tsd->status.gm_level) {
+    if (rust_session_exists(x) && (tsd = (USER *)rust_session_get_data(x)) &&
+        !rust_session_get_eof(x) && tsd->status.gm_level) {
       clif_sendmsg(tsd, 11, buf);
     }
   }
@@ -222,7 +222,7 @@ int command_weather(USER *sd, char *line, lua_State *state) {
 
   map[sd->bl.m].weather = weather;
   for (x = 1; x < fd_max; x++) {
-    if (session[x] && (tmpsd = (USER *)rust_session_get_data(x)) &&
+    if (rust_session_exists(x) && (tmpsd = (USER *)rust_session_get_data(x)) &&
         !rust_session_get_eof(x)) {
       if (tmpsd->bl.m == sd->bl.m) {
         clif_sendweather(tmpsd);
@@ -242,7 +242,7 @@ int command_light(USER *sd, char *line, lua_State *state) {
 
   map[sd->bl.m].light = weather;
   for (int x = 0; x < fd_max; x++) {
-    if (session[x] && (tmpsd = (USER *)rust_session_get_data(x)) &&
+    if (rust_session_exists(x) && (tmpsd = (USER *)rust_session_get_data(x)) &&
         !rust_session_get_eof(x)) {
       if (tmpsd->bl.m == sd->bl.m) {
         pc_warp(tmpsd, tmpsd->bl.m, tmpsd->bl.x, tmpsd->bl.y);
@@ -734,7 +734,7 @@ int command_checkdupes(USER *sd, char *line, lua_State *state) {
   int x;
 
   for (x = 1; x < fd_max; x++) {
-    if (session[x] && (tmpsd = rust_session_get_data(x)) && !rust_session_get_eof(x)) {
+    if (rust_session_exists(x) && (tmpsd = rust_session_get_data(x)) && !rust_session_get_eof(x)) {
       int numDupes = pc_readglobalreg(tmpsd, "goldbardupe");
       if (numDupes) {
         sprintf(BufStr, "%s gold bar %i times", tmpsd->status.name, numDupes);
@@ -752,7 +752,7 @@ int command_checkwpe(USER *sd, char *line, lua_State *state) {
   int x;
 
   for (x = 1; x < fd_max; x++) {
-    if (session[x] && (tmpsd = rust_session_get_data(x)) && !rust_session_get_eof(x)) {
+    if (rust_session_exists(x) && (tmpsd = rust_session_get_data(x)) && !rust_session_get_eof(x)) {
       int numDupes = pc_readglobalreg(tmpsd, "WPEtimes");
       if (numDupes) {
         sprintf(BufStr, "%s WPE attempt %i times", tmpsd->status.name,
@@ -788,7 +788,7 @@ int command_killall(USER *sd, char *line, lua_State *state) {
   for (x = 1; x < fd_max; x++) {
     tmpsd = NULL;
 
-    if (session[x] && (tmpsd = rust_session_get_data(x)) && !rust_session_get_eof(x)) {
+    if (rust_session_exists(x) && (tmpsd = rust_session_get_data(x)) && !rust_session_get_eof(x)) {
       if (!tmpsd->status.gm_level) {
         rust_session_set_eof(x, 1);
       }

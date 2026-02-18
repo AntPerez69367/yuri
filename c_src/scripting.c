@@ -608,13 +608,11 @@ int bll_throw(lua_State *state, void *self) {
 
 int bll_getusers(lua_State *state, void *self) {
   USER *tsd = NULL;
-  struct socket_data *p;
   // struct block_list *bl= (struct block_list*)self;
   int i;
   lua_newtable(state);
   for (i = 0; i < fd_max; i++) {
-    p = session[i];
-    if (p && (tsd = p->session_data)) {
+    if (rust_session_exists(i) && (tsd = rust_session_get_data(i))) {
       bll_pushinst(state, &tsd->bl, 0);
       lua_rawseti(state, -2, lua_objlen(state, -2) + 1);
     }
@@ -1270,7 +1268,7 @@ int setweather(lua_State *state) {
           timer == 0) {
         map[x].weather = mapweather;
         for (i = 1; i < fd_max; i++) {
-          if (session[i] && (tmpsd = (USER *)rust_session_get_data(i)) &&
+          if (rust_session_exists(i) && (tmpsd = (USER *)rust_session_get_data(i)) &&
               !rust_session_get_eof(i)) {
             if (tmpsd->bl.m == x) {
               clif_sendweather(tmpsd);
@@ -1307,7 +1305,7 @@ int setweatherm(lua_State *state) {
     if (timer == 0) {
       map[mapnum].weather = mapweather;
       for (i = 1; i < fd_max; i++) {
-        if (session[i] && (tmpsd = (USER *)rust_session_get_data(i)) &&
+        if (rust_session_exists(i) && (tmpsd = (USER *)rust_session_get_data(i)) &&
             !rust_session_get_eof(i)) {
           if (tmpsd->bl.m == mapnum) {
             clif_sendweather(tmpsd);
@@ -1387,7 +1385,7 @@ int setlight(lua_State *state) {
         if (map[x].light == 0) map[x].light = maplight;
 
         for (int i = 0; i < fd_max; i++) {
-          if (session[i] && (tmpsd = (USER *)rust_session_get_data(i)) &&
+          if (rust_session_exists(i) && (tmpsd = (USER *)rust_session_get_data(i)) &&
               !rust_session_get_eof(i)) {
             if (tmpsd->bl.m == x) {
               // clif_refreshnoclick(tmpsd);
@@ -1736,7 +1734,7 @@ int sendMeta(lua_State *state) {
   USER *tsd = NULL;
 
   for (int i = 0; i < fd_max; i++) {
-    if (session[i] && (tsd = rust_session_get_data(i))) send_metalist(tsd);
+    if (rust_session_exists(i) && (tsd = rust_session_get_data(i))) send_metalist(tsd);
   }
 
   return 1;
@@ -2756,7 +2754,7 @@ int sl_setMapTitle(lua_State *state) {
     strcpy(map[m].title, title);
 
     for (int i = 1; i < fd_max; i++) {
-      if (session[i] && (tsd = (USER *)rust_session_get_data(i)) &&
+      if (rust_session_exists(i) && (tsd = (USER *)rust_session_get_data(i)) &&
           !rust_session_get_eof(i)) {
         if (tsd->bl.m == m) {
           clif_refreshnoclick(tsd);
