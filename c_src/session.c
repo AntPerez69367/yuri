@@ -233,17 +233,21 @@ void set_nonblocking(int fd, unsigned long yes) {
 //----------------------------
 void set_defaultparse(int (*defaultparse)(int)) {
   default_func_parse = defaultparse;
+  rust_session_set_default_parse(defaultparse);
 }
 
 void set_defaultshutdown(int (*defaultshutdown)(int)) {
   default_func_shutdown = defaultshutdown;
+  rust_session_set_default_shutdown(defaultshutdown);
 }
 void set_defaultaccept(int (*defaultaccept)(int)) {
   default_func_accept = defaultaccept;
+  rust_session_set_default_accept(defaultaccept);
 }
 
 void set_defaulttimeout(int (*default_timeout)(int)) {
   default_func_timeout = default_timeout;
+  rust_session_set_default_timeout(default_timeout);
 }
 
 // Socket recv and send
@@ -259,8 +263,8 @@ int recv_to_fifo(int fd) {
     return -1;
   }
 
-  // printf("recv_to_fifo : %d %d\n", fd, session[fd]->eof);
-  if (session[fd]->eof) {
+  // printf("recv_to_fifo : %d %d\n", fd, rust_session_get_eof(fd));
+  if (rust_session_get_eof(fd)) {
     return -1;
   }
 
@@ -283,7 +287,7 @@ int recv_to_fifo(int fd) {
       // printf("recv_to_fifo: code %d, closing connection #%d\n",sErrno,fd);
       // session_eof(fd);
 
-      session[fd]->eof = 3;
+      rust_session_set_eof(fd, 3);
     }
 
     // sending error eof
@@ -292,7 +296,7 @@ int recv_to_fifo(int fd) {
 
   if (len == 0) {  // Normal connection end.
     // session_eof(fd);
-    session[fd]->eof = 4;  // zerolen eof
+    rust_session_set_eof(fd, 4);  // zerolen eof
     return 0;
   }
 
@@ -319,14 +323,14 @@ RFIFOREST(fd);
         return 0;
 }*/
 int WFIFOHEADER(int fd, int packetID, int packetSize) {
-  if (!session[fd]) {
+  if (!rust_session_exists(fd)) {
     return 0;
   }
+  WFIFOHEAD(fd, packetSize + 3);
   WFIFOB(fd, 0) = 0xAA;
   WFIFOW(fd, 1) = SWAP16(packetSize);
   WFIFOB(fd, 3) = packetID;
-  session[fd]->increment++;
-  WFIFOB(fd, 4) = session[fd]->increment;
+  WFIFOB(fd, 4) = rust_session_increment(fd);
   return 0;
 }
 int send_from_fifo(int fd) {
@@ -341,8 +345,8 @@ int send_from_fifo(int fd) {
     return -1;
   }
 
-  // printf("recv_to_fifo : %d %d\n", fd, session[fd]->eof);
-  if (session[fd]->eof) {
+  // printf("recv_to_fifo : %d %d\n", fd, rust_session_get_eof(fd));
+  if (rust_session_get_eof(fd)) {
     return -1;
   }
 
@@ -351,7 +355,7 @@ int send_from_fifo(int fd) {
   }
 
   if (!session[fd]->wdata) {
-    session[fd]->eof = 5;
+    rust_session_set_eof(fd, 5);
     return -1;
   }
   len = send(fd, (char*)session[fd]->wdata, session[fd]->wdata_size,
@@ -362,7 +366,7 @@ int send_from_fifo(int fd) {
     if (sErrno != S_EWOULDBLOCK && sErrno != S_EAGAIN) {
       // printf("send_from_fifo: error %d, ending connection #%d\n",sErrno,fd);
       session[fd]->wdata_size = 0;
-      session[fd]->eof = 2;
+      rust_session_set_eof(fd, 2);
       // session_eof(fd);
     }
     // sending eof
@@ -387,8 +391,8 @@ int send_from_fifo(int fd) {
 int null_accept(int fd) { return 0; }
 
 int null_parse(int fd) {
-  if (session[fd]->eof) {
-    session[fd]->eof = 1;
+  if (rust_session_get_eof(fd)) {
+    rust_session_set_eof(fd, 1);
     // session_eof(fd);
     return 0;
   }
@@ -429,7 +433,7 @@ int connect_client(int listen_fd) {
     fd_max = fd + 1;
   }
 
-  if (session[fd]) {
+  if (rust_session_exists(fd)) {
     printf("Socket fail: Already in use\n");
     return -1;
   }
@@ -459,105 +463,16 @@ int connect_client(int listen_fd) {
   create_session(fd);
   session[fd]->client_addr = client_address;
   default_func_accept(fd);
-  // printf("new_session : %d %d\n",fd,session[fd]->eof);
+  // printf("new_session : %d %d\n",fd,rust_session_get_eof(fd));
   return fd;
 }
 
 int make_listen_port(int port) {
-  struct sockaddr_in server_address;
-  int fd;
-  int result;
-
-  fd = socket(AF_INET, SOCK_STREAM, 0);
-
-  if (fd_max <= fd) {
-    fd_max = fd + 1;
-  }
-
-  /*result = fcntl(fd,F_SETFL,O_NONBLOCK);
-//	setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,NULL,0);
-
-  setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,(char *)&yes,sizeof yes); // reuse fix
-#ifdef SO_REUSEPORT
-//	setsockopt(fd,SOL_SOCKET,SO_REUSEPORT,NULL,0);
-  setsockopt(fd,SOL_SOCKET,SO_REUSEPORT,(char *)&yes,sizeof yes); //reuse fix
-#endif
-//	setsockopt(fd,IPPROTO_TCP,TCP_NODELAY,NULL,0);
-  setsockopt(fd,IPPROTO_TCP,TCP_NODELAY,(char *)&yes,sizeof yes); // reuse fix
-*/
-  setsocketopts(fd);
-  set_nonblocking(fd, 1);
-
-  server_address.sin_family = AF_INET;
-  server_address.sin_addr.s_addr = htonl(INADDR_ANY);
-  server_address.sin_port = htons(port);
-
-  result = bind(fd, (struct sockaddr*)&server_address, sizeof(server_address));
-  if (result == -1) {
-    perror("bind");
-    exit(1);
-  }
-  result = listen(fd, 5);
-  if (result == -1) {  // error
-    perror("listen");
-    exit(1);
-  }
-
-  FD_SET(fd, &readfds);
-
-  CALLOC(session[fd], struct socket_data, 1);
-
-  session[fd]->func_recv = connect_client;
-  session[fd]->rdata_tick = 0;
-  return fd;
+  return rust_make_listen_port(port);
 }
 
 int make_connection(long ip, int port) {
-  struct sockaddr_in server_address;
-  int fd;
-
-  fd = socket(AF_INET, SOCK_STREAM, 0);
-
-  if (fd_max <= fd) {
-    fd_max = fd + 1;
-  }
-  /*
-  //	setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,NULL,0);
-          setsockopt(fd,SOL_SOCKET,SO_REUSEADDR,(char *)&yes,sizeof yes); //
-  reuse fix #ifdef SO_REUSEPORT
-  //	setsockopt(fd,SOL_SOCKET,SO_REUSEPORT,NULL,0);
-          setsockopt(fd,SOL_SOCKET,SO_REUSEPORT,(char *)&yes,sizeof yes);
-  //reuse fix #endif
-  //	setsockopt(fd,IPPROTO_TCP,TCP_NODELAY,NULL,0);
-          setsockopt(fd,IPPROTO_TCP,TCP_NODELAY,(char *)&yes,sizeof yes); //
-  reuse fix
-  */
-  setsocketopts(fd);
-
-  server_address.sin_family = AF_INET;
-  server_address.sin_addr.s_addr = ip;
-  server_address.sin_port = htons(port);
-
-  set_nonblocking(fd, 1);
-  /*result = fcntl(fd, F_SETFL, O_NONBLOCK);*/
-  connect(fd, (struct sockaddr*)(&server_address), sizeof(struct sockaddr_in));
-
-  FD_SET(fd, &readfds);
-
-  CALLOC(session[fd], struct socket_data, 1);
-  CALLOC(session[fd]->rdata, unsigned char, rfifo_size);
-  CALLOC(session[fd]->wdata, unsigned char, wfifo_size);
-
-  session[fd]->max_rdata = rfifo_size;
-  session[fd]->max_wdata = wfifo_size;
-  session[fd]->func_recv = recv_to_fifo;
-  session[fd]->func_send = send_from_fifo;
-  session[fd]->func_parse = default_func_parse;
-  session[fd]->func_timeout = default_func_timeout;
-  // session[fd]->rdata_tick=last_tick;
-  session[fd]->rdata_tick = 0;
-
-  return fd;
+  return rust_make_connection((uint32_t)ip, port);
 }
 void create_session(int fd) {
   // result = fcntl(fd, F_SETFL, O_NONBLOCK);
@@ -570,7 +485,7 @@ void create_session(int fd) {
   session[fd]->max_wdata = wfifo_size;
   session[fd]->func_recv = recv_to_fifo;
   session[fd]->func_send = send_from_fifo;
-  session[fd]->func_parse = default_func_parse;
+  rust_session_set_parse(fd, default_func_parse);
   session[fd]->func_timeout = default_func_timeout;
 
   session[fd]->rdata_tick = last_tick;
@@ -585,20 +500,23 @@ int session_eof(int fd) {
     return -1;
   }
 
+  if (session[fd] == NULL) {
+    // Rust-managed session: fd is a virtual session ID, not an OS fd.
+    // Let Rust's session_io_task handle the actual socket cleanup.
+    rust_session_set_eof(fd, 1);
+    return 0;
+  }
+
   flush_fifo(fd);
   FD_CLR(fd, &readfds);
   shutdown(fd, SHUT_RDWR);
   close(fd);
 
   // log_session(fd,"Closing client FD(%d)\n");
-  if (session[fd]) {
+  if (rust_session_exists(fd)) {
     free(session[fd]->rdata);
     free(session[fd]->wdata);
-    free(session[fd]->session_data);
-    // session[fd]->session_data=NULL;
-    // if(session[fd]->session_data)
-    // printf("ERROR in FD %d\n",fd);
-
+    free(rust_session_get_data(fd));
     free(session[fd]);
     session[fd] = NULL;
     // log_session(fd,"Freeing Session FD(%d)\n");
@@ -607,7 +525,12 @@ int session_eof(int fd) {
   return 0;
 }
 int realloc_rfifo(int fd, unsigned int rfifo_sizen, unsigned int wfifo_sizen) {
-  if (!session[fd]) {
+  if (!rust_session_exists(fd)) {
+    return 0;
+  }
+
+  if (session[fd] == NULL) {
+    // Rust-managed session: read/write buffers are Vec<u8> and resize dynamically.
     return 0;
   }
 
@@ -628,9 +551,15 @@ int realloc_rfifo(int fd, unsigned int rfifo_sizen, unsigned int wfifo_sizen) {
 int realloc_fifo(int fd, size_t addition) {
   size_t newsize;
 
-  if (!session[fd]) {
+  if (!rust_session_exists(fd)) {
     return 0;
   }
+
+  if (session[fd] == NULL) {
+    // Rust-managed session: buffers resize dynamically.
+    return 0;
+  }
+
   // if(!rfifo_sizen) return 0;
   if (!addition) {
     return 0;
@@ -639,7 +568,7 @@ int realloc_fifo(int fd, size_t addition) {
   if (!session[fd]->wdata) {
     return 0;
   }
-  if (session[fd]->eof) {
+  if (rust_session_get_eof(fd)) {
     return 0;
   }
   // g_Size=session[fd]->wdata_size+wfifo_sizen;
@@ -675,30 +604,6 @@ int realloc_fifo(int fd, size_t addition) {
   return 0;
 }
 
-int WFIFOSET(int fd, int len) {
-  // struct socket_data *s = session[fd];
-  if (!session[fd]) {
-    return 0;
-  }
-
-  if (session[fd]->wdata_size + len < session[fd]->max_wdata) {
-    session[fd]->wdata_size = session[fd]->wdata_size + len;
-  } else
-      // printf("socket #%d %d bytes wdata lost due low free space.\n", fd,
-      // len);
-
-      if (session[fd]->wdata_size + len + 4096 > session[fd]->max_wdata) {
-    // printf("socket #%d wdata low free space!\n", fd);
-    // printf("  capasity: %d bytes.\n", s->max_wdata);
-    // printf("  used: %d bytes.\n", s->wdata_size);
-    // printf("  free: %d bytes.\n", s->max_wdata - s->wdata_size);
-    realloc_fifo(fd, session[fd]->max_wdata + 4096);
-    // printf("  expanded to %d bytes.\n", s->max_wdata);
-  }
-
-  return len;
-}
-
 // Socket Main Routine
 //----------------------------
 int do_sendrecv() {
@@ -718,7 +623,7 @@ int do_sendrecv() {
       continue;
     }
 
-    if (!session[i]) {
+    if (!rust_session_exists(i)) {
       continue;
     }
     if (session[i]->wdata_size) {
@@ -740,7 +645,7 @@ int do_sendrecv() {
   for (i = 1; i < fd_max; i++) {
     activeFD = i;
     // p=session[i];
-    if (!session[i]) {
+    if (!rust_session_exists(i)) {
       continue;
     }
     if (session[i]->wdata_size) {
@@ -755,13 +660,13 @@ int do_sendrecv() {
         session[i]->func_recv(i);
       }
     }
-    if (session[i]->eof) {  // Force disconnects!
+    if (rust_session_get_eof(i)) {  // Force disconnects!
       if (session[i]->func_parse) {
-        session[i]->func_parse(i);
+        rust_session_call_parse(i);
       }
     }
 
-    if (rust_should_shutdown() && (!FD_ISSET(i, &wfd)) && session[i]) {
+    if (rust_should_shutdown() && (!FD_ISSET(i, &wfd)) && rust_session_exists(i)) {
       if (session[i]->func_shutdown) {
         session[i]->func_shutdown(i);
       }
@@ -770,8 +675,8 @@ int do_sendrecv() {
     /*if (session[i]->rdata_size == 0 && session[i]->eof == 0)
             continue;
     if (session[i]->func_parse){
-            session[i]->func_parse(i);
-            if (!session[i])
+            rust_session_call_parse(i);
+            if (!rust_session_exists(i))
                     continue;
     }
 
@@ -787,7 +692,7 @@ int do_parsepacket(void) {
   for (i = 1; i < fd_max; i++) {
     // p=session[i];
     activeFD = i;
-    if (!session[i]) {
+    if (!rust_session_exists(i)) {
       continue;
     }
     // if (session[i]->rdata_size == 0 && session[i]->eof == 0)
@@ -801,18 +706,18 @@ int do_parsepacket(void) {
     }
 
     if (session[i]->func_parse) {
-      session[i]->func_parse(i);
-      // if (!session[i])
+      rust_session_call_parse(i);
+      // if (!rust_session_exists(i))
       // continue;
     }
 
-    if (!session[i]) {
+    if (!rust_session_exists(i)) {
       continue;
     }
 
     if (session[i]->rdata_size == rfifo_size &&
         session[i]->max_rdata == rfifo_size) {
-      session[i]->eof = 1;
+      rust_session_set_eof(i, 1);
       continue;
     }
 
@@ -824,6 +729,11 @@ int do_parsepacket(void) {
 
 // Socket init
 //----------------------------
+void c_update_fd_max(int fd) {
+  if (fd + 1 > fd_max)
+    fd_max = fd + 1;
+}
+
 void do_socket(void) {
   FD_ZERO(&readfds);
   last_tick = time(NULL);
@@ -835,6 +745,7 @@ void do_socket(void) {
   CALLOC(session[0], struct socket_data, 1);
   CALLOC(session[0]->rdata, unsigned char, rfifo_size);
   CALLOC(session[0]->wdata, unsigned char, wfifo_size);
+  // (fd_max updater registered in core.c main())
 }
 
 void Add_Throttle(struct sockaddr_in S) {
