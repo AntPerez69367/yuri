@@ -430,6 +430,11 @@ int clif_parse(int fd) {
 
   if (!rust_session_get_data(fd)) {
     struct login_session_data *_new_sd = calloc(1, sizeof(struct login_session_data));
+    if (!_new_sd) {
+      printf("[login] [clif_parse] calloc failed for fd=%d, closing session\n", fd);
+      session_eof(fd);
+      return 0;
+    }
     rust_session_set_data(fd, _new_sd);
   }
 

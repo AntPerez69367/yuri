@@ -1180,7 +1180,7 @@ int sl_throw(struct block_list *bl, va_list ap) {
   char *buf = va_arg(ap, char *);
   int len = va_arg(ap, int);
 
-  if (!rust_session_exists(sd->fd)) {
+  if (!rust_session_exists(sd->fd) || rust_session_get_eof(sd->fd)) {
     rust_session_set_eof(sd->fd, 8);
     return 0;
   }
@@ -12893,7 +12893,7 @@ int pcl_testpacket(lua_State *state, void *self) {
 
   lua_pushnil(state);
 
-  if (!rust_session_exists(sd->fd)) {
+  if (!rust_session_exists(sd->fd) || rust_session_get_eof(sd->fd)) {
     rust_session_set_eof(sd->fd, 8);
     return 0;
   }

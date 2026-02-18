@@ -174,6 +174,11 @@ int intif_mmo_tosd(int fd, struct mmo_charstatus* p) {
   //}
 
   CALLOC(sd, USER, 1);
+  if (!sd) {
+    printf("[map] [intif_mmo_tosd] calloc failed for fd=%d, closing session\n", fd);
+    rust_session_set_eof(fd, 7);
+    return 0;
+  }
   memcpy(&sd->status, p, sizeof(struct mmo_charstatus));
 
   sd->fd = fd;
