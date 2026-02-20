@@ -2562,7 +2562,7 @@ int sl_setClanName(lua_State *state) {
   }
 
   struct clan_data *db = NULL;
-  db = uidb_get(clan_db, clan);
+  db = (struct clan_data*)(void*)rust_clandb_searchexist(clan);
   if (!db) return 1;
   strcpy(db->name, clanName);
 
@@ -7800,6 +7800,33 @@ int pcl_showhealth(lua_State *state, void *self) {
   return 0;
 }
 
+static int clandb_add_local(void *sd, const char *name) {
+  unsigned int newid = 0;
+  char *data;
+  char escape[64];
+  struct clan_data *db;
+
+  if (SQL_ERROR == Sql_Query(sql_handle,
+          "SELECT l.ClnId + 1 as start from `Clans` as l "
+          "left outer join `Clans` as r on l.ClnId + 1 = r.ClnId "
+          "where r.ClnId is null LIMIT 1"))
+    Sql_ShowDebug(sql_handle);
+  if (SQL_SUCCESS != Sql_NextRow(sql_handle)) Sql_ShowDebug(sql_handle);
+  Sql_GetData(sql_handle, 0, &data, NULL);
+  newid = (unsigned int)strtoul(data, NULL, 10);
+  Sql_FreeResult(sql_handle);
+  Sql_EscapeString(sql_handle, escape, name);
+  if (SQL_ERROR == Sql_Query(sql_handle,
+          "INSERT INTO `Clans` (`ClnName`, `ClnId`) VALUES('%s', '%u')",
+          escape, newid))
+    Sql_ShowDebug(sql_handle);
+
+  db = (struct clan_data*)rust_clandb_search(newid);
+  strcpy(db->name, name);
+  ((USER *)sd)->status.clan = newid;
+  return newid;
+}
+
 int pcl_addclan(lua_State *state, void *self) {
   USER *sd = (USER *)self;
   struct clan_data *clan;
@@ -7811,7 +7838,7 @@ int pcl_addclan(lua_State *state, void *self) {
   if (clan) {
     lua_pushnumber(state, 0);
   } else {
-    newid = clandb_add(sd, c_name);
+    newid = clandb_add_local(sd, c_name);
     lua_pushnumber(state, newid);
   }
   return 1;

@@ -1748,6 +1748,17 @@ int do_init(int argc, char** argv) {
     exit(EXIT_FAILURE);
   }
 
+  {
+    extern int rust_db_connect(const char* url);
+    char db_url[512];
+    snprintf(db_url, sizeof(db_url), "mysql://%s:%s@%s:%d/%s",
+             sql_id, sql_pw, sql_ip, sql_port, sql_db);
+    if (rust_db_connect(db_url) != 0) {
+      printf("[map] Failed to initialize MariaDB Rust pool\n");
+      exit(EXIT_FAILURE);
+    }
+  }
+
   if (SQL_ERROR ==
       Sql_Query(
           sql_handle,
@@ -1768,6 +1779,23 @@ int do_init(int argc, char** argv) {
   magicdb_init();
   classdb_init();
   clandb_init();
+  {
+    // Load clan banks: was done inside clandb_read(); now done here after rust_clandb_init().
+    if (SQL_SUCCESS == Sql_Query(sql_handle, "SELECT ClnId FROM Clans")) {
+      char *data;
+      while (SQL_SUCCESS == Sql_NextRow(sql_handle)) {
+        int clan_id;
+        struct clan_data *clan;
+        Sql_GetData(sql_handle, 0, &data, NULL);
+        clan_id = (int)strtoul(data, NULL, 10);
+        clan = (struct clan_data*)rust_clandb_search(clan_id);
+        if (clan->clanbanks == NULL)
+          CALLOC(clan->clanbanks, struct clan_bank, 255);
+        map_loadclanbank(clan_id);
+      }
+      Sql_FreeResult(sql_handle);
+    }
+  }
   boarddb_init();
   intif_init();
   createdb_init();
@@ -2773,7 +2801,7 @@ int map_loadclanbank(int id) {
     return -1;
   }
 
-  clan = clandb_search(id);
+  clan = (struct clan_data*)rust_clandb_search(id);
 
   if (SQL_ERROR ==
           SqlStmt_Prepare(
@@ -2835,7 +2863,7 @@ int map_saveclanbank(int id) {
   char escape2[300];
 
   struct clan_data* clan = NULL;
-  clan = clandb_search(id);
+  clan = (struct clan_data*)rust_clandb_search(id);
 
   if (clan == NULL) return 0;
 
