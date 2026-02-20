@@ -937,27 +937,22 @@ async fn session_io_task(fd: i32) {
 
     // Handle deferred outgoing connection (set by rust_make_connection)
     let connect_addr = {
-        match session_arc.try_lock() {
-            Ok(session) => if session.socket.is_none() { session.connect_addr } else { None },
-            Err(_) => None,
-        }
+        let session = session_arc.lock().await;
+        if session.socket.is_none() { session.connect_addr } else { None }
     };
 
     if let Some(addr) = connect_addr {
         match TcpStream::connect(addr).await {
             Ok(stream) => {
-                if let Ok(mut session) = session_arc.try_lock() {
-                    session.socket = Some(Arc::new(Mutex::new(stream)));
-                    tracing::info!("[session] fd={} connected to {}", fd, addr);
-                }
+                session_arc.lock().await.socket = Some(Arc::new(Mutex::new(stream)));
+                tracing::info!("[session] fd={} connected to {}", fd, addr);
                 // Flush any write data queued before the connection was established
                 // (e.g. auth packet written by check_connect_login before connect completes)
                 flush_wdata_to_socket(fd, manager).await;
             }
             Err(e) => {
                 tracing::error!("[session] fd={} connect to {} failed: {}", fd, addr, e);
-                let shutdown_cb = session_arc.try_lock().ok()
-                    .and_then(|s| s.callbacks.shutdown);
+                let shutdown_cb = session_arc.lock().await.callbacks.shutdown;
                 if let Some(cb) = shutdown_cb {
                     unsafe { cb(fd); }
                 }
