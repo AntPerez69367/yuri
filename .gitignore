@@ -73,3 +73,5 @@ logs/
 *_pid.txt
 .env
 .claude/
+docs/**
+data/**

@@ -30,6 +30,28 @@
 #define SERVER_TICK_RATE_NS 10000000
 
 /**
+ * Non-DDoS entries expire after 3× this interval (ms).
+ */
+#define DDOS_INTERVAL (3 * 1000)
+
+/**
+ * DDoS-locked entries are cleared after this interval (ms).
+ */
+#define DDOS_AUTORESET ((10 * 60) * 1000)
+
+/**
+ * Buffer size constants
+ */
+#define RFIFO_SIZE (16 * 1024)
+
+#define WFIFO_SIZE (16 * 1024)
+
+/**
+ * Maximum number of sessions
+ */
+#define MAX_SESSIONS 1024
+
+/**
  * A point in 3D space (map, x, y)
  *
  * This matches the C struct exactly due to #[repr(C)]
@@ -228,5 +250,304 @@ uint64_t rust_get_tick_rate_ns(void);
  * Legacy hash generation function (to be replaced)
  */
 void rust_generate_hashvalues(const char *name, char *_buffer);
+
+void rust_register_fd_max_updater(void (*cb)(int));
+
+/**
+ * Initialize and run the async game server.
+ * Blocks until server shuts down.
+ *
+ * # Safety
+ * Must be called from C main thread after do_init() has registered listeners.
+ */
+int rust_server_run(uint16_t port);
+
+/**
+ * Create a listening socket on the specified port.
+ * Returns fd on success, -1 on failure.
+ *
+ * Binds a std::net::TcpListener (sync, safe from any context) and stores it
+ * in the SessionManager. Converted to tokio::net::TcpListener at server start.
+ */
+int rust_make_listen_port(int port);
+
+/**
+ * Create an outgoing connection to ip:port.
+ * Returns fd on success, -1 on failure.
+ *
+ * Safe to call from inside the Tokio runtime (timer callbacks, parse callbacks).
+ * The actual TCP connect happens asynchronously in session_io_task after this returns.
+ * ip is in network byte order (matching sin_addr.s_addr).
+ */
+int rust_make_connection(uint32_t ip, int port);
+
+/**
+ * Mark a session for closing.
+ */
+int rust_session_eof(int fd);
+
+/**
+ * Read unsigned 8-bit value from read buffer.
+ * Returns 0 if out of bounds or session not found.
+ */
+uint8_t rust_session_read_u8(int fd, uintptr_t pos);
+
+/**
+ * Read unsigned 16-bit value (little-endian).
+ * Returns 0 if out of bounds or session not found.
+ */
+uint16_t rust_session_read_u16(int fd, uintptr_t pos);
+
+/**
+ * Read unsigned 32-bit value (little-endian).
+ * Returns 0 if out of bounds or session not found.
+ */
+uint32_t rust_session_read_u32(int fd, uintptr_t pos);
+
+/**
+ * Write unsigned 8-bit value to write buffer.
+ * Returns 0 on success, -1 on error.
+ */
+int rust_session_write_u8(int fd, uintptr_t pos, uint8_t val);
+
+/**
+ * Write unsigned 16-bit value (little-endian).
+ * Returns 0 on success, -1 on error.
+ */
+int rust_session_write_u16(int fd, uintptr_t pos, uint16_t val);
+
+/**
+ * Write unsigned 32-bit value (little-endian).
+ * Returns 0 on success, -1 on error.
+ */
+int rust_session_write_u32(int fd, uintptr_t pos, uint32_t val);
+
+/**
+ * Skip N bytes in read buffer (like RFIFOSKIP).
+ * Returns 0 on success, -1 on error.
+ */
+int rust_session_skip(int fd, uintptr_t len);
+
+/**
+ * Get number of unread bytes (like RFIFOREST).
+ */
+uintptr_t rust_session_available(int fd);
+
+/**
+ * Commit write buffer (like WFIFOSET).
+ * Returns 0 on success, -1 on error.
+ */
+int rust_session_commit(int fd, uintptr_t len);
+
+/**
+ * Flush write buffer - no-op in async model (writes happen in session_io_task).
+ */
+int rust_session_flush(int _fd);
+
+/**
+ * Get a raw pointer to the read buffer at offset (like RFIFOP).
+ * Returns NULL if fd invalid or out of bounds.
+ *
+ * # Safety
+ * The returned pointer is valid only while the C call stack holds no other FFI calls
+ * that could modify this session's read buffer (skip, flush). In practice this is
+ * safe because C parse callbacks operate on a single session at a time.
+ */
+const uint8_t *rust_session_rdata_ptr(int fd, uintptr_t pos);
+
+/**
+ * Get a mutable raw pointer to the write buffer at offset (like WFIFOP).
+ * Returns NULL if fd invalid or out of bounds.
+ *
+ * # Safety
+ * Caller must call rust_session_commit() after writing to advance wdata_size.
+ */
+uint8_t *rust_session_wdata_ptr(int fd, uintptr_t pos);
+
+/**
+ * Ensure write buffer has room for `size` bytes (like WFIFOHEAD).
+ * Returns 0 on success, -1 on error.
+ */
+int rust_session_wfifohead(int fd, uintptr_t size);
+
+/**
+ * Flush read buffer - compact unread data (like RFIFOFLUSH).
+ */
+int rust_session_rfifoflush(int fd);
+
+/**
+ * Set default accept callback — called once per new incoming connection.
+ * Use this for initial handshake packets (server speaks first).
+ *
+ * # Safety
+ * Callback must be a valid C function pointer.
+ */
+void rust_session_set_default_accept(int (*callback)(int));
+
+/**
+ * Set default parse callback for all new sessions.
+ *
+ * # Safety
+ * Callback must be a valid C function pointer.
+ */
+void rust_session_set_default_parse(int (*callback)(int));
+
+/**
+ * Set default timeout callback.
+ *
+ * # Safety
+ * Callback must be a valid C function pointer.
+ */
+void rust_session_set_default_timeout(int (*callback)(int));
+
+/**
+ * Set default shutdown callback.
+ *
+ * # Safety
+ * Callback must be a valid C function pointer.
+ */
+void rust_session_set_default_shutdown(int (*callback)(int));
+
+/**
+ * Get session_data pointer (opaque void* for C).
+ */
+void *rust_session_get_data(int fd);
+
+/**
+ * Set session_data pointer.
+ */
+void rust_session_set_data(int fd, void *data);
+
+/**
+ * Get session eof flag.
+ */
+int rust_session_get_eof(int fd);
+
+/**
+ * Set session eof flag.
+ */
+void rust_session_set_eof(int fd, int eof);
+
+/**
+ * Get client IP address as u32 (network byte order, matches sin_addr.s_addr).
+ */
+uint32_t rust_session_get_client_ip(int fd);
+
+/**
+ * Get session increment value (packet sequence counter).
+ */
+uint8_t rust_session_get_increment(int fd);
+
+/**
+ * Increment packet counter and return new value.
+ */
+uint8_t rust_session_increment(int fd);
+
+/**
+ * Check if session exists (returns 1 if exists, 0 if not).
+ */
+int rust_session_exists(int fd);
+
+/**
+ * Override the parse callback for a specific session.
+ *
+ * # Safety
+ * Callback must be a valid C function pointer.
+ */
+void rust_session_set_parse(int fd, int (*callback)(int));
+
+/**
+ * Override the shutdown callback for a specific session.
+ *
+ * # Safety
+ * Callback must be a valid C function pointer.
+ */
+void rust_session_set_shutdown(int fd, int (*callback)(int));
+
+/**
+ * Call the parse callback for a session.
+ */
+void rust_session_call_parse(int fd);
+
+/**
+ * Log a message from C code through Rust's tracing system.
+ * level: 0=error, 1=warn, 2=info, 3=debug
+ *
+ * # Safety
+ * msg must be a valid null-terminated C string.
+ */
+void rust_log_c(int level, const char *msg);
+
+/**
+ * Get a snapshot of all active session fds (for iteration in C).
+ * Writes fds into caller-provided buffer, returns count written.
+ */
+int rust_session_get_all_fds(int *buf, int buf_len);
+
+/**
+ * Mark an IP as DDoS-locked.
+ *
+ * `ip` is in network byte order (sin_addr.s_addr), as returned by
+ * `rust_session_get_client_ip`.
+ */
+void rust_add_ip_lockout(uint32_t ip);
+
+/**
+ * Timer callback: prune stale DDoS history entries.
+ *
+ * Registered with timer_insert at server startup (interval 1 s).
+ * Signature matches C's `int (*func)(int, int)`.
+ */
+int rust_connect_check_clear(int _id, int _data);
+
+/**
+ * Record a throttled connection attempt from an IP.
+ *
+ * `ip` is in network byte order (sin_addr.s_addr), as returned by
+ * `rust_session_get_client_ip`.
+ */
+void rust_add_throttle(uint32_t ip);
+
+/**
+ * Timer callback: reset all throttle counts.
+ *
+ * Registered with timer_insert at server startup (interval 10 min).
+ * Signature matches C's `int (*func)(int, int)`.
+ */
+int rust_remove_throttle(int _id, int _data);
+
+/**
+ * Get current tick count in milliseconds (monotonic clock)
+ */
+extern uint32_t gettick_nocache(void);
+
+/**
+ * Get current tick count (may be cached)
+ */
+extern uint32_t gettick(void);
+
+/**
+ * Execute all expired timers. Returns ms until next timer fires.
+ */
+extern int timer_do(uint32_t tick);
+
+/**
+ * Initialize timer subsystem (currently a no-op in C)
+ */
+extern void timer_init(void);
+
+/**
+ * Free all timer memory
+ */
+extern int timer_clear(void);
+
+/**
+ * Insert a recurring or one-shot timer.
+ * `tick` — initial delay (ms), `interval` — repeat interval (ms, 0 = one-shot),
+ * `func` — callback `int (*)(int id, int data)`,
+ * `id` / `data` — passed through to callback.
+ * Returns a timer handle (used with timer_remove).
+ */
+extern int timer_insert(uint32_t tick, uint32_t interval, int (*func)(int, int), int id, int data);
 
 #endif  /* YURI_RS_H */

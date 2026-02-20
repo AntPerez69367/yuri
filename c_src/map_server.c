@@ -126,8 +126,8 @@ int nmail_sendmessage(USER* sd, char* message, int other, int type) {
   int len = 0;
   isactive(sd);
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -315,13 +315,13 @@ USER* map_id2sd(unsigned int id) {
 int isPlayerActive(USER* sd) {
   if (!sd) return 0;
   if (!sd->fd) return 0;
-  if (!session[sd->fd]) {  // This is an anomally, save, and exit.
+  if (!rust_session_exists(sd->fd)) {  // This is an anomally, save, and exit.
     printf(
         "Abnormal, Player exists but session does not(%s).  Attempting to "
         "recreate.\n",
         sd->status.name);
     // create_session(sd->fd); //Recreate socket data.
-    // session[sd->fd]->session_data=sd;
+    // rust_session_get_data(sd->fd)=sd;
     // session[sd->fd]->eof=1;
     // clif_handle_disconnect(sd);
     // session_eof(sd->fd);
@@ -395,7 +395,7 @@ USER* map_name2sd(const char* name) {
   USER* sd = NULL;
 
   for (i = 0; i < fd_max; i++) {
-    if (session[i] && (sd = session[i]->session_data)) {
+    if (rust_session_exists(i) && (sd = rust_session_get_data(i))) {
       if (strcasecmp(name, sd->status.name) == 0) return sd;
     }
   }
@@ -1593,7 +1593,7 @@ int change_time_char(int none, int none2) {
   }
 
   for (i = 0; i < fd_max; i++) {
-    if (session[i] && (sd = session[i]->session_data)) {
+    if (rust_session_exists(i) && (sd = rust_session_get_data(i))) {
       clif_sendtime(sd);
     }
   }
@@ -2391,7 +2391,7 @@ void mmo_setonline(unsigned int id, int val) {
   }
 
   if (SQL_SUCCESS == SqlStmt_NextRow(stmt)) {
-    a = b = c = d = session[sd->fd]->client_addr.sin_addr.s_addr;
+    a = b = c = d = rust_session_get_client_ip(sd->fd);
     a &= 0xff;
     b = (b >> 8) & 0xff;
     c = (c >> 16) & 0xff;
@@ -2423,9 +2423,9 @@ void mmo_setonline(unsigned int id, int val) {
 char isActive(USER* sd) {
   if (!sd) return 0;
 
-  if (!session[sd->fd]) return 0;
+  if (!rust_session_exists(sd->fd)) return 0;
 
-  if (session[sd->fd]->eof) return 0;
+  if (rust_session_get_eof(sd->fd)) return 0;
 
   return 1;
 }
@@ -2458,15 +2458,13 @@ int map_reset_timer(int v1, int v2) {
   }
   if (reset <= 0) {
     for (x = 0; x < fd_max; x++) {
-      if (session[x] && (sd = session[x]->session_data) && !session[x]->eof) {
+      if (rust_session_exists(x) && (sd = rust_session_get_data(x)) && !rust_session_get_eof(x)) {
         clif_handle_disconnect(sd);
 
-        if (session[x]->func_parse) {
-          session[x]->func_parse(x);
-        }
+        rust_session_call_parse(x);
         RFIFOFLUSH(x);
 
-        session[x]->eof = 1;
+        rust_session_set_eof(x, 1);
       }
     }
 
@@ -2972,8 +2970,8 @@ int map_savechars(int none, int nonetoo) {
   int x;
 
   for (x = 0; x < fd_max; x++) {
-    if (session[x] && (sd = (USER*)session[x]->session_data) &&
-        !session[x]->eof) {
+    if (rust_session_exists(x) && (sd = (USER*)rust_session_get_data(x)) &&
+        !rust_session_get_eof(x)) {
       intif_save(sd);
     }
   }

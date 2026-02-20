@@ -16,11 +16,10 @@
 static const int packet_len_table[] = {3, 20, 43, 40, 52, 0, 0};
 
 int check_connect_login(int ip, int port) {
-  if (login_fd <= 0 || session[login_fd] == NULL) {
+  if (login_fd <= 0 || rust_session_exists(login_fd) == 0) {
     printf("[char] [logif] Connecting to login-server\n");
     login_fd = make_connection(ip, port);
-    session[login_fd]->func_parse = logif_parse;
-    realloc_rfifo(login_fd, FIFOSIZE_SERVER, FIFOSIZE_SERVER);
+    rust_session_set_parse(login_fd, logif_parse);
     WFIFOHEAD(login_fd, 69);
     WFIFOB(login_fd, 0) = 0xAA;
     WFIFOW(login_fd, 1) = SWAP16(66);
@@ -75,8 +74,6 @@ int logif_parse_login(int fd) {
   res = char_db_mapfifofromlogin((char *)RFIFOP(fd, 4), (char *)RFIFOP(fd, 20),
                                  &id);
 
-  // printf("Res: %i\n",res);
-
   WFIFOHEAD(fd, 27);
   if (res < 0) {
     // printf("Error1\n");
@@ -86,8 +83,16 @@ int logif_parse_login(int fd) {
     WFIFOSET(fd, 27);
     return 0;
   }
-  if (logindata_add(id, res, (char *)RFIFOP(fd, 4))) {
-    // printf("Error2\n");
+  if (map_fifo[res].fd <= 0) {
+    WFIFOW(fd, 0) = 0x2003;
+    WFIFOW(fd, 2) = RFIFOW(fd, 2);
+    WFIFOB(fd, 4) = 0x05;  // LGN_ERRSERVER: map server not connected
+    WFIFOSET(fd, 27);
+    return 0;
+  }
+
+  int online_status = logindata_add(id, res, (char *)RFIFOP(fd, 4));
+  if (online_status) {
     // character is online, force disconnected
     WFIFOW(fd, 0) = 0x2003;
     WFIFOW(fd, 2) = RFIFOW(fd, 2);
@@ -130,7 +135,7 @@ int logif_parse(int fd) {
     return 0;
   }
 
-  if (session[fd]->eof) {
+  if (rust_session_get_eof(fd)) {
     // mmo_setallonline(0);
     printf("[char] [logif] Can't connect to Login Server\n");
     login_fd = 0;

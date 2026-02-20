@@ -141,8 +141,8 @@ int command_report(USER *sd, char *line, lua_State *state) {
   sprintf(buf, "<REPORT>%s: %s", sd->status.name, line);
   for (x = 1; x < fd_max; x++) {
     tsd = NULL;
-    if (session[x] && (tsd = (USER *)session[x]->session_data) &&
-        !session[x]->eof && tsd->status.gm_level) {
+    if (rust_session_exists(x) && (tsd = (USER *)rust_session_get_data(x)) &&
+        !rust_session_get_eof(x) && tsd->status.gm_level) {
       clif_sendmsg(tsd, 12, buf);
     }
   }
@@ -166,8 +166,8 @@ int command_gm(USER *sd, char *line, lua_State *state) {
 
   for (x = 1; x < fd_max; x++) {
     tsd = NULL;
-    if (session[x] && (tsd = (USER *)session[x]->session_data) &&
-        !session[x]->eof && tsd->status.gm_level) {
+    if (rust_session_exists(x) && (tsd = (USER *)rust_session_get_data(x)) &&
+        !rust_session_get_eof(x) && tsd->status.gm_level) {
       clif_sendmsg(tsd, 11, buf);
     }
   }
@@ -203,8 +203,8 @@ sd->status.gm_level == 0
 
         for(x=1;x<fd_max;x++) {
                 tsd=NULL;
-                if(session[x] && (tsd=(USER*)session[x]->session_data) &&
-!session[x]->eof
+                if(session[x] && (tsd=(USER*)rust_session_get_data(x)) &&
+!rust_session_get_eof(x)
                         && ((tsd->status.class <= 5 && tsd->status.level <= 25)
 || tsd->status.gm_level > 0
                         || pc_readglobalreg(tsd, "guide") > 0)) {
@@ -222,8 +222,8 @@ int command_weather(USER *sd, char *line, lua_State *state) {
 
   map[sd->bl.m].weather = weather;
   for (x = 1; x < fd_max; x++) {
-    if (session[x] && (tmpsd = (USER *)session[x]->session_data) &&
-        !session[x]->eof) {
+    if (rust_session_exists(x) && (tmpsd = (USER *)rust_session_get_data(x)) &&
+        !rust_session_get_eof(x)) {
       if (tmpsd->bl.m == sd->bl.m) {
         clif_sendweather(tmpsd);
         // pc_warp(tmpsd,tmpsd->bl.m,tmpsd->bl.x,tmpsd->bl.y);
@@ -242,8 +242,8 @@ int command_light(USER *sd, char *line, lua_State *state) {
 
   map[sd->bl.m].light = weather;
   for (int x = 0; x < fd_max; x++) {
-    if (session[x] && (tmpsd = (USER *)session[x]->session_data) &&
-        !session[x]->eof) {
+    if (rust_session_exists(x) && (tmpsd = (USER *)rust_session_get_data(x)) &&
+        !rust_session_get_eof(x)) {
       if (tmpsd->bl.m == sd->bl.m) {
         pc_warp(tmpsd, tmpsd->bl.m, tmpsd->bl.x, tmpsd->bl.y);
         // clif_sendmapinfo(sd);
@@ -448,10 +448,10 @@ int command_ban(USER *sd, char *line, lua_State *state) {
       Sql_ShowDebug(sql_handle);
     }
     // unsigned int ipaddr;
-    // ipaddr = session[tsd->fd]->client_addr.sin_addr.s_addr;
+    // ipaddr = rust_session_get_client_ip(tsd->fd);
     // sql_request("INSERT INTO `banlist` (`ipaddy`) VALUES('%u')",ipaddr);
     // sql_free_row();
-    session[tsd->fd]->eof = 1;
+    rust_session_set_eof(tsd->fd, 1);
   }
   return 0;
 }
@@ -734,7 +734,7 @@ int command_checkdupes(USER *sd, char *line, lua_State *state) {
   int x;
 
   for (x = 1; x < fd_max; x++) {
-    if (session[x] && (tmpsd = session[x]->session_data) && !session[x]->eof) {
+    if (rust_session_exists(x) && (tmpsd = rust_session_get_data(x)) && !rust_session_get_eof(x)) {
       int numDupes = pc_readglobalreg(tmpsd, "goldbardupe");
       if (numDupes) {
         sprintf(BufStr, "%s gold bar %i times", tmpsd->status.name, numDupes);
@@ -752,7 +752,7 @@ int command_checkwpe(USER *sd, char *line, lua_State *state) {
   int x;
 
   for (x = 1; x < fd_max; x++) {
-    if (session[x] && (tmpsd = session[x]->session_data) && !session[x]->eof) {
+    if (rust_session_exists(x) && (tmpsd = rust_session_get_data(x)) && !rust_session_get_eof(x)) {
       int numDupes = pc_readglobalreg(tmpsd, "WPEtimes");
       if (numDupes) {
         sprintf(BufStr, "%s WPE attempt %i times", tmpsd->status.name,
@@ -772,7 +772,7 @@ int command_kill(USER *sd, char *line, lua_State *state) {
   if (tsd) {
     sprintf(buf, "Done.");
 
-    if (session[tsd->fd]) session[tsd->fd]->eof = 1;
+    if (rust_session_exists(tsd->fd)) rust_session_set_eof(tsd->fd, 1);
     clif_sendminitext(sd, buf);
   } else {
     sprintf(buf, "User not found.");
@@ -788,15 +788,15 @@ int command_killall(USER *sd, char *line, lua_State *state) {
   for (x = 1; x < fd_max; x++) {
     tmpsd = NULL;
 
-    if (session[x] && (tmpsd = session[x]->session_data) && !session[x]->eof) {
+    if (rust_session_exists(x) && (tmpsd = rust_session_get_data(x)) && !rust_session_get_eof(x)) {
       if (!tmpsd->status.gm_level) {
-        session[x]->eof = 1;
+        rust_session_set_eof(x, 1);
       }
     }
   }
 
   // int len = sprintf(buf,"All but GMs have been mass booted.");
-  if (!session[sd->fd]->eof)
+  if (!rust_session_get_eof(sd->fd))
     clif_sendminitext(sd, "All but GMs have been mass booted.");
 
   return 0;
@@ -1491,7 +1491,7 @@ int command_reloadcreations(USER *sd, char *line, lua_State *state) {
 int command_reloadmaps(USER *sd, char *line, lua_State *state) {
   map_reload();
 
-  if (char_fd > 0 && session[char_fd] != NULL) {
+  if (char_fd > 0 && rust_session_exists(char_fd) != 0) {
     int i = 0;
     int j = 0;
 

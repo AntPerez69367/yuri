@@ -17,6 +17,8 @@ pub mod network;
 pub mod database;
 /// Server implementations (login, char, map)
 pub mod servers;
+/// Session management (replaces session.c)
+pub mod session;
 
 // ============================================
 // FFI Layer (Temporary - for C interop)
@@ -24,4 +26,5 @@ pub mod servers;
 
 /// C-compatible wrapper functions
 /// This entire module will be deleted once C code is fully ported
+#[cfg(not(test))]
 mod ffi;

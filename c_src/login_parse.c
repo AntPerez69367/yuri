@@ -17,8 +17,6 @@
 #include "strlib.h"
 #include "timer.h"
 
-extern int Check_Throttle(struct sockaddr_in S);
-extern void Add_Throttle(struct sockaddr_in S);
 
 bool bannedIPCheck(char *ip) {
   SqlStmt *stmt = SqlStmt_Malloc(sql_handle);
@@ -52,51 +50,51 @@ int clif_accept(int fd) {
   bool banned = false;
 
   char ip[30];
-  strcpy(ip, inet_ntoa(session[fd]->client_addr.sin_addr));
+  sprintf(ip, "%u.%u.%u.%u", CONVIP(rust_session_get_client_ip(fd)));
 
   banned = bannedIPCheck(ip);
 
   printf("[login] [accept] ip=%s\n", ip);
 
   if (DDOS) {
-    Add_Throttle(session[fd]->client_addr);
+    rust_add_throttle(rust_session_get_client_ip(fd));
     printf("[login] [ddos_throttle] ip=%u.%u.%u.%u\n",
-           CONVIP2(session[fd]->client_addr.sin_addr.s_addr));
+           CONVIP2(rust_session_get_client_ip(fd)));
 
     for (P = 0; P <= fd_max; P++) {
-      if (session[P] == NULL) {
+      if (rust_session_exists(P) == 0) {
         continue;
       }
 
       if (P == fd) {
         continue;
       }
-      if (session[fd]->client_addr.sin_addr.s_addr ==
-          session[P]->client_addr.sin_addr.s_addr) {
-        session[P]->eof = 1;
+      if (rust_session_get_client_ip(fd) ==
+          rust_session_get_client_ip(P)) {
+        rust_session_set_eof(P, 1);
         session_eof(P);
       }
     }
-    session[fd]->eof = 1;
+    rust_session_set_eof(fd, 1);
     session_eof(fd);
   } else if (banned) {
     // Add_Throttle( session[fd]->client_addr);
     printf("[login] [banned] ip=%s\n", ip);
 
     for (P = 0; P <= fd_max; P++) {
-      if (session[P] == NULL) {
+      if (rust_session_exists(P) == 0) {
         continue;
       }
       if (P == fd) {
         continue;
       }
-      if (session[fd]->client_addr.sin_addr.s_addr ==
-          session[P]->client_addr.sin_addr.s_addr) {
-        session[P]->eof = 1;
+      if (rust_session_get_client_ip(fd) ==
+          rust_session_get_client_ip(P)) {
+        rust_session_set_eof(P, 1);
         session_eof(P);
       }
     }
-    session[fd]->eof = 1;
+    rust_session_set_eof(fd, 1);
     session_eof(fd);
   } else {
     WFIFOHEAD(fd, 22);
@@ -425,23 +423,29 @@ int clif_parse(int fd) {
   unsigned short len = 0;
   unsigned short ver = 0;
   unsigned short deep = 0;
-  if (session[fd]->eof) {
+  if (rust_session_get_eof(fd)) {
     session_eof(fd);
     return 0;
   }
 
-  if (!session[fd]->session_data) {
-    CALLOC(session[fd]->session_data, struct login_session_data, 1);
+  if (!rust_session_get_data(fd)) {
+    struct login_session_data *_new_sd = calloc(1, sizeof(struct login_session_data));
+    if (!_new_sd) {
+      printf("[login] [clif_parse] calloc failed for fd=%d, closing session\n", fd);
+      session_eof(fd);
+      return 0;
+    }
+    rust_session_set_data(fd, _new_sd);
   }
 
-  struct login_session_data *sd = session[fd]->session_data;
+  struct login_session_data *sd = rust_session_get_data(fd);
 
   if (RFIFOB(fd, 0) != 0xAA) {
     int head_err = 0;
     while (RFIFOB(fd, 0) != 0xAA && RFIFOREST(fd)) {
       RFIFOSKIP(fd, 1);
       if (head_err++ > 30) {
-        session[fd]->eof = 1;
+        rust_session_set_eof(fd, 1);
         return 0;
       }
     }
@@ -456,10 +460,10 @@ int clif_parse(int fd) {
 
   char OutStr[1024] = "";
   sprintf(OutStr, "ip=%u.%u.%u.%u length=%i packet=",
-          CONVIP(session[fd]->client_addr.sin_addr.s_addr), len);
+          CONVIP(rust_session_get_client_ip(fd)), len);
 
   char ip[30];
-  strcpy(ip, inet_ntoa(session[fd]->client_addr.sin_addr));
+  sprintf(ip, "%u.%u.%u.%u", CONVIP(rust_session_get_client_ip(fd)));
 
   for (L = 0; L < len; L++) {
     char HexStr[32];
@@ -611,7 +615,7 @@ int clif_parse(int fd) {
         memcpy(WFIFOP(char_fd, 4), RFIFOP(fd, 6), RFIFOB(fd, 5));
         memcpy(WFIFOP(char_fd, 20), RFIFOP(fd, 7 + RFIFOB(fd, 5)),
                RFIFOB(fd, 6 + RFIFOB(fd, 5)));
-        WFIFOL(char_fd, 36) = session[fd]->client_addr.sin_addr.s_addr;
+        WFIFOL(char_fd, 36) = rust_session_get_client_ip(fd);
         WFIFOSET(char_fd, 40);
       } else {
         clif_message(fd, 0x03, login_msg[LGN_ERRDB]);
@@ -621,7 +625,7 @@ int clif_parse(int fd) {
     case 0x04:
 
       if (!strlen(sd->name) || !strlen(sd->pass)) {
-        session[fd]->eof = 1;
+        rust_session_set_eof(fd, 1);
       }
 
       sd->face = RFIFOB(fd, 6);
@@ -738,8 +742,8 @@ int clif_parse(int fd) {
       intif_auth(fd);
       break;
     default:
-      printf("[login] [packet_unknown] id=%02X ip=%s:\n", RFIFOB(fd, 3),
-             inet_ntoa(session[fd]->client_addr.sin_addr));
+      printf("[login] [packet_unknown] id=%02X ip=%u.%u.%u.%u:\n", RFIFOB(fd, 3),
+             CONVIP(rust_session_get_client_ip(fd)));
       clif_debug(RFIFOP(fd, 0), SWAP16(RFIFOW(fd, 1)));
       break;
   }

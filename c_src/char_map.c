@@ -80,7 +80,7 @@ int mapif_parse_auth(int fd) {
 
   // if(!packet_len_table[9]) packet_len_table[9]=; //0x3009
 
-  if (session[fd]->eof) {
+  if (rust_session_get_eof(fd)) {
     session_eof(fd);
     return 0;
   }
@@ -114,7 +114,7 @@ int mapif_parse_auth(int fd) {
       WFIFOB(fd, 2) = 0x01;
       WFIFOB(fd, 3) = 0x00;
       WFIFOSET(fd, 4);
-      session[fd]->eof = 1;
+      rust_session_set_eof(fd, 1);
       RFIFOSKIP(fd, packet_len);
       return 0;
     }
@@ -135,7 +135,7 @@ int mapif_parse_auth(int fd) {
     map_fifo[i].fd = fd;
     map_fifo[i].ip = RFIFOL(fd, 66);
     map_fifo[i].port = RFIFOW(fd, 70);
-    session[fd]->func_parse = mapif_parse;
+    rust_session_set_parse(fd, mapif_parse);
     realloc_rfifo(fd, FIFOSIZE_SERVER, FIFOSIZE_SERVER);
 
     WFIFOHEAD(fd, 4);
@@ -150,7 +150,7 @@ int mapif_parse_auth(int fd) {
            i, p[0], p[1], p[2], p[3], map_fifo[i].port);
 
   } else {
-    session[fd]->eof = 1;
+    rust_session_set_eof(fd, 1);
   }
 
   RFIFOSKIP(fd, packet_len);
@@ -979,7 +979,7 @@ int mapif_parse(int fd) {
     }
   }
 
-  if (session[fd]->eof) {
+  if (rust_session_get_eof(fd)) {
     printf("[char] [mapif] Map Server #%d connection lost\n", id);
     map_fifo[id].fd = 0;
     map_fifo_n--;

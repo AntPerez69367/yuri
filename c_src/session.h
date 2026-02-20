@@ -6,66 +6,51 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 
-// define declaration
+#include "yuri.h"
+#include "net_crypt.h"
 
-#define RFIFOP(fd, pos) (session[fd]->rdata + session[fd]->rdata_pos + (pos))
-#define RFIFOB(fd, pos) \
-  (*(unsigned char *)(session[fd]->rdata + session[fd]->rdata_pos + (pos)))
-#define RFIFOW(fd, pos) \
-  (*(unsigned short *)(session[fd]->rdata + session[fd]->rdata_pos + (pos)))
-#define RFIFOL(fd, pos) \
-  (*(unsigned int *)(session[fd]->rdata + session[fd]->rdata_pos + (pos)))
-#define RFIFOSKIP(fd, len)                                                  \
-  ((session[fd]->rdata_size - session[fd]->rdata_pos - (len) < 0)           \
-       ? (printf("Skip error in file %s at line %d\n", __FILE__, __LINE__), \
-          exit(1))                                                          \
-       : (session[fd]->rdata_pos += (len)))
-#define RFIFOREST(fd) (session[fd]->rdata_size - session[fd]->rdata_pos)
-#define RFIFOFLUSH(fd)                                                         \
-  do {                                                                         \
-    if (session[fd]->rdata_size == session[fd]->rdata_pos) {                   \
-      session[fd]->rdata_size = session[fd]->rdata_pos = 0;                    \
-    } else {                                                                   \
-      session[fd]->rdata_size -= session[fd]->rdata_pos;                       \
-      memmove(session[fd]->rdata, session[fd]->rdata + session[fd]->rdata_pos, \
-              session[fd]->rdata_size);                                        \
-      session[fd]->rdata_pos = 0;                                              \
-    }                                                                          \
-  } while (0)
-#define RFIFOSPACE(fd) (session[fd]->max_rdata - session[fd]->rdata_size)
-#define RBUFP(p, pos) (((unsigned char *)(p)) + (pos))
-#define RBUFB(p, pos) (*(unsigned char *)RBUFP((p), (pos)))
-#define RBUFW(p, pos) (*(unsigned short *)RBUFP((p), (pos)))
-#define RBUFL(p, pos) (*(unsigned int *)RBUFP((p), (pos)))
-#define WFIFOHEAD(fd, size)                                                \
-  do {                                                                     \
-    if ((fd) && session[fd]->wdata_size + (size) > session[fd]->max_wdata) \
-      realloc_fifo(fd, size);                                              \
-  } while (0)
-//#define WFIFOHEAD(fd,size) if(fd) while(session[fd]->wdata_size +(size) >
-// session[fd]->max_wdata) { if(session[fd]->func_send)
-// session[fd]->func_send(fd); }
-#define WFIFOSPACE(fd) (session[fd]->max_wdata - session[fd]->wdata_size)
-#define WFIFOP(fd, pos) \
-  (char *)(session[fd]->wdata + session[fd]->wdata_size + (pos))
-#define WFIFOB(fd, pos) \
-  (*(unsigned char *)(session[fd]->wdata + session[fd]->wdata_size + (pos)))
-#define WFIFOW(fd, pos) \
-  (*(unsigned short *)(session[fd]->wdata + session[fd]->wdata_size + (pos)))
-#define WFIFOL(fd, pos) \
-  (*(unsigned int *)(session[fd]->wdata + session[fd]->wdata_size + (pos)))
-// use function instead of macro.
-//#define WFIFOSET(fd,len) (session[fd]->wdata_size =
-//(session[fd]->wdata_size+(len)+2048 < session[fd]->max_wdata) ?
-// session[fd]->wdata_size+len : session[fd]->wdata_size)
-#define WBUFP(p, pos) (((unsigned char *)(p)) + (pos))
-#define WBUFB(p, pos) (*(unsigned char *)WBUFP((p), (pos)))
-#define WBUFW(p, pos) (*(unsigned short *)WBUFP((p), (pos)))
-#define WBUFL(p, pos) (*(unsigned int *)WBUFP((p), (pos)))
+// Route all C printf() calls through Rust's tracing system for unified output.
+// snprintf into a fixed buffer then hand off to rust_log_c(level=2 = INFO).
+#define printf(fmt, ...) do { \
+    char _log_buf_[2048]; \
+    snprintf(_log_buf_, sizeof(_log_buf_), fmt, ##__VA_ARGS__); \
+    rust_log_c(2, _log_buf_); \
+} while(0)
 
 #ifdef __INTERIX
 #define FD_SETSIZE 4096
 #endif  // __INTERIX
+
+// struct socket_data removed — C session[] array replaced by Rust SessionManager.
+
+extern int fd_max;
+
+// Buffer access macros - Rust-backed via FFI
+#define RFIFOP(fd, pos)  ((unsigned char *)rust_session_rdata_ptr((fd), (pos)))
+#define RFIFOB(fd, pos)  (*(unsigned char *)rust_session_rdata_ptr((fd), (pos)))
+#define RFIFOW(fd, pos)  (*(unsigned short *)rust_session_rdata_ptr((fd), (pos)))
+#define RFIFOL(fd, pos)  (*(unsigned int *)rust_session_rdata_ptr((fd), (pos)))
+#define RFIFOSKIP(fd, len) rust_session_skip((fd), (len))
+#define RFIFOREST(fd)    ((int)rust_session_available((fd)))
+#define RFIFOFLUSH(fd)   rust_session_rfifoflush((fd))
+#define RFIFOSPACE(fd)   (16 * 1024)
+#define WFIFOHEAD(fd, size) rust_session_wfifohead((fd), (size))
+#define WFIFOSPACE(fd)   (16 * 1024)
+#define WFIFOP(fd, pos)  ((char *)rust_session_wdata_ptr((fd), (pos)))
+#define WFIFOB(fd, pos)  (*(unsigned char *)rust_session_wdata_ptr((fd), (pos)))
+#define WFIFOW(fd, pos)  (*(unsigned short *)rust_session_wdata_ptr((fd), (pos)))
+#define WFIFOL(fd, pos)  (*(unsigned int *)rust_session_wdata_ptr((fd), (pos)))
+#define WFIFOSET(fd, len) rust_session_commit((fd), (len))
+
+// Raw buffer macros - operate on arbitrary pointers, not sessions
+#define RBUFP(p, pos) (((unsigned char *)(p)) + (pos))
+#define RBUFB(p, pos) (*(unsigned char *)RBUFP((p), (pos)))
+#define RBUFW(p, pos) (*(unsigned short *)RBUFP((p), (pos)))
+#define RBUFL(p, pos) (*(unsigned int *)RBUFP((p), (pos)))
+#define WBUFP(p, pos) (((unsigned char *)(p)) + (pos))
+#define WBUFB(p, pos) (*(unsigned char *)WBUFP((p), (pos)))
+#define WBUFW(p, pos) (*(unsigned short *)WBUFP((p), (pos)))
+#define WBUFL(p, pos) (*(unsigned int *)WBUFP((p), (pos)))
 
 #define CONVIP(ip)                                             \
   ((ip) >> 0) & 0xFF, ((ip) >> 8) & 0xFF, ((ip) >> 16) & 0xFF, \
@@ -73,50 +58,52 @@
 #define CONVIP2(ip)                                             \
   ((ip) >> 24) & 0xFF, ((ip) >> 16) & 0xFF, ((ip) >> 8) & 0xFF, \
       ((ip) >> 0) & 0xFF
-// Struct declaration
 
-struct socket_data {
-  int eof;
-  unsigned char *rdata, *wdata;
-  size_t max_rdata, max_wdata;
-  size_t rdata_size, wdata_size;
-  size_t rdata_pos;
-  time_t rdata_tick;
-  struct sockaddr_in client_addr;
-  int (*func_recv)(int);
-  int (*func_send)(int);
-  int (*func_parse)(int);
-  int (*func_timeout)(int);
-  int (*func_shutdown)(int);
-  void *session_data;
-  unsigned char increment;
-  char name[32];
-};
-// server_shutdown removed - use rust_should_shutdown() instead
-// Data prototype declaration
+// session.c deleted — all functions inlined here.
+// rust_add_ip_lockout is declared in yuri.h (cbindgen-generated)
 
-extern struct socket_data *session[FD_SETSIZE];
+static inline int null_accept(int fd) { (void)fd; return 0; }
+static inline int null_shutdown(int fd) { (void)fd; return 0; }
+static inline int null_timeout(int fd) { (void)fd; return 0; }
+static inline int null_parse(int fd) {
+  if (rust_session_get_eof(fd)) {
+    rust_session_set_eof(fd, 1);
+    return 0;
+  }
+  printf("[session] null_parse fd=%d\n", fd);
+  RFIFOSKIP(fd, RFIFOREST(fd));
+  return 0;
+}
 
-extern size_t rfifo_size, wfifo_size;
-extern int fd_max;
-void create_session(int);
-// Function prototype declaration
-int WFIFOHEADER(int, int, int);
-int make_listen_port(int);
-int make_connection(long, int);
-int session_eof(int);
-int realloc_fifo(int, size_t);
-int WFIFOSET(int, int);
-void log_session(int, const char *);
-int add_ip_lockout(unsigned int);
-// int RFIFOSKIP(int,size_t);
-int do_sendrecv();
-int do_parsepacket(void);
-void do_socket(void);
-int realloc_rfifo(int fd, unsigned int rfifo_sizen, unsigned int wfifo_sizen);
-void set_defaultparse(int (*)(int));
-void set_defaultaccept(int (*)(int));
-void set_defaulttimeout(int (*)(int));
-void set_defaultshutdown(int (*)(int));
+static inline void set_defaultparse(int (*cb)(int))    { rust_session_set_default_parse(cb); }
+static inline void set_defaultaccept(int (*cb)(int))   { rust_session_set_default_accept(cb); }
+static inline void set_defaulttimeout(int (*cb)(int))  { rust_session_set_default_timeout(cb); }
+static inline void set_defaultshutdown(int (*cb)(int)) { rust_session_set_default_shutdown(cb); }
 
-int Remove_Throttle(int none, int nonetoo);
+static inline int make_listen_port(int port) { return rust_make_listen_port(port); }
+static inline int make_connection(long ip, int port) { return rust_make_connection((uint32_t)ip, port); }
+
+static inline int session_eof(int fd) {
+  if (fd < 0 || fd >= FD_SETSIZE) return -1;
+  rust_session_set_eof(fd, 1);
+  return 0;
+}
+
+static inline int realloc_rfifo(int fd, unsigned int rfifo_sizen, unsigned int wfifo_sizen) {
+  (void)fd; (void)rfifo_sizen; (void)wfifo_sizen;
+  return 0;
+}
+
+static inline int WFIFOHEADER(int fd, int packetID, int packetSize) {
+  if (!rust_session_exists(fd)) return 0;
+  WFIFOHEAD(fd, packetSize + 3);
+  WFIFOB(fd, 0) = 0xAA;
+  WFIFOW(fd, 1) = SWAP16(packetSize);
+  WFIFOB(fd, 3) = packetID;
+  WFIFOB(fd, 4) = rust_session_increment(fd);
+  return 0;
+}
+
+static inline void c_update_fd_max(int fd) {
+  if (fd + 1 > fd_max) fd_max = fd + 1;
+}

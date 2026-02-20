@@ -29,11 +29,11 @@ static const int packet_len_table[] = {
 int intif_shutdown(int fd) { exit(0); }
 int check_connect_char(int ip, int port) {
   // printf("Called Connect\n");
-  if (char_fd <= 0 || session[char_fd] == NULL) {
+  if (char_fd <= 0 || rust_session_exists(char_fd) == 0) {
     printf("[map] [intif] Connecting to char-server\n");
     char_fd = make_connection(ip, port);
-    session[char_fd]->func_parse = intif_parse;
-    session[char_fd]->func_shutdown = intif_shutdown;
+    rust_session_set_parse(char_fd, intif_parse);
+    rust_session_set_shutdown(char_fd, intif_shutdown);
     realloc_rfifo(char_fd, FIFOSIZE_SERVER, FIFOSIZE_SERVER);
     WFIFOHEAD(char_fd, 72);
     WFIFOW(char_fd, 0) = 0x3000;
@@ -59,7 +59,6 @@ int intif_quit(USER* sd) {
 int intif_load(int fd, int id, char* name) {
   if (char_fd <= 0) return -1;
 
-  // printf("	Sent FD: %d\n",fd);
   WFIFOHEAD(char_fd, 24);
   WFIFOW(char_fd, 0) = 0x3003;
   WFIFOW(char_fd, 2) = fd;
@@ -166,20 +165,25 @@ int intif_mmo_tosd(int fd, struct mmo_charstatus* p) {
     return 0;
   }
   if (!p) {
-    session[fd]->eof = 7;
+    rust_session_set_eof(fd, 7);
     return 0;
   }
-  // if(session[fd]->session_data) { //data already exists
+  // if(rust_session_get_data(fd)) { //data already exists
   //	session[fd]->eof=8;
   //	return 0;
   //}
 
   CALLOC(sd, USER, 1);
+  if (!sd) {
+    printf("[map] [intif_mmo_tosd] calloc failed for fd=%d, closing session\n", fd);
+    rust_session_set_eof(fd, 7);
+    return 0;
+  }
   memcpy(&sd->status, p, sizeof(struct mmo_charstatus));
 
   sd->fd = fd;
 
-  session[fd]->session_data = sd;
+  rust_session_set_data(fd, sd);
 
   populate_table(sd->status.name, sd->EncHash, sizeof(sd->EncHash));
   sd->bl.id = sd->status.id;
@@ -436,7 +440,7 @@ int intif_parse_charload(int fd) {
   uLongf clen;
   Bytef* cbuf = NULL;
 
-  if (!session[RFIFOW(fd, 6)]) return 0;
+  if (!rust_session_exists(RFIFOW(fd, 6))) return 0;
 
   ulen = sizeof(struct mmo_charstatus);
   clen = ulen;
@@ -465,7 +469,7 @@ int intif_parse_checkonline(int fd) {
   sd = map_id2sd(RFIFOL(fd, 2));
 
   if (sd) {  // User is not online, FORCE login to delete
-    session[sd->fd]->eof = 20;
+    rust_session_set_eof(sd->fd, 20);
     // WFIFOW(fd,0)=0x3005;
     // WFIFOL(fd,2)=RFIFOL(fd,2);
   }
@@ -478,9 +482,9 @@ int intif_parse_deletepostresponse(int fd) {
   int response = RFIFOB(fd, 4);
   USER* sd = NULL;
 
-  if (sfd > FD_SETSIZE || sfd >= fd_max || sfd <= 0) return 0;
+  if (sfd <= 0 || sfd > FD_SETSIZE || !rust_session_exists(sfd)) return 0;
 
-  if (session[sfd]) sd = (USER*)session[sfd]->session_data;
+  if (rust_session_exists(sfd)) sd = (USER*)rust_session_get_data(sfd);
   if (!sd) return 0;
 
   switch (response) {
@@ -513,9 +517,9 @@ int intif_parse_showpostresponse(int fd) {
   int x;
   StringBuf buf;
   // return 0;
-  if (header.fd > FD_SETSIZE || header.fd >= fd_max || header.fd <= 0) return 0;
+  if (header.fd <= 0 || header.fd > FD_SETSIZE || !rust_session_exists(header.fd)) return 0;
 
-  if (session[header.fd]) sd = (USER*)session[header.fd]->session_data;
+  if (rust_session_exists(header.fd)) sd = (USER*)rust_session_get_data(header.fd);
 
   if (!sd) return 0;
 
@@ -586,23 +590,21 @@ int intif_parse_userlist(int fd) {
   char name[16];
 
   USER* sd = NULL;
-  if (sfd > FD_SETSIZE || sfd >= fd_max || sfd <= 0) return 0;
-  if (session[sfd]) sd = session[sfd]->session_data;
+  if (sfd <= 0 || sfd > FD_SETSIZE || !rust_session_exists(sfd)) return 0;
+  if (rust_session_exists(sfd)) sd = rust_session_get_data(sfd);
 
   if (!sd) return 0;
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
   int usercount = 0;
 
   USER* tsd = NULL;
-  struct socket_data* p;
   for (int i = 0; i < fd_max; i++) {
-    p = session[i];
-    if (p && (tsd = p->session_data)) {
+    if (rust_session_exists(i) && (tsd = (USER*)rust_session_get_data(i))) {
       usercount += 1;  // This gets true number of users on the specific server.
                        // most cases will match count.
     }
@@ -680,8 +682,8 @@ int intif_parse_userlist(int fd) {
 int intif_parse_boardpostresponse(int fd) {
   int sfd = RFIFOW(fd, 2);
   USER* sd = NULL;
-  if (sfd > FD_SETSIZE || sfd >= fd_max || sfd <= 0) return 0;
-  if (session[sfd]) sd = session[sfd]->session_data;
+  if (sfd <= 0 || sfd > FD_SETSIZE || !rust_session_exists(sfd)) return 0;
+  if (rust_session_exists(sfd)) sd = rust_session_get_data(sfd);
 
   if (!sd) return 0;
 
@@ -699,8 +701,8 @@ int intif_parse_boardpostresponse(int fd) {
 int intif_parse_nmailwriteresponse(int fd) {
   int sfd = RFIFOW(fd, 2);
   USER* sd = NULL;
-  if (sfd > FD_SETSIZE || sfd >= fd_max || sfd <= 0) return 0;
-  if (session[sfd]) sd = session[sfd]->session_data;
+  if (sfd <= 0 || sfd > FD_SETSIZE || !rust_session_exists(sfd)) return 0;
+  if (rust_session_exists(sfd)) sd = rust_session_get_data(sfd);
 
   if (!sd) return 0;
 
@@ -737,8 +739,8 @@ int intif_parse_setmp(int fd) {
   int flags = RFIFOW(fd, 4);
 
   USER* sd = NULL;
-  if (sfd > FD_SETSIZE || sfd >= fd_max || sfd <= 0) return 0;
-  if (session[sfd]) sd = session[sfd]->session_data;
+  if (sfd <= 0 || sfd > FD_SETSIZE || !rust_session_exists(sfd)) return 0;
+  if (rust_session_exists(sfd)) sd = rust_session_get_data(sfd);
 
   if (!sd) return 0;
 
@@ -757,17 +759,17 @@ int intif_parse_readpost(int fd) {
   int len;
 
   USER* sd = NULL;
-  if (h.fd > FD_SETSIZE || h.fd >= fd_max || h.fd <= 0) return 0;
+  if (h.fd <= 0 || h.fd > FD_SETSIZE || !rust_session_exists(h.fd)) return 0;
 
-  if (session[h.fd]) sd = session[h.fd]->session_data;
+  if (rust_session_exists(h.fd)) sd = rust_session_get_data(h.fd);
 
   if (!sd) return 0;
 
   if (strcasecmp(sd->status.name, h.name))
     return 0;  // Name does not match User, Return
 
-  if (!session[sd->fd]) {
-    session[sd->fd]->eof = 8;
+  if (!rust_session_exists(sd->fd)) {
+    rust_session_set_eof(sd->fd, 8);
     return 0;
   }
 
@@ -802,7 +804,7 @@ int intif_parse_readpost(int fd) {
 int intif_parse(int fd) {
   int packet_len, cmd;
 
-  if (session[fd]->eof) {
+  if (rust_session_get_eof(fd)) {
     printf("[map] [intif] Can't connect to Char Server.\n");
     char_fd = 0;
     session_eof(fd);
@@ -884,7 +886,7 @@ int intif_timer(int data1, int data2) {
   /*int i;
   USER *sd;
   for(i=0;i<fd_max;i++){
-          if(session[i] && (sd=(USER*)session[i]->session_data)) {
+          if(session[i] && (sd=(USER*)rust_session_get_data(i))) {
                   intif_save(sd);
           }
   }*/

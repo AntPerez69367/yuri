@@ -38,13 +38,13 @@ int intif_auth(int fd) {
     WFIFOW(fd, 0) = 0x1000;
     WFIFOB(fd, 2) = 0x01;
     WFIFOSET(fd, 3);
-    session[fd]->eof = 1;
+    rust_session_set_eof(fd, 1);
     return 0;
   }
 
   char_fd = fd;
 
-  session[char_fd]->func_parse = intif_parse;
+  rust_session_set_parse(char_fd, intif_parse);
   realloc_rfifo(char_fd, FIFOSIZE_SERVER, FIFOSIZE_SERVER);
   WFIFOHEAD(char_fd, 3);
   WFIFOW(char_fd, 0) = 0x1000;
@@ -56,7 +56,7 @@ int intif_auth(int fd) {
   return 0;
 }
 int intif_parse_2001(int fd) {
-  if (!session[RFIFOW(fd, 2)]) {
+  if (!rust_session_exists(RFIFOW(fd, 2))) {
     return 0;
   }
 
@@ -71,7 +71,7 @@ int intif_parse_2001(int fd) {
   return 0;
 }
 int intif_parse_2002(int fd) {
-  if (!session[RFIFOW(fd, 2)]) {
+  if (!rust_session_exists(RFIFOW(fd, 2))) {
     return 0;
   }
 
@@ -86,20 +86,20 @@ int intif_parse_2002(int fd) {
   return 0;
 }
 int intif_parse_connectconfirm(int fd) {
-  if (!session[RFIFOW(fd, 2)]) {
+  if (!rust_session_exists(RFIFOW(fd, 2))) {
     return 0;
   }
 
-  struct login_session_data *sd = session[RFIFOW(fd, 2)]->session_data;
+  struct login_session_data *sd = rust_session_get_data(RFIFOW(fd, 2));
 
   if (RFIFOB(fd, 4) == 0) {
     printf("[login] [auth_success] name=%s ip=%u.%u.%u.%u\n", sd->name,
-           CONVIP(session[RFIFOW(fd, 2)]->client_addr.sin_addr.s_addr));
+           CONVIP(rust_session_get_client_ip(RFIFOW(fd, 2))));
 
     char ipaddress[16] = "";
 
     sprintf(ipaddress, "%u.%u.%u.%u",
-            CONVIP(session[RFIFOW(fd, 2)]->client_addr.sin_addr.s_addr));
+            CONVIP(rust_session_get_client_ip(RFIFOW(fd, 2))));
 
     SqlStmt *stmt = NULL;
     stmt = SqlStmt_Malloc(sql_handle);
@@ -158,11 +158,11 @@ int intif_parse_connectconfirm(int fd) {
     clif_message(RFIFOW(fd, 2), 0x03, login_msg[LGN_WRONGUSER]);
   } else if (RFIFOB(fd, 4) == 0x03) {
     printf("[login] [auth_failure] name=%s ip=%u.%u.%u.%u\n", sd->name,
-           CONVIP(session[RFIFOW(fd, 2)]->client_addr.sin_addr.s_addr));
-    if (setInvalidCount(session[RFIFOW(fd, 2)]->client_addr.sin_addr.s_addr) >=
+           CONVIP(rust_session_get_client_ip(RFIFOW(fd, 2))));
+    if (setInvalidCount(rust_session_get_client_ip(RFIFOW(fd, 2))) >=
         10) {
-      add_ip_lockout(session[RFIFOW(fd, 2)]->client_addr.sin_addr.s_addr);
-      session[RFIFOW(fd, 2)]->eof = 1;
+      rust_add_ip_lockout(rust_session_get_client_ip(RFIFOW(fd, 2)));
+      rust_session_set_eof(RFIFOW(fd, 2), 1);
     }
     clif_message(RFIFOW(fd, 2), 0x03, login_msg[LGN_WRONGPASS]);
   } else if (RFIFOB(fd, 4) == 0x04) {
@@ -179,7 +179,7 @@ int intif_parse_connectconfirm(int fd) {
 }
 
 int intif_parse_changepass(int fd) {
-  if (!session[RFIFOW(fd, 2)]) {
+  if (!rust_session_exists(RFIFOW(fd, 2))) {
     {
       return 0;
     }
@@ -187,7 +187,7 @@ int intif_parse_changepass(int fd) {
 
   if (!RFIFOB(fd, 4)) {
     printf("[login] [pass_change_success] ip=%u.%u.%u.%u\n",
-           CONVIP(session[RFIFOW(fd, 2)]->client_addr.sin_addr.s_addr));
+           CONVIP(rust_session_get_client_ip(RFIFOW(fd, 2))));
     clif_message(RFIFOW(fd, 2), 0x00, login_msg[LGN_CHGPASS]);
   } else if (RFIFOB(fd, 4) == 0x01) {
     clif_message(RFIFOW(fd, 2), 0x03, login_msg[LGN_ERRDB]);
@@ -196,11 +196,11 @@ int intif_parse_changepass(int fd) {
 
   } else if (RFIFOB(fd, 4) == 0x03) {
     printf("[login] [pass_change_failure] ip=%u.%u.%u.%u\n",
-           CONVIP(session[RFIFOW(fd, 2)]->client_addr.sin_addr.s_addr));
-    if (setInvalidCount(session[RFIFOW(fd, 2)]->client_addr.sin_addr.s_addr) >=
+           CONVIP(rust_session_get_client_ip(RFIFOW(fd, 2))));
+    if (setInvalidCount(rust_session_get_client_ip(RFIFOW(fd, 2))) >=
         10) {
-      add_ip_lockout(session[RFIFOW(fd, 2)]->client_addr.sin_addr.s_addr);
-      session[RFIFOW(fd, 2)]->eof = 1;
+      rust_add_ip_lockout(rust_session_get_client_ip(RFIFOW(fd, 2)));
+      rust_session_set_eof(RFIFOW(fd, 2), 1);
     }
     clif_message(RFIFOW(fd, 2), 0x03, login_msg[LGN_WRONGPASS]);
   }
@@ -210,7 +210,7 @@ int intif_parse(int fd) {
   int cmd = 0;
   int packet_len = 0;
 
-  if (session[fd]->eof) {
+  if (rust_session_get_eof(fd)) {
     printf("[login] [char_server_disconnect] Char Server connection lost.\n");
     char_fd = 0;
     session_eof(fd);
