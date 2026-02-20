@@ -42,12 +42,11 @@ int main(int argc, char **argv) {
   // Rust takes over the event loop.
   // Blocks until shutdown signal is received.
   // Port 0 = use listeners already registered by do_init via make_listen_port.
-  rust_server_run(0);
-
+  int rc = rust_server_run(0);
   timer_clear();
   rust_core_cleanup();
 
-  return 0;
+  return rc == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 
 void handle_signal(int signal) {
