@@ -2095,6 +2095,11 @@ int clif_send_mob_health_sub(struct block_list *bl, va_list ap) {
     return 0;
   }
 
+  if (!rust_session_exists(tsd->fd) || rust_session_get_eof(tsd->fd)) {
+    rust_session_set_eof(tsd->fd, 8);
+    return 0;
+  }
+
   WFIFOHEAD(tsd->fd, 15);
   WFIFOHEADER(tsd->fd, 0x13, 12);
   WFIFOL(tsd->fd, 5) = SWAP32(mob->bl.id);

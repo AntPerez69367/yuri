@@ -612,7 +612,7 @@ int bll_getusers(lua_State *state, void *self) {
   int i;
   lua_newtable(state);
   for (i = 0; i < fd_max; i++) {
-    if (rust_session_exists(i) && (tsd = rust_session_get_data(i))) {
+    if (rust_session_exists(i) && !rust_session_get_eof(i) && (tsd = rust_session_get_data(i))) {
       bll_pushinst(state, &tsd->bl, 0);
       lua_rawseti(state, -2, lua_objlen(state, -2) + 1);
     }
@@ -1734,7 +1734,7 @@ int sendMeta(lua_State *state) {
   USER *tsd = NULL;
 
   for (int i = 0; i < fd_max; i++) {
-    if (rust_session_exists(i) && (tsd = rust_session_get_data(i))) send_metalist(tsd);
+    if (rust_session_exists(i) && !rust_session_get_eof(i) && (tsd = rust_session_get_data(i))) send_metalist(tsd);
   }
 
   return 1;
