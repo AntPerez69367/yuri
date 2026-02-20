@@ -6817,7 +6817,6 @@ int clif_sendmsg(USER *sd, int type, const char *buf) {
 
   if (len > strlen(buf)) len = strlen(buf);
 
-  WFIFOHEAD(sd->fd, 8 + len);
   if (!rust_session_exists(sd->fd)) {
     rust_session_set_eof(sd->fd, 8);
     return 0;

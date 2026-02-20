@@ -121,7 +121,7 @@ impl SessionManager {
     /// Allocate a new file descriptor (sync)
     pub fn allocate_fd(&self) -> Result<i32, SessionError> {
         let fd = self.next_fd.fetch_add(1, Ordering::Relaxed);
-        if fd >= MAX_SESSIONS as i32 {
+        if fd > MAX_SESSIONS as i32 {
             return Err(SessionError::MaxSessionsExceeded);
         }
         Ok(fd)
@@ -987,7 +987,15 @@ async fn session_io_task(fd: i32) {
             }
             Err(e) => {
                 tracing::error!("[session] fd={} connect to {} failed: {}", fd, addr, e);
-                let shutdown_cb = session_arc.lock().await.callbacks.shutdown;
+                let shutdown_cb = {
+                    let mut session = session_arc.lock().await;
+                    if session.shutdown_called {
+                        None
+                    } else {
+                        session.shutdown_called = true;
+                        session.callbacks.shutdown
+                    }
+                };
                 if let Some(cb) = shutdown_cb {
                     unsafe { cb(fd); }
                 }
