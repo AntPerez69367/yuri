@@ -50,7 +50,7 @@ int clif_accept(int fd) {
   bool banned = false;
 
   char ip[30];
-  strcpy(ip, inet_ntoa(*(struct in_addr*)(&(uint32_t){rust_session_get_client_ip(fd)})));
+  sprintf(ip, "%u.%u.%u.%u", CONVIP(rust_session_get_client_ip(fd)));
 
   banned = bannedIPCheck(ip);
 
@@ -463,7 +463,7 @@ int clif_parse(int fd) {
           CONVIP(rust_session_get_client_ip(fd)), len);
 
   char ip[30];
-  strcpy(ip, inet_ntoa(*(struct in_addr*)(&(uint32_t){rust_session_get_client_ip(fd)})));
+  sprintf(ip, "%u.%u.%u.%u", CONVIP(rust_session_get_client_ip(fd)));
 
   for (L = 0; L < len; L++) {
     char HexStr[32];
@@ -742,8 +742,8 @@ int clif_parse(int fd) {
       intif_auth(fd);
       break;
     default:
-      printf("[login] [packet_unknown] id=%02X ip=%s:\n", RFIFOB(fd, 3),
-             inet_ntoa(*(struct in_addr*)(&(uint32_t){rust_session_get_client_ip(fd)})));
+      printf("[login] [packet_unknown] id=%02X ip=%u.%u.%u.%u:\n", RFIFOB(fd, 3),
+             CONVIP(rust_session_get_client_ip(fd)));
       clif_debug(RFIFOP(fd, 0), SWAP16(RFIFOW(fd, 1)));
       break;
   }
