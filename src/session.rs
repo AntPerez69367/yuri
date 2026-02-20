@@ -303,6 +303,10 @@ pub struct Session {
     /// Callbacks
     pub callbacks: SessionCallbacks,
 
+    /// Guards against double-invocation of the shutdown callback.
+    /// Set to true the first time shutdown is called; subsequent callers skip it.
+    shutdown_called: bool,
+
     /// Notified when C code writes data to this session's write buffer.
     /// session_io_task selects on this to flush pending writes immediately
     /// instead of waiting for the next read event.
@@ -329,12 +333,17 @@ impl Session {
             last_activity: Instant::now(),
             session_data: None,
             callbacks: SessionCallbacks::default(),
+            shutdown_called: false,
         }
     }
 
     /// Read u8 with bounds checking
     pub fn read_u8(&self, pos: usize) -> Result<u8, SessionError> {
-        let actual_pos = self.rdata_pos + pos;
+        let actual_pos = self.rdata_pos.checked_add(pos).ok_or(SessionError::ReadOutOfBounds {
+            fd: self.fd,
+            pos: usize::MAX,
+            size: self.rdata_size,
+        })?;
 
         if actual_pos >= self.rdata_size {
             return Err(SessionError::ReadOutOfBounds {
@@ -349,9 +358,18 @@ impl Session {
 
     /// Read u16 (little-endian) with bounds checking
     pub fn read_u16(&self, pos: usize) -> Result<u16, SessionError> {
-        let actual_pos = self.rdata_pos + pos;
+        let actual_pos = self.rdata_pos.checked_add(pos).ok_or(SessionError::ReadOutOfBounds {
+            fd: self.fd,
+            pos: usize::MAX,
+            size: self.rdata_size,
+        })?;
+        let end = actual_pos.checked_add(2).ok_or(SessionError::ReadOutOfBounds {
+            fd: self.fd,
+            pos: actual_pos,
+            size: self.rdata_size,
+        })?;
 
-        if actual_pos + 2 > self.rdata_size {
+        if end > self.rdata_size {
             return Err(SessionError::ReadOutOfBounds {
                 fd: self.fd,
                 pos: actual_pos,
@@ -359,16 +377,23 @@ impl Session {
             });
         }
 
-        let bytes = [self.rdata[actual_pos], self.rdata[actual_pos + 1]];
-
-        Ok(u16::from_le_bytes(bytes))
+        Ok(u16::from_le_bytes([self.rdata[actual_pos], self.rdata[actual_pos + 1]]))
     }
 
     /// Read u32 (little-endian) with bounds checking
     pub fn read_u32(&self, pos: usize) -> Result<u32, SessionError> {
-        let actual_pos = self.rdata_pos + pos;
+        let actual_pos = self.rdata_pos.checked_add(pos).ok_or(SessionError::ReadOutOfBounds {
+            fd: self.fd,
+            pos: usize::MAX,
+            size: self.rdata_size,
+        })?;
+        let end = actual_pos.checked_add(4).ok_or(SessionError::ReadOutOfBounds {
+            fd: self.fd,
+            pos: actual_pos,
+            size: self.rdata_size,
+        })?;
 
-        if actual_pos + 4 > self.rdata_size {
+        if end > self.rdata_size {
             return Err(SessionError::ReadOutOfBounds {
                 fd: self.fd,
                 pos: actual_pos,
@@ -376,14 +401,12 @@ impl Session {
             });
         }
 
-        let bytes = [
+        Ok(u32::from_le_bytes([
             self.rdata[actual_pos],
             self.rdata[actual_pos + 1],
             self.rdata[actual_pos + 2],
             self.rdata[actual_pos + 3],
-        ];
-
-        Ok(u32::from_le_bytes(bytes))
+        ]))
     }
 
     /// Get available bytes to read (like RFIFOREST)
@@ -546,9 +569,13 @@ impl Session {
     /// The returned pointer is only valid while the Session lock is held.
     /// The caller must not read past `available()` bytes from this pointer.
     pub fn rdata_ptr(&self, pos: usize) -> Result<*const u8, SessionError> {
-        let actual_pos = self.rdata_pos + pos;
+        let actual_pos = self.rdata_pos.checked_add(pos).ok_or(SessionError::ReadOutOfBounds {
+            fd: self.fd,
+            pos: usize::MAX,
+            size: self.rdata_size,
+        })?;
 
-        if actual_pos > self.rdata_size {
+        if actual_pos >= self.rdata_size {
             return Err(SessionError::ReadOutOfBounds {
                 fd: self.fd,
                 pos: actual_pos,
@@ -619,8 +646,16 @@ impl Session {
 
     /// Copy data from read buffer into a destination buffer (safe RFIFOP + memcpy)
     pub fn read_buf(&self, pos: usize, dst: &mut [u8]) -> Result<(), SessionError> {
-        let actual_pos = self.rdata_pos + pos;
-        let end = actual_pos + dst.len();
+        let actual_pos = self.rdata_pos.checked_add(pos).ok_or(SessionError::ReadOutOfBounds {
+            fd: self.fd,
+            pos: usize::MAX,
+            size: self.rdata_size,
+        })?;
+        let end = actual_pos.checked_add(dst.len()).ok_or(SessionError::ReadOutOfBounds {
+            fd: self.fd,
+            pos: actual_pos,
+            size: self.rdata_size,
+        })?;
 
         if end > self.rdata_size {
             return Err(SessionError::ReadOutOfBounds {
@@ -1089,10 +1124,16 @@ async fn session_io_task(fd: i32) {
         }
     }
 
-    // Invoke C shutdown callback then remove session
+    // Invoke C shutdown callback then remove session.
+    // The flag prevents a double-call if shutdown_all_sessions races here.
     let shutdown_cb = {
-        let session = session_arc.lock().await;
-        session.callbacks.shutdown
+        let mut session = session_arc.lock().await;
+        if session.shutdown_called {
+            None
+        } else {
+            session.shutdown_called = true;
+            session.callbacks.shutdown
+        }
     };
     if let Some(cb) = shutdown_cb {
         unsafe { cb(fd); }
@@ -1111,8 +1152,13 @@ async fn shutdown_all_sessions() {
     for fd in fds {
         if let Some(session_arc) = manager.get_session(fd) {
             let shutdown_cb = {
-                let session = session_arc.lock().await;
-                session.callbacks.shutdown
+                let mut session = session_arc.lock().await;
+                if session.shutdown_called {
+                    None
+                } else {
+                    session.shutdown_called = true;
+                    session.callbacks.shutdown
+                }
             };
             if let Some(cb) = shutdown_cb {
                 tracing::debug!("[rust_server] Calling shutdown callback for fd={}", fd);
