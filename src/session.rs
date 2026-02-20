@@ -17,6 +17,14 @@ use tokio::sync::Mutex;
 pub const RFIFO_SIZE: usize = 16 * 1024;
 pub const WFIFO_SIZE: usize = 16 * 1024;
 
+/// Maximum read buffer size.
+///
+/// Inter-server connections (e.g. map→char) burst large payloads on connect
+/// (map list, etc.) that can exceed RFIFO_SIZE.  Dropping bytes in a stream
+/// protocol corrupts all subsequent packet framing, so we grow up to this
+/// limit instead.  Connections that exceed it are closed, not silently truncated.
+const MAX_RDATA_SIZE: usize = 64 * 1024;
+
 /// Maximum number of sessions
 pub const MAX_SESSIONS: usize = 1024;
 
@@ -394,17 +402,18 @@ impl Session {
                 pos,
             })?;
 
-        if actual_pos >= MAX_WDATA_SIZE {
+        let end = actual_pos + 1;
+        if end > MAX_WDATA_SIZE {
             return Err(SessionError::WriteBufferTooLarge {
                 fd: self.fd,
-                requested_pos: actual_pos,
+                requested_pos: end,
                 max: MAX_WDATA_SIZE,
             });
         }
 
-        // Auto-grow in 1KB chunks
-        if actual_pos + 1 > self.wdata.len() {
-            self.wdata.resize(actual_pos + 1024, 0);
+        // Auto-grow in 1KB chunks, clamped to MAX_WDATA_SIZE
+        if end > self.wdata.len() {
+            self.wdata.resize(end.saturating_add(1024).min(MAX_WDATA_SIZE), 0);
         }
 
         self.wdata[actual_pos] = val;
@@ -422,16 +431,17 @@ impl Session {
                 pos,
             })?;
 
-        if actual_pos >= MAX_WDATA_SIZE {
+        let end = actual_pos + 2;
+        if end > MAX_WDATA_SIZE {
             return Err(SessionError::WriteBufferTooLarge {
                 fd: self.fd,
-                requested_pos: actual_pos,
+                requested_pos: end,
                 max: MAX_WDATA_SIZE,
             });
         }
 
-        if actual_pos + 2 > self.wdata.len() {
-            self.wdata.resize(actual_pos + 1024, 0);
+        if end > self.wdata.len() {
+            self.wdata.resize(end.saturating_add(1024).min(MAX_WDATA_SIZE), 0);
         }
 
         let bytes = val.to_le_bytes();
@@ -451,16 +461,17 @@ impl Session {
                 pos,
             })?;
 
-        if actual_pos >= MAX_WDATA_SIZE {
+        let end = actual_pos + 4;
+        if end > MAX_WDATA_SIZE {
             return Err(SessionError::WriteBufferTooLarge {
                 fd: self.fd,
-                requested_pos: actual_pos,
+                requested_pos: end,
                 max: MAX_WDATA_SIZE,
             });
         }
 
-        if actual_pos + 4 > self.wdata.len() {
-            self.wdata.resize(actual_pos + 1024, 0);
+        if end > self.wdata.len() {
+            self.wdata.resize(end.saturating_add(1024).min(MAX_WDATA_SIZE), 0);
         }
 
         let bytes = val.to_le_bytes();
@@ -471,13 +482,28 @@ impl Session {
 
     /// Commit write buffer (like WFIFOSET)
     pub fn commit_write(&mut self, len: usize) -> Result<(), SessionError> {
-        let new_size = self.wdata_size + len;
+        let new_size = self.wdata_size.checked_add(len).ok_or(
+            SessionError::WriteBufferTooLarge {
+                fd: self.fd,
+                requested_pos: usize::MAX,
+                max: MAX_WDATA_SIZE,
+            },
+        )?;
 
+        if new_size > MAX_WDATA_SIZE {
+            return Err(SessionError::WriteBufferTooLarge {
+                fd: self.fd,
+                requested_pos: new_size,
+                max: MAX_WDATA_SIZE,
+            });
+        }
+
+        let available = self.wdata.len().checked_sub(self.wdata_size).unwrap_or(0);
         if new_size > self.wdata.len() {
             return Err(SessionError::WriteCommitTooLarge {
                 fd: self.fd,
                 requested: len,
-                available: self.wdata.len() - self.wdata_size,
+                available,
             });
         }
 
@@ -548,17 +574,18 @@ impl Session {
                 pos,
             })?;
 
-        if actual_pos >= MAX_WDATA_SIZE {
+        let end = actual_pos + 1;
+        if end > MAX_WDATA_SIZE {
             return Err(SessionError::WriteBufferTooLarge {
                 fd: self.fd,
-                requested_pos: actual_pos,
+                requested_pos: end,
                 max: MAX_WDATA_SIZE,
             });
         }
 
-        // Ensure buffer is large enough
-        if actual_pos + 1 > self.wdata.len() {
-            self.wdata.resize(actual_pos + 1024, 0);
+        // Ensure buffer is large enough, clamped to MAX_WDATA_SIZE
+        if end > self.wdata.len() {
+            self.wdata.resize(end.saturating_add(1024).min(MAX_WDATA_SIZE), 0);
         }
 
         Ok(self.wdata.as_mut_ptr().wrapping_add(actual_pos))
@@ -584,7 +611,7 @@ impl Session {
         }
 
         if needed > self.wdata.len() {
-            self.wdata.resize(needed + 1024, 0);
+            self.wdata.resize(needed.saturating_add(1024).min(MAX_WDATA_SIZE), 0);
         }
 
         Ok(())
@@ -629,7 +656,7 @@ impl Session {
         }
 
         if end > self.wdata.len() {
-            self.wdata.resize(end + 1024, 0);
+            self.wdata.resize(end.saturating_add(1024).min(MAX_WDATA_SIZE), 0);
         }
 
         self.wdata[actual_pos..end].copy_from_slice(src);
@@ -646,6 +673,7 @@ impl Session {
             self.rdata.copy_within(self.rdata_pos..self.rdata_size, 0);
             self.rdata_size -= self.rdata_pos;
             self.rdata_pos = 0;
+            self.rdata.truncate(self.rdata_size);
         }
     }
 }
@@ -1012,12 +1040,31 @@ async fn session_io_task(fd: i32) {
                 break;
             }
             Event::Read(Ok(n)) => {
-                // Append data and update activity timestamp
-                {
+                // Append data and update activity timestamp.
+                //
+                // Dropping bytes in a stream protocol corrupts all subsequent
+                // packet framing, so we grow up to MAX_RDATA_SIZE instead of
+                // silently truncating.  If that limit is exceeded we close the
+                // connection rather than corrupt it.
+                let overflow = {
                     let mut session = session_arc.lock().await;
-                    session.rdata.extend_from_slice(&read_buf[..n]);
-                    session.rdata_size += n;
-                    session.last_activity = Instant::now();
+                    let new_size = session.rdata_size + n;
+                    if new_size > MAX_RDATA_SIZE {
+                        tracing::warn!(
+                            "[session] fd={} rdata overflow ({} bytes), closing connection",
+                            fd, new_size
+                        );
+                        session.eof = 3;
+                        true
+                    } else {
+                        session.rdata.extend_from_slice(&read_buf[..n]);
+                        session.rdata_size += n;
+                        session.last_activity = Instant::now();
+                        false
+                    }
+                };
+                if overflow {
+                    break;
                 }
 
                 // Call C parse callback (lock released — C accesses buffers via FFI try_lock)

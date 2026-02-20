@@ -35,7 +35,7 @@ extern int fd_max;
 #define RFIFOFLUSH(fd)   rust_session_rfifoflush((fd))
 #define RFIFOSPACE(fd)   (16 * 1024)
 #define WFIFOHEAD(fd, size) rust_session_wfifohead((fd), (size))
-#define WFIFOSPACE(fd)   (256 * 1024)
+#define WFIFOSPACE(fd)   (16 * 1024)
 #define WFIFOP(fd, pos)  ((char *)rust_session_wdata_ptr((fd), (pos)))
 #define WFIFOB(fd, pos)  (*(unsigned char *)rust_session_wdata_ptr((fd), (pos)))
 #define WFIFOW(fd, pos)  (*(unsigned short *)rust_session_wdata_ptr((fd), (pos)))
