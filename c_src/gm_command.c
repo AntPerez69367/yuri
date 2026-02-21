@@ -996,14 +996,15 @@ replace); clif_sendminitext(sd,"One time monster spawn added!"); return 0;
 AREA, BL_PC, msg); return 0;
 }*/
 int command_reloadmob(USER *sd, char *line, lua_State *state) {
-  mobdb_read("nothing");
+  rust_mobdb_term();
+  rust_mobdb_init();
   nullpo_ret(0, sd);
   clif_sendminitext(sd, "Mob DB Reloaded");
   return 0;
 }
 
 int command_reloadspawn(USER *sd, char *line, lua_State *state) {
-  mobspawn_read("nothing");
+  mobspawn_read();
   nullpo_ret(0, sd);
   clif_sendminitext(sd, "Spawn DB Reloaded");
   return 0;

@@ -7,7 +7,6 @@
 
 #include "config.h"
 #include "core.h"
-#include "db.h"
 #include "db_mysql.h"
 #include "map_parse.h"
 #include "map_server.h"
@@ -27,9 +26,6 @@ unsigned int MIN_TIMER = 1000;
 unsigned int mob_get_new_id();
 unsigned char timercheck = 0;
 
-DBMap *mobdb;
-// struct dbt *onetimedb;
-
 int mob_timerhandle(int, int);
 
 unsigned int mob_get_new_id() { return mob_id++; }
@@ -48,198 +44,10 @@ unsigned int mob_get_free_id() {
   return MOB_ONETIME_MAX;
 }
 
-int mobdb_read() {
-  // FILE *fp;
-  struct mobdb_data *db;
-  struct item item;
-  int i, mstr = 0;
-  int x;
-  char pos;
-  struct mobdb_data a;
-  // StringBuf buf;
-  SqlStmt *stmt = SqlStmt_Malloc(sql_handle);
-  SqlStmt *eqstmt = SqlStmt_Malloc(sql_handle);
-
-  if (stmt == NULL) {
-    SqlStmt_ShowDebug(stmt);
-    return 0;
-  }
-
-  if (eqstmt == NULL) {
-    SqlStmt_ShowDebug(eqstmt);
-    return 0;
-  }
-
-  memset(&a, 0, sizeof(a));
-  memset(&item, 0, sizeof(item));
-
-  if (SQL_ERROR ==
-          SqlStmt_Prepare(
-              stmt,
-              "SELECT `MobId`, `MobDescription`, `MobIdentifier`, "
-              "`MobBehavior`, `MobAI`, `MobLook`, `MobLookColor`, `MobVita`, "
-              "`MobMana`, `MobExperience`, `MobHit`, `MobLevel`, `MobMight`,"
-              "`MobGrace`, `MobMoveTime`, `MobSpawnTime`, `MobArmor`, "
-              "`MobSound`, `MobAttackTime`, `MobProtection`, "
-              "`MobReturnDistance`, `MobSex`, `MobFace`, `MobFaceColor`,"
-              "`MobHair`, `MobHairColor`, `MobSkinColor`, `MobState`, "
-              "`MobIsChar`, `MobWill`, `MobMinimumDamage`, `MobMaximumDamage`,"
-              "`MobMark`, `MobIsNpc`, `MobIsBoss` FROM `Mobs`") ||
-      SQL_ERROR == SqlStmt_Execute(stmt) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 0, SQLDT_INT, &a.id, 0, NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 1, SQLDT_STRING, &a.name,
-                                      sizeof(a.name), NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 2, SQLDT_STRING, &a.yname,
-                                      sizeof(a.yname), NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 3, SQLDT_INT, &a.type, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 4, SQLDT_INT, &a.subtype, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 5, SQLDT_INT, &a.look, 0, NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 6, SQLDT_INT, &a.look_color, 0,
-                                      NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 7, SQLDT_INT, &a.vita, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 8, SQLDT_INT, &a.mana, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 9, SQLDT_UINT, &a.exp, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 10, SQLDT_INT, &a.hit, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 11, SQLDT_INT, &a.level, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 12, SQLDT_INT, &a.might, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 13, SQLDT_INT, &a.grace, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 14, SQLDT_INT, &a.movetime, 0, NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 15, SQLDT_INT, &a.spawntime, 0,
-                                      NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 16, SQLDT_INT, &a.baseac, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 17, SQLDT_INT, &a.sound, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 18, SQLDT_INT, &a.atktime, 0, NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 19, SQLDT_SHORT, &a.protection, 0,
-                                      NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 20, SQLDT_UCHAR, &a.retdist, 0,
-                                      NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 21, SQLDT_USHORT, &a.sex, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 22, SQLDT_USHORT, &a.face, 0, NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 23, SQLDT_USHORT, &a.face_color, 0,
-                                      NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 24, SQLDT_USHORT, &a.hair, 0, NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 25, SQLDT_USHORT, &a.hair_color, 0,
-                                      NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 26, SQLDT_USHORT, &a.skin_color, 0,
-                                      NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 27, SQLDT_CHAR, &a.state, 0, NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 28, SQLDT_UCHAR, &a.mobtype, 0,
-                                      NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 29, SQLDT_INT, &a.will, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 30, SQLDT_UINT, &a.mindam, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 31, SQLDT_UINT, &a.maxdam, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 32, SQLDT_UCHAR, &a.mark, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 33, SQLDT_UCHAR, &a.isnpc, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 34, SQLDT_UCHAR, &a.isboss, 0, NULL, NULL)) {
-    SqlStmt_ShowDebug(stmt);
-    SqlStmt_Free(stmt);
-    return 0;
-  }
-
-  /*for (i = 0; i < 8; i++) {
-          if (SQL_ERROR == SqlStmt_BindColumn(stmt, i + 18, SQLDT_UINT,
-  &a.drop[i], 0, NULL, NULL)
-          || SQL_ERROR == SqlStmt_BindColumn(stmt, i + 26, SQLDT_UINT,
-  &a.drop_rate[i], 0, NULL, NULL)
-          || SQL_ERROR == SqlStmt_BindColumn(stmt, i + 34, SQLDT_UINT,
-  &a.drop_count[i], 0, NULL, NULL)) { SqlStmt_ShowDebug(stmt);
-                  SqlStmt_Free(stmt);
-                  return 0;
-          }
-  }*/
-
-  mstr = SqlStmt_NumRows(stmt);
-  // type: 0=Normal, 1=Aggressive, 2=Stationary(such as trees)
-
-  for (x = 0; x < mstr && SQL_SUCCESS == SqlStmt_NextRow(stmt); x++) {
-    // sql_get_row();
-    db = mobdb_search(a.id);
-    memcpy(db, &a, sizeof(a));
-
-    if (db->mobtype == 1) {
-      if (SQL_ERROR ==
-              SqlStmt_Prepare(
-                  eqstmt,
-                  "SELECT `MeqLook`, 1, 0, 0, `MeqColor`, `MeqSlot` FROM "
-                  "`MobEquipment` WHERE `MeqMobId` = '%u' LIMIT 14",
-                  db->id) ||
-          SQL_ERROR == SqlStmt_Execute(eqstmt) ||
-          SQL_ERROR == SqlStmt_BindColumn(eqstmt, 0, SQLDT_UINT, &item.id, 0,
-                                          NULL, NULL) ||
-          SQL_ERROR == SqlStmt_BindColumn(eqstmt, 1, SQLDT_UINT, &item.amount,
-                                          0, NULL, NULL) ||
-          SQL_ERROR == SqlStmt_BindColumn(eqstmt, 2, SQLDT_UINT, &item.dura, 0,
-                                          NULL, NULL) ||
-          SQL_ERROR == SqlStmt_BindColumn(eqstmt, 3, SQLDT_UINT, &item.owner, 0,
-                                          NULL, NULL) ||
-          SQL_ERROR == SqlStmt_BindColumn(eqstmt, 4, SQLDT_UINT, &item.custom,
-                                          0, NULL, NULL) ||
-          SQL_ERROR ==
-              SqlStmt_BindColumn(eqstmt, 5, SQLDT_UCHAR, &pos, 0, NULL, NULL)) {
-        SqlStmt_ShowDebug(eqstmt);
-        SqlStmt_Free(eqstmt);
-        return 0;
-      }
-
-      // Equip Read
-      for (i = 0; i < 14 && SQL_SUCCESS == SqlStmt_NextRow(eqstmt); i++) {
-        memcpy(&db->equip[(int)pos], &item, sizeof(item));
-      }
-    }
-  }
-
-  SqlStmt_Free(stmt);
-  SqlStmt_Free(eqstmt);
-
-  // StringBuf_Destroy(&buf);
-  printf("[mob] read done count=%u\n", mstr);
-  return 0;
-}
-
 struct block_list *onetime_avail(unsigned int id) {
   struct block_list *bl = NULL;
   bl = map_id2bl(id);
   return bl;
-}
-
-struct mobdb_data *mobdb_search(unsigned int id) {
-  static struct mobdb_data *db = NULL;
-  if (db && db->id == id) return db;
-
-  db = uidb_get(mobdb, id);
-  if (db) return db;
-
-  CALLOC(db, struct mobdb_data, 1);
-  uidb_put(mobdb, id, db);
-  db->id = id;
-  strcpy(db->name, "??");
-
-  return db;
 }
 
 int free_onetime(MOB *mob) {
@@ -426,70 +234,10 @@ int mobspawn_read() {
 int mobspawn2_read(const char *mobspawn_file) { return 0; }
 int mobspeech_read(char *mobspeech_file) { return 0; }
 
-int mobdb_id(const char *str) {
-  struct mobdb_data *db = NULL;
-  db = mobdb_searchname(str);
-  if (db) return db->id;
-
-  if ((unsigned int)strtoul(str, NULL, 10) > 0) {
-    db = mobdb_searchexist((unsigned int)strtoul(str, NULL, 10));
-    if (db) {
-      return db->id;
-    }
-  }
-  return 0;
-}
-
-struct mobdb_data *mobdb_searchexist(unsigned int id) {
-  struct mobdb_data *db = NULL;
-  db = uidb_get(mobdb, id);
-  return db;
-}
-
 int mobdb_init() {
-  mobdb = uidb_alloc(DB_OPT_BASE);
-  mobdb_read();
+  if (rust_mobdb_init() != 0) return -1;
   mobspawn_read();
   return 0;
-}
-
-struct mobdb_data *mobdb_searchname(const char *str) {
-  struct mobdb_data *mob = NULL;
-  mobdb->foreach (mobdb, mobdb_searchname_sub, str, &mob);
-  return mob;
-}
-
-int mobdb_searchname_sub(DBKey key, void *data, va_list ap) {
-  struct mobdb_data *mob = (struct mobdb_data *)data, **dst;
-  char *str;
-  str = va_arg(ap, char *);
-  dst = va_arg(ap, struct mobdb_data **);
-  if (strcasecmp(mob->yname, str) == 0) *dst = mob;
-  return 0;
-}
-
-int mobdb_level(unsigned int id) {
-  struct mobdb_data *mob;
-
-  mob = mobdb_search(id);
-
-  if (mob) {
-    return mob->level;
-  } else {
-    return 0;
-  }
-}
-
-unsigned int mobdb_experience(unsigned int id) {
-  struct mobdb_data *mob;
-
-  mob = mobdb_search(id);
-
-  if (mob) {
-    return mob->exp;
-  } else {
-    return 0;
-  }
 }
 
 int mob_thing_yeah(struct block_list *bl, va_list ap) {

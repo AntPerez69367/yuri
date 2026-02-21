@@ -1,6 +1,5 @@
 #pragma once
 
-#include "db.h"
 #include "map_server.h"
 
 enum { MOB_ALIVE, MOB_DEAD, MOB_PARA, MOB_BLIND, MOB_HIT, MOB_ESCAPE };
@@ -11,14 +10,30 @@ extern unsigned int MOB_SPAWN_MAX;
 extern unsigned int MOB_ONETIME_START;
 extern unsigned int MOB_ONETIME_MAX;
 extern unsigned int MIN_TIMER;
-int mobdb_read();
-int mobspawn_read();
-struct mobdb_data* mobdb_search(unsigned int);
-int mobdb_init();
-struct mobdb_data* mobdb_searchexist(unsigned int);
-struct mobdb_data* mobdb_searchname(const char*);
-int mobdb_id(const char*);
-int mobdb_searchname_sub(DBKey, void*, va_list);
+
+// mob_db sub-module deleted from C — implemented in Rust (src/database/mob_db.rs)
+struct MobDbData;
+struct MobDbData* rust_mobdb_search(unsigned int id);
+struct MobDbData* rust_mobdb_searchexist(unsigned int id);
+struct MobDbData* rust_mobdb_searchname(const char* s);
+int rust_mobdb_init(void);
+void rust_mobdb_term(void);
+int rust_mobdb_id(const char* s);
+int rust_mobdb_level(unsigned int id);
+unsigned int rust_mobdb_experience(unsigned int id);
+
+static inline struct mobdb_data* mobdb_search(unsigned int id)      { return (struct mobdb_data*)rust_mobdb_search(id); }
+static inline struct mobdb_data* mobdb_searchexist(unsigned int id) { return (struct mobdb_data*)rust_mobdb_searchexist(id); }
+static inline struct mobdb_data* mobdb_searchname(const char* s)    { return (struct mobdb_data*)rust_mobdb_searchname(s); }
+static inline int mobdb_id(const char* s)                           { return rust_mobdb_id(s); }
+static inline int mobdb_level(unsigned int id)                      { return (int)rust_mobdb_level(id); }
+static inline unsigned int mobdb_experience(unsigned int id)        { return rust_mobdb_experience(id); }
+static inline void mobdb_term(void)                                 { rust_mobdb_term(); }
+
+// mobdb_init stays as a C function: calls rust_mobdb_init() then mobspawn_read()
+int mobdb_init(void);
+int mobspawn_read(void);
+
 int mob_handle(int, int);
 int mob_handle_sub(MOB*, va_list);
 int mob_handle_magic(struct block_list*, va_list);
@@ -28,7 +43,6 @@ unsigned int* mobspawn_onetime(unsigned int, int, int, int, int, int, int,
 int mobdb_itemrate(unsigned int, int);
 int mobdb_drops(MOB*, USER*);
 int mobdb_itemid(unsigned int, int);
-unsigned int mobdb_experience(unsigned int);
 int mobdb_itemamount(unsigned int, int);
 int mob_calcstat(MOB*);
 int mob_respawn(MOB*);
@@ -39,9 +53,7 @@ int mob_attack(MOB*, int);
 int mob_move(struct block_list*, va_list);
 int mobdb_dropitem(unsigned int, unsigned int, int, int, int, int, int, int,
                    int, USER*);
-// int move_mob_intent(MOB*,USER*);
 int mob_timer_spawns(int, int);
-int move_mob(MOB*);
 int move_mob_ignore_object(MOB*);
 int moveghost_mob(MOB*);
 int mob_flushmagic(MOB*);
@@ -58,6 +70,5 @@ int mob_respawn_nousers(MOB* mob);
 
 void onetime_addiddb(struct block_list*);
 void onetime_deliddb(unsigned int);
-// int free_onetime(unsigned int);
 struct block_list* onetime_avail(unsigned int);
 int free_session_add(int);
