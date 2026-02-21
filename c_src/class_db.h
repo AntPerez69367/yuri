@@ -24,21 +24,33 @@ struct class_data {
   int icon;
 };
 
-extern struct class_data* cdata[20];
+// class_db.c deleted — implemented in Rust (src/database/class_db.rs)
+// Safe to cast ClassData* <-> class_data* because Rust ClassData is #[repr(C)].
+// C layout: 16 named char[32] rank fields = Rust ranks[[c_char;32];16] (same memory layout).
+// cdata is exposed from Rust as struct ClassData*[20]; use void* to avoid struct name conflict
+struct ClassData;
+extern struct ClassData* cdata[20];
 
-extern struct DBMap* class_db;
+struct ClassData* rust_classdb_search(int);
+struct ClassData* rust_classdb_searchexist(int);
+unsigned int rust_classdb_level(int, int);
+char* rust_classdb_name(int, int);
+int rust_classdb_path(int);
+int rust_classdb_chat(int);
+int rust_classdb_icon(int);
+int rust_classdb_init(const char* data_dir);
+void rust_classdb_term(void);
 
-struct class_data* classdb_search(int);
-struct class_data* classdb_searchexist(int);
-unsigned int classdb_level(int, int);
+extern char* data_dir;
 
-char* classdb_name(int, int);
-int classdb_path(int);
-int classdb_chat(int);
-int classdb_icon(int);
-
-int classdb_read();
-int classdb_term();
-int classdb_init();
-
-int leveldb_read();
+static inline struct class_data* classdb_search(int id)          { return (struct class_data*)(void*)rust_classdb_search(id); }
+static inline struct class_data* classdb_searchexist(int id)     { return (struct class_data*)(void*)rust_classdb_searchexist(id); }
+static inline unsigned int classdb_level(int path, int lvl)      { return rust_classdb_level(path, lvl); }
+static inline char* classdb_name(int id, int rank)               { return rust_classdb_name(id, rank); }
+static inline int classdb_path(int id)                           { return rust_classdb_path(id); }
+static inline int classdb_chat(int id)                           { return rust_classdb_chat(id); }
+static inline int classdb_icon(int id)                           { return rust_classdb_icon(id); }
+static inline int classdb_init(void)                             { return rust_classdb_init(data_dir); }
+static inline void classdb_term(void)                            { rust_classdb_term(); }
+static inline int classdb_read(void)                             { return 0; }
+static inline int leveldb_read(void)                             { return 0; }

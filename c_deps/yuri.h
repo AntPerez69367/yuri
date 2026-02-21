@@ -51,6 +51,66 @@
  */
 #define MAX_SESSIONS 1024
 
+typedef struct BoardData {
+  int id;
+  int level;
+  int gmlevel;
+  int path;
+  int clan;
+  int special;
+  int sort;
+  char name[64];
+  char yname[64];
+  /**
+   * Single-byte boolean (not a pointer), matches `char script` in C struct.
+   */
+  char script;
+} BoardData;
+
+typedef struct BnData {
+  int id;
+  char name[255];
+} BnData;
+
+typedef struct ClassData {
+  /**
+   * 16 rank name strings, each 32 bytes (rank0..rank15)
+   */
+  char ranks[16][32];
+  uint16_t id;
+  uint16_t path;
+  unsigned int level[99];
+  int chat;
+  int icon;
+} ClassData;
+
+typedef struct ClanBank {
+  unsigned int item_id;
+  unsigned int amount;
+  unsigned int owner;
+  unsigned int time;
+  unsigned int custom_icon;
+  unsigned int custom_look;
+  unsigned int pos;
+  char real_name[64];
+  unsigned int custom_look_color;
+  unsigned int custom_icon_color;
+  unsigned int protected_flag;
+  char note[300];
+} ClanBank;
+
+typedef struct ClanData {
+  int id;
+  char name[64];
+  int maxslots;
+  int maxperslot;
+  int level;
+  /**
+   * Set to null on init; map_loadclanbank() fills this in after init.
+   */
+  struct ClanBank *clanbanks;
+} ClanData;
+
 /**
  * A point in 3D space (map, x, y)
  *
@@ -61,6 +121,194 @@ typedef struct Point {
   uint16_t x;
   uint16_t y;
 } Point;
+
+typedef struct ItemData {
+  unsigned int id;
+  unsigned int sound;
+  unsigned int min_sdam;
+  unsigned int max_sdam;
+  unsigned int min_ldam;
+  unsigned int max_ldam;
+  unsigned int sound_hit;
+  unsigned int time;
+  unsigned int amount;
+  char name[64];
+  char yname[64];
+  char text[64];
+  char buytext[64];
+  unsigned char typ;
+  unsigned char class_;
+  unsigned char sex;
+  unsigned char level;
+  unsigned char icon_color;
+  unsigned char ethereal;
+  unsigned char unequip;
+  int price;
+  int sell;
+  int rank;
+  int stack_amount;
+  int look;
+  int look_color;
+  int dura;
+  int might;
+  int will;
+  int grace;
+  int ac;
+  int dam;
+  int hit;
+  int vita;
+  int mana;
+  int protection;
+  int protected_;
+  int healing;
+  int wisdom;
+  int con;
+  int attack_speed;
+  int icon;
+  int mightreq;
+  int depositable;
+  int exchangeable;
+  int droppable;
+  int thrown;
+  int thrownconfirm;
+  int repairable;
+  int max_amount;
+  int skinnable;
+  int bod;
+  char *script;
+  char *equip_script;
+  char *unequip_script;
+} ItemData;
+
+typedef struct MagicData {
+  int id;
+  int typ;
+  char name[32];
+  char yname[32];
+  char question[64];
+  char script[64];
+  char script2[64];
+  char script3[64];
+  unsigned char dispell;
+  unsigned char aether;
+  unsigned char mute;
+  unsigned char level;
+  unsigned char mark;
+  unsigned char canfail;
+  char alignment;
+  unsigned char ticker;
+  char class_;
+} MagicData;
+
+typedef struct RecipeData {
+  int id;
+  int tokens_required;
+  /**
+   * Alternating [material_id, amount] pairs × 5: [mat1, amt1, mat2, amt2, ...]
+   */
+  int materials[10];
+  int superior_materials[2];
+  char identifier[64];
+  char description[64];
+  char crit_identifier[64];
+  char crit_description[64];
+  unsigned int craft_time;
+  unsigned int success_rate;
+  unsigned int skill_advance;
+  unsigned int crit_rate;
+  unsigned int bonus;
+  unsigned int skill_required;
+} RecipeData;
+
+/**
+ * Exposed for C code that declares `extern struct class_data* cdata[20]`.
+ * Unused in practice but required by the C headers.
+ */
+extern struct ClassData *cdata[20];
+
+int rust_boarddb_init(void);
+
+void rust_boarddb_term(void);
+
+struct BoardData *rust_boarddb_search(int id);
+
+struct BoardData *rust_boarddb_searchexist(int id);
+
+unsigned int rust_boarddb_id(const char *s);
+
+char *rust_boarddb_name(int id);
+
+char *rust_boarddb_yname(int id);
+
+int rust_boarddb_level(int id);
+
+int rust_boarddb_gmlevel(int id);
+
+int rust_boarddb_path(int id);
+
+int rust_boarddb_clan(int id);
+
+int rust_boarddb_sort(int id);
+
+/**
+ * Returns single-byte boolean (char in C), not a string pointer.
+ */
+int rust_boarddb_script(int id);
+
+struct BnData *rust_bn_search(int id);
+
+struct BnData *rust_bn_searchexist(int id);
+
+char *rust_bn_name(int id);
+
+int rust_classdb_init(const char *data_dir);
+
+void rust_classdb_term(void);
+
+/**
+ * Returns a raw pointer derived from an Arc::into_raw so the ClassData
+ * allocation outlives any HashMap clear (e.g. term()). The C caller must
+ * not free this pointer directly; call rust_classdb_free when done.
+ */
+struct ClassData *rust_classdb_search(int id);
+
+struct ClassData *rust_classdb_searchexist(int id);
+
+/**
+ * Decrements the Arc reference count for a pointer returned by
+ * rust_classdb_search or rust_classdb_searchexist.
+ */
+void rust_classdb_free(struct ClassData *ptr);
+
+unsigned int rust_classdb_level(int path, int lvl);
+
+/**
+ * Returns a caller-owned C string. Must be freed with rust_classdb_free_name().
+ */
+char *rust_classdb_name(int id, int rank);
+
+/**
+ * Frees a string returned by rust_classdb_name.
+ */
+void rust_classdb_free_name(char *ptr);
+
+int rust_classdb_path(int id);
+
+int rust_classdb_chat(int id);
+
+int rust_classdb_icon(int id);
+
+int rust_clandb_init(void);
+
+void rust_clandb_term(void);
+
+struct ClanData *rust_clandb_search(int id);
+
+struct ClanData *rust_clandb_searchexist(int id);
+
+struct ClanData *rust_clandb_searchname(const char *s);
+
+const char *rust_clandb_name(int id);
 
 /**
  * Load configuration from file (C-compatible entry point)
@@ -250,6 +498,208 @@ uint64_t rust_get_tick_rate_ns(void);
  * Legacy hash generation function (to be replaced)
  */
 void rust_generate_hashvalues(const char *name, char *_buffer);
+
+/**
+ * Called from C's do_init() before any *_init() calls.
+ * url format: "mysql://user:pass@host:port/db"
+ */
+int rust_db_connect(const char *url);
+
+int rust_itemdb_init(void);
+
+void rust_itemdb_term(void);
+
+struct ItemData *rust_itemdb_search(unsigned int id);
+
+struct ItemData *rust_itemdb_searchexist(unsigned int id);
+
+struct ItemData *rust_itemdb_searchname(const char *s);
+
+unsigned int rust_itemdb_id(const char *s);
+
+int rust_itemdb_type(unsigned int id);
+
+char *rust_itemdb_name(unsigned int id);
+
+char *rust_itemdb_yname(unsigned int id);
+
+char *rust_itemdb_text(unsigned int id);
+
+char *rust_itemdb_buytext(unsigned int id);
+
+int rust_itemdb_price(unsigned int id);
+
+int rust_itemdb_sell(unsigned int id);
+
+int rust_itemdb_rank(unsigned int id);
+
+int rust_itemdb_stackamount(unsigned int id);
+
+int rust_itemdb_look(unsigned int id);
+
+int rust_itemdb_lookcolor(unsigned int id);
+
+int rust_itemdb_icon(unsigned int id);
+
+int rust_itemdb_iconcolor(unsigned int id);
+
+unsigned int rust_itemdb_sound(unsigned int id);
+
+unsigned int rust_itemdb_soundhit(unsigned int id);
+
+int rust_itemdb_dura(unsigned int id);
+
+int rust_itemdb_might(unsigned int id);
+
+int rust_itemdb_will(unsigned int id);
+
+int rust_itemdb_grace(unsigned int id);
+
+int rust_itemdb_ac(unsigned int id);
+
+int rust_itemdb_dam(unsigned int id);
+
+int rust_itemdb_hit(unsigned int id);
+
+int rust_itemdb_vita(unsigned int id);
+
+int rust_itemdb_mana(unsigned int id);
+
+int rust_itemdb_protection(unsigned int id);
+
+int rust_itemdb_protected(unsigned int id);
+
+int rust_itemdb_minSdam(unsigned int id);
+
+int rust_itemdb_maxSdam(unsigned int id);
+
+int rust_itemdb_minLdam(unsigned int id);
+
+int rust_itemdb_maxLdam(unsigned int id);
+
+int rust_itemdb_mindam(unsigned int id);
+
+int rust_itemdb_maxdam(unsigned int id);
+
+int rust_itemdb_mincritdam(unsigned int _id);
+
+int rust_itemdb_maxcritdam(unsigned int _id);
+
+int rust_itemdb_mightreq(unsigned int id);
+
+int rust_itemdb_depositable(unsigned int id);
+
+int rust_itemdb_exchangeable(unsigned int id);
+
+int rust_itemdb_droppable(unsigned int id);
+
+int rust_itemdb_thrown(unsigned int id);
+
+int rust_itemdb_thrownconfirm(unsigned int id);
+
+int rust_itemdb_repairable(unsigned int id);
+
+int rust_itemdb_maxamount(unsigned int id);
+
+int rust_itemdb_skinnable(unsigned int id);
+
+int rust_itemdb_unequip(unsigned int id);
+
+int rust_itemdb_ethereal(unsigned int id);
+
+int rust_itemdb_healing(unsigned int id);
+
+int rust_itemdb_wisdom(unsigned int id);
+
+int rust_itemdb_con(unsigned int id);
+
+int rust_itemdb_attackspeed(unsigned int id);
+
+int rust_itemdb_level(unsigned int id);
+
+int rust_itemdb_class(unsigned int id);
+
+int rust_itemdb_sex(unsigned int id);
+
+int rust_itemdb_time(unsigned int id);
+
+char *rust_itemdb_script(unsigned int _id);
+
+char *rust_itemdb_equipscript(unsigned int _id);
+
+char *rust_itemdb_unequipscript(unsigned int _id);
+
+int rust_itemdb_breakondeath(unsigned int id);
+
+int rust_itemdb_reqvita(unsigned int _id);
+
+int rust_itemdb_reqmana(unsigned int _id);
+
+int rust_itemdb_dodge(unsigned int _id);
+
+int rust_itemdb_block(unsigned int _id);
+
+int rust_itemdb_parry(unsigned int _id);
+
+int rust_itemdb_resist(unsigned int _id);
+
+int rust_itemdb_physdeduct(unsigned int _id);
+
+int rust_magicdb_init(void);
+
+void rust_magicdb_term(void);
+
+struct MagicData *rust_magicdb_search(int id);
+
+struct MagicData *rust_magicdb_searchexist(int id);
+
+struct MagicData *rust_magicdb_searchname(const char *s);
+
+int rust_magicdb_id(const char *s);
+
+char *rust_magicdb_name(int id);
+
+char *rust_magicdb_yname(int id);
+
+char *rust_magicdb_question(int id);
+
+int rust_magicdb_type(int id);
+
+int rust_magicdb_dispel(int id);
+
+int rust_magicdb_aether(int id);
+
+int rust_magicdb_mute(int id);
+
+int rust_magicdb_canfail(int id);
+
+int rust_magicdb_alignment(int id);
+
+int rust_magicdb_ticker(int id);
+
+/**
+ * Takes spell name string, returns level.
+ */
+int rust_magicdb_level(const char *s);
+
+/**
+ * Script fields are always empty (never populated in original game).
+ */
+const char *rust_magicdb_script(int _id);
+
+const char *rust_magicdb_script2(int _id);
+
+const char *rust_magicdb_script3(int _id);
+
+int rust_recipedb_init(void);
+
+void rust_recipedb_term(void);
+
+struct RecipeData *rust_recipedb_search(unsigned int id);
+
+struct RecipeData *rust_recipedb_searchexist(unsigned int id);
+
+struct RecipeData *rust_recipedb_searchname(const char *s);
 
 void rust_register_fd_max_updater(void (*cb)(int));
 

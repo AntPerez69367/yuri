@@ -2562,7 +2562,7 @@ int sl_setClanName(lua_State *state) {
   }
 
   struct clan_data *db = NULL;
-  db = uidb_get(clan_db, clan);
+  db = (struct clan_data*)(void*)rust_clandb_searchexist(clan);
   if (!db) return 1;
   strcpy(db->name, clanName);
 
@@ -7800,6 +7800,75 @@ int pcl_showhealth(lua_State *state, void *self) {
   return 0;
 }
 
+static int clandb_add_local(void *sd, const char *name) {
+  unsigned int newid = 0;
+  char *data;
+  char escape[129]; /* 2 * 64 + 1: worst-case escaping of a 64-byte name field */
+  size_t name_len;
+  struct clan_data *db;
+  int attempts;
+  int row_res;
+
+  name_len = strlen(name);
+  if (name_len >= 64) {
+    printf("[scripting] clandb_add_local: clan name too long (%zu chars)\n", name_len);
+    return 0;
+  }
+  Sql_EscapeStringLen(sql_handle, escape, name, name_len);
+
+  for (attempts = 0; attempts < 5; attempts++) {
+    /* Find the first gap in ClnId, or 1 if the table is empty. */
+    if (SQL_ERROR == Sql_Query(sql_handle,
+            "SELECT l.ClnId + 1 as start from `Clans` as l "
+            "left outer join `Clans` as r on l.ClnId + 1 = r.ClnId "
+            "where r.ClnId is null LIMIT 1")) {
+      Sql_ShowDebug(sql_handle);
+      return 0;
+    }
+    row_res = Sql_NextRow(sql_handle);
+    if (row_res == SQL_NO_DATA) {
+      /* Clans table is empty — start at id 1. */
+      Sql_FreeResult(sql_handle);
+      newid = 1;
+    } else if (row_res != SQL_SUCCESS) {
+      Sql_ShowDebug(sql_handle);
+      Sql_FreeResult(sql_handle);
+      return 0;
+    } else {
+      Sql_GetData(sql_handle, 0, &data, NULL);
+      if (data == NULL) {
+        Sql_FreeResult(sql_handle);
+        return 0;
+      }
+      newid = (unsigned int)strtoul(data, NULL, 10);
+      Sql_FreeResult(sql_handle);
+    }
+
+    if (newid == 0)
+      return 0;
+
+    if (SQL_ERROR != Sql_Query(sql_handle,
+            "INSERT INTO `Clans` (`ClnName`, `ClnId`) VALUES('%s', '%u')",
+            escape, newid))
+      break; /* insert succeeded */
+
+    /* INSERT failed (likely a duplicate-key race) — retry with a fresh id. */
+    Sql_ShowDebug(sql_handle);
+    if (attempts == 4)
+      return 0;
+  }
+
+  db = (struct clan_data*)rust_clandb_search(newid);
+  if (db == NULL) {
+    printf("[scripting] clandb_add_local: clan %u not found after insert\n", newid);
+    return 0;
+  }
+  strncpy(db->name, name, sizeof(db->name) - 1);
+  db->name[sizeof(db->name) - 1] = '\0';
+  ((USER *)sd)->status.clan = newid;
+  return newid;
+}
+
 int pcl_addclan(lua_State *state, void *self) {
   USER *sd = (USER *)self;
   struct clan_data *clan;
@@ -7811,7 +7880,7 @@ int pcl_addclan(lua_State *state, void *self) {
   if (clan) {
     lua_pushnumber(state, 0);
   } else {
-    newid = clandb_add(sd, c_name);
+    newid = clandb_add_local(sd, c_name);
     lua_pushnumber(state, newid);
   }
   return 1;
