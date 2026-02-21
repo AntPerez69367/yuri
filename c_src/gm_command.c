@@ -1482,8 +1482,7 @@ int command_reloadnpc(USER *sd, char *line, lua_State *state) {
 }*/
 
 int command_reloadcreations(USER *sd, char *line, lua_State *state) {
-  createdb_term();
-  createdb_init();
+  // Creation system is Lua-script-driven; no DB layer to reload.
   clif_sendminitext(sd, "Creations DB reloaded!");
   return 0;
 }
