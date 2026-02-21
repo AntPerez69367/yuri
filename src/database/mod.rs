@@ -34,9 +34,21 @@ pub(crate) fn blocking_run<F: Future>(f: F) -> F::Output {
 }
 
 /// Connect to the database. Called from ffi::database::rust_db_connect.
+///
+/// Returns an error if the pool is already initialized or if the connection fails.
 pub fn connect(url: &str) -> Result<(), sqlx::Error> {
+    if DB_POOL.get().is_some() {
+        return Err(sqlx::Error::Configuration(
+            "database pool already initialized".into(),
+        ));
+    }
     let pool = blocking_run(MySqlPool::connect(url))?;
-    let _ = DB_POOL.set(pool);
+    // set() only fails if another thread raced us; drop the new pool and return an error.
+    if DB_POOL.set(pool).is_err() {
+        return Err(sqlx::Error::Configuration(
+            "database pool already initialized".into(),
+        ));
+    }
     tracing::info!("[db] Connected to MariaDB");
     Ok(())
 }

@@ -1748,11 +1748,16 @@ int do_init(int argc, char** argv) {
     exit(EXIT_FAILURE);
   }
 
+  /* Note: sql_id/sql_pw are not URL-encoded; avoid special chars in credentials.
+   * rust_db_connect is declared in yuri.h. */
   {
-    extern int rust_db_connect(const char* url);
     char db_url[512];
-    snprintf(db_url, sizeof(db_url), "mysql://%s:%s@%s:%d/%s",
-             sql_id, sql_pw, sql_ip, sql_port, sql_db);
+    int n = snprintf(db_url, sizeof(db_url), "mysql://%s:%s@%s:%d/%s",
+                     sql_id, sql_pw, sql_ip, sql_port, sql_db);
+    if (n < 0 || (size_t)n >= sizeof(db_url)) {
+      printf("[map] Failed to format database URL (buffer too small)\n");
+      exit(EXIT_FAILURE);
+    }
     if (rust_db_connect(db_url) != 0) {
       printf("[map] Failed to initialize MariaDB Rust pool\n");
       exit(EXIT_FAILURE);
