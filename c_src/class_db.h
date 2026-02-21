@@ -31,7 +31,6 @@ struct class_data {
 struct ClassData;
 extern struct ClassData* cdata[20];
 
-struct ClassData;
 struct ClassData* rust_classdb_search(int);
 struct ClassData* rust_classdb_searchexist(int);
 unsigned int rust_classdb_level(int, int);
