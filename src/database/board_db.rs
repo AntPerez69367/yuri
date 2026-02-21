@@ -160,9 +160,9 @@ pub fn search(id: i32) -> *mut BoardData {
 /// or clear the cache (e.g. `term()`). If a safer ownership model is needed, consider
 /// returning `Arc<BoardData>` or confining access to within the lock scope.
 pub fn searchexist(id: i32) -> *mut BoardData {
-    let map = board_db().lock().unwrap();
-    match map.get(&id) {
-        Some(b) => b.as_ref() as *const BoardData as *mut BoardData,
+    let mut map = board_db().lock().unwrap();
+    match map.get_mut(&id) {
+        Some(b) => b.as_mut() as *mut BoardData,
         None => null_mut(),
     }
 }
@@ -206,9 +206,9 @@ pub fn bn_search(id: i32) -> *mut BnData {
 }
 
 pub fn bn_searchexist(id: i32) -> *mut BnData {
-    let map = bn_db().lock().unwrap();
-    match map.get(&id) {
-        Some(b) => b.as_ref() as *const BnData as *mut BnData,
+    let mut map = bn_db().lock().unwrap();
+    match map.get_mut(&id) {
+        Some(b) => b.as_mut() as *mut BnData,
         None => null_mut(),
     }
 }
