@@ -11,6 +11,7 @@ use sqlx::Row;
 use super::{blocking_run, get_pool};
 use super::item_db::str_to_fixed;
 
+#[derive(Clone)]
 #[repr(C)]
 pub struct ClassData {
     /// 16 rank name strings, each 32 bytes (rank0..rank15)
@@ -64,10 +65,7 @@ async fn load_classes() -> Result<usize, sqlx::Error> {
     for row in rows {
         let id: u32 = row.try_get::<u32, _>(0).unwrap_or(0);
         let arc = map.entry(id).or_insert_with(|| make_default(id));
-        // Arc::get_mut is guaranteed Some here: map was just cleared in init()
-        // before load_classes runs, so refcount is always 1 at this point.
-        let c = Arc::get_mut(arc)
-            .expect("arc not uniquely owned during class load — concurrent init?");
+        let c = Arc::make_mut(arc);
         c.id   = u16::try_from(id).expect("class path ID exceeds u16::MAX");
         c.path = row.try_get::<u32, _>(1).map(|v| v as u16).unwrap_or(0);
         c.chat = row.try_get::<u32, _>(2).map(|v| v as i32).unwrap_or(0);
@@ -101,8 +99,7 @@ fn load_leveldb(data_dir: &str) -> Result<usize, std::io::Error> {
         }
         let path_id: u32 = parts[0].trim().parse().unwrap_or(0);
         let arc = map.entry(path_id).or_insert_with(|| make_default(path_id));
-        let c = Arc::get_mut(arc)
-            .expect("arc not uniquely owned during leveldb load — concurrent init?");
+        let c = Arc::make_mut(arc);
         for x in 1..parts.len().min(99) {
             c.level[x] = parts[x].trim().parse().unwrap_or(0);
         }
