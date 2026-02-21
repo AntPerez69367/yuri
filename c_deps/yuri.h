@@ -685,11 +685,11 @@ int rust_magicdb_level(const char *s);
 /**
  * Script fields are always empty (never populated in original game).
  */
-char *rust_magicdb_script(int _id);
+const char *rust_magicdb_script(int _id);
 
-char *rust_magicdb_script2(int _id);
+const char *rust_magicdb_script2(int _id);
 
-char *rust_magicdb_script3(int _id);
+const char *rust_magicdb_script3(int _id);
 
 int rust_recipedb_init(void);
 

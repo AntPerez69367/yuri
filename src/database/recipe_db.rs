@@ -108,7 +108,7 @@ async fn load_recipes() -> Result<usize, sqlx::Error> {
 pub fn init() -> c_int {
     RECIPE_DB.get_or_init(|| Mutex::new(HashMap::new()));
     match blocking_run(load_recipes()) {
-        Ok(n) => { println!("[recipedb] read done count={}", n); 0 }
+        Ok(n) => { println!("[recipe_db] read done count={}", n); 0 }
         Err(e) => { eprintln!("[recipe_db] load failed: {}", e); -1 }
     }
 }
@@ -119,6 +119,14 @@ pub fn term() {
     }
 }
 
+/// Returns a raw pointer to the `RecipeData` for `id`, inserting a default entry if absent.
+///
+/// # Safety
+///
+/// The returned pointer is valid only while the database is initialized and the map entry
+/// remains present. Callers **must not** hold this pointer across any call that may modify
+/// or clear the cache (e.g. `term()`). A safer alternative would be to return
+/// `Arc<RecipeData>` or confine access to within the lock scope.
 pub fn search(id: u32) -> *mut RecipeData {
     let mut map = db().lock().unwrap();
     let r = map.entry(id).or_insert_with(|| make_default(id));
@@ -138,6 +146,8 @@ pub fn searchname(s: *const c_char) -> *mut RecipeData {
     let target = unsafe { CStr::from_ptr(s) }.to_string_lossy().to_lowercase();
     let map = db().lock().unwrap();
     for r in map.values() {
+        // SAFETY: str_to_fixed always writes a NUL at index `len` (≤ N-1), so these
+        // fixed-size arrays are guaranteed to be NUL-terminated within their bounds.
         let ident = unsafe { CStr::from_ptr(r.identifier.as_ptr()) }.to_string_lossy().to_lowercase();
         let desc = unsafe { CStr::from_ptr(r.description.as_ptr()) }.to_string_lossy().to_lowercase();
         let crit_ident = unsafe { CStr::from_ptr(r.crit_identifier.as_ptr()) }.to_string_lossy().to_lowercase();

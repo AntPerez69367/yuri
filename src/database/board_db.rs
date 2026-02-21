@@ -137,12 +137,28 @@ pub fn term() {
     if let Some(m) = BN_DB.get() { m.lock().unwrap().clear(); }
 }
 
+/// Returns a raw pointer to the `BoardData` for `id`, inserting a default entry if absent.
+///
+/// # Safety
+///
+/// The returned pointer is valid only while the database is initialized and the map entry
+/// remains present. Callers **must not** hold this pointer across any call that may modify
+/// or clear the cache (e.g. `term()`). If a safer ownership model is needed, consider
+/// returning `Arc<BoardData>` or confining access to within the lock scope.
 pub fn search(id: i32) -> *mut BoardData {
     let mut map = board_db().lock().unwrap();
     let b = map.entry(id).or_insert_with(|| make_default_board(id));
     b.as_mut() as *mut BoardData
 }
 
+/// Returns a raw pointer to the `BoardData` for `id`, or null if not found.
+///
+/// # Safety
+///
+/// The returned pointer is valid only while the database is initialized and the map entry
+/// remains present. Callers **must not** hold this pointer across any call that may modify
+/// or clear the cache (e.g. `term()`). If a safer ownership model is needed, consider
+/// returning `Arc<BoardData>` or confining access to within the lock scope.
 pub fn searchexist(id: i32) -> *mut BoardData {
     let map = board_db().lock().unwrap();
     match map.get(&id) {
@@ -166,6 +182,7 @@ pub fn searchname(s: *const c_char) -> *mut BoardData {
 }
 
 pub fn board_id(s: *const c_char) -> c_uint {
+    if s.is_null() { return 0; }
     let ptr = searchname(s);
     if !ptr.is_null() {
         return unsafe { (*ptr).id as c_uint };

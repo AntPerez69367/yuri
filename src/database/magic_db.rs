@@ -65,6 +65,9 @@ fn make_default(id: i32) -> Box<MagicData> {
 
 async fn load_magic() -> Result<usize, sqlx::Error> {
     let pool = get_pool();
+    // SplScript1/SplScript2/SplScript3 are intentionally omitted: the script
+    // fields on MagicData are always left zeroed. See ffi/magic_db.rs where the
+    // corresponding FFI accessors unconditionally return an empty string.
     let rows = sqlx::query(
         "SELECT SplId, SplDescription, SplIdentifier, SplType, \
          SplQuestion, SplDispel, SplAether, SplMute, SplPthId, \
@@ -113,12 +116,24 @@ pub fn term() {
     }
 }
 
+/// Returns a pointer to the `MagicData` for `id`, inserting a zeroed default
+/// entry if one does not already exist.
+///
+/// # Safety
+/// The returned pointer is valid until `term()` is called. Each map value is a
+/// `Box<MagicData>` whose heap allocation is independent of the HashMap's
+/// internal array, so HashMap growth never invalidates it. Callers must not
+/// use the pointer after `term()` has been called (server shutdown).
 pub fn search(id: i32) -> *mut MagicData {
     let mut map = db().lock().unwrap();
     let m = map.entry(id).or_insert_with(|| make_default(id));
     m.as_mut() as *mut MagicData
 }
 
+/// Returns a pointer to the `MagicData` for `id`, or null if no entry exists.
+///
+/// # Safety
+/// Same lifetime contract as `search`: valid until `term()` is called.
 pub fn searchexist(id: i32) -> *mut MagicData {
     let map = db().lock().unwrap();
     match map.get(&id) {
@@ -128,6 +143,14 @@ pub fn searchexist(id: i32) -> *mut MagicData {
 }
 
 /// Searches by yname only (matches C behavior).
+///
+/// # Safety
+/// - `s` must be a valid null-terminated C string or null (null returns null).
+/// - The returned pointer shares the same lifetime contract as `search`: valid
+///   until `term()` is called.
+/// - `m.yname` is always null-terminated because `str_to_fixed` writes a zero
+///   byte at `dst[len]` where `len ≤ N-1`, guaranteeing termination even for
+///   maximum-length inputs.
 pub fn searchname(s: *const c_char) -> *mut MagicData {
     if s.is_null() { return null_mut(); }
     let target = unsafe { CStr::from_ptr(s) }.to_string_lossy().to_lowercase();
@@ -144,6 +167,7 @@ pub fn searchname(s: *const c_char) -> *mut MagicData {
 }
 
 pub fn id(s: *const c_char) -> c_int {
+    if s.is_null() { return 0; }
     let ptr = searchname(s);
     if !ptr.is_null() {
         return unsafe { (*ptr).id };
@@ -162,6 +186,7 @@ pub fn id(s: *const c_char) -> c_int {
 
 /// Takes a spell name string, returns the level field.
 pub fn level_by_name(s: *const c_char) -> c_int {
+    if s.is_null() { return 0; }
     let spell_id = id(s);
     if spell_id != 0 {
         unsafe { (*search(spell_id)).level as c_int }

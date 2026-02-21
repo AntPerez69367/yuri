@@ -72,6 +72,10 @@ pub struct ItemData {
     pub unequip_script: *mut c_char,
 }
 
+// SAFETY: `script`, `equip_script`, and `unequip_script` are always `null_mut()` —
+// they are never set from the database and the FFI layer returns `null_mut()` for all
+// three script accessors. With only null pointers in those fields, sharing across
+// threads is safe under the `Mutex<HashMap<…>>` that guards all access.
 unsafe impl Send for ItemData {}
 unsafe impl Sync for ItemData {}
 
@@ -256,6 +260,13 @@ pub fn term() {
 }
 
 /// Returns pointer to item, creating a default entry if missing.
+///
+/// # Safety
+///
+/// The returned pointer is valid only while the database is initialized and the map entry
+/// remains present. Callers **must not** hold this pointer across any call that may modify
+/// or clear the cache (e.g. `term()`). A safer alternative would be to return
+/// `Arc<Mutex<ItemData>>` and update callers accordingly.
 pub fn search(id: u32) -> *mut ItemData {
     let mut map = db().lock().unwrap();
     let item = map.entry(id).or_insert_with(|| make_default(id));
@@ -263,6 +274,13 @@ pub fn search(id: u32) -> *mut ItemData {
 }
 
 /// Returns pointer to item if it exists, null otherwise.
+///
+/// # Safety
+///
+/// The returned pointer is valid only while the database is initialized and the map entry
+/// remains present. Callers **must not** hold this pointer across any call that may modify
+/// or clear the cache (e.g. `term()`). A safer alternative would be to return
+/// `Option<Arc<Mutex<ItemData>>>` and update callers accordingly.
 pub fn searchexist(id: u32) -> *mut ItemData {
     let map = db().lock().unwrap();
     match map.get(&id) {
@@ -272,6 +290,13 @@ pub fn searchexist(id: u32) -> *mut ItemData {
 }
 
 /// Linear scan by name or yname (case-insensitive).
+///
+/// # Safety
+///
+/// The returned pointer points into a `Box<ItemData>` stored in the global map and is valid
+/// only while the database is initialized and the entry is not removed (e.g. by `term()`).
+/// A safer alternative would be to clone the matching entry and return `Box::into_raw` of
+/// the clone, or change the return type to `Option<ItemData>`.
 pub fn searchname(s: *const c_char) -> *mut ItemData {
     if s.is_null() {
         return null_mut();

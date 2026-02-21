@@ -74,6 +74,10 @@ struct ItemData* rust_itemdb_searchname(const char* s);
 int rust_itemdb_init(void);
 void rust_itemdb_term(void);
 unsigned int rust_itemdb_id(const char* s);
+/* The following functions return pointers into Rust-owned memory (fields of
+ * the BoxItemData stored in the static item database).  The lifetime of each
+ * pointer is tied to the item database: pointers remain valid until
+ * rust_itemdb_term() is called.  Callers MUST NOT free the returned pointer. */
 char* rust_itemdb_name(unsigned int id);
 char* rust_itemdb_yname(unsigned int id);
 char* rust_itemdb_text(unsigned int id);
@@ -180,7 +184,7 @@ static inline int  itemdb_protected(unsigned int id)    { return rust_itemdb_pro
 static inline int  itemdb_healing(unsigned int id)      { return rust_itemdb_healing(id); }
 static inline int  itemdb_wisdom(unsigned int id)       { return rust_itemdb_wisdom(id); }
 static inline int  itemdb_con(unsigned int id)          { return rust_itemdb_con(id); }
-static inline int  itemdb_attackspeed(signed int id)    { return rust_itemdb_attackspeed((unsigned int)id); }
+static inline int  itemdb_attackspeed(unsigned int id)  { return rust_itemdb_attackspeed(id); }
 static inline int  itemdb_mindam(unsigned int id)       { return rust_itemdb_mindam(id); }
 static inline int  itemdb_maxdam(unsigned int id)       { return rust_itemdb_maxdam(id); }
 static inline int  itemdb_minSdam(unsigned int id)      { return rust_itemdb_minSdam(id); }

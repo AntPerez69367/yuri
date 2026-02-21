@@ -22,9 +22,9 @@ int rust_magicdb_id(const char*);
 char* rust_magicdb_name(int);
 char* rust_magicdb_yname(int);
 char* rust_magicdb_question(int);
-char* rust_magicdb_script(int);
-char* rust_magicdb_script2(int);
-char* rust_magicdb_script3(int);
+const char* rust_magicdb_script(int);
+const char* rust_magicdb_script2(int);
+const char* rust_magicdb_script3(int);
 int rust_magicdb_type(int);
 int rust_magicdb_dispel(int);
 int rust_magicdb_aether(int);
@@ -43,9 +43,9 @@ static inline int   magicdb_id(const char* s)                     { return rust_
 static inline char* magicdb_name(int id)                          { return rust_magicdb_name(id); }
 static inline char* magicdb_yname(int id)                         { return rust_magicdb_yname(id); }
 static inline char* magicdb_question(int id)                      { return rust_magicdb_question(id); }
-static inline char* magicdb_script(int id)                        { return rust_magicdb_script(id); }
-static inline char* magicdb_script2(int id)                       { return rust_magicdb_script2(id); }
-static inline char* magicdb_script3(int id)                       { return rust_magicdb_script3(id); }
+static inline const char* magicdb_script(int id)                  { return rust_magicdb_script(id); }
+static inline const char* magicdb_script2(int id)                 { return rust_magicdb_script2(id); }
+static inline const char* magicdb_script3(int id)                 { return rust_magicdb_script3(id); }
 static inline int   magicdb_type(int id)                          { return rust_magicdb_type(id); }
 static inline int   magicdb_dispel(int id)                        { return rust_magicdb_dispel(id); }
 static inline int   magicdb_aether(int id)                        { return rust_magicdb_aether(id); }
@@ -56,4 +56,7 @@ static inline int   magicdb_ticker(int id)                        { return rust_
 static inline int   magicdb_level(const char* s)                  { return rust_magicdb_level(s); }
 static inline int   magicdb_init(void)                            { return rust_magicdb_init(); }
 static inline void  magicdb_term(void)                            { rust_magicdb_term(); }
+/* No-op: loading is handled by rust_magicdb_init() (called via magicdb_init()).
+ * Callers that previously relied on magicdb_read() must use magicdb_init() instead.
+ * Returns 0 to avoid breaking call sites that check the return value. */
 static inline int   magicdb_read(void)                            { return 0; }

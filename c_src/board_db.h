@@ -10,6 +10,8 @@ struct bn_data {
   char name[255];
 };
 // board_db.c deleted — implemented in Rust (src/database/board_db.rs)
+// Safe to cast BoardData* <-> board_data* and BnData* <-> bn_data* because the
+// Rust types are #[repr(C)] with identical field order, types, and array sizes.
 struct BoardData;
 struct BnData;
 struct BoardData* rust_boarddb_search(int);
@@ -42,7 +44,7 @@ static inline int   boarddb_gmlevel(int id)                   { return rust_boar
 static inline int   boarddb_clan(int id)                      { return rust_boarddb_clan(id); }
 static inline int   boarddb_sort(int id)                      { return rust_boarddb_sort(id); }
 static inline unsigned int boarddb_id(const char* s)          { return rust_boarddb_id(s); }
-static inline char  boarddb_script(int id)                    { return (char)rust_boarddb_script(id); }
+static inline int   boarddb_script(int id)                    { return rust_boarddb_script(id); }
 static inline int   boarddb_init(void)                        { return rust_boarddb_init(); }
 static inline void  boarddb_term(void)                        { rust_boarddb_term(); }
 static inline int   boarddb_read(void)                        { return 0; }
