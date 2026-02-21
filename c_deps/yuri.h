@@ -200,6 +200,84 @@ typedef struct MagicData {
   char class_;
 } MagicData;
 
+/**
+ * Mirrors `struct item` from mmo.h (live item instance, not item template).
+ * Also used by pc.rs inventory — move to a shared types module when pc.rs is written.
+ */
+typedef struct MobItem {
+  unsigned int id;
+  unsigned int owner;
+  unsigned int custom;
+  unsigned int time;
+  int dura;
+  int amount;
+  unsigned char pos;
+  uint8_t _pad[3];
+  unsigned int custom_look;
+  unsigned int custom_icon;
+  unsigned int custom_look_color;
+  unsigned int custom_icon_color;
+  unsigned int protected_;
+  unsigned int traps_table[100];
+  unsigned char buytext[64];
+  char note[300];
+  signed char repair;
+  char real_name[64];
+} MobItem;
+
+/**
+ * Mirrors `struct mobdb_data` from map_server.h.
+ * The `equip` array is populated by a MobEquipment sub-query for NPC mobs (mobtype == 1).
+ */
+typedef struct MobDbData {
+  struct MobItem equip[15];
+  int vita;
+  int type;
+  int subtype;
+  int look;
+  int look_color;
+  int hit;
+  int level;
+  int might;
+  int grace;
+  int will;
+  int movetime;
+  int atktime;
+  int spawntime;
+  int baseac;
+  int sound;
+  int mana;
+  unsigned int owner;
+  unsigned int id;
+  unsigned int mindam;
+  unsigned int maxdam;
+  unsigned int exp;
+  char name[45];
+  char yname[45];
+  signed char block;
+  signed char retdist;
+  unsigned char mobtype;
+  signed char state;
+  signed char race;
+  signed char seeinvis;
+  signed char tier;
+  unsigned char mark;
+  unsigned char isnpc;
+  unsigned char isboss;
+  short protection;
+  short miss;
+  unsigned short sex;
+  unsigned short face;
+  unsigned short face_color;
+  unsigned short hair;
+  unsigned short hair_color;
+  unsigned short armor_color;
+  unsigned short skin_color;
+  unsigned short startm;
+  unsigned short startx;
+  unsigned short starty;
+} MobDbData;
+
 typedef struct RecipeData {
   int id;
   int tokens_required;
@@ -690,6 +768,22 @@ const char *rust_magicdb_script(int _id);
 const char *rust_magicdb_script2(int _id);
 
 const char *rust_magicdb_script3(int _id);
+
+int rust_mobdb_init(void);
+
+void rust_mobdb_term(void);
+
+struct MobDbData *rust_mobdb_search(unsigned int id);
+
+struct MobDbData *rust_mobdb_searchexist(unsigned int id);
+
+struct MobDbData *rust_mobdb_searchname(const char *s);
+
+int rust_mobdb_level(unsigned int id);
+
+unsigned int rust_mobdb_experience(unsigned int id);
+
+int rust_mobdb_id(const char *s);
 
 int rust_recipedb_init(void);
 

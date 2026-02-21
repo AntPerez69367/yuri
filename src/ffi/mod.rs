@@ -24,6 +24,7 @@ pub mod crypt;
 pub mod database;
 pub mod item_db;
 pub mod magic_db;
+pub mod mob_db;
 pub mod recipe_db;
 pub mod session;
 pub mod timer;
