@@ -3,6 +3,7 @@ use std::os::raw::{c_char, c_int, c_uchar};
 use std::slice;
 
 use crate::network::crypt;
+use crate::session::{RFIFO_SIZE, WFIFO_SIZE};
 
 /// Whether the opcode uses dynamic encryption (client-side check).
 #[no_mangle]
@@ -64,6 +65,11 @@ pub unsafe extern "C" fn rust_crypt_set_packet_indexes(packet: *mut c_uchar) -> 
         return 0;
     }
     let psize = ((*packet.add(1) as usize) << 8) | (*packet.add(2) as usize);
+    // psize must be non-zero and the full write (psize + 3-byte header + 3 trailer)
+    // must fit within WFIFO_SIZE.
+    if psize == 0 || psize + 6 > WFIFO_SIZE {
+        return 0;
+    }
     let buf_size = psize + 3 + 3; // current content + 3 trailer bytes
     let buf = slice::from_raw_parts_mut(packet, buf_size);
     crypt::set_packet_indexes(buf) as c_int
@@ -82,6 +88,11 @@ pub unsafe extern "C" fn rust_crypt_generate_key2(
         return std::ptr::null_mut();
     }
     let psize = ((*packet.add(1) as usize) << 8) | (*packet.add(2) as usize);
+    // psize must be non-zero and the packet slice (psize + 3-byte header) must
+    // fit within RFIFO_SIZE.
+    if psize == 0 || psize + 3 > RFIFO_SIZE {
+        return std::ptr::null_mut();
+    }
     let packet_buf = slice::from_raw_parts(packet, psize + 3);
     let table_buf = slice::from_raw_parts(table as *const u8, 0x401);
     let mut key = [0u8; 10];
@@ -98,6 +109,10 @@ pub unsafe extern "C" fn rust_crypt_dynamic(buff: *mut c_uchar, key: *const c_ch
         return;
     }
     let total = ((*buff.add(1) as usize) << 8) | (*buff.add(2) as usize);
+    // Minimum 5-byte packet (header consumed by tk_crypt_dynamic); cap at RFIFO_SIZE.
+    if total < 5 || total > RFIFO_SIZE {
+        return;
+    }
     let buf = slice::from_raw_parts_mut(buff, total);
     let key_bytes = slice::from_raw_parts(key as *const u8, 9);
     crypt::tk_crypt_dynamic(buf, key_bytes);
