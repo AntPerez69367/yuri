@@ -4,15 +4,7 @@ use std::os::raw::{c_char, c_int, c_uint};
 use std::ptr::null_mut;
 
 use crate::database::item_db as db;
-
-macro_rules! ffi_catch {
-    ($default:expr, $body:expr) => {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
-            Ok(v) => v,
-            Err(_) => $default,
-        }
-    };
-}
+use super::ffi_catch;
 
 #[no_mangle]
 pub extern "C" fn rust_itemdb_init() -> c_int { ffi_catch!(-1, db::init()) }
