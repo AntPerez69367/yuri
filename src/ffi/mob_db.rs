@@ -4,7 +4,6 @@ use std::os::raw::{c_char, c_int, c_uint};
 use std::ptr::null_mut;
 
 use crate::database::mob_db::{self as db, MobDbData};
-use super::ffi_catch;
 
 #[no_mangle]
 pub extern "C" fn rust_mobdb_init() -> c_int { ffi_catch!(-1, db::init()) }

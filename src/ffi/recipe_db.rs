@@ -4,7 +4,6 @@ use std::os::raw::{c_char, c_int, c_uint};
 use std::ptr::null_mut;
 
 use crate::database::recipe_db::{self as db, RecipeData};
-use super::ffi_catch;
 
 #[no_mangle]
 pub extern "C" fn rust_recipedb_init() -> c_int { ffi_catch!(-1, db::init()) }
