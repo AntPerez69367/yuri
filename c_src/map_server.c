@@ -1808,7 +1808,6 @@ int do_init(int argc, char** argv) {
   }
   boarddb_init();
   intif_init();
-  createdb_init();
   object_flag_init();
   sl_init();
   map_loadgameregistry();

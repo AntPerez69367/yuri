@@ -2,17 +2,5 @@
 
 #include "map_server.h"
 
-struct creation_data {
-  int id;
-  int count;
-  int amount;
-  int item[10];
-  int item_count[10];
-  int item_created;
-};
-
-extern struct DBMap *create_db;
-
-int createdb_init();
+// Item creation is driven by Lua scripts; no DB table or storage layer exists.
 int createdb_start(USER *);
-int createdb_term();
