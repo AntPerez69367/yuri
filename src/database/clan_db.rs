@@ -148,8 +148,24 @@ pub fn searchname(s: *const c_char) -> *mut ClanData {
     null_mut()
 }
 
-/// Returns clan name or "??" if not found. Matches C clandb_name behavior.
-/// Returns `*const c_char`; callers must not write through this pointer.
+/// Returns a pointer to the clan name string for `id`, or a pointer to the
+/// static literal `"??"` if the id is not present in the map.
+///
+/// # Pointer validity invariant
+/// When the id is found, the returned pointer points directly into the `name`
+/// field of the `Box<ClanData>` stored in `CLAN_DB`. It is valid as long as:
+/// 1. The entry is not removed from the map — only `term()` removes entries.
+/// 2. No reallocation of the `Box<ClanData>` occurs (it is heap-stable and
+///    owned by the map; `search()` and `searchexist()` do not reallocate it).
+///
+/// When the id is not found the pointer refers to a static `b"??\0"` literal
+/// and is always valid.
+///
+/// Callers must not write through this pointer (it is `*const c_char`).
+/// Callers must not hold this pointer across a call to `term()`, which drops
+/// all map entries and invalidates every pointer previously returned by
+/// `name()`, `search()`, or `searchexist()`. See also `db()` for the
+/// underlying store that governs the lifetime of all returned pointers.
 pub fn name(id: i32) -> *const c_char {
     let map = db().lock().unwrap();
     match map.get(&id) {
