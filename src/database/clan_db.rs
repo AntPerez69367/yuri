@@ -77,7 +77,9 @@ async fn load_clans() -> Result<usize, sqlx::Error> {
     let mut map = CLAN_DB.get().unwrap().lock().unwrap();
     // Fix C bug: original only processed one row due to loop condition
     for row in rows {
-        let id: i32 = row.try_get::<u32, _>(0)? as i32;
+        let raw_id: u32 = row.try_get(0)?;
+        let id: i32 = i32::try_from(raw_id)
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
         let c = map.entry(id).or_insert_with(|| make_default(id));
         c.id = id;
         let name: String = row.try_get(1)?;
