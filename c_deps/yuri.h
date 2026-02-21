@@ -265,13 +265,32 @@ int rust_classdb_init(const char *data_dir);
 
 void rust_classdb_term(void);
 
+/**
+ * Returns a raw pointer derived from an Arc::into_raw so the ClassData
+ * allocation outlives any HashMap clear (e.g. term()). The C caller must
+ * not free this pointer directly; call rust_classdb_free when done.
+ */
 struct ClassData *rust_classdb_search(int id);
 
 struct ClassData *rust_classdb_searchexist(int id);
 
+/**
+ * Decrements the Arc reference count for a pointer returned by
+ * rust_classdb_search or rust_classdb_searchexist.
+ */
+void rust_classdb_free(struct ClassData *ptr);
+
 unsigned int rust_classdb_level(int path, int lvl);
 
+/**
+ * Returns a caller-owned C string. Must be freed with rust_classdb_free_name().
+ */
 char *rust_classdb_name(int id, int rank);
+
+/**
+ * Frees a string returned by rust_classdb_name.
+ */
+void rust_classdb_free_name(char *ptr);
 
 int rust_classdb_path(int id);
 

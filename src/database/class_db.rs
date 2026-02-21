@@ -1,8 +1,10 @@
 use std::collections::HashMap;
-use std::ffi::CStr;
+use std::convert::TryFrom;
+use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uint};
+use std::path::PathBuf;
 use std::ptr::null_mut;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use sqlx::Row;
 
@@ -23,23 +25,25 @@ pub struct ClassData {
 unsafe impl Send for ClassData {}
 unsafe impl Sync for ClassData {}
 
-static CLASS_DB: OnceLock<Mutex<HashMap<u32, Box<ClassData>>>> = OnceLock::new();
+// Issue 2: Arc<ClassData> instead of Box so cloned references keep data alive
+// after term() clears the HashMap.
+static CLASS_DB: OnceLock<Mutex<HashMap<u32, Arc<ClassData>>>> = OnceLock::new();
 
-fn db() -> &'static Mutex<HashMap<u32, Box<ClassData>>> {
+fn db() -> &'static Mutex<HashMap<u32, Arc<ClassData>>> {
     CLASS_DB.get().expect("[class_db] not initialized")
 }
 
-fn make_default(id: u32) -> Box<ClassData> {
-    let mut c = Box::new(ClassData {
+fn make_default(id: u32) -> Arc<ClassData> {
+    let mut c = ClassData {
         ranks: [[0; 32]; 16],
-        id: id as u16,
+        id: u16::try_from(id).expect("class path ID exceeds u16::MAX — C struct field too narrow"),
         path: 0,
         level: [0; 99],
         chat: 0,
         icon: 0,
-    });
+    };
     str_to_fixed(&mut c.ranks[0], "??");
-    c
+    Arc::new(c)
 }
 
 async fn load_classes() -> Result<usize, sqlx::Error> {
@@ -59,8 +63,12 @@ async fn load_classes() -> Result<usize, sqlx::Error> {
     let mut map = CLASS_DB.get().unwrap().lock().unwrap();
     for row in rows {
         let id: u32 = row.try_get::<u32, _>(0).unwrap_or(0);
-        let c = map.entry(id).or_insert_with(|| make_default(id));
-        c.id   = id as u16;
+        let arc = map.entry(id).or_insert_with(|| make_default(id));
+        // Arc::get_mut is guaranteed Some here: map was just cleared in init()
+        // before load_classes runs, so refcount is always 1 at this point.
+        let c = Arc::get_mut(arc)
+            .expect("arc not uniquely owned during class load — concurrent init?");
+        c.id   = u16::try_from(id).expect("class path ID exceeds u16::MAX");
         c.path = row.try_get::<u32, _>(1).map(|v| v as u16).unwrap_or(0);
         c.chat = row.try_get::<u32, _>(2).map(|v| v as i32).unwrap_or(0);
         c.icon = row.try_get::<u32, _>(3).map(|v| v as i32).unwrap_or(0);
@@ -74,9 +82,12 @@ async fn load_classes() -> Result<usize, sqlx::Error> {
 
 fn load_leveldb(data_dir: &str) -> Result<usize, std::io::Error> {
     use std::fs;
-    let path = format!("{}tnl_exp.csv", data_dir);
+    // Issue 4: use PathBuf::join so a missing trailing separator is handled
+    // correctly (e.g. "data" + "tnl_exp.csv" → "data/tnl_exp.csv", not
+    // "datatnl_exp.csv").
+    let path = PathBuf::from(data_dir).join("tnl_exp.csv");
     let contents = fs::read_to_string(&path)
-        .map_err(|e| { eprintln!("DB_ERR: Can't read level db ({}).", path); e })?;
+        .map_err(|e| { eprintln!("DB_ERR: Can't read level db ({}).", path.display()); e })?;
 
     let mut count = 0;
     let mut map = CLASS_DB.get().unwrap().lock().unwrap();
@@ -89,7 +100,9 @@ fn load_leveldb(data_dir: &str) -> Result<usize, std::io::Error> {
             continue;
         }
         let path_id: u32 = parts[0].trim().parse().unwrap_or(0);
-        let c = map.entry(path_id).or_insert_with(|| make_default(path_id));
+        let arc = map.entry(path_id).or_insert_with(|| make_default(path_id));
+        let c = Arc::get_mut(arc)
+            .expect("arc not uniquely owned during leveldb load — concurrent init?");
         for x in 1..parts.len().min(99) {
             c.level[x] = parts[x].trim().parse().unwrap_or(0);
         }
@@ -101,7 +114,10 @@ fn load_leveldb(data_dir: &str) -> Result<usize, std::io::Error> {
 // ─── Public interface (called by ffi::class_db) ─────────────────────────────
 
 pub fn init(data_dir: *const c_char) -> c_int {
-    CLASS_DB.get_or_init(|| Mutex::new(HashMap::new()));
+    // Issue 3: clear stale entries on re-initialization so old data does not
+    // persist if init() is called more than once.
+    let lock = CLASS_DB.get_or_init(|| Mutex::new(HashMap::new()));
+    lock.lock().unwrap().clear();
 
     match blocking_run(load_classes()) {
         Ok(n) => println!("[class_db] read done count={}", n),
@@ -126,19 +142,18 @@ pub fn term() {
     }
 }
 
-pub fn search(id: i32) -> *mut ClassData {
+/// Returns a cloned Arc so the caller holds a strong reference independent of
+/// the map. Creates a default entry if the id is not present.
+pub fn search(id: i32) -> Arc<ClassData> {
     let key = id as u32;
     let mut map = db().lock().unwrap();
-    let c = map.entry(key).or_insert_with(|| make_default(key));
-    c.as_mut() as *mut ClassData
+    map.entry(key).or_insert_with(|| make_default(key)).clone()
 }
 
-pub fn searchexist(id: i32) -> *mut ClassData {
+/// Returns a cloned Arc if the entry exists, None otherwise.
+pub fn searchexist(id: i32) -> Option<Arc<ClassData>> {
     let map = db().lock().unwrap();
-    match map.get(&(id as u32)) {
-        Some(c) => c.as_ref() as *const ClassData as *mut ClassData,
-        None => null_mut(),
-    }
+    map.get(&(id as u32)).cloned()
 }
 
 pub fn level(path: i32, lvl: i32) -> c_uint {
@@ -149,13 +164,23 @@ pub fn level(path: i32, lvl: i32) -> c_uint {
     }
 }
 
+/// Returns an owned CString (allocated on the Rust heap). The returned pointer
+/// must be freed by the caller via rust_classdb_free_name().
 pub fn name(id: i32, rank: i32) -> *mut c_char {
-    let map = db().lock().unwrap();
-    match map.get(&(id as u32)) {
-        Some(c) => {
+    // Issue 1: clone the rank bytes while holding the lock, then release the
+    // lock before constructing CString, so the returned pointer is fully
+    // caller-owned and not tied to the HashMap's lifetime.
+    let bytes: Option<Vec<u8>> = {
+        let map = db().lock().unwrap();
+        map.get(&(id as u32)).map(|c| {
             let idx = (rank as usize).min(15);
-            c.ranks[idx].as_ptr() as *mut c_char
-        }
+            let slice = &c.ranks[idx];
+            let len = slice.iter().position(|&b| b == 0).unwrap_or(slice.len());
+            slice[..len].iter().map(|&b| b as u8).collect()
+        })
+    };
+    match bytes {
+        Some(b) => CString::new(b).map(|s| s.into_raw()).unwrap_or(null_mut()),
         None => null_mut(),
     }
 }
@@ -168,10 +193,14 @@ pub fn path(id: i32) -> c_int {
     }
 }
 
+/// Issue 5: direct map lookup, no unsafe dereference of a raw pointer.
 pub fn chat(id: i32) -> c_int {
-    unsafe { (*search(id)).chat }
+    let map = db().lock().unwrap();
+    map.get(&(id as u32)).map(|c| c.chat).unwrap_or(0)
 }
 
+/// Issue 5: direct map lookup, no unsafe dereference of a raw pointer.
 pub fn icon(id: i32) -> c_int {
-    unsafe { (*search(id)).icon }
+    let map = db().lock().unwrap();
+    map.get(&(id as u32)).map(|c| c.icon).unwrap_or(0)
 }

@@ -25,6 +25,8 @@ struct class_data {
 };
 
 // class_db.c deleted — implemented in Rust (src/database/class_db.rs)
+// Safe to cast ClassData* <-> class_data* because Rust ClassData is #[repr(C)].
+// C layout: 16 named char[32] rank fields = Rust ranks[[c_char;32];16] (same memory layout).
 // cdata is exposed from Rust as struct ClassData*[20]; use void* to avoid struct name conflict
 struct ClassData;
 extern struct ClassData* cdata[20];
