@@ -36,8 +36,15 @@ pub struct ClanData {
     pub clanbanks: *mut ClanBank,
 }
 
+// SAFETY: ClanBank contains only POD fields (no raw pointers) and is always
+// accessed while holding CLAN_DB's Mutex, so cross-thread sharing is safe.
 unsafe impl Send for ClanBank {}
 unsafe impl Sync for ClanBank {}
+
+// SAFETY: ClanData::clanbanks is a raw pointer filled in by map_loadclanbank()
+// on the C side. The invariant is: clanbanks is written exactly once before any
+// concurrent readers exist and is never reallocated or freed while the ClanData
+// lives in CLAN_DB. All Rust-side access goes through the CLAN_DB Mutex.
 unsafe impl Send for ClanData {}
 unsafe impl Sync for ClanData {}
 
@@ -73,7 +80,7 @@ async fn load_clans() -> Result<usize, sqlx::Error> {
         let id: i32 = row.try_get::<u32, _>(0)? as i32;
         let c = map.entry(id).or_insert_with(|| make_default(id));
         c.id = id;
-        let name: String = row.try_get(1).unwrap_or_default();
+        let name: String = row.try_get(1)?;
         str_to_fixed(&mut c.name, &name);
     }
     Ok(count)
@@ -89,6 +96,15 @@ pub fn init() -> c_int {
     }
 }
 
+/// Drops all clan entries from the in-memory map.
+///
+/// # Safety
+/// Must only be called at server shutdown, after all C-side code has stopped
+/// using pointers returned by `search`/`searchexist`/`searchname`. Clearing
+/// the map while outstanding raw pointers exist produces dangling pointers.
+/// `OnceLock` cannot be re-initialized, so a subsequent `init()` call will
+/// see an empty map but the same lock; callers must not call `init()` after
+/// `term()` in production.
 pub fn term() {
     if let Some(m) = CLAN_DB.get() {
         m.lock().unwrap().clear();
@@ -96,12 +112,21 @@ pub fn term() {
 }
 
 /// Create-if-missing. Returns mutable pointer so C can write clanbanks into it.
+///
+/// # Pointer validity invariant
+/// The returned pointer is valid as long as:
+/// 1. The entry is not removed from the map (only `term()` removes entries).
+/// 2. No reallocation of the `Box<ClanData>` occurs (it is heap-stable).
+/// Callers must not hold this pointer across a call to `term()`.
 pub fn search(id: i32) -> *mut ClanData {
     let mut map = db().lock().unwrap();
     let c = map.entry(id).or_insert_with(|| make_default(id));
     c.as_mut() as *mut ClanData
 }
 
+/// # Pointer validity invariant
+/// Same as `search`: valid until `term()` is called. Caller must not hold this
+/// pointer after the server teardown sequence begins.
 pub fn searchexist(id: i32) -> *mut ClanData {
     let map = db().lock().unwrap();
     match map.get(&id) {
@@ -124,10 +149,11 @@ pub fn searchname(s: *const c_char) -> *mut ClanData {
 }
 
 /// Returns clan name or "??" if not found. Matches C clandb_name behavior.
-pub fn name(id: i32) -> *mut c_char {
+/// Returns `*const c_char`; callers must not write through this pointer.
+pub fn name(id: i32) -> *const c_char {
     let map = db().lock().unwrap();
     match map.get(&id) {
-        Some(c) => c.name.as_ptr() as *mut c_char,
-        None => b"??\0".as_ptr() as *mut c_char,
+        Some(c) => c.name.as_ptr() as *const c_char,
+        None => b"??\0".as_ptr() as *const c_char,
     }
 }

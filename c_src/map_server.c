@@ -1787,8 +1787,13 @@ int do_init(int argc, char** argv) {
         int clan_id;
         struct clan_data *clan;
         Sql_GetData(sql_handle, 0, &data, NULL);
+        if (data == NULL) continue;
         clan_id = (int)strtoul(data, NULL, 10);
         clan = (struct clan_data*)rust_clandb_search(clan_id);
+        if (clan == NULL) {
+          printf("[map] clandb_init: clan %d not found, skipping\n", clan_id);
+          continue;
+        }
         if (clan->clanbanks == NULL)
           CALLOC(clan->clanbanks, struct clan_bank, 255);
         map_loadclanbank(clan_id);
@@ -2802,6 +2807,11 @@ int map_loadclanbank(int id) {
   }
 
   clan = (struct clan_data*)rust_clandb_search(id);
+  if (clan == NULL) {
+    printf("[map] map_loadclanbank: clan %d not found\n", id);
+    SqlStmt_Free(stmt);
+    return -1;
+  }
 
   if (SQL_ERROR ==
           SqlStmt_Prepare(

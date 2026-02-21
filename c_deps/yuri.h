@@ -308,7 +308,7 @@ struct ClanData *rust_clandb_searchexist(int id);
 
 struct ClanData *rust_clandb_searchname(const char *s);
 
-char *rust_clandb_name(int id);
+const char *rust_clandb_name(int id);
 
 /**
  * Load configuration from file (C-compatible entry point)

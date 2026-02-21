@@ -7809,20 +7809,38 @@ static int clandb_add_local(void *sd, const char *name) {
   if (SQL_ERROR == Sql_Query(sql_handle,
           "SELECT l.ClnId + 1 as start from `Clans` as l "
           "left outer join `Clans` as r on l.ClnId + 1 = r.ClnId "
-          "where r.ClnId is null LIMIT 1"))
+          "where r.ClnId is null LIMIT 1")) {
     Sql_ShowDebug(sql_handle);
-  if (SQL_SUCCESS != Sql_NextRow(sql_handle)) Sql_ShowDebug(sql_handle);
+    return 0;
+  }
+  if (SQL_SUCCESS != Sql_NextRow(sql_handle)) {
+    Sql_ShowDebug(sql_handle);
+    Sql_FreeResult(sql_handle);
+    return 0;
+  }
   Sql_GetData(sql_handle, 0, &data, NULL);
+  if (data == NULL) {
+    Sql_FreeResult(sql_handle);
+    return 0;
+  }
   newid = (unsigned int)strtoul(data, NULL, 10);
   Sql_FreeResult(sql_handle);
+
   Sql_EscapeString(sql_handle, escape, name);
   if (SQL_ERROR == Sql_Query(sql_handle,
           "INSERT INTO `Clans` (`ClnName`, `ClnId`) VALUES('%s', '%u')",
-          escape, newid))
+          escape, newid)) {
     Sql_ShowDebug(sql_handle);
+    return 0;
+  }
 
   db = (struct clan_data*)rust_clandb_search(newid);
-  strcpy(db->name, name);
+  if (db == NULL) {
+    printf("[scripting] clandb_add_local: clan %u not found after insert\n", newid);
+    return 0;
+  }
+  strncpy(db->name, name, sizeof(db->name) - 1);
+  db->name[sizeof(db->name) - 1] = '\0';
   ((USER *)sd)->status.clan = newid;
   return newid;
 }
