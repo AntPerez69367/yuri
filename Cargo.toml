@@ -5,10 +5,11 @@ authors = ["Steve Corona"]
 edition = "2018"
 
 [lib]
-crate-type = ["staticlib"] 
+crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 toml = "0.9.8"
+rand = "0.8"
 flate2 = "1"
 bytes = "1"
 md-5 = "0.10.6"
