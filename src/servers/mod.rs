@@ -6,6 +6,6 @@
 //! - map_server: Main game world and logic
 
 // When we port servers to Rust, they'll be declared here:
-// pub mod login;
+pub mod login;
 // pub mod char;
 // pub mod map;
