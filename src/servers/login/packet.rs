@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 
 use crate::network::crypt::{set_packet_indexes, tk_crypt_static};
