@@ -8,3 +8,9 @@ pub async fn promote_to_charserver(
     _stream: TcpStream,
     _first: Vec<u8>,
 ) {}
+
+pub async fn dispatch_char_response(
+    _stream: &mut tokio::net::TcpStream,
+    _state: &super::LoginState,
+    _resp: &super::CharResponse,
+) {}
