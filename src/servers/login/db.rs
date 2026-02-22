@@ -1,4 +1,3 @@
-use anyhow::Result;
 use sqlx::MySqlPool;
 
 /// Returns true if `ip` (dotted-decimal string) is in `BannedIP`.
@@ -26,14 +25,14 @@ pub async fn get_maintenance_mode(pool: &MySqlPool) -> bool {
 
 /// Returns the GM level for `char_name`, or 0 if not found.
 pub async fn get_char_gm_level(pool: &MySqlPool, char_name: &str) -> u32 {
-    let row: Option<(i32,)> = sqlx::query_as(
+    let row: Option<(u32,)> = sqlx::query_as(
         "SELECT `ChaGMLevel` FROM `Character` WHERE `ChaName` = ?"
     )
     .bind(char_name)
     .fetch_optional(pool)
     .await
     .unwrap_or(None);
-    row.map(|(n,)| n.max(0) as u32).unwrap_or(0)
+    row.map(|(n,)| n).unwrap_or(0)
 }
 
 /// Returns the AccountId that owns `char_name`, or 0 if not found/unattached.
@@ -78,14 +77,6 @@ pub async fn update_char_last_ip(pool: &MySqlPool, char_name: &str, ip: &str) {
 
 #[cfg(test)]
 mod tests {
-    fn get_pool() -> Option<String> {
-        std::env::var("DATABASE_URL").ok()
-    }
-
-    #[test]
-    fn test_db_skips_without_url() {
-        if get_pool().is_none() {
-            return; // skip
-        }
-    }
+    // DB integration tests require a live DATABASE_URL; skipped in CI.
+    // Pattern matches src/database/mob_db.rs convention.
 }
