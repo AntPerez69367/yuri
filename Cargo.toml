@@ -9,6 +9,7 @@ crate-type = ["staticlib"]
 
 [dependencies]
 toml = "0.9.8"
+bytes = "1"
 md-5 = "0.10.6"
 hex = "0.4.3"
 libc = "0.2.181"
@@ -26,3 +27,7 @@ tokio = { version = "1", features = ["full"] }
 
 [dev-dependencies]
 criterion = "0.5"
+
+[[bin]]
+name = "login_server"
+path = "src/bin/login_server.rs"
