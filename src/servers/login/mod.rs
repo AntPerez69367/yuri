@@ -1,6 +1,7 @@
 pub mod client;
 pub mod db;
 pub mod interserver;
+pub mod packet;
 
 use anyhow::Result;
 
