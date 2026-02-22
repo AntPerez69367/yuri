@@ -90,7 +90,6 @@ impl LoginState {
         }
     }
 
-    #[cfg(test)]
     pub fn test_only() -> Self {
         let config: ServerConfig = serde_yaml::from_str(r#"
 sql_ip: "127.0.0.1"
@@ -104,6 +103,7 @@ char_id: "charid"
 char_pw: "charpw"
 char_ip: "127.0.0.1"
 map_ip: "127.0.0.1"
+xor_key: "test"
 start_point:
   m: 0
   x: 1
