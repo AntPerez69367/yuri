@@ -28,6 +28,10 @@ pub async fn promote_to_charserver(state: Arc<LoginState>, mut stream: TcpStream
         return;
     }
 
+    // Decrypt: char_server encrypts the packet with tk_crypt_static before sending
+    let mut first = first;
+    tk_crypt_static(&mut first, state.config.xor_key.as_bytes());
+
     let login_id = std::str::from_utf8(&first[5..37]).unwrap_or("").trim_end_matches('\0');
     let login_pw = std::str::from_utf8(&first[37..69]).unwrap_or("").trim_end_matches('\0');
 
