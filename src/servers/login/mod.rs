@@ -4,6 +4,14 @@ pub mod interserver;
 pub mod packet;
 
 use anyhow::Result;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU16, Ordering};
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use tokio::sync::{Mutex, oneshot};
+use tokio::net::{TcpListener, TcpStream};
+use sqlx::MySqlPool;
+use crate::config::ServerConfig;
 
 /// The 11 localised error messages, indexed by LGN_* constants.
 #[derive(Debug, Clone, Default)]
@@ -50,6 +58,161 @@ pub fn parse_lang_file(content: &str) -> Result<LoginMessages> {
         }
     }
     Ok(msgs)
+}
+
+/// Char server response routed back to a waiting client task.
+pub struct CharResponse {
+    pub session_id: u16,
+    pub data: Vec<u8>,
+}
+
+pub struct LoginState {
+    pub db: Option<MySqlPool>,
+    pub config: ServerConfig,
+    pub messages: LoginMessages,
+    pub lockout: Mutex<HashMap<u32, u32>>,  // ip → fail count
+    pub pending: Mutex<HashMap<u16, oneshot::Sender<CharResponse>>>,
+    pub char_tx: Mutex<Option<tokio::sync::mpsc::Sender<Vec<u8>>>>,
+    session_counter: AtomicU16,
+}
+
+impl LoginState {
+    pub fn new(db: MySqlPool, config: ServerConfig, messages: LoginMessages) -> Self {
+        Self {
+            db: Some(db),
+            config,
+            messages,
+            lockout: Mutex::new(HashMap::new()),
+            pending: Mutex::new(HashMap::new()),
+            char_tx: Mutex::new(None),
+            session_counter: AtomicU16::new(1),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn test_only() -> Self {
+        let config: ServerConfig = serde_yaml::from_str(r#"
+sql_ip: "127.0.0.1"
+sql_id: "test"
+sql_pw: "test"
+sql_db: "testdb"
+login_id: "loginid"
+login_pw: "loginpw"
+login_ip: "127.0.0.1"
+char_id: "charid"
+char_pw: "charpw"
+char_ip: "127.0.0.1"
+map_ip: "127.0.0.1"
+start_point:
+  m: 0
+  x: 1
+  y: 1
+"#).expect("test config parse failed");
+        Self {
+            db: None,
+            config,
+            messages: LoginMessages::default(),
+            lockout: Mutex::new(HashMap::new()),
+            pending: Mutex::new(HashMap::new()),
+            char_tx: Mutex::new(None),
+            session_counter: AtomicU16::new(1),
+        }
+    }
+
+    fn next_session_id(&self) -> u16 {
+        self.session_counter.fetch_add(1, Ordering::Relaxed)
+    }
+
+    pub async fn handle_new_connection(
+        state: Arc<Self>,
+        mut stream: TcpStream,
+        peer: SocketAddr,
+    ) {
+        use tokio::io::AsyncWriteExt;
+        use crate::servers::login::packet::read_client_packet;
+
+        let ip_u32 = match peer.ip() {
+            std::net::IpAddr::V4(v4) => u32::from(v4),
+            _ => return,
+        };
+
+        // Check IP ban
+        if let Some(pool) = &state.db {
+            let ip_str = format!("{}", peer.ip());
+            if db::is_ip_banned(pool, &ip_str).await {
+                tracing::info!("[login] [banned] ip={}", ip_str);
+                return;
+            }
+        }
+
+        // Check lockout
+        {
+            let lock = state.lockout.lock().await;
+            if lock.get(&ip_u32).copied().unwrap_or(0) >= 10 {
+                tracing::info!("[login] [lockout] ip={}", peer.ip());
+                return;
+            }
+        }
+
+        // Send connect banner (mirrors C clif_accept ok branch)
+        let banner: &[u8] = b"\xAA\x00\x13\x7E\x1B\x43\x4F\x4E\x4E\x45\x43\x54\x45\x44\x20\x53\x45\x52\x56\x45\x52\x0A";
+        if stream.write_all(banner).await.is_err() {
+            return;
+        }
+
+        // Read first packet to determine role
+        let first = match read_client_packet(&mut stream).await {
+            Ok(p) => p,
+            Err(_) => return,
+        };
+
+        if first.len() < 4 {
+            return;
+        }
+
+        let cmd = first[3];
+        if cmd == 0xFF {
+            interserver::promote_to_charserver(state, stream, first).await;
+        } else {
+            let session_id = state.next_session_id();
+            client::handle_client(state, stream, peer, session_id, first).await;
+        }
+    }
+
+    pub async fn run(state: Arc<Self>, bind_addr: &str) -> anyhow::Result<()> {
+        let listener = TcpListener::bind(bind_addr).await?;
+        tracing::info!("[login] [ready] addr={}", bind_addr);
+        loop {
+            let (stream, peer) = listener.accept().await?;
+            let s = Arc::clone(&state);
+            tokio::spawn(async move {
+                LoginState::handle_new_connection(s, stream, peer).await;
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod accept_tests {
+    use super::*;
+    use tokio::io::AsyncReadExt;
+
+    #[tokio::test]
+    async fn test_server_sends_connect_banner() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let state = Arc::new(LoginState::test_only());
+
+        tokio::spawn(async move {
+            let (stream, peer) = listener.accept().await.unwrap();
+            LoginState::handle_new_connection(Arc::clone(&state), stream, peer).await;
+        });
+
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut banner = vec![0u8; 22];
+        client.read_exact(&mut banner).await.unwrap();
+        assert_eq!(banner[0], 0xAA);
+    }
 }
 
 #[cfg(test)]
