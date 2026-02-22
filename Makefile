@@ -21,8 +21,9 @@ decrypt_cli: common
 	@cmake --build build --target decrypt_cli --parallel --
 char_server: common
 	@cmake --build build --target char_server --parallel --
-login_server: common
-	@cmake --build build --target login_server --parallel --
+login_server: libyuri
+	@cargo build --bin login_server
+	@cp target/debug/login_server bin/login_server
 map_server: common
 	@cmake --build build --target map_server --parallel --
 clean:
