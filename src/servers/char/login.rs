@@ -302,6 +302,7 @@ async fn handle_login(state: &Arc<CharState>, pkt: &[u8]) {
             char_name: name.to_string(),
         });
     }
+    db::set_online(&state.db, char_info.char_id, true).await;
 }
 
 async fn handle_setpass(state: &Arc<CharState>, pkt: &[u8]) {
