@@ -6,10 +6,9 @@ pub mod packet;
 
 use anyhow::Result;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU16, Ordering};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::Mutex;
 use tokio::net::{TcpListener, TcpStream};
 use sqlx::MySqlPool;
 use crate::config::ServerConfig;
@@ -72,9 +71,8 @@ pub struct LoginState {
     pub config: ServerConfig,
     pub messages: LoginMessages,
     pub lockout: Mutex<HashMap<u32, u32>>,  // ip → fail count
-    pub pending: Mutex<HashMap<u16, oneshot::Sender<CharResponse>>>,
+    pub pending: Mutex<HashMap<u16, tokio::sync::mpsc::Sender<CharResponse>>>,
     pub char_tx: Mutex<Option<tokio::sync::mpsc::Sender<Vec<u8>>>>,
-    session_counter: AtomicU16,
 }
 
 impl LoginState {
@@ -86,7 +84,6 @@ impl LoginState {
             lockout: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
             char_tx: Mutex::new(None),
-            session_counter: AtomicU16::new(1),
         }
     }
 
@@ -116,12 +113,7 @@ start_point:
             lockout: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
             char_tx: Mutex::new(None),
-            session_counter: AtomicU16::new(1),
         }
-    }
-
-    fn next_session_id(&self) -> u16 {
-        self.session_counter.fetch_add(1, Ordering::Relaxed)
     }
 
     pub async fn handle_new_connection(
@@ -175,7 +167,10 @@ start_point:
         if cmd == 0xFF {
             interserver::promote_to_charserver(state, stream, first).await;
         } else {
-            let session_id = state.next_session_id();
+            // Use the OS socket fd as session_id, matching the C login server where
+            // session_id == the client's file descriptor (typically 4, 5, 6, ...).
+            use std::os::unix::io::AsRawFd;
+            let session_id = stream.as_raw_fd() as u16;
             client::handle_client(state, stream, peer, session_id, first).await;
         }
     }

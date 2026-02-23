@@ -309,16 +309,28 @@ async fn forward_to_char(
     xk: &[u8],
     err_db_msg: &str,
 ) {
-    use tokio::sync::oneshot;
+    use tokio::sync::mpsc;
 
-    let (tx, rx) = oneshot::channel::<CharResponse>();
+    // The char server relays a single response per request. For login (0x2003),
+    // the response arrives after the map server acks via mapif_parse_login and
+    // contains the map server IP:port for the client redirect.
+    let (tx, mut rx) = mpsc::channel::<CharResponse>(4);
     {
         let mut pending = state.pending.lock().await;
         pending.insert(session_id, tx);
     }
 
+    let remove_pending = || async {
+        let mut pending = state.pending.lock().await;
+        pending.remove(&session_id);
+    };
+
+    tracing::debug!("[login] [forward_to_char] session={} msg_len={} cmd={:02X}{:02X} hex={:02X?}",
+        session_id, msg.len(), msg[0], msg[1], &msg[..msg.len().min(20)]);
+
     let sent = {
         let tx_guard = state.char_tx.lock().await;
+        let has_char = tx_guard.is_some();
         if let Some(tx) = &*tx_guard {
             tx.send(msg).await.is_ok()
         } else {
@@ -327,20 +339,39 @@ async fn forward_to_char(
     };
 
     if !sent {
+        tracing::warn!("[login] [forward_to_char] session={} FAILED to send to char server", session_id);
         let _ = stream.write_all(&build_message(0x03, err_db_msg, xk)).await;
-        let mut pending = state.pending.lock().await;
-        pending.remove(&session_id);
+        remove_pending().await;
         return;
     }
+    tracing::debug!("[login] [forward_to_char] session={} sent OK, waiting for response...", session_id);
 
-    match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
-        Ok(Ok(resp)) => {
-            super::interserver::dispatch_char_response(stream, state, &resp).await;
+    // Wait for the response (up to 10s).
+    let resp = match tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await {
+        Ok(Some(r)) => {
+            tracing::debug!("[login] [forward_to_char] session={} got response cmd={:04X} len={}",
+                session_id,
+                if r.data.len() >= 2 { u16::from_le_bytes([r.data[0], r.data[1]]) } else { 0 },
+                r.data.len());
+            r
         }
-        _ => {
+        Ok(None) => {
+            tracing::warn!("[login] [forward_to_char] session={} channel closed (no response)", session_id);
             let _ = stream.write_all(&build_message(0x03, err_db_msg, xk)).await;
+            remove_pending().await;
+            return;
         }
-    }
+        Err(_) => {
+            tracing::warn!("[login] [forward_to_char] session={} TIMEOUT waiting for char response", session_id);
+            let _ = stream.write_all(&build_message(0x03, err_db_msg, xk)).await;
+            remove_pending().await;
+            return;
+        }
+    };
+
+    super::interserver::dispatch_char_response(stream, state, &resp).await;
+
+    remove_pending().await;
 }
 
 #[cfg(test)]
