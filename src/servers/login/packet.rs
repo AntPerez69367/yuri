@@ -37,7 +37,7 @@ pub fn build_message(code: u8, text: &str, xor_key: &[u8]) -> Vec<u8> {
     buf[7..7 + text_bytes.len()].copy_from_slice(text_bytes);
     set_packet_indexes(&mut buf);
     tk_crypt_static(&mut buf, xor_key);
-    buf[..total].to_vec()
+    buf
 }
 
 /// Builds the version-OK response (20 bytes, unencrypted).

@@ -53,7 +53,10 @@ pub async fn handle_client(
         } else {
             match read_client_packet(&mut stream).await {
                 Ok(p) => p,
-                Err(_) => return,
+                Err(e) => {
+                    tracing::info!("[login] [client_disconnect] session={} peer={} reason={}", session_id, peer, e);
+                    return;
+                }
             }
         };
 
@@ -62,6 +65,7 @@ pub async fn handle_client(
         tk_crypt_static(&mut pkt, &xk);
 
         if pkt.len() < 4 {
+            tracing::warn!("[login] [short_packet] session={} len={} raw={:02X?}", session_id, pkt.len(), &pkt[..]);
             return;
         }
 
@@ -75,7 +79,10 @@ pub async fn handle_client(
             0x04 => dispatch_create_char(&mut stream, &pkt, &state, &mut sd, session_id).await,
             0x10 => dispatch_heartbeat(&mut stream).await,
             0x26 => dispatch_change_pass(&mut stream, &pkt, &state, &mut sd, session_id).await,
-            0x57 | 0x71 | 0x62 => {}
+            0x57 | 0x71 | 0x62 => {
+                tracing::debug!("[login] [client_ping] session={} cmd={:02X} raw={:02X?}",
+                    session_id, cmd, &pkt[..pkt.len().min(16)]);
+            }
             0x7B => super::meta::dispatch_meta(&mut stream, &pkt, &state).await,
             _ => tracing::warn!("[login] [packet_unknown] cmd={:02X} session={}", cmd, session_id),
         }
@@ -84,6 +91,11 @@ pub async fn handle_client(
 
 async fn dispatch_version_check(stream: &mut TcpStream, pkt: &[u8], state: &LoginState) {
     if pkt.len() < 9 { return; }
+    // The version check packet is sent unencrypted by the client.
+    // handle_client applied tk_crypt_static globally; re-apply here to reverse it
+    // (XOR is its own inverse), restoring the original bytes before reading.
+    let mut pkt = pkt.to_vec();
+    tk_crypt_static(&mut pkt, state.config.xor_key.as_bytes());
     let ver  = u16::from_be_bytes([pkt[4], pkt[5]]);
     let deep = u16::from_be_bytes([pkt[7], pkt[8]]);
     tracing::info!("[login] [version_check] client_version={} patch={}", ver, deep);
@@ -160,7 +172,7 @@ async fn dispatch_login(
     let name = std::str::from_utf8(&pkt[6..6 + name_len])
         .unwrap_or("").trim_end_matches('\0').to_string();
 
-    if !is_valid_password(&name) {
+    if !is_valid_name(&name) {
         let _ = stream.write_all(&build_message(0x03, &state.messages.0[LGN_ERRUSER], xk)).await;
         return;
     }
@@ -271,7 +283,7 @@ async fn dispatch_change_pass(
     if new_pass_len > 8 || new_pass_len < 3 { return; }
 
     let name = std::str::from_utf8(&pkt[6..6 + name_len]).unwrap_or("").trim_end_matches('\0');
-    if !is_valid_password(name) {
+    if !is_valid_name(name) {
         let _ = stream.write_all(&build_message(0x03, &state.messages.0[LGN_ERRUSER], xk)).await;
         return;
     }

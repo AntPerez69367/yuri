@@ -77,7 +77,7 @@ async fn send_meta_file(stream: &mut TcpStream, pkt: &[u8], state: &LoginState) 
 
     set_packet_indexes(&mut buf);
     tk_crypt_static(&mut buf, state.config.xor_key.as_bytes());
-    let _ = stream.write_all(&buf[..total]).await;
+    let _ = stream.write_all(&buf[..total + 3]).await;
 }
 
 async fn send_meta_list(stream: &mut TcpStream, state: &LoginState) {
@@ -115,7 +115,7 @@ async fn send_meta_list(stream: &mut TcpStream, state: &LoginState) {
 
     set_packet_indexes(&mut buf);
     tk_crypt_static(&mut buf, xk);
-    let _ = stream.write_all(&buf[..total]).await;
+    let _ = stream.write_all(&buf[..total + 3]).await;
 }
 
 #[cfg(test)]
