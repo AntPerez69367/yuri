@@ -573,9 +573,51 @@ int rust_should_shutdown(void);
 uint64_t rust_get_tick_rate_ns(void);
 
 /**
- * Legacy hash generation function (to be replaced)
+ * Whether the opcode uses dynamic encryption (client-side check).
  */
-void rust_generate_hashvalues(const char *name, char *_buffer);
+bool rust_crypt_is_key_client(int opcode);
+
+/**
+ * Whether the opcode uses dynamic encryption (server-side check).
+ */
+bool rust_crypt_is_key_server(int opcode);
+
+/**
+ * Generates an MD5 hex digest of `name` into `buffer` (must be ≥33 bytes).
+ * Returns `buffer` on success, NULL if buffer too short.
+ */
+char *rust_crypt_generate_hashvalues(const char *name, char *buffer, int buflen);
+
+/**
+ * Builds the 1025-byte encryption lookup table from `name`.
+ * Returns `table` on success, NULL on failure.
+ */
+char *rust_crypt_populate_table(const char *name, char *table, int tablelen);
+
+/**
+ * Appends 3 index bytes to `packet` and updates its length field.
+ * Returns the new total packet size.
+ */
+int rust_crypt_set_packet_indexes(unsigned char *packet);
+
+/**
+ * Derives a 9-byte session key into `keyout[0..10]` (NUL at [9]).
+ * Returns `keyout` on success.
+ */
+char *rust_crypt_generate_key2(unsigned char *packet,
+                               const char *table,
+                               char *keyout,
+                               int fromclient);
+
+/**
+ * XOR-encrypts/decrypts `buff` in-place using a 9-byte `key`.
+ */
+void rust_crypt_dynamic(unsigned char *buff, const char *key);
+
+/**
+ * XOR-encrypts/decrypts `buff` using the static xor_key (passed from C config global).
+ */
+void rust_crypt_static(unsigned char *buff, const char *xor_key);
 
 /**
  * Called from C's do_init() before any *_init() calls.

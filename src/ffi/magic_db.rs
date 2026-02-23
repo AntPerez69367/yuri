@@ -4,7 +4,6 @@ use std::os::raw::{c_char, c_int};
 use std::ptr::null_mut;
 
 use crate::database::magic_db::{self as db, MagicData};
-use super::ffi_catch;
 
 static EMPTY: &[u8] = b"\0";
 

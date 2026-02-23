@@ -13,8 +13,6 @@ macro_rules! ffi_catch {
         }
     };
 }
-pub(crate) use ffi_catch;
-
 pub mod board_db;
 pub mod class_db;
 pub mod clan_db;

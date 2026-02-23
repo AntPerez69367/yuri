@@ -5,7 +5,6 @@ use std::ptr::null_mut;
 use std::sync::Arc;
 
 use crate::database::class_db::{self as db, ClassData};
-use super::ffi_catch;
 
 /// Exposed for C code that declares `extern struct class_data* cdata[20]`.
 /// Unused in practice but required by the C headers.
