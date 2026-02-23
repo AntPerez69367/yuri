@@ -4,8 +4,9 @@
 /// padding). Verified target size: 3,171,352 bytes (from gcc sizeof check).
 ///
 /// Safety: All types are Plain Old Data. `unsafe impl Pod` is used because
-/// bytemuck derive doesn't handle arrays larger than 32 elements or structs
-/// with trailing padding bytes.
+/// bytemuck derive doesn't handle arrays larger than 32 elements. All implicit
+/// repr(C) padding has been replaced with explicit `_pad` fields (e.g.
+/// `SkillInfo::_pad`) so no struct contains uninitialized padding bytes.
 
 // ── Sub-structs ───────────────────────────────────────────────────────────────
 
@@ -63,6 +64,7 @@ pub struct SkillInfo {
     pub caster_id: u32,
     pub dura_timer: u32,
     pub aether_timer: u32,
+    pub _pad: u32, // explicit padding to 8-byte-align lasttick_dura; replaces implicit repr(C) padding
     pub lasttick_dura: u64,
     pub lasttick_aether: u64,
 }
@@ -257,6 +259,9 @@ pub fn char_status_from_bytes(bytes: &[u8]) -> Option<Box<MmoCharStatus>> {
     let mut s: Box<MmoCharStatus> = unsafe {
         let layout = std::alloc::Layout::new::<MmoCharStatus>();
         let ptr = std::alloc::alloc_zeroed(layout) as *mut MmoCharStatus;
+        if ptr.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
         Box::from_raw(ptr)
     };
     unsafe {

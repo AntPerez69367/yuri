@@ -183,6 +183,9 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
     let mut s: Box<MmoCharStatus> = unsafe {
         let layout = std::alloc::Layout::new::<MmoCharStatus>();
         let ptr = std::alloc::alloc_zeroed(layout) as *mut MmoCharStatus;
+        if ptr.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
         Box::from_raw(ptr)
     };
     s.id = char_id;
