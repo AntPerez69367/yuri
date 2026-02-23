@@ -466,6 +466,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
         s.killreg[p].amount = amount;
     }
 
+    tracing::info!("[char] [load_char] name={} map={} x={} y={}", i8_slice_to_str(&s.name), s.last_pos.m, s.last_pos.x, s.last_pos.y);
     Ok(char_status_to_bytes(&s).to_vec())
 }
 

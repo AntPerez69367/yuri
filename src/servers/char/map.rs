@@ -253,7 +253,14 @@ async fn handle_save_char(state: &Arc<CharState>, pkt: &[u8]) {
     if dec.read_to_end(&mut raw).is_err() {
         return;
     }
-    let _ = db::save_char_bytes(&state.db, &raw).await;
+    let char_id = if raw.len() >= 4 {
+        u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]])
+    } else {
+        0
+    };
+    if let Err(e) = db::save_char_bytes(&state.db, &raw).await {
+        tracing::error!("[char] [save_char] char_id={} db error: {}", char_id, e);
+    }
 }
 
 async fn handle_logout(state: &Arc<CharState>, pkt: &[u8]) {
