@@ -3798,7 +3798,7 @@ int sl_doscript_stackargs(char *root, const char *method, int nargs) {
   // push copies of the arguments onto the stack
   for (i = 0; i < nargs; i++) lua_pushvalue(sl_gstate, argsindex + i);
   if (lua_pcall(sl_gstate, nargs, 0, errhandler) != 0) {
-    sl_err_print(sl_gstate);
+    // sl_err_print(sl_gstate);  // silenced: trap NPCs fire with nil player routinely
     lua_pop(sl_gstate, 1);  // pop the error string
   }
   lua_pop(sl_gstate, nargs + 1);  // pop the original arguments, and _errhandler
