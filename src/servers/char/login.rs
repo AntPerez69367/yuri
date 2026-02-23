@@ -102,8 +102,8 @@ async fn run_login_connection(state: Arc<CharState>, mut stream: TcpStream) {
         let cmd = u16::from_le_bytes(cmd_bytes);
         let idx = (cmd as usize).wrapping_sub(0x1000);
         if idx >= PKT_LENS.len() || PKT_LENS[idx] == 0 {
-            tracing::warn!("[char] [logif] unknown cmd={:04X}", cmd);
-            continue;
+            tracing::warn!("[char] [logif] unknown cmd={:04X}, dropping connection", cmd);
+            break;
         }
 
         let rest_len = PKT_LENS[idx].saturating_sub(2);
