@@ -9,6 +9,8 @@ use tokio::sync::mpsc;
 use super::{CharState, MapFifo};
 use super::db;
 
+const MAX_PKT_LEN: usize = 16 * 1024 * 1024; // 16 MiB hard cap for variable-length packets
+
 // Packet length table: index = cmd - 0x3000
 // -1 means variable length (read 4-byte len at offset 2)
 // 0 means unknown/invalid
@@ -104,7 +106,12 @@ pub async fn handle_map_server(state: Arc<CharState>, mut stream: TcpStream, fir
             if rh.read_exact(&mut lbuf).await.is_err() {
                 break;
             }
-            (u32::from_le_bytes(lbuf) as usize, Some(lbuf))
+            let declared = u32::from_le_bytes(lbuf) as usize;
+            if declared == 0 || declared > MAX_PKT_LEN {
+                tracing::error!("[char] [mapif] cmd={:04X} declared len={} out of bounds, dropping connection", cmd, declared);
+                break;
+            }
+            (declared, Some(lbuf))
         } else {
             (PKT_LENS[table_idx] as usize, None)
         };
@@ -154,7 +161,7 @@ async fn dispatch_map_packet(state: &Arc<CharState>, map_idx: usize, cmd: u16, p
         0x3001 => handle_mapset(state, map_idx, pkt).await,
         0x3002 => handle_map_login(state, pkt).await,
         0x3003 => handle_request_char(state, map_idx, pkt).await,
-        0x3004 => handle_save_char(state, pkt).await,
+        0x3004 => { let _ = handle_save_char(state, pkt).await; }
         0x3005 => handle_logout(state, pkt).await,
         0x3007 => handle_save_char_logout(state, pkt).await,
         0x3008 => handle_delete_post(state, map_idx, pkt).await,
@@ -237,30 +244,31 @@ async fn handle_request_char(state: &Arc<CharState>, map_idx: usize, pkt: &[u8])
     send_to_map(state, map_idx, resp).await;
 }
 
-async fn handle_save_char(state: &Arc<CharState>, pkt: &[u8]) {
+async fn handle_save_char(state: &Arc<CharState>, pkt: &[u8]) -> Option<u32> {
     if pkt.len() < 6 {
-        return;
+        return None;
     }
     let total_len = u32::from_le_bytes([pkt[2], pkt[3], pkt[4], pkt[5]]) as usize;
     let data_len = total_len.saturating_sub(6);
     if pkt.len() < 6 + data_len {
-        return;
+        return None;
     }
     let compressed = &pkt[6..6 + data_len];
 
     let mut dec = ZlibDecoder::new(compressed);
     let mut raw = Vec::new();
     if dec.read_to_end(&mut raw).is_err() {
-        return;
+        return None;
     }
-    let char_id = if raw.len() >= 4 {
-        u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]])
-    } else {
-        0
-    };
+    if raw.len() < 4 {
+        return None;
+    }
+    let char_id = u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]);
+    tracing::debug!("[char] [save_char] char_id={} decompressed_bytes={}", char_id, raw.len());
     if let Err(e) = db::save_char_bytes(&state.db, &raw).await {
-        tracing::error!("[char] [save_char] char_id={} db error: {}", char_id, e);
+        tracing::error!("[char] [save_char] char_id={} failed: {}", char_id, e);
     }
+    Some(char_id)
 }
 
 async fn handle_logout(state: &Arc<CharState>, pkt: &[u8]) {
@@ -274,22 +282,11 @@ async fn handle_logout(state: &Arc<CharState>, pkt: &[u8]) {
 }
 
 async fn handle_save_char_logout(state: &Arc<CharState>, pkt: &[u8]) {
-    handle_save_char(state, pkt).await;
-
-    // Extract char_id from offset 0 of the decompressed blob
-    if pkt.len() < 6 { return; }
-    let total_len = u32::from_le_bytes([pkt[2], pkt[3], pkt[4], pkt[5]]) as usize;
-    let data_len = total_len.saturating_sub(6);
-    if pkt.len() < 6 + data_len { return; }
-
-    let mut dec = ZlibDecoder::new(&pkt[6..6 + data_len]);
-    let mut raw = Vec::new();
-    if dec.read_to_end(&mut raw).is_err() || raw.len() < 4 { return; }
-
-    let char_id = u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]);
-    db::set_online(&state.db, char_id, false).await;
-    let mut online = state.online.lock().await;
-    online.remove(&char_id);
+    if let Some(char_id) = handle_save_char(state, pkt).await {
+        db::set_online(&state.db, char_id, false).await;
+        let mut online = state.online.lock().await;
+        online.remove(&char_id);
+    }
 }
 
 // ── Board/mail helpers ────────────────────────────────────────────────────────
