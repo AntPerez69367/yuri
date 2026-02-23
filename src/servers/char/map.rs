@@ -546,6 +546,11 @@ async fn handle_user_list(state: &Arc<CharState>, map_idx: usize, pkt: &[u8]) {
     write_u16_le(&mut resp, sfd);
     write_u16_le(&mut resp, count);
 
+    // Pad header to 36 bytes before user entries (header fields occupy 10 bytes)
+    while resp.len() < 36 {
+        resp.push(0);
+    }
+
     for (class, mark, clan, name, hunter, nation) in &rows {
         write_u16_le(&mut resp, *hunter as u16);
         write_u16_le(&mut resp, *class as u16);
@@ -555,10 +560,6 @@ async fn handle_user_list(state: &Arc<CharState>, map_idx: usize, pkt: &[u8]) {
         write_str_padded(&mut resp, name, 16);
     }
 
-    // Pad to 36 bytes before user entries (header is 10 bytes, pad to 36)
-    while resp.len() < 36 {
-        resp.push(0);
-    }
     send_to_map(state, map_idx, resp).await;
 }
 
