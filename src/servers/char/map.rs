@@ -131,7 +131,20 @@ pub async fn handle_map_server(state: Arc<CharState>, mut stream: TcpStream, fir
         let mut servers = state.map_servers.lock().await;
         servers[idx] = None;
     }
-    db::set_all_online(&state.db, false).await;
+    let affected: Vec<u32> = {
+        let mut online = state.online.lock().await;
+        let ids: Vec<u32> = online.iter()
+            .filter(|(_, e)| e.map_server_idx == idx)
+            .map(|(&id, _)| id)
+            .collect();
+        for id in &ids {
+            online.remove(id);
+        }
+        ids
+    };
+    for char_id in affected {
+        db::set_online(&state.db, char_id, false).await;
+    }
     writer.abort();
     tracing::info!("[char] [mapif] Map Server #{} disconnected", idx);
 }

@@ -32,7 +32,7 @@ pub struct LoginEntry {
 pub struct CharState {
     pub db: MySqlPool,
     pub config: ServerConfig,
-    /// account_id → LoginEntry
+    /// char_id → LoginEntry
     pub online: Mutex<HashMap<u32, LoginEntry>>,
     /// index → MapFifo
     pub map_servers: Mutex<Vec<Option<MapFifo>>>,

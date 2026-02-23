@@ -123,13 +123,6 @@ pub async fn set_online(pool: &MySqlPool, char_id: u32, online: bool) {
         .execute(pool).await;
 }
 
-pub async fn set_all_online(pool: &MySqlPool, online: bool) {
-    let val: u8 = if online { 1 } else { 0 };
-    let _ = sqlx::query("UPDATE `Character` SET `ChaOnline` = ?")
-        .bind(val)
-        .execute(pool).await;
-}
-
 /// Change password after verifying old password. Returns 0=ok, -2=no user, -3=wrong pass, -1=db error.
 pub async fn set_char_password(pool: &MySqlPool, name: &str, pass: &str, newpass: &str) -> i32 {
     let stored = match get_char_password(pool, name).await {
