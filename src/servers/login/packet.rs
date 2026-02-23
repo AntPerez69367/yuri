@@ -24,7 +24,8 @@ pub async fn read_client_packet(stream: &mut TcpStream) -> Result<Vec<u8>> {
 /// `code`: sub-command (0x00=ok, 0x03=error, 0x05=pass-error)
 pub fn build_message(code: u8, text: &str, xor_key: &[u8]) -> Vec<u8> {
     let text_bytes = text.as_bytes();
-    let payload_len = text_bytes.len() + 6;
+    let text_len = std::cmp::min(text_bytes.len(), 255);
+    let payload_len = text_len + 6;
     let total = payload_len + 3;
     let mut buf = vec![0u8; total + 3]; // +3 for set_packet_indexes trailer
     buf[0] = 0xAA;
@@ -33,8 +34,8 @@ pub fn build_message(code: u8, text: &str, xor_key: &[u8]) -> Vec<u8> {
     buf[3] = 0x02; // cmd
     buf[4] = 0x02;
     buf[5] = code;
-    buf[6] = text_bytes.len() as u8;
-    buf[7..7 + text_bytes.len()].copy_from_slice(text_bytes);
+    buf[6] = text_len as u8;
+    buf[7..7 + text_len].copy_from_slice(&text_bytes[..text_len]);
     set_packet_indexes(&mut buf);
     tk_crypt_static(&mut buf, xor_key);
     buf
