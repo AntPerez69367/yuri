@@ -42,6 +42,11 @@ int check_connect_char(int ip, int port) {
     WFIFOL(char_fd, 66) = map_ip;
     WFIFOW(char_fd, 70) = 2001;
     WFIFOSET(char_fd, 72);
+    {
+      unsigned char *p = (unsigned char *)&map_ip;
+      printf("[map] [intif] registering with char: map_ip=%u.%u.%u.%u (raw=0x%08X) map_port=2001 map_fd=%d\n",
+             p[0], p[1], p[2], p[3], map_ip, map_fd);
+    }
   }
   return 0;
 }
@@ -230,8 +235,8 @@ int intif_mmo_tosd(int fd, struct mmo_charstatus* p) {
 
   if (sd->status.gm_level) sd->optFlags = optFlag_walkthrough;  //.
   if (!map_isloaded(sd->status.last_pos.m)) {
-    // sd->status.last_pos.m=0; sd->status.last_pos.x=8;
-    // sd->status.last_pos.y=7;
+    sd->status.last_pos.m=0; sd->status.last_pos.x=8;
+    sd->status.last_pos.y=7;
   }
 
   pc_setpos(sd, sd->status.last_pos.m, sd->status.last_pos.x,
@@ -424,15 +429,12 @@ int intif_parse_mapset(int fd) {
 int intif_parse_authadd(int fd) {
   auth_add((char*)RFIFOP(fd, 8), RFIFOL(fd, 4), RFIFOL(fd, 34));
 
-  // printf("Auth add: %s\n",RFIFOP(fd,8));
-  // printf("Accepting IP: %u - %s\n",RFIFOL(fd,33), auth_fifo
   WFIFOHEAD(fd, 20);
   WFIFOW(fd, 0) = 0x3002;
   WFIFOW(fd, 2) = RFIFOW(fd, 2);
   memset(WFIFOP(fd, 4), 0, 16);
   memcpy(WFIFOP(fd, 4), RFIFOP(fd, 8), 16);
   WFIFOSET(fd, 20);
-
   return 0;
 }
 int intif_parse_charload(int fd) {
