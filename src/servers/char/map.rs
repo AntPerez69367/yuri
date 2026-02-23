@@ -1,4 +1,8 @@
+use std::io::{Read, Write};
 use std::sync::Arc;
+use flate2::Compression;
+use flate2::read::ZlibDecoder;
+use flate2::write::ZlibEncoder;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
@@ -204,9 +208,6 @@ async fn handle_request_char(state: &Arc<CharState>, map_idx: usize, pkt: &[u8])
         Err(_) => return,
     };
 
-    use flate2::write::ZlibEncoder;
-    use flate2::Compression;
-    use std::io::Write;
     let mut enc = ZlibEncoder::new(Vec::new(), Compression::default());
     let _ = enc.write_all(&char_bytes);
     let compressed = enc.finish().unwrap_or_default();
@@ -234,8 +235,6 @@ async fn handle_save_char(state: &Arc<CharState>, pkt: &[u8]) {
     }
     let compressed = &pkt[6..6 + data_len];
 
-    use flate2::read::ZlibDecoder;
-    use std::io::Read;
     let mut dec = ZlibDecoder::new(compressed);
     let mut raw = Vec::new();
     if dec.read_to_end(&mut raw).is_err() {
@@ -256,7 +255,21 @@ async fn handle_logout(state: &Arc<CharState>, pkt: &[u8]) {
 
 async fn handle_save_char_logout(state: &Arc<CharState>, pkt: &[u8]) {
     handle_save_char(state, pkt).await;
-    // char_id is inside the compressed charstatus blob; full impl deferred to Task 7
+
+    // Extract char_id from offset 0 of the decompressed blob
+    if pkt.len() < 6 { return; }
+    let total_len = u32::from_le_bytes([pkt[2], pkt[3], pkt[4], pkt[5]]) as usize;
+    let data_len = total_len.saturating_sub(6);
+    if pkt.len() < 6 + data_len { return; }
+
+    let mut dec = ZlibDecoder::new(&pkt[6..6 + data_len]);
+    let mut raw = Vec::new();
+    if dec.read_to_end(&mut raw).is_err() || raw.len() < 4 { return; }
+
+    let char_id = u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]);
+    db::set_online(&state.db, char_id, false).await;
+    let mut online = state.online.lock().await;
+    online.remove(&char_id);
 }
 
 // ── Board/mail helpers ────────────────────────────────────────────────────────
@@ -505,7 +518,7 @@ async fn handle_user_list(state: &Arc<CharState>, map_idx: usize, pkt: &[u8]) {
     ).fetch_all(&state.db).await.unwrap_or_default();
 
     let count = rows.len() as u16;
-    let total_len = (count as u32) * 22 + 36;
+    let total_len = (count as u32) * 26 + 36;
 
     let mut resp = Vec::with_capacity(total_len as usize);
     write_u16_le(&mut resp, 0x380A);
