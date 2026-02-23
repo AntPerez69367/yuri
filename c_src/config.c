@@ -15,11 +15,11 @@ struct point start_pos;
 int char_ip;
 int char_port = 2005;
 
-char char_id[32] = "";
-char char_pw[32] = "";
+char char_id[33] = "";
+char char_pw[33] = "";
 
-char login_id[32] = "";
-char login_pw[32] = "";
+char login_id[33] = "";
+char login_pw[33] = "";
 
 int login_ip;
 int login_port = 2010;

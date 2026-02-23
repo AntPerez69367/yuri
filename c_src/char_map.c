@@ -107,8 +107,8 @@ int mapif_parse_auth(int fd) {
   }
 
   if (cmd == 0x3000) {
-    if ((strcmp((char*)RFIFOP(fd, 2), char_id)) &&
-        (strcmp((char*)RFIFOP(fd, 34), char_pw))) {
+    if ((strncmp((char*)RFIFOP(fd, 2), char_id, 32)) &&
+        (strncmp((char*)RFIFOP(fd, 34), char_pw, 32))) {
       WFIFOHEAD(fd, 4);
       WFIFOW(fd, 0) = 0x3800;
       WFIFOB(fd, 2) = 0x01;
