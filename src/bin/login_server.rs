@@ -19,8 +19,24 @@ async fn main() -> Result<()> {
                 println!("Usage: login_server [--conf FILE] [--lang FILE]");
                 return Ok(());
             }
-            "--conf" => { i += 1; conf_file = args[i].clone(); }
-            "--lang" => { i += 1; lang_file = args[i].clone(); }
+            "--conf" => {
+                if i + 1 < args.len() {
+                    i += 1;
+                    conf_file = args[i].clone();
+                } else {
+                    eprintln!("Error: --conf requires a FILE argument");
+                    return Ok(());
+                }
+            }
+            "--lang" => {
+                if i + 1 < args.len() {
+                    i += 1;
+                    lang_file = args[i].clone();
+                } else {
+                    eprintln!("Error: --lang requires a FILE argument");
+                    return Ok(());
+                }
+            }
             _ => {}
         }
         i += 1;
@@ -29,7 +45,7 @@ async fn main() -> Result<()> {
     let config: ServerConfig = {
         let content = std::fs::read_to_string(&conf_file)
             .with_context(|| format!("Cannot read config: {}", conf_file))?;
-        serde_yaml::from_str(&content)
+        ServerConfig::from_str(&content)
             .with_context(|| format!("Cannot parse config: {}", conf_file))?
     };
 
