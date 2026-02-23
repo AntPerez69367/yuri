@@ -809,7 +809,8 @@ pub async fn run_async_server(_port: u16) -> Result<(), Box<dyn std::error::Erro
 
 /// Accept loop for a single listener socket
 async fn accept_loop(listener: tokio::net::TcpListener, _listen_fd: i32) {
-    tracing::info!("[accept] Listening on fd={}", _listen_fd);
+    let local_addr = listener.local_addr().map(|a| a.to_string()).unwrap_or_else(|_| "unknown".to_string());
+    tracing::info!("[accept] Listening on fd={} addr={}", _listen_fd, local_addr);
 
     loop {
         match listener.accept().await {
@@ -828,7 +829,7 @@ async fn accept_loop(listener: tokio::net::TcpListener, _listen_fd: i32) {
                     continue;
                 }
                 apply_socket_opts(&stream);
-                tracing::debug!("[accept] New connection from {} on fd={}", addr, _listen_fd);
+                tracing::info!("[accept] New connection from {} on listener fd={}", addr, _listen_fd);
                 tokio::task::spawn_local(session_io_task_from_accept(stream, addr));
             }
             Err(e) => {
@@ -1105,13 +1106,32 @@ async fn session_io_task(fd: i32) {
                     break;
                 }
 
-                // Call C parse callback (lock released — C accesses buffers via FFI try_lock)
+                // Call C parse callback in a loop until all packets are consumed.
+                // The C parser processes ONE packet per call (RFIFOSKIP at the end).
+                // Multiple packets may arrive in a single read(), so we loop.
+                // Break if: no bytes available, parser needs more data (ret==2),
+                // or no progress was made (avoids infinite loop on unknown packets).
                 let parse_cb = {
                     let session = session_arc.lock().await;
                     session.callbacks.parse
                 };
                 if let Some(cb) = parse_cb {
-                    unsafe { cb(fd); }
+                    loop {
+                        let available = {
+                            let session = session_arc.lock().await;
+                            session.available()
+                        };
+                        if available == 0 { break; }
+
+                        let ret = unsafe { cb(fd) };
+                        if ret == 2 { break; }
+
+                        let (new_available, eof) = {
+                            let session = session_arc.lock().await;
+                            (session.available(), session.eof)
+                        };
+                        if eof != 0 || new_available >= available { break; }
+                    }
                 }
 
                 // Flush this session's write buffer (may have been written by parse cb)
@@ -1281,8 +1301,9 @@ mod tests {
         assert!(session.commit_write(2).is_ok());
         assert_eq!(session.wdata_size, 2);
 
-        // Can't commit more than buffer has
-        assert!(session.commit_write(1023).is_err());
+        // Can't commit more than buffer has (buffer auto-grew to 1025 bytes
+        // due to write_u8's 1024-byte padding, so 1024 exceeds remaining capacity)
+        assert!(session.commit_write(1024).is_err());
     }
 
     #[test]

@@ -76,7 +76,7 @@ int logif_parse_login(int fd) {
 
   WFIFOHEAD(fd, 27);
   if (res < 0) {
-    // printf("Error1\n");
+    printf("[char] [logif_login] DB error, sending 0x2003 error=%d to login\n", abs(res));
     WFIFOW(fd, 0) = 0x2003;
     WFIFOW(fd, 2) = RFIFOW(fd, 2);
     WFIFOB(fd, 4) = abs(res);
@@ -84,6 +84,7 @@ int logif_parse_login(int fd) {
     return 0;
   }
   if (map_fifo[res].fd <= 0) {
+    printf("[char] [logif_login] map server NOT connected, sending error 0x05\n");
     WFIFOW(fd, 0) = 0x2003;
     WFIFOW(fd, 2) = RFIFOW(fd, 2);
     WFIFOB(fd, 4) = 0x05;  // LGN_ERRSERVER: map server not connected
@@ -114,7 +115,6 @@ int logif_parse_login(int fd) {
   memcpy(WFIFOP(map_fifo[res].fd, 8), RFIFOP(fd, 4), 16);
   WFIFOL(map_fifo[res].fd, 34) = RFIFOL(fd, 36);
   WFIFOSET(map_fifo[res].fd, 38);
-
   return 0;
 }
 int logif_parse_setpass(int fd) {

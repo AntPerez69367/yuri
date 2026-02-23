@@ -44,8 +44,7 @@ set(YURI_LINK_GROUP -Wl,--start-group common ${YURI_LIB} deps -Wl,--end-group)
 add_executable(char_server c_src/char_db.c c_src/char_server.c c_src/char_login.c c_src/char_map.c)
 target_link_libraries(char_server ${YURI_LINK_GROUP} ZLIB::ZLIB m dl pthread)
 
-add_executable(login_server c_src/login_server.c c_src/login_char.c c_src/login_parse.c)
-target_link_libraries(login_server ${YURI_LINK_GROUP} ZLIB::ZLIB m dl pthread)
+# login_server is now a Rust binary (src/bin/login_server.rs); C files removed
 
 add_executable(map_server c_src/map_char.c c_src/gm_command.c c_src/creation_db.c c_src/map_parse.c c_src/map_server.c c_src/mob.c c_src/npc.c c_src/pc.c c_src/scripting.c)
 target_link_libraries(map_server ${YURI_LINK_GROUP} ZLIB::ZLIB PkgConfig::LUAJIT m dl pthread)

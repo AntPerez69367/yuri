@@ -133,9 +133,14 @@ pub fn generate_key2(packet: &[u8], table: &[u8], keyout: &mut [u8; 10], fromcli
 ///
 /// Packet layout: [0] opcode [1..2] big-endian total len [3] inc [4] packetInc [5..] data
 pub fn tk_crypt_dynamic(buff: &mut [u8], key: &[u8]) {
-    if buff.len() < 5 {
+    if buff.len() < 5 || key.is_empty() {
         return;
     }
+    // C uses a fixed 9-byte key array (null-padded); mirror that by padding here
+    let mut k9 = [0u8; 9];
+    k9[..key.len().min(9)].copy_from_slice(&key[..key.len().min(9)]);
+    let key = &k9;
+
     let packet_len = (((buff[1] as u32) << 8) | (buff[2] as u32)).saturating_sub(5) as usize;
     let packet_inc = buff[4];
 

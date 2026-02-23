@@ -321,11 +321,11 @@ pub unsafe extern "C" fn rust_config_populate_c_globals() {
         static mut sql_db: [c_char; 32];
         static mut sql_port: c_int;
 
-        // Server IDs and passwords
-        static mut login_id: [c_char; 32];
-        static mut login_pw: [c_char; 32];
-        static mut char_id: [c_char; 32];
-        static mut char_pw: [c_char; 32];
+        // Server IDs and passwords (33 = 32 hex chars + null terminator)
+        static mut login_id: [c_char; 33];
+        static mut login_pw: [c_char; 33];
+        static mut char_id: [c_char; 33];
+        static mut char_pw: [c_char; 33];
 
         // Server IPs and ports
         static mut login_ip: c_int;
