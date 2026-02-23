@@ -104,8 +104,6 @@ fn make_default(id: u32) -> Box<MobDbData> {
     m
 }
 
-// TODO(human): implement load_mobs() — load mob templates from `Mobs` + `MobEquipment`.
-//
 // The C code runs a SELECT from `Mobs` (35 columns) then, for each mob where
 // mobtype == 1, runs a per-mob SELECT from `MobEquipment` to fill equip[slot].
 //
