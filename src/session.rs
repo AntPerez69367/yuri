@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::os::unix::io::AsRawFd;
 use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Mutex as StdMutex, RwLock};
@@ -847,7 +848,6 @@ async fn accept_loop(listener: tokio::net::TcpListener, _listen_fd: i32) {
 ///   intentionally commented out; the `0` call was kept as-is).
 /// - `SO_LINGER` with `l_onoff=0`: graceful close, no hard timeout.
 fn apply_socket_opts(stream: &TcpStream) {
-    use std::os::unix::io::AsRawFd;
     let fd = stream.as_raw_fd();
     let yes: libc::c_int = 1;
     unsafe {

@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc;
 
 use super::{LoginState, CharResponse, LGN_ERRDB, LGN_ERRPASS, LGN_ERRUSER};
 use super::packet::{read_client_packet, build_message, build_version_ok, build_version_patch};
@@ -309,8 +310,6 @@ async fn forward_to_char(
     xk: &[u8],
     err_db_msg: &str,
 ) {
-    use tokio::sync::mpsc;
-
     // The char server relays a single response per request. For login (0x2003),
     // the response arrives after the map server acks via mapif_parse_login and
     // contains the map server IP:port for the client redirect.

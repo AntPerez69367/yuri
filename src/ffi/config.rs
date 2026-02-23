@@ -5,6 +5,7 @@
 //! we can delete this entire file.
 
 use std::ffi::{CStr, CString};
+use std::net::Ipv4Addr;
 use std::os::raw::{c_char, c_int};
 use std::ptr;
 use std::sync::OnceLock;
@@ -310,8 +311,6 @@ struct TownData {
 /// C global variables must be accessible and have sufficient buffer space
 #[no_mangle]
 pub unsafe extern "C" fn rust_config_populate_c_globals() {
-    use std::net::Ipv4Addr;
-
     // Import the C global variables
     extern "C" {
         // SQL config

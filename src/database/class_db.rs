@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::ffi::{CStr, CString};
+use std::fs;
 use std::os::raw::{c_char, c_int, c_uint};
 use std::path::PathBuf;
 use std::ptr::null_mut;
@@ -79,7 +80,6 @@ async fn load_classes() -> Result<usize, sqlx::Error> {
 }
 
 fn load_leveldb(data_dir: &str) -> Result<usize, std::io::Error> {
-    use std::fs;
     // Issue 4: use PathBuf::join so a missing trailing separator is handled
     // correctly (e.g. "data" + "tnl_exp.csv" → "data/tnl_exp.csv", not
     // "datatnl_exp.csv").
