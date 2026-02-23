@@ -15,6 +15,7 @@ bytes = "1"
 md-5 = "0.10.6"
 hex = "0.4.3"
 chrono = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
 libc = "0.2.181"
 
 serde = { version = "1.0", features = ["derive"] }

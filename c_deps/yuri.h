@@ -61,6 +61,24 @@
 
 #define LGN_BANNED 10
 
+#define MAX_SPELLS 52
+
+#define MAX_EQUIP 15
+
+#define MAX_INVENTORY 52
+
+#define MAX_LEGENDS 1000
+
+#define MAX_MAGIC_TIMERS 200
+
+#define MAX_GLOBALREG 5000
+
+#define MAX_GLOBALQUESTREG 250
+
+#define MAX_KILLREG 5000
+
+#define MAX_BANK_SLOTS 255
+
 /**
  * Buffer size constants
  */
