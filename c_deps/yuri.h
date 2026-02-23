@@ -39,6 +39,28 @@
  */
 #define DDOS_AUTORESET ((10 * 60) * 1000)
 
+#define LGN_ERRSERVER 0
+
+#define LGN_WRONGPASS 1
+
+#define LGN_WRONGUSER 2
+
+#define LGN_ERRDB 3
+
+#define LGN_USEREXIST 4
+
+#define LGN_ERRPASS 5
+
+#define LGN_ERRUSER 6
+
+#define LGN_NEWCHAR 7
+
+#define LGN_CHGPASS 8
+
+#define LGN_DBLLOGIN 9
+
+#define LGN_BANNED 10
+
 /**
  * Buffer size constants
  */
