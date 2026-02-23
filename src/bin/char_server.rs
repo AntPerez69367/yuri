@@ -6,7 +6,9 @@ use yuri::servers::char::CharState;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt::init();
+    tracing_subscriber::fmt()
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+        .init();
 
     let mut conf_file = "conf/server.yaml".to_string();
 
