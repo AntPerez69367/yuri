@@ -40,8 +40,10 @@ pub async fn create_char(
     country: u8, face: u16, hair: u16, face_color: u16, hair_color: u16,
     start_m: u32, start_x: u32, start_y: u32,
 ) -> i32 {
-    if is_name_used(pool, name).await.unwrap_or(true) {
-        return 1;
+    match is_name_used(pool, name).await {
+        Err(_)       => return 2,
+        Ok(true)     => return 1,
+        Ok(false)    => {}
     }
     let res = sqlx::query(
         "INSERT INTO `Character` (`ChaName`, `ChaPassword`, `ChaTotem`, `ChaSex`,
@@ -293,7 +295,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
              `BnkPosition`, `BnkCustomLook`, `BnkCustomLookColor`, \
              `BnkCustomIcon`, `BnkCustomIconColor`, `BnkProtected`, `BnkNote` \
              FROM `Banks` WHERE `BnkChaId` = ? LIMIT 255"
-        ).bind(char_id).fetch_all(pool).await.unwrap_or_default();
+        ).bind(char_id).fetch_all(pool).await?;
     for (engrave, item_id, amount, owner, pos, custom_look, custom_look_color,
          custom_icon, custom_icon_color, protected, note) in banks {
         let p = pos as usize;
@@ -320,7 +322,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
              `InvCustomLook`, `InvCustomLookColor`, `InvCustomIcon`, \
              `InvCustomIconColor`, `InvProtected`, `InvNote` \
              FROM `Inventory` WHERE `InvChaId` = ? LIMIT 52"
-        ).bind(char_id).fetch_all(pool).await.unwrap_or_default();
+        ).bind(char_id).fetch_all(pool).await?;
     for (engrave, id, amount, dura, owner, time, pos, custom,
          custom_look, custom_look_color, custom_icon, custom_icon_color, protected, note) in items {
         let p = pos as usize;
@@ -349,7 +351,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
              `EqpCustomLook`, `EqpCustomLookColor`, `EqpCustomIcon`, \
              `EqpCustomIconColor`, `EqpProtected`, `EqpNote` \
              FROM `Equipment` WHERE `EqpChaId` = ? LIMIT 15"
-        ).bind(char_id).fetch_all(pool).await.unwrap_or_default();
+        ).bind(char_id).fetch_all(pool).await?;
     for (engrave, id, amount, dura, owner, time, pos, custom,
          custom_look, custom_look_color, custom_icon, custom_icon_color, protected, note) in equips {
         let p = pos as usize;
@@ -373,7 +375,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
     // SbkSplId and SbkPosition are int(10) unsigned → u32
     let spells: Vec<(u32, u32)> = sqlx::query_as(
         "SELECT `SbkSplId`, `SbkPosition` FROM `SpellBook` WHERE `SbkChaId` = ?"
-    ).bind(char_id).fetch_all(pool).await.unwrap_or_default();
+    ).bind(char_id).fetch_all(pool).await?;
     for (spell_id, pos) in spells {
         let p = pos as usize;
         if p < MAX_SPELLS { s.skill[p] = spell_id as u16; }
@@ -384,7 +386,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
     let aethers: Vec<(u32, u32, u32, u32)> = sqlx::query_as(
         "SELECT `AthAether`, `AthSplId`, `AthDuration`, `AthPosition` \
          FROM `Aethers` WHERE `AthChaId` = ? LIMIT 200"
-    ).bind(char_id).fetch_all(pool).await.unwrap_or_default();
+    ).bind(char_id).fetch_all(pool).await?;
     for (aether, spell_id, duration, pos) in aethers {
         let p = pos as usize;
         if p >= MAX_MAGIC_TIMERS { continue; }
@@ -397,7 +399,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
     // RegValue is int(10) unsigned → u32, cast to i32 in struct
     let regs: Vec<(String, u32)> = sqlx::query_as(
         "SELECT `RegIdentifier`, `RegValue` FROM `Registry` WHERE `RegChaId` = ? LIMIT 5000"
-    ).bind(char_id).fetch_all(pool).await.unwrap_or_default();
+    ).bind(char_id).fetch_all(pool).await?;
     s.global_reg_num = regs.len().min(MAX_GLOBALREG) as i32;
     for (i, (key, val)) in regs.into_iter().enumerate() {
         if i >= MAX_GLOBALREG { break; }
@@ -408,7 +410,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
     // ── Registry (string) ─────────────────────────────────────────────────────
     let regstrs: Vec<(String, String)> = sqlx::query_as(
         "SELECT `RegIdentifier`, `RegValue` FROM `RegistryString` WHERE `RegChaId` = ? LIMIT 5000"
-    ).bind(char_id).fetch_all(pool).await.unwrap_or_default();
+    ).bind(char_id).fetch_all(pool).await?;
     s.global_regstring_num = regstrs.len().min(MAX_GLOBALREG) as i32;
     for (i, (key, val)) in regstrs.into_iter().enumerate() {
         if i >= MAX_GLOBALREG { break; }
@@ -420,7 +422,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
     // NrgValue is int(10) unsigned → u32, cast to i32
     let npcregs: Vec<(String, u32)> = sqlx::query_as(
         "SELECT `NrgIdentifier`, `NrgValue` FROM `NPCRegistry` WHERE `NrgChaId` = ? LIMIT 100"
-    ).bind(char_id).fetch_all(pool).await.unwrap_or_default();
+    ).bind(char_id).fetch_all(pool).await?;
     for (i, (key, val)) in npcregs.into_iter().enumerate() {
         if i >= MAX_GLOBALREG { break; }
         copy_str_to_i8(&mut s.npcintreg[i].str, &key);
@@ -431,7 +433,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
     // QrgValue is int(10) unsigned → u32, cast to i32
     let questregs: Vec<(String, u32)> = sqlx::query_as(
         "SELECT `QrgIdentifier`, `QrgValue` FROM `QuestRegistry` WHERE `QrgChaId` = ? LIMIT 250"
-    ).bind(char_id).fetch_all(pool).await.unwrap_or_default();
+    ).bind(char_id).fetch_all(pool).await?;
     for (i, (key, val)) in questregs.into_iter().enumerate() {
         if i >= MAX_GLOBALQUESTREG { break; }
         copy_str_to_i8(&mut s.questreg[i].str, &key);
@@ -443,7 +445,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
     let legends: Vec<(u32, u32, u32, String, String, u32)> = sqlx::query_as(
         "SELECT `LegPosition`, `LegIcon`, `LegColor`, `LegDescription`, \
          `LegIdentifier`, `LegTChaId` FROM `Legends` WHERE `LegChaId` = ? LIMIT 1000"
-    ).bind(char_id).fetch_all(pool).await.unwrap_or_default();
+    ).bind(char_id).fetch_all(pool).await?;
     for (pos, icon, color, text, name, tchaid) in legends {
         let p = pos as usize;
         if p >= MAX_LEGENDS { continue; }
@@ -458,7 +460,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
     // KilPosition, KilMobId, KilAmount are all int(10) unsigned → u32 (already correct)
     let kills: Vec<(u32, u32, u32)> = sqlx::query_as(
         "SELECT `KilPosition`, `KilMobId`, `KilAmount` FROM `Kills` WHERE `KilChaId` = ? LIMIT 5000"
-    ).bind(char_id).fetch_all(pool).await.unwrap_or_default();
+    ).bind(char_id).fetch_all(pool).await?;
     for (pos, mob_id, amount) in kills {
         let p = pos as usize;
         if p >= MAX_KILLREG { continue; }
