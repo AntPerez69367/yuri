@@ -8,6 +8,7 @@ use yuri::servers::login::{LoginState, parse_lang_file};
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
     let mut conf_file = "conf/server.yaml".to_string();

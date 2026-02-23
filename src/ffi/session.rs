@@ -69,8 +69,8 @@ where
 #[no_mangle]
 pub unsafe extern "C" fn rust_server_run(port: u16) -> c_int {
     let _ = tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::INFO)
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();
 
     tracing::info!("[FFI] rust_server_run(port={})", port);
