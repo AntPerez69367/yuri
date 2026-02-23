@@ -35,12 +35,12 @@ binaries: common
 	@cmake --build build \
 		--target metan_cli \
 		--target decrypt_cli \
-		--target char_server \
 		--target map_server \
 		--parallel $(NPROC)
 	@ln -sf metan_cli bin/metan
-	@cargo build --bin login_server $(CARGO_FLAGS)
+	@cargo build --bin login_server --bin char_server $(CARGO_FLAGS)
 	@cp target/$(RUST_PROFILE)/login_server bin/login_server
+	@cp target/$(RUST_PROFILE)/char_server bin/char_server
 
 # Individual targets kept for incremental builds.
 metan_cli: common
@@ -50,6 +50,9 @@ decrypt_cli: common
 	@cmake --build build --target decrypt_cli --parallel $(NPROC)
 char_server: common
 	@cmake --build build --target char_server --parallel $(NPROC)
+char_server_rust: libyuri
+	@cargo build --bin char_server $(CARGO_FLAGS)
+	@cp target/$(RUST_PROFILE)/char_server bin/char_server
 login_server: libyuri
 	@cargo build --bin login_server $(CARGO_FLAGS)
 	@cp target/$(RUST_PROFILE)/login_server bin/login_server
