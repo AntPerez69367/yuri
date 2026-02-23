@@ -7,5 +7,5 @@
 
 // When we port servers to Rust, they'll be declared here:
 pub mod login;
-// pub mod char;
+pub mod char;
 // pub mod map;

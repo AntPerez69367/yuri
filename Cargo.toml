@@ -34,3 +34,7 @@ criterion = "0.5"
 [[bin]]
 name = "login_server"
 path = "src/bin/login_server.rs"
+
+[[bin]]
+name = "char_server"
+path = "src/bin/char_server.rs"
