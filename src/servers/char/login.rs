@@ -16,11 +16,9 @@ pub async fn connect_to_login(state: Arc<CharState>) {
         ticker.tick().await;
         {
             let login_tx = state.login_tx.lock().await;
-            if login_tx.is_some() {
+            if let Some(tx) = login_tx.as_ref() {
                 // Already connected — send keepalive
-                if let Some(tx) = login_tx.as_ref() {
-                    let _ = tx.send(vec![0xFF, 0x01]).await;
-                }
+                let _ = tx.send(vec![0xFF, 0x01]).await;
                 continue;
             }
         }

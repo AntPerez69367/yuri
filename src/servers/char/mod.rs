@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::time::{Duration, sleep};
 use tokio::io::AsyncReadExt;
 use sqlx::MySqlPool;
 use crate::config::ServerConfig;
@@ -55,11 +56,18 @@ impl CharState {
         let listener = TcpListener::bind(bind_addr).await?;
         tracing::info!("[char] [ready] addr={}", bind_addr);
         loop {
-            let (stream, _peer) = listener.accept().await?;
-            let s = Arc::clone(&state);
-            tokio::spawn(async move {
-                handle_new_connection(s, stream).await;
-            });
+            match listener.accept().await {
+                Ok((stream, _peer)) => {
+                    let s = Arc::clone(&state);
+                    tokio::spawn(async move {
+                        handle_new_connection(s, stream).await;
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("[char] [accept] error: {}", e);
+                    sleep(Duration::from_millis(100)).await;
+                }
+            }
         }
     }
 }
