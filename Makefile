@@ -1,33 +1,55 @@
 #!make
 
-CC ?= clang
+CC    ?= clang
+NPROC := $(shell nproc)
 
-all: clean libyuri cmake metan_cli decrypt_cli char_server login_server map_server
+all: clean libyuri cmake binaries
+
 libyuri:
 	@echo "libyuri:"
 	@cargo build --lib
+
 yuri.h:
 	@cbindgen --config cbindgen.toml --crate yuri --output ./c_deps/yuri.h --lang c
+
 cmake:
 	@cmake -H. -Bbuild
+
 common: deps
-	@cmake --build build --target common --parallel --
+	@cmake --build build --target common --parallel $(NPROC)
+
 deps: cmake libyuri yuri.h
-	@cmake --build build --target deps --parallel --
-metan_cli: common
-	@cmake --build build --target metan_cli --parallel --
+	@cmake --build build --target deps --parallel $(NPROC)
+
+# Build all five binaries in one cmake invocation so the internal parallel
+# scheduler can saturate cores across targets simultaneously.
+binaries: common
+	@cmake --build build \
+		--target metan_cli \
+		--target decrypt_cli \
+		--target char_server \
+		--target login_server \
+		--target map_server \
+		--parallel $(NPROC)
 	@ln -sf metan_cli bin/metan
-decrypt_cli: common 
-	@cmake --build build --target decrypt_cli --parallel --
+
+# Individual targets kept for incremental builds.
+metan_cli: common
+	@cmake --build build --target metan_cli --parallel $(NPROC)
+	@ln -sf metan_cli bin/metan
+decrypt_cli: common
+	@cmake --build build --target decrypt_cli --parallel $(NPROC)
 char_server: common
 	@cmake --build build --target char_server --parallel --
 login_server: libyuri
 	@cargo build --bin login_server
 	@cp target/debug/login_server bin/login_server
 map_server: common
-	@cmake --build build --target map_server --parallel --
+	@cmake --build build --target map_server --parallel $(NPROC)
+
 clean:
 	@rm -rf ./bin/*
 	@rm -rf ./build
+
 clean-crate:
 	@cargo clean

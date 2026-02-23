@@ -4,7 +4,6 @@ use std::os::raw::{c_char, c_int};
 use std::ptr::null_mut;
 
 use crate::database::clan_db::{self as db, ClanData};
-use super::ffi_catch;
 
 #[no_mangle]
 pub extern "C" fn rust_clandb_init() -> c_int { ffi_catch!(-1, db::init()) }
