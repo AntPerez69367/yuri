@@ -191,7 +191,7 @@ async fn handle_login(state: &Arc<CharState>, pkt: &[u8]) {
     }
     let name = std::str::from_utf8(&pkt[4..20]).unwrap_or("").trim_end_matches('\0');
     let pass = std::str::from_utf8(&pkt[20..36]).unwrap_or("").trim_end_matches('\0');
-    tracing::info!("[char] [login] attempt name={}", name);
+    tracing::debug!("[char] [login] attempt name={}", name);
 
     let mut resp = vec![0u8; 27];
     resp[0] = 0x03; resp[1] = 0x20; // cmd 0x2003 LE
@@ -245,22 +245,23 @@ async fn handle_login(state: &Arc<CharState>, pkt: &[u8]) {
         None => { resp[4] = 0x05; send_to_login(state, resp).await; return; }
     };
 
-    // Check if already online
-    {
+    // Check if already online — lock online, record result, then drop before locking map_servers.
+    let already_online = {
         let online = state.online.lock().await;
-        if online.contains_key(&char_info.char_id) {
-            resp[4] = 0x06;
-            send_to_login(state, resp).await;
-            // Force-kick on map server (0x3804)
-            let servers = state.map_servers.lock().await;
-            if let Some(Some(s)) = servers.get(map_idx) {
-                let mut kick = vec![0u8; 6];
-                kick[0] = 0x04; kick[1] = 0x38; // 0x3804 LE
-                kick[2..6].copy_from_slice(&char_info.char_id.to_le_bytes());
-                let _ = s.tx.send(kick).await;
-            }
-            return;
+        online.contains_key(&char_info.char_id)
+    };
+    if already_online {
+        resp[4] = 0x06;
+        send_to_login(state, resp).await;
+        // Force-kick on map server (0x3804)
+        let servers = state.map_servers.lock().await;
+        if let Some(Some(s)) = servers.get(map_idx) {
+            let mut kick = vec![0u8; 6];
+            kick[0] = 0x04; kick[1] = 0x38; // 0x3804 LE
+            kick[2..6].copy_from_slice(&char_info.char_id.to_le_bytes());
+            let _ = s.tx.send(kick).await;
         }
+        return;
     }
 
     // Route player: send 0x3802 to map server
@@ -331,9 +332,8 @@ async fn send_to_login(state: &Arc<CharState>, msg: Vec<u8>) {
 mod tests {
     #[test]
     fn test_logif_packet_lens() {
-        const PKT_LENS: &[usize] = &[3, 20, 43, 40, 52];
-        assert_eq!(PKT_LENS[0x1000 - 0x1000], 3);
-        assert_eq!(PKT_LENS[0x1003 - 0x1000], 40);
+        assert_eq!(super::PKT_LENS[0x1000 - 0x1000], 3);
+        assert_eq!(super::PKT_LENS[0x1003 - 0x1000], 40);
     }
 
     #[test]
