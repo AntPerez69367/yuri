@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use flate2::write::ZlibEncoder;
@@ -39,8 +40,28 @@ async fn send_meta_file(stream: &mut TcpStream, pkt: &[u8], state: &LoginState) 
         Err(_) => return,
     };
 
-    let path = format!("{}{}", state.config.meta_dir, fname);
-    let data = match fs::read(&path) {
+    let fname_path = Path::new(&fname);
+    if fname_path.is_absolute()
+        || fname_path.components().any(|c| matches!(c,
+            std::path::Component::ParentDir | std::path::Component::RootDir))
+    {
+        return;
+    }
+
+    let meta_dir = match fs::canonicalize(&state.config.meta_dir) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+    let joined = meta_dir.join(fname_path);
+    let resolved = match fs::canonicalize(&joined) {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    if !resolved.starts_with(&meta_dir) {
+        return;
+    }
+
+    let data = match fs::read(&resolved) {
         Ok(d) => d,
         Err(_) => return,
     };
