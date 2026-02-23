@@ -23,8 +23,7 @@ async fn main() -> Result<()> {
                     i += 1;
                     conf_file = args[i].clone();
                 } else {
-                    eprintln!("Error: --conf requires a FILE argument");
-                    return Ok(());
+                    return Err(anyhow::anyhow!("--conf requires a FILE argument"));
                 }
             }
             _ => {}
@@ -39,15 +38,20 @@ async fn main() -> Result<()> {
             .with_context(|| format!("Cannot parse config: {}", conf_file))?
     };
 
-    let db_url = format!(
-        "mysql://{}:{}@{}:{}/{}",
-        config.sql_id, config.sql_pw, config.sql_ip, config.sql_port, config.sql_db
-    );
-    let pool = MySqlPoolOptions::new()
-        .max_connections(5)
-        .connect(&db_url)
-        .await
-        .context("Cannot connect to MySQL")?;
+    let pool = {
+        let db_url = format!(
+            "mysql://{}:{}@{}:{}/{}",
+            config.sql_id, config.sql_pw, config.sql_ip, config.sql_port, config.sql_db
+        );
+        MySqlPoolOptions::new()
+            .max_connections(5)
+            .connect(&db_url)
+            .await
+            .with_context(|| format!(
+                "Cannot connect to MySQL (host={}:{} db={} user={})",
+                config.sql_ip, config.sql_port, config.sql_db, config.sql_id
+            ))?
+    };
 
     tracing::info!("[char] [started] Char Server Started.");
 
