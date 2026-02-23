@@ -49,7 +49,7 @@ metan_cli: common
 decrypt_cli: common
 	@cmake --build build --target decrypt_cli --parallel $(NPROC)
 char_server: common
-	@cmake --build build --target char_server --parallel --
+	@cmake --build build --target char_server --parallel $(NPROC)
 login_server: libyuri
 	@cargo build --bin login_server $(CARGO_FLAGS)
 	@cp target/$(RUST_PROFILE)/login_server bin/login_server
