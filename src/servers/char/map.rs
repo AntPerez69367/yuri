@@ -378,24 +378,22 @@ async fn handle_show_posts(state: &Arc<CharState>, map_idx: usize, pkt: &[u8]) {
     };
 
     let offset = bcount * 20;
-    let (sql, use_nmail) = if board == 0 {
-        (format!(
-            "SELECT `MalNew`, `MalChaName`, `MalSubject`, `MalPosition`, \
-             `MalMonth`, `MalDay`, `MalId` FROM `Mail` \
-             WHERE `MalChaNameDestination` = '{}' AND `MalDeleted` = 0 \
-             ORDER BY `MalPosition` DESC LIMIT {}, 20", name, offset), true)
-    } else {
-        (format!(
-            "SELECT `BrdHighlighted`, `BrdChaName`, `BrdTopic`, `BrdPosition`, \
-             `BrdMonth`, `BrdDay`, `BrdBtlId` FROM `Boards` \
-             WHERE `BrdBnmId` = {} ORDER BY `BrdPosition` DESC LIMIT {}, 20",
-            board, offset), false)
-    };
-    let _ = use_nmail;
 
     // boards_show_array_1: board_name(4)+color(4)+post_id(4)+month(4)+day(4)+user[32]+topic[64] = 116
-    let rows: Vec<(i32, String, String, i32, i32, i32, i32)> =
-        sqlx::query_as(&sql).fetch_all(&state.db).await.unwrap_or_default();
+    let rows: Vec<(i32, String, String, i32, i32, i32, i32)> = if board == 0 {
+        sqlx::query_as(
+            "SELECT `MalNew`, `MalChaName`, `MalSubject`, `MalPosition`, \
+             `MalMonth`, `MalDay`, `MalId` FROM `Mail` \
+             WHERE `MalChaNameDestination` = ? AND `MalDeleted` = 0 \
+             ORDER BY `MalPosition` DESC LIMIT 20 OFFSET ?"
+        ).bind(&name).bind(offset).fetch_all(&state.db).await.unwrap_or_default()
+    } else {
+        sqlx::query_as(
+            "SELECT `BrdHighlighted`, `BrdChaName`, `BrdTopic`, `BrdPosition`, \
+             `BrdMonth`, `BrdDay`, `BrdBtlId` FROM `Boards` \
+             WHERE `BrdBnmId` = ? ORDER BY `BrdPosition` DESC LIMIT 20 OFFSET ?"
+        ).bind(board).bind(offset).fetch_all(&state.db).await.unwrap_or_default()
+    };
 
     let header = build_header(rows.len() as u32);
     let total_len = (6 + 40 + 116 * rows.len()) as u32;
@@ -431,33 +429,35 @@ async fn handle_read_post(state: &Arc<CharState>, map_idx: usize, pkt: &[u8]) {
     let buttons: u32 = if board == 0 || flags & 1 != 0 { 3 } else { 1 };
 
     // Get MAX position
-    let max_sql = if board == 0 {
-        format!("SELECT MAX(`MalPosition`) FROM `Mail` WHERE `MalChaNameDestination` = '{}' AND `MalDeleted` = '0'", name)
+    let max_row: Option<(Option<u32>,)> = if board == 0 {
+        sqlx::query_as(
+            "SELECT MAX(`MalPosition`) FROM `Mail` \
+             WHERE `MalChaNameDestination` = ? AND `MalDeleted` = 0"
+        ).bind(&name).fetch_optional(&state.db).await.unwrap_or(None)
     } else {
-        format!("SELECT MAX(`BrdPosition`) FROM `Boards` WHERE `BrdBnmId` = '{}'", board)
+        sqlx::query_as(
+            "SELECT MAX(`BrdPosition`) FROM `Boards` WHERE `BrdBnmId` = ?"
+        ).bind(board).fetch_optional(&state.db).await.unwrap_or(None)
     };
-    let max_row: Option<(Option<u32>,)> = sqlx::query_as(&max_sql)
-        .fetch_optional(&state.db).await.unwrap_or(None);
     let max_pos = max_row.and_then(|(v,)| v).unwrap_or(0);
     let post = if post > max_pos { 1 } else { post };
 
     // Fetch post content
-    let read_sql = if board == 0 {
-        format!(
+    let row: Option<(String, String, String, u32, u32, u32, u32)> = if board == 0 {
+        sqlx::query_as(
             "SELECT `MalChaName`, `MalSubject`, `MalBody`, `MalPosition`, \
              `MalMonth`, `MalDay`, `MalId` FROM `Mail` \
-             WHERE `MalChaNameDestination` = '{}' AND `MalPosition` >= {} \
-             AND `MalDeleted` = '0' ORDER BY `MalPosition` LIMIT 1", name, post)
+             WHERE `MalChaNameDestination` = ? AND `MalPosition` >= ? \
+             AND `MalDeleted` = 0 ORDER BY `MalPosition` LIMIT 1"
+        ).bind(&name).bind(post).fetch_optional(&state.db).await.unwrap_or(None)
     } else {
-        format!(
+        sqlx::query_as(
             "SELECT `BrdChaName`, `BrdTopic`, `BrdPost`, `BrdPosition`, \
              `BrdMonth`, `BrdDay`, `BrdBtlId` FROM `Boards` \
-             WHERE `BrdBnmId` = {} AND `BrdPosition` >= {} \
-             ORDER BY `BrdPosition` LIMIT 1", board, post)
+             WHERE `BrdBnmId` = ? AND `BrdPosition` >= ? \
+             ORDER BY `BrdPosition` LIMIT 1"
+        ).bind(board).bind(post).fetch_optional(&state.db).await.unwrap_or(None)
     };
-
-    let row: Option<(String, String, String, u32, u32, u32, u32)> =
-        sqlx::query_as(&read_sql).fetch_optional(&state.db).await.unwrap_or(None);
 
     let (user, topic, msg, real_post, month, day, board_name) = match row {
         Some(r) => r,
