@@ -1,6 +1,7 @@
-use sqlx::{MySqlPool, Row};
+use sqlx::{MySqlPool, Row, Transaction, MySql};
 use anyhow::Result;
 use md5::{Md5, Digest};
+use crate::servers::char::charstatus::*;
 
 /// Compute MD5 of `input` and return it as a lowercase hex string.
 fn md5_hex(input: &str) -> String {
@@ -148,7 +149,6 @@ pub async fn set_char_password(pool: &MySqlPool, name: &str, pass: &str, newpass
 /// Load a character from DB and return it as a raw byte blob for zlib transfer.
 /// Mirrors mmo_char_fromdb in char_db.c.
 pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -> Result<Vec<u8>> {
-    use crate::servers::char::charstatus::*;
 
     // Update character name to match login name (mirrors C line 427)
     let _ = sqlx::query("UPDATE `Character` SET `ChaName` = ? WHERE `ChaId` = ?")
@@ -348,7 +348,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
     // EqpDurability is int(10) unsigned → u32, EqpSlot is int(10) unsigned → u32
     let equips: Vec<(String, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, String)> =
         sqlx::query_as(
-            "SELECT `EqpEngrave`, `EqpItmId`, '1', `EqpDurability`, \
+            "SELECT `EqpEngrave`, `EqpItmId`, 1, `EqpDurability`, \
              `EqpChaIdOwner`, `EqpTimer`, `EqpSlot`, `EqpCustom`, \
              `EqpCustomLook`, `EqpCustomLookColor`, `EqpCustomIcon`, \
              `EqpCustomIconColor`, `EqpProtected`, `EqpNote` \
@@ -400,9 +400,9 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
     // ── Registry (int) ────────────────────────────────────────────────────────
     // RegValue is int(10) unsigned → u32, cast to i32 in struct
     let regs: Vec<(String, u32)> = sqlx::query_as(
-        "SELECT `RegIdentifier`, `RegValue` FROM `Registry` WHERE `RegChaId` = ? LIMIT 500"
+        "SELECT `RegIdentifier`, `RegValue` FROM `Registry` WHERE `RegChaId` = ? LIMIT 5000"
     ).bind(char_id).fetch_all(pool).await.unwrap_or_default();
-    s.global_reg_num = regs.len() as i32;
+    s.global_reg_num = regs.len().min(MAX_GLOBALREG) as i32;
     for (i, (key, val)) in regs.into_iter().enumerate() {
         if i >= MAX_GLOBALREG { break; }
         copy_str_to_i8(&mut s.global_reg[i].str, &key);
@@ -411,9 +411,9 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
 
     // ── Registry (string) ─────────────────────────────────────────────────────
     let regstrs: Vec<(String, String)> = sqlx::query_as(
-        "SELECT `RegIdentifier`, `RegValue` FROM `RegistryString` WHERE `RegChaId` = ? LIMIT 500"
+        "SELECT `RegIdentifier`, `RegValue` FROM `RegistryString` WHERE `RegChaId` = ? LIMIT 5000"
     ).bind(char_id).fetch_all(pool).await.unwrap_or_default();
-    s.global_regstring_num = regstrs.len() as i32;
+    s.global_regstring_num = regstrs.len().min(MAX_GLOBALREG) as i32;
     for (i, (key, val)) in regstrs.into_iter().enumerate() {
         if i >= MAX_GLOBALREG { break; }
         copy_str_to_i8(&mut s.global_regstring[i].str, &key);
@@ -476,11 +476,10 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
 /// Save a character from a raw byte blob back to the DB.
 /// Mirrors mmo_char_todb + sub-table save functions in char_db.c.
 pub async fn save_char_bytes(pool: &MySqlPool, raw: &[u8]) -> Result<()> {
-    use crate::servers::char::charstatus::*;
 
     let s = match char_status_from_bytes(raw) {
         Some(s) => s,
-        None => return Ok(()),
+        None => anyhow::bail!("invalid char status bytes: got {} bytes, need {}", raw.len(), std::mem::size_of::<crate::servers::char::charstatus::MmoCharStatus>()),
     };
     if s.id == 0 { return Ok(()); }
 
@@ -530,34 +529,25 @@ pub async fn save_char_bytes(pool: &MySqlPool, raw: &[u8]) -> Result<()> {
     .bind(&afkmsg).bind(s.tutor).bind(s.alignment)
     .bind(s.profile_vitastats).bind(s.profile_equiplist).bind(s.profile_legends)
     .bind(s.profile_spells).bind(s.profile_inventory).bind(s.profile_bankitems)
-    .bind(s.class_rank as u8).bind(s.clan_rank as u8)
+    .bind(s.class_rank as u32).bind(s.clan_rank as u32)
     .bind(s.id)
     .execute(pool).await?;
 
     // ── Sub-table saves (position-keyed upsert matching C pattern) ────────────
 
-    // Inventory
-    save_items_inventory(pool, s.id, &s.inventory).await;
-    // Equipment
-    save_items_equipment(pool, s.id, &s.equip).await;
-    // SpellBook
-    save_spells(pool, s.id, &s.skill).await;
-    // Aethers
-    save_aethers(pool, s.id, &s.dura_aether).await;
-    // Registry (int)
-    save_registry(pool, s.id, &s.global_reg, s.global_reg_num as usize).await;
-    // Registry (string)
-    save_registry_string(pool, s.id, &s.global_regstring, s.global_regstring_num as usize).await;
-    // NPC Registry
-    save_npc_registry(pool, s.id, &s.npcintreg).await;
-    // Quest Registry
-    save_quest_registry(pool, s.id, &s.questreg).await;
-    // Kill counts
-    save_kills(pool, s.id, &s.killreg).await;
-    // Legends
-    save_legends(pool, s.id, &s.legends).await;
-    // Banks
-    save_banks(pool, s.id, &s.banks).await;
+    let mut tx = pool.begin().await?;
+    save_items_inventory(&mut tx, s.id, &s.inventory).await?;
+    save_items_equipment(&mut tx, s.id, &s.equip).await?;
+    save_spells(&mut tx, s.id, &s.skill).await?;
+    save_aethers(&mut tx, s.id, &s.dura_aether).await?;
+    save_registry(&mut tx, s.id, &s.global_reg, s.global_reg_num as usize).await?;
+    save_registry_string(&mut tx, s.id, &s.global_regstring, s.global_regstring_num as usize).await?;
+    save_npc_registry(&mut tx, s.id, &s.npcintreg).await?;
+    save_quest_registry(&mut tx, s.id, &s.questreg).await?;
+    save_kills(&mut tx, s.id, &s.killreg).await?;
+    save_legends(&mut tx, s.id, &s.legends).await?;
+    save_banks(&mut tx, s.id, &s.banks).await?;
+    tx.commit().await?;
 
     Ok(())
 }
@@ -590,26 +580,25 @@ fn i8_slice_to_str(src: &[i8]) -> String {
 
 // ── Sub-table save helpers ────────────────────────────────────────────────────
 
-async fn existing_positions(pool: &MySqlPool, sql: &str, id: u32) -> Vec<usize> {
+async fn existing_positions(tx: &mut Transaction<'_, MySql>, sql: &str, id: u32) -> Vec<usize> {
     let rows: Vec<(i32,)> = sqlx::query_as(sql)
-        .bind(id).fetch_all(pool).await.unwrap_or_default();
+        .bind(id).fetch_all(&mut **tx).await.unwrap_or_default();
     rows.into_iter().map(|(p,)| p as usize).collect()
 }
 
-async fn save_items_inventory(pool: &MySqlPool, char_id: u32, items: &[crate::servers::char::charstatus::Item]) {
-    use crate::servers::char::charstatus::MAX_INVENTORY;
+async fn save_items_inventory(tx: &mut Transaction<'_, MySql>, char_id: u32, items: &[crate::servers::char::charstatus::Item]) -> Result<()> {
     let existing: Vec<usize> = existing_positions(
-        pool, "SELECT `InvPosition` FROM `Inventory` WHERE `InvChaId` = ? LIMIT 52", char_id
+        tx, "SELECT `InvPosition` FROM `Inventory` WHERE `InvChaId` = ? LIMIT 52", char_id
     ).await;
     for (i, item) in items.iter().enumerate().take(MAX_INVENTORY) {
         let name = i8_slice_to_str(&item.real_name);
         let note = i8_slice_to_str(&item.note);
         if existing.contains(&i) {
             if item.id == 0 {
-                let _ = sqlx::query("DELETE FROM `Inventory` WHERE `InvChaId`=? AND `InvPosition`=?")
-                    .bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("DELETE FROM `Inventory` WHERE `InvChaId`=? AND `InvPosition`=?")
+                    .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             } else {
-                let _ = sqlx::query(
+                sqlx::query(
                     "UPDATE `Inventory` SET `InvItmId`=?,`InvAmount`=?,`InvDurability`=?,\
                      `InvChaIdOwner`=?,`InvCustom`=?,`InvTimer`=?,`InvEngrave`=?,\
                      `InvCustomLook`=?,`InvCustomLookColor`=?,`InvCustomIcon`=?,\
@@ -620,10 +609,10 @@ async fn save_items_inventory(pool: &MySqlPool, char_id: u32, items: &[crate::se
                  .bind(item.custom_look).bind(item.custom_look_color)
                  .bind(item.custom_icon).bind(item.custom_icon_color)
                  .bind(item.protected).bind(&note).bind(char_id).bind(i as u32)
-                 .execute(pool).await;
+                 .execute(&mut **tx).await?;
             }
         } else if item.id > 0 {
-            let _ = sqlx::query(
+            sqlx::query(
                 "INSERT INTO `Inventory` \
                  (`InvChaId`,`InvItmId`,`InvAmount`,`InvDurability`,`InvChaIdOwner`,\
                   `InvCustom`,`InvTimer`,`InvEngrave`,`InvCustomLook`,`InvCustomLookColor`,\
@@ -634,25 +623,25 @@ async fn save_items_inventory(pool: &MySqlPool, char_id: u32, items: &[crate::se
              .bind(item.custom_look).bind(item.custom_look_color)
              .bind(item.custom_icon).bind(item.custom_icon_color)
              .bind(item.protected).bind(&note).bind(i as u32)
-             .execute(pool).await;
+             .execute(&mut **tx).await?;
         }
     }
+    Ok(())
 }
 
-async fn save_items_equipment(pool: &MySqlPool, char_id: u32, items: &[crate::servers::char::charstatus::Item]) {
-    use crate::servers::char::charstatus::MAX_EQUIP;
+async fn save_items_equipment(tx: &mut Transaction<'_, MySql>, char_id: u32, items: &[crate::servers::char::charstatus::Item]) -> Result<()> {
     let existing = existing_positions(
-        pool, "SELECT `EqpSlot` FROM `Equipment` WHERE `EqpChaId` = ? LIMIT 15", char_id
+        tx, "SELECT `EqpSlot` FROM `Equipment` WHERE `EqpChaId` = ? LIMIT 15", char_id
     ).await;
     for (i, item) in items.iter().enumerate().take(MAX_EQUIP) {
         let name = i8_slice_to_str(&item.real_name);
         let note = i8_slice_to_str(&item.note);
         if existing.contains(&i) {
             if item.id == 0 {
-                let _ = sqlx::query("DELETE FROM `Equipment` WHERE `EqpChaId`=? AND `EqpSlot`=?")
-                    .bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("DELETE FROM `Equipment` WHERE `EqpChaId`=? AND `EqpSlot`=?")
+                    .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             } else {
-                let _ = sqlx::query(
+                sqlx::query(
                     "UPDATE `Equipment` SET `EqpItmId`=?,`EqpDurability`=?,`EqpChaIdOwner`=?,\
                      `EqpTimer`=?,`EqpEngrave`=?,`EqpCustomLook`=?,`EqpCustomLookColor`=?,\
                      `EqpCustomIcon`=?,`EqpCustomIconColor`=?,`EqpProtected`=?,`EqpNote`=? \
@@ -661,10 +650,10 @@ async fn save_items_equipment(pool: &MySqlPool, char_id: u32, items: &[crate::se
                  .bind(item.custom_look).bind(item.custom_look_color)
                  .bind(item.custom_icon).bind(item.custom_icon_color)
                  .bind(item.protected).bind(&note).bind(char_id).bind(i as u32)
-                 .execute(pool).await;
+                 .execute(&mut **tx).await?;
             }
         } else if item.id > 0 {
-            let _ = sqlx::query(
+            sqlx::query(
                 "INSERT INTO `Equipment` \
                  (`EqpChaId`,`EqpItmId`,`EqpDurability`,`EqpChaIdOwner`,`EqpTimer`,\
                   `EqpEngrave`,`EqpCustomLook`,`EqpCustomLookColor`,`EqpCustomIcon`,\
@@ -674,207 +663,210 @@ async fn save_items_equipment(pool: &MySqlPool, char_id: u32, items: &[crate::se
              .bind(&name).bind(item.custom_look).bind(item.custom_look_color)
              .bind(item.custom_icon).bind(item.custom_icon_color)
              .bind(item.protected).bind(&note).bind(i as u32)
-             .execute(pool).await;
+             .execute(&mut **tx).await?;
         }
     }
+    Ok(())
 }
 
-async fn save_spells(pool: &MySqlPool, char_id: u32, skills: &[u16]) {
-    use crate::servers::char::charstatus::MAX_SPELLS;
+async fn save_spells(tx: &mut Transaction<'_, MySql>, char_id: u32, skills: &[u16]) -> Result<()> {
     let existing = existing_positions(
-        pool, "SELECT `SbkPosition` FROM `SpellBook` WHERE `SbkChaId` = ? LIMIT 52", char_id
+        tx, "SELECT `SbkPosition` FROM `SpellBook` WHERE `SbkChaId` = ? LIMIT 52", char_id
     ).await;
     for (i, &spell_id) in skills.iter().enumerate().take(MAX_SPELLS) {
         if existing.contains(&i) {
             if spell_id == 0 {
-                let _ = sqlx::query("DELETE FROM `SpellBook` WHERE `SbkChaId`=? AND `SbkPosition`=?")
-                    .bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("DELETE FROM `SpellBook` WHERE `SbkChaId`=? AND `SbkPosition`=?")
+                    .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             } else {
-                let _ = sqlx::query("UPDATE `SpellBook` SET `SbkSplId`=? WHERE `SbkChaId`=? AND `SbkPosition`=?")
-                    .bind(spell_id).bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("UPDATE `SpellBook` SET `SbkSplId`=? WHERE `SbkChaId`=? AND `SbkPosition`=?")
+                    .bind(spell_id).bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             }
         } else if spell_id > 0 {
-            let _ = sqlx::query("INSERT INTO `SpellBook` (`SbkChaId`,`SbkSplId`,`SbkPosition`) VALUES(?,?,?)")
-                .bind(char_id).bind(spell_id).bind(i as u32).execute(pool).await;
+            sqlx::query("INSERT INTO `SpellBook` (`SbkChaId`,`SbkSplId`,`SbkPosition`) VALUES(?,?,?)")
+                .bind(char_id).bind(spell_id).bind(i as u32).execute(&mut **tx).await?;
         }
     }
+    Ok(())
 }
 
-async fn save_aethers(pool: &MySqlPool, char_id: u32, aethers: &[crate::servers::char::charstatus::SkillInfo]) {
-    use crate::servers::char::charstatus::MAX_MAGIC_TIMERS;
+async fn save_aethers(tx: &mut Transaction<'_, MySql>, char_id: u32, aethers: &[crate::servers::char::charstatus::SkillInfo]) -> Result<()> {
     let existing = existing_positions(
-        pool, "SELECT `AthPosition` FROM `Aethers` WHERE `AthChaId` = ? LIMIT 200", char_id
+        tx, "SELECT `AthPosition` FROM `Aethers` WHERE `AthChaId` = ? LIMIT 200", char_id
     ).await;
     for (i, a) in aethers.iter().enumerate().take(MAX_MAGIC_TIMERS) {
         if existing.contains(&i) {
             if a.id == 0 {
-                let _ = sqlx::query("DELETE FROM `Aethers` WHERE `AthChaId`=? AND `AthPosition`=?")
-                    .bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("DELETE FROM `Aethers` WHERE `AthChaId`=? AND `AthPosition`=?")
+                    .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             } else {
-                let _ = sqlx::query(
+                sqlx::query(
                     "UPDATE `Aethers` SET `AthSplId`=?,`AthDuration`=?,`AthAether`=? \
                      WHERE `AthChaId`=? AND `AthPosition`=?"
                 ).bind(a.id).bind(a.duration).bind(a.aether).bind(char_id).bind(i as u32)
-                 .execute(pool).await;
+                 .execute(&mut **tx).await?;
             }
         } else if a.id > 0 {
-            let _ = sqlx::query(
+            sqlx::query(
                 "INSERT INTO `Aethers` (`AthChaId`,`AthSplId`,`AthDuration`,`AthAether`,`AthPosition`) VALUES(?,?,?,?,?)"
             ).bind(char_id).bind(a.id).bind(a.duration).bind(a.aether).bind(i as u32)
-             .execute(pool).await;
+             .execute(&mut **tx).await?;
         }
     }
+    Ok(())
 }
 
-async fn save_registry(pool: &MySqlPool, char_id: u32, regs: &[crate::servers::char::charstatus::GlobalReg], count: usize) {
+async fn save_registry(tx: &mut Transaction<'_, MySql>, char_id: u32, regs: &[crate::servers::char::charstatus::GlobalReg], count: usize) -> Result<()> {
     let existing = existing_positions(
-        pool, "SELECT `RegPosition` FROM `Registry` WHERE `RegChaId` = ? LIMIT 500", char_id
+        tx, "SELECT `RegPosition` FROM `Registry` WHERE `RegChaId` = ? LIMIT 5000", char_id
     ).await;
-    for (i, reg) in regs.iter().enumerate().take(count.min(500)) {
+    for (i, reg) in regs.iter().enumerate().take(count.min(MAX_GLOBALREG)) {
         let key = i8_slice_to_str(&reg.str);
         if existing.contains(&i) {
             if reg.val == 0 {
-                let _ = sqlx::query("DELETE FROM `Registry` WHERE `RegChaId`=? AND `RegPosition`=?")
-                    .bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("DELETE FROM `Registry` WHERE `RegChaId`=? AND `RegPosition`=?")
+                    .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             } else {
-                let _ = sqlx::query("UPDATE `Registry` SET `RegIdentifier`=?,`RegValue`=? WHERE `RegChaId`=? AND `RegPosition`=?")
-                    .bind(&key).bind(reg.val).bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("UPDATE `Registry` SET `RegIdentifier`=?,`RegValue`=? WHERE `RegChaId`=? AND `RegPosition`=?")
+                    .bind(&key).bind(reg.val).bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             }
         } else if reg.val > 0 {
-            let _ = sqlx::query("INSERT INTO `Registry` (`RegChaId`,`RegIdentifier`,`RegValue`,`RegPosition`) VALUES(?,?,?,?)")
-                .bind(char_id).bind(&key).bind(reg.val).bind(i as u32).execute(pool).await;
+            sqlx::query("INSERT INTO `Registry` (`RegChaId`,`RegIdentifier`,`RegValue`,`RegPosition`) VALUES(?,?,?,?)")
+                .bind(char_id).bind(&key).bind(reg.val).bind(i as u32).execute(&mut **tx).await?;
         }
     }
+    Ok(())
 }
 
-async fn save_registry_string(pool: &MySqlPool, char_id: u32, regs: &[crate::servers::char::charstatus::GlobalRegString], count: usize) {
+async fn save_registry_string(tx: &mut Transaction<'_, MySql>, char_id: u32, regs: &[crate::servers::char::charstatus::GlobalRegString], count: usize) -> Result<()> {
     let existing = existing_positions(
-        pool, "SELECT `RegPosition` FROM `RegistryString` WHERE `RegChaId` = ? LIMIT 500", char_id
+        tx, "SELECT `RegPosition` FROM `RegistryString` WHERE `RegChaId` = ? LIMIT 5000", char_id
     ).await;
-    for (i, reg) in regs.iter().enumerate().take(count.min(500)) {
+    for (i, reg) in regs.iter().enumerate().take(count.min(MAX_GLOBALREG)) {
         let key = i8_slice_to_str(&reg.str);
         let val = i8_slice_to_str(&reg.val);
         if existing.contains(&i) {
             if val.is_empty() {
-                let _ = sqlx::query("DELETE FROM `RegistryString` WHERE `RegChaId`=? AND `RegPosition`=?")
-                    .bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("DELETE FROM `RegistryString` WHERE `RegChaId`=? AND `RegPosition`=?")
+                    .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             } else {
-                let _ = sqlx::query("UPDATE `RegistryString` SET `RegIdentifier`=?,`RegValue`=? WHERE `RegChaId`=? AND `RegPosition`=?")
-                    .bind(&key).bind(&val).bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("UPDATE `RegistryString` SET `RegIdentifier`=?,`RegValue`=? WHERE `RegChaId`=? AND `RegPosition`=?")
+                    .bind(&key).bind(&val).bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             }
         } else if !val.is_empty() {
-            let _ = sqlx::query("INSERT INTO `RegistryString` (`RegChaId`,`RegIdentifier`,`RegValue`,`RegPosition`) VALUES(?,?,?,?)")
-                .bind(char_id).bind(&key).bind(&val).bind(i as u32).execute(pool).await;
+            sqlx::query("INSERT INTO `RegistryString` (`RegChaId`,`RegIdentifier`,`RegValue`,`RegPosition`) VALUES(?,?,?,?)")
+                .bind(char_id).bind(&key).bind(&val).bind(i as u32).execute(&mut **tx).await?;
         }
     }
+    Ok(())
 }
 
-async fn save_npc_registry(pool: &MySqlPool, char_id: u32, regs: &[crate::servers::char::charstatus::GlobalReg]) {
+async fn save_npc_registry(tx: &mut Transaction<'_, MySql>, char_id: u32, regs: &[crate::servers::char::charstatus::GlobalReg]) -> Result<()> {
     let existing = existing_positions(
-        pool, "SELECT `NrgPosition` FROM `NPCRegistry` WHERE `NrgChaId` = ? LIMIT 100", char_id
+        tx, "SELECT `NrgPosition` FROM `NPCRegistry` WHERE `NrgChaId` = ? LIMIT 100", char_id
     ).await;
     for (i, reg) in regs.iter().enumerate().take(100) {
         let key = i8_slice_to_str(&reg.str);
         if existing.contains(&i) {
             if reg.val == 0 {
-                let _ = sqlx::query("DELETE FROM `NPCRegistry` WHERE `NrgChaId`=? AND `NrgPosition`=?")
-                    .bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("DELETE FROM `NPCRegistry` WHERE `NrgChaId`=? AND `NrgPosition`=?")
+                    .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             } else {
-                let _ = sqlx::query("UPDATE `NPCRegistry` SET `NrgIdentifier`=?,`NrgValue`=? WHERE `NrgChaId`=? AND `NrgPosition`=?")
-                    .bind(&key).bind(reg.val).bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("UPDATE `NPCRegistry` SET `NrgIdentifier`=?,`NrgValue`=? WHERE `NrgChaId`=? AND `NrgPosition`=?")
+                    .bind(&key).bind(reg.val).bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             }
         } else if reg.val > 0 {
-            let _ = sqlx::query("INSERT INTO `NPCRegistry` (`NrgChaId`,`NrgIdentifier`,`NrgValue`,`NrgPosition`) VALUES(?,?,?,?)")
-                .bind(char_id).bind(&key).bind(reg.val).bind(i as u32).execute(pool).await;
+            sqlx::query("INSERT INTO `NPCRegistry` (`NrgChaId`,`NrgIdentifier`,`NrgValue`,`NrgPosition`) VALUES(?,?,?,?)")
+                .bind(char_id).bind(&key).bind(reg.val).bind(i as u32).execute(&mut **tx).await?;
         }
     }
+    Ok(())
 }
 
-async fn save_quest_registry(pool: &MySqlPool, char_id: u32, regs: &[crate::servers::char::charstatus::GlobalReg]) {
-    use crate::servers::char::charstatus::MAX_GLOBALQUESTREG;
+async fn save_quest_registry(tx: &mut Transaction<'_, MySql>, char_id: u32, regs: &[crate::servers::char::charstatus::GlobalReg]) -> Result<()> {
     let existing = existing_positions(
-        pool, "SELECT `QrgPosition` FROM `QuestRegistry` WHERE `QrgChaId` = ? LIMIT 250", char_id
+        tx, "SELECT `QrgPosition` FROM `QuestRegistry` WHERE `QrgChaId` = ? LIMIT 250", char_id
     ).await;
     for (i, reg) in regs.iter().enumerate().take(MAX_GLOBALQUESTREG) {
         let key = i8_slice_to_str(&reg.str);
         if existing.contains(&i) {
             if reg.val == 0 {
-                let _ = sqlx::query("DELETE FROM `QuestRegistry` WHERE `QrgChaId`=? AND `QrgPosition`=?")
-                    .bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("DELETE FROM `QuestRegistry` WHERE `QrgChaId`=? AND `QrgPosition`=?")
+                    .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             } else {
-                let _ = sqlx::query("UPDATE `QuestRegistry` SET `QrgIdentifier`=?,`QrgValue`=? WHERE `QrgChaId`=? AND `QrgPosition`=?")
-                    .bind(&key).bind(reg.val).bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("UPDATE `QuestRegistry` SET `QrgIdentifier`=?,`QrgValue`=? WHERE `QrgChaId`=? AND `QrgPosition`=?")
+                    .bind(&key).bind(reg.val).bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             }
         } else if reg.val > 0 {
-            let _ = sqlx::query("INSERT INTO `QuestRegistry` (`QrgChaId`,`QrgIdentifier`,`QrgValue`,`QrgPosition`) VALUES(?,?,?,?)")
-                .bind(char_id).bind(&key).bind(reg.val).bind(i as u32).execute(pool).await;
+            sqlx::query("INSERT INTO `QuestRegistry` (`QrgChaId`,`QrgIdentifier`,`QrgValue`,`QrgPosition`) VALUES(?,?,?,?)")
+                .bind(char_id).bind(&key).bind(reg.val).bind(i as u32).execute(&mut **tx).await?;
         }
     }
+    Ok(())
 }
 
-async fn save_kills(pool: &MySqlPool, char_id: u32, kills: &[crate::servers::char::charstatus::KillReg]) {
-    use crate::servers::char::charstatus::MAX_KILLREG;
+async fn save_kills(tx: &mut Transaction<'_, MySql>, char_id: u32, kills: &[crate::servers::char::charstatus::KillReg]) -> Result<()> {
     let existing = existing_positions(
-        pool, "SELECT `KilPosition` FROM `Kills` WHERE `KilChaId` = ? LIMIT 5000", char_id
+        tx, "SELECT `KilPosition` FROM `Kills` WHERE `KilChaId` = ? LIMIT 5000", char_id
     ).await;
     for (i, k) in kills.iter().enumerate().take(MAX_KILLREG) {
         if existing.contains(&i) {
             if k.mob_id == 0 {
-                let _ = sqlx::query("DELETE FROM `Kills` WHERE `KilChaId`=? AND `KilPosition`=?")
-                    .bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("DELETE FROM `Kills` WHERE `KilChaId`=? AND `KilPosition`=?")
+                    .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             } else {
-                let _ = sqlx::query("UPDATE `Kills` SET `KilAmount`=?,`KilMobId`=? WHERE `KilChaId`=? AND `KilPosition`=?")
-                    .bind(k.amount).bind(k.mob_id).bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("UPDATE `Kills` SET `KilAmount`=?,`KilMobId`=? WHERE `KilChaId`=? AND `KilPosition`=?")
+                    .bind(k.amount).bind(k.mob_id).bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             }
         } else if k.mob_id > 0 {
-            let _ = sqlx::query("INSERT INTO `Kills` (`KilChaId`,`KilMobId`,`KilAmount`,`KilPosition`) VALUES(?,?,?,?)")
-                .bind(char_id).bind(k.mob_id).bind(k.amount).bind(i as u32).execute(pool).await;
+            sqlx::query("INSERT INTO `Kills` (`KilChaId`,`KilMobId`,`KilAmount`,`KilPosition`) VALUES(?,?,?,?)")
+                .bind(char_id).bind(k.mob_id).bind(k.amount).bind(i as u32).execute(&mut **tx).await?;
         }
     }
+    Ok(())
 }
 
-async fn save_legends(pool: &MySqlPool, char_id: u32, legends: &[crate::servers::char::charstatus::Legend]) {
-    use crate::servers::char::charstatus::MAX_LEGENDS;
+async fn save_legends(tx: &mut Transaction<'_, MySql>, char_id: u32, legends: &[crate::servers::char::charstatus::Legend]) -> Result<()> {
     let existing = existing_positions(
-        pool, "SELECT `LegPosition` FROM `Legends` WHERE `LegChaId` = ? LIMIT 1000", char_id
+        tx, "SELECT `LegPosition` FROM `Legends` WHERE `LegChaId` = ? LIMIT 1000", char_id
     ).await;
     for (i, leg) in legends.iter().enumerate().take(MAX_LEGENDS) {
         let name = i8_slice_to_str(&leg.name);
         let text = i8_slice_to_str(&leg.text);
         if existing.contains(&i) {
             if name.is_empty() {
-                let _ = sqlx::query("DELETE FROM `Legends` WHERE `LegChaId`=? AND `LegPosition`=?")
-                    .bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("DELETE FROM `Legends` WHERE `LegChaId`=? AND `LegPosition`=?")
+                    .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             } else {
-                let _ = sqlx::query(
+                sqlx::query(
                     "UPDATE `Legends` SET `LegIcon`=?,`LegColor`=?,`LegDescription`=?,`LegIdentifier`=?,`LegTChaId`=? \
                      WHERE `LegChaId`=? AND `LegPosition`=?"
                 ).bind(leg.icon).bind(leg.color).bind(&text).bind(&name).bind(leg.tchaid)
-                 .bind(char_id).bind(i as u32).execute(pool).await;
+                 .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             }
         } else if !name.is_empty() {
-            let _ = sqlx::query(
+            sqlx::query(
                 "INSERT INTO `Legends` (`LegChaId`,`LegIcon`,`LegColor`,`LegDescription`,`LegIdentifier`,`LegTChaId`,`LegPosition`) VALUES(?,?,?,?,?,?,?)"
             ).bind(char_id).bind(leg.icon).bind(leg.color).bind(&text).bind(&name).bind(leg.tchaid).bind(i as u32)
-             .execute(pool).await;
+             .execute(&mut **tx).await?;
         }
     }
+    Ok(())
 }
 
-async fn save_banks(pool: &MySqlPool, char_id: u32, banks: &[crate::servers::char::charstatus::BankData]) {
-    use crate::servers::char::charstatus::MAX_BANK_SLOTS;
+async fn save_banks(tx: &mut Transaction<'_, MySql>, char_id: u32, banks: &[crate::servers::char::charstatus::BankData]) -> Result<()> {
     let existing = existing_positions(
-        pool, "SELECT `BnkPosition` FROM `Banks` WHERE `BnkChaId` = ? LIMIT 255", char_id
+        tx, "SELECT `BnkPosition` FROM `Banks` WHERE `BnkChaId` = ? LIMIT 255", char_id
     ).await;
     for (i, bank) in banks.iter().enumerate().take(MAX_BANK_SLOTS) {
         let name = i8_slice_to_str(&bank.real_name);
         let note = i8_slice_to_str(&bank.note);
         if existing.contains(&i) {
             if bank.item_id == 0 {
-                let _ = sqlx::query("DELETE FROM `Banks` WHERE `BnkChaId`=? AND `BnkPosition`=?")
-                    .bind(char_id).bind(i as u32).execute(pool).await;
+                sqlx::query("DELETE FROM `Banks` WHERE `BnkChaId`=? AND `BnkPosition`=?")
+                    .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             } else {
-                let _ = sqlx::query(
+                sqlx::query(
                     "UPDATE `Banks` SET `BnkItmId`=?,`BnkAmount`=?,`BnkChaIdOwner`=?,`BnkCustomLook`=?,\
                      `BnkCustomLookColor`=?,`BnkCustomIcon`=?,`BnkCustomIconColor`=?,\
                      `BnkProtected`=?,`BnkEngrave`=?,`BnkNote`=? \
@@ -883,10 +875,10 @@ async fn save_banks(pool: &MySqlPool, char_id: u32, banks: &[crate::servers::cha
                  .bind(bank.custom_look).bind(bank.custom_look_color)
                  .bind(bank.custom_icon).bind(bank.custom_icon_color)
                  .bind(bank.protected).bind(&name).bind(&note)
-                 .bind(char_id).bind(i as u32).execute(pool).await;
+                 .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
             }
         } else if bank.item_id > 0 {
-            let _ = sqlx::query(
+            sqlx::query(
                 "INSERT INTO `Banks` (`BnkChaId`,`BnkItmId`,`BnkAmount`,`BnkChaIdOwner`,\
                  `BnkCustomLook`,`BnkCustomLookColor`,`BnkCustomIcon`,`BnkCustomIconColor`,\
                  `BnkProtected`,`BnkEngrave`,`BnkNote`,`BnkPosition`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
@@ -894,9 +886,10 @@ async fn save_banks(pool: &MySqlPool, char_id: u32, banks: &[crate::servers::cha
              .bind(bank.custom_look).bind(bank.custom_look_color)
              .bind(bank.custom_icon).bind(bank.custom_icon_color)
              .bind(bank.protected).bind(&name).bind(&note).bind(i as u32)
-             .execute(pool).await;
+             .execute(&mut **tx).await?;
         }
     }
+    Ok(())
 }
 
 #[cfg(test)]
