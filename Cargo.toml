@@ -14,6 +14,7 @@ flate2 = "1"
 bytes = "1"
 md-5 = "0.10.6"
 hex = "0.4.3"
+chrono = "0.4"
 libc = "0.2.181"
 
 serde = { version = "1.0", features = ["derive"] }
