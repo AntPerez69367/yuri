@@ -246,15 +246,27 @@ pub fn char_status_to_bytes(s: &MmoCharStatus) -> &[u8] {
     }
 }
 
-/// Interpret a byte slice as a MmoCharStatus reference.
+/// Copy a byte slice into an aligned, heap-allocated MmoCharStatus.
 /// Returns None if the slice is too short.
-pub fn char_status_from_bytes(bytes: &[u8]) -> Option<&MmoCharStatus> {
+pub fn char_status_from_bytes(bytes: &[u8]) -> Option<Box<MmoCharStatus>> {
     if bytes.len() < std::mem::size_of::<MmoCharStatus>() {
         return None;
     }
-    // Safety: bytes must be at least size_of::<MmoCharStatus>() long and
-    // properly aligned. Caller ensures this from DB/network data.
-    Some(unsafe { &*(bytes.as_ptr() as *const MmoCharStatus) })
+    // Allocate aligned memory and copy bytes in — avoids UB from casting a
+    // potentially 1-byte-aligned &[u8] pointer directly to *const MmoCharStatus.
+    let mut s: Box<MmoCharStatus> = unsafe {
+        let layout = std::alloc::Layout::new::<MmoCharStatus>();
+        let ptr = std::alloc::alloc_zeroed(layout) as *mut MmoCharStatus;
+        Box::from_raw(ptr)
+    };
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr(),
+            &mut *s as *mut MmoCharStatus as *mut u8,
+            std::mem::size_of::<MmoCharStatus>(),
+        );
+    }
+    Some(s)
 }
 
 // ── Size verification tests ───────────────────────────────────────────────────
