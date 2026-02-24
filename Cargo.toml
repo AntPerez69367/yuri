@@ -42,3 +42,7 @@ path = "src/bin/login_server.rs"
 [[bin]]
 name = "char_server"
 path = "src/bin/char_server.rs"
+
+[[bin]]
+name = "map_server"
+path = "src/bin/map_server.rs"
