@@ -3,7 +3,6 @@
 //! `MapData` mirrors `struct map_data` from `map_server.h` exactly.
 //! `GlobalReg` mirrors `struct global_reg` from `mmo.h` exactly.
 
-use std::ffi::CStr;
 use std::os::raw::{c_char, c_int, c_uchar, c_uint, c_ushort};
 use std::ptr::null_mut;
 
@@ -106,20 +105,24 @@ fn copy_str_to_fixed<const N: usize>(dest: &mut [c_char; N], src: &str) {
 
 /// Parse a `.map` binary file into a MapData's tile/pass/obj arrays.
 /// File format: [xs: u16 BE][ys: u16 BE] then xs*ys × (tile u16 BE, pass u16 BE, obj u16 BE).
-/// Allocates tile, pass, obj, map (walkability, zeroed) arrays via Box::into_raw.
-/// Returns Err if the file cannot be opened or is too short.
+/// Reads the entire file in one syscall, then parses from the in-memory buffer.
 pub fn parse_map_file(slot: &mut MapData, path: &str) -> Result<()> {
-    use std::io::Read;
-    let mut fp = std::fs::File::open(path)
+    let data = std::fs::read(path)
         .with_context(|| format!("map file not found: {path}"))?;
 
-    let mut buf2 = [0u8; 2];
-    fp.read_exact(&mut buf2).context("reading xs")?;
-    slot.xs = u16::from_be_bytes(buf2);
-    fp.read_exact(&mut buf2).context("reading ys")?;
-    slot.ys = u16::from_be_bytes(buf2);
+    if data.len() < 4 {
+        anyhow::bail!("map file too short: {path}");
+    }
+
+    slot.xs = u16::from_be_bytes([data[0], data[1]]);
+    slot.ys = u16::from_be_bytes([data[2], data[3]]);
 
     let cell_count = slot.xs as usize * slot.ys as usize;
+    let expected = 4 + cell_count * 6; // header + (tile+pass+obj) * 2 bytes each
+    if data.len() < expected {
+        anyhow::bail!("map file truncated: {path} (got {} bytes, need {expected})", data.len());
+    }
+
     slot.bxs = ((slot.xs as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as c_ushort;
     slot.bys = ((slot.ys as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as c_ushort;
 
@@ -128,13 +131,14 @@ pub fn parse_map_file(slot: &mut MapData, path: &str) -> Result<()> {
     let obj  = alloc_zeroed_slice::<c_ushort>(cell_count);
     let map  = alloc_zeroed_slice::<c_uchar>(cell_count);
 
+    let mut pos = 4usize;
     for i in 0..cell_count {
-        fp.read_exact(&mut buf2).context("reading tile")?;
-        unsafe { *tile.add(i) = u16::from_be_bytes(buf2); }
-        fp.read_exact(&mut buf2).context("reading pass")?;
-        unsafe { *pass.add(i) = u16::from_be_bytes(buf2); }
-        fp.read_exact(&mut buf2).context("reading obj")?;
-        unsafe { *obj.add(i)  = u16::from_be_bytes(buf2); }
+        unsafe {
+            *tile.add(i) = u16::from_be_bytes([data[pos],   data[pos+1]]);
+            *pass.add(i) = u16::from_be_bytes([data[pos+2], data[pos+3]]);
+            *obj.add(i)  = u16::from_be_bytes([data[pos+4], data[pos+5]]);
+        }
+        pos += 6;
     }
 
     slot.tile = tile;
