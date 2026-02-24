@@ -218,6 +218,9 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(MapState::new(pool, config));
 
+    // Register state with FFI bridge so C game logic can send packets to char_server.
+    yuri::ffi::map_char::set_map_state(Arc::clone(&state));
+
     // Spawn char server reconnect loop (replaces check_connect_char timer)
     {
         let s = Arc::clone(&state);
