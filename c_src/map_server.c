@@ -1445,7 +1445,7 @@ int object_flag_init(void) {
   int z = 1;
 
   char* filename = "static_objects.tbl";
-  size_t path_size = strlen(data_dir) + strlen(filename);
+  size_t path_size = strlen(data_dir) + strlen(filename) + 1;
   char* path = malloc(path_size);
 
   strncpy(path, data_dir, path_size);

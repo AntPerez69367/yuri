@@ -3644,7 +3644,7 @@ void sl_init() {
   // make sure to load the sys.lua file before anything else!
 
   char *filename = "sys.lua";
-  size_t path_size = strlen(lua_dir) + strlen(filename);
+  size_t path_size = strlen(lua_dir) + strlen(filename) + 1;
 
   char *path = malloc(path_size);
   strncpy(path, lua_dir, path_size);
