@@ -203,18 +203,66 @@ async fn handle_login(state: &Arc<CharState>, pkt: &[u8]) {
         Err(e)    => { tracing::warn!("[char] [login] db err: {}", e); resp[4] = 0x01; send_to_login(state, resp).await; return; }
     };
 
-    let mast_ok = match db::get_master_password(&state.db).await {
-        Ok(Some((mhash, exp))) => db::ismastpass(pass, &mhash, exp),
-        _ => false,
+    let (mast_ok, mast_hash) = match db::get_master_password(&state.db).await {
+        Ok(Some((mhash, exp))) => (db::ismastpass(pass, &mhash, exp).await, Some(mhash)),
+        _ => (false, None),
     };
 
-    if !db::ispass(name, pass, &stored_hash) && !mast_ok {
+    if !db::ispass(name, pass, &stored_hash).await && !mast_ok {
         tracing::warn!("[char] [login] wrong password");
         resp[4] = 0x03;
         send_to_login(state, resp).await;
         return;
     }
     tracing::info!("[char] [login] password ok");
+    // Silently upgrade legacy MD5 password to bcrypt — runs in background, does not block login
+    if db::is_legacy_hash(&stored_hash) {
+        let pool = state.db.clone();
+        let pass = pass.to_owned();
+        let name = name.to_owned();
+        tokio::spawn(async move {
+            match db::hash_password(&pass).await {
+                Ok(new_hash) => {
+                    match sqlx::query(
+                        "UPDATE `Character` SET `ChaPassword` = ? WHERE `ChaName` = ?"
+                    )
+                    .bind(&new_hash).bind(&name)
+                    .execute(&pool).await
+                    {
+                        Ok(_) => tracing::info!("[char] [login] rehashed password for {} to bcrypt", name),
+                        Err(e) => tracing::error!("[char] [login] failed to persist rehashed password for {}: {}", name, e),
+                    }
+                }
+                Err(e) => tracing::error!("[char] [login] failed to rehash password for {}: {}", name, e),
+            }
+        });
+    }
+
+    // Silently upgrade legacy MD5 admin password to bcrypt — runs in background, does not block login
+    if mast_ok {
+        if let Some(mhash) = mast_hash {
+            if db::is_legacy_hash(&mhash) {
+                let pool = state.db.clone();
+                let pass = pass.to_owned();
+                tokio::spawn(async move {
+                    match db::hash_password(&pass).await {
+                        Ok(new_hash) => {
+                            match sqlx::query(
+                                "UPDATE `AdminPassword` SET `AdmPassword` = ? WHERE `AdmId` = 1"
+                            )
+                            .bind(&new_hash)
+                            .execute(&pool).await
+                            {
+                                Ok(_) => tracing::info!("[char] [login] rehashed admin password to bcrypt"),
+                                Err(e) => tracing::error!("[char] [login] failed to persist rehashed admin password: {}", e),
+                            }
+                        }
+                        Err(e) => tracing::error!("[char] [login] failed to rehash admin password: {}", e),
+                    }
+                });
+            }
+        }
+    }
 
     let char_info = match db::char_login_lookup(&state.db, name).await {
         Ok(Some(c)) => c,
