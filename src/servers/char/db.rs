@@ -416,7 +416,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
     // EqpDurability is int(10) unsigned → u32, EqpSlot is int(10) unsigned → u32
     let equips: Vec<(String, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, String)> =
         sqlx::query_as(
-            "SELECT `EqpEngrave`, `EqpItmId`, 1, `EqpDurability`, \
+            "SELECT `EqpEngrave`, `EqpItmId`, CAST(1 AS UNSIGNED), `EqpDurability`, \
              `EqpChaIdOwner`, `EqpTimer`, `EqpSlot`, `EqpCustom`, \
              `EqpCustomLook`, `EqpCustomLookColor`, `EqpCustomIcon`, \
              `EqpCustomIconColor`, `EqpProtected`, `EqpNote` \
