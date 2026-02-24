@@ -39,6 +39,12 @@
  */
 #define DDOS_AUTORESET ((10 * 60) * 1000)
 
+#define BLOCK_SIZE 8
+
+#define MAX_MAPREG 500
+
+#define MAP_SLOTS 65535
+
 #define LGN_ERRSERVER 0
 
 #define LGN_WRONGPASS 1
@@ -850,6 +856,25 @@ const char *rust_magicdb_script(int _id);
 const char *rust_magicdb_script2(int _id);
 
 const char *rust_magicdb_script3(int _id);
+
+/**
+ * Allocate the 65535-slot map array, load all maps from DB + files, set C globals.
+ * Replaces map_read() in do_init(). Returns 0 on success, -1 on error.
+ */
+int rust_map_init(const char *maps_dir, int server_id);
+
+/**
+ * Reload map metadata + registry in-place (tile arrays reallocated, block grid preserved).
+ * Replaces map_reload() body. Returns 0 on success, -1 on error.
+ * NOTE: C wrapper still calls map_foreachinarea(sl_updatepeople,...) after this returns.
+ */
+int rust_map_reload(const char *maps_dir, int server_id);
+
+/**
+ * Reload the MapRegistry for a single map. Called from map_loadregistry() C shim.
+ * Returns 0 on success, -1 on error.
+ */
+int rust_map_loadregistry(int map_id);
 
 int rust_mobdb_init(void);
 
