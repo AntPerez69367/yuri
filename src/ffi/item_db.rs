@@ -43,21 +43,37 @@ pub extern "C" fn rust_itemdb_id(s: *const c_char) -> c_uint {
 pub extern "C" fn rust_itemdb_type(id: c_uint) -> c_int {
     ffi_catch!(0, { let p = db::search(id); if p.is_null() { 0 } else { unsafe { (*p).typ as c_int } } })
 }
+// Fallback C string returned when an item ID is not found in the database.
+// The C map server uses "??" as a sentinel to detect unknown items and zero the slot.
+static UNKNOWN_ITEM_NAME: &[u8] = b"??\0";
+
 #[no_mangle]
 pub extern "C" fn rust_itemdb_name(id: c_uint) -> *mut c_char {
-    ffi_catch!(null_mut(), { let p = db::search(id); if p.is_null() { null_mut() } else { unsafe { (*p).name.as_mut_ptr() } } })
+    ffi_catch!(UNKNOWN_ITEM_NAME.as_ptr() as *mut c_char, {
+        let p = db::search(id);
+        if p.is_null() { UNKNOWN_ITEM_NAME.as_ptr() as *mut c_char } else { unsafe { (*p).name.as_mut_ptr() } }
+    })
 }
 #[no_mangle]
 pub extern "C" fn rust_itemdb_yname(id: c_uint) -> *mut c_char {
-    ffi_catch!(null_mut(), { let p = db::search(id); if p.is_null() { null_mut() } else { unsafe { (*p).yname.as_mut_ptr() } } })
+    ffi_catch!(UNKNOWN_ITEM_NAME.as_ptr() as *mut c_char, {
+        let p = db::search(id);
+        if p.is_null() { UNKNOWN_ITEM_NAME.as_ptr() as *mut c_char } else { unsafe { (*p).yname.as_mut_ptr() } }
+    })
 }
 #[no_mangle]
 pub extern "C" fn rust_itemdb_text(id: c_uint) -> *mut c_char {
-    ffi_catch!(null_mut(), { let p = db::search(id); if p.is_null() { null_mut() } else { unsafe { (*p).text.as_mut_ptr() } } })
+    ffi_catch!(UNKNOWN_ITEM_NAME.as_ptr() as *mut c_char, {
+        let p = db::search(id);
+        if p.is_null() { UNKNOWN_ITEM_NAME.as_ptr() as *mut c_char } else { unsafe { (*p).text.as_mut_ptr() } }
+    })
 }
 #[no_mangle]
 pub extern "C" fn rust_itemdb_buytext(id: c_uint) -> *mut c_char {
-    ffi_catch!(null_mut(), { let p = db::search(id); if p.is_null() { null_mut() } else { unsafe { (*p).buytext.as_mut_ptr() } } })
+    ffi_catch!(UNKNOWN_ITEM_NAME.as_ptr() as *mut c_char, {
+        let p = db::search(id);
+        if p.is_null() { UNKNOWN_ITEM_NAME.as_ptr() as *mut c_char } else { unsafe { (*p).buytext.as_mut_ptr() } }
+    })
 }
 #[no_mangle]
 pub extern "C" fn rust_itemdb_price(id: c_uint) -> c_int {

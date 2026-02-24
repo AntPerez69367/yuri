@@ -4,22 +4,71 @@ use md5::{Md5, Digest};
 use crate::servers::char::charstatus::*;
 
 /// Compute MD5 of `input` and return it as a lowercase hex string.
+/// Kept for legacy password verification only.
 fn md5_hex(input: &str) -> String {
     hex::encode(Md5::new().chain_update(input).finalize())
 }
 
-/// Verify password: checks MD5("lowercase_name password") or MD5(password).
-/// Returns true if either form matches `stored_hash` from DB.
-pub fn ispass(name: &str, pass: &str, stored_hash: &str) -> bool {
+/// Returns true if `stored` is a legacy MD5 hash (not a bcrypt hash).
+/// Recognises all four bcrypt version prefixes the `bcrypt` crate accepts:
+/// $2b$ (canonical), $2a$ (original), $2y$ (PHP compat), $2x$ (rare bugfix).
+pub(crate) fn is_legacy_hash(stored: &str) -> bool {
+    !stored.starts_with("$2b$")
+        && !stored.starts_with("$2a$")
+        && !stored.starts_with("$2y$")
+        && !stored.starts_with("$2x$")
+}
+
+/// Hash a plaintext password with bcrypt at cost 10.
+/// Runs on a blocking thread to avoid stalling the async executor.
+pub async fn hash_password(pass: &str) -> Result<String> {
+    let pass = pass.to_owned();
+    tokio::task::spawn_blocking(move || {
+        bcrypt::hash(&pass, 10).map_err(|e| anyhow::anyhow!("bcrypt hash failed: {}", e))
+    })
+    .await
+    .map_err(|e| anyhow::anyhow!("spawn_blocking failed: {}", e))?
+}
+
+/// Verify password against stored hash.
+/// If stored is a bcrypt hash ($2b$/$2a$ prefix), uses bcrypt::verify on a blocking thread.
+/// Otherwise falls back to MD5("lowercase_name password") or MD5(password).
+pub async fn ispass(name: &str, pass: &str, stored_hash: &str) -> bool {
+    if !is_legacy_hash(stored_hash) {
+        let pass = pass.to_owned();
+        let stored_hash = stored_hash.to_owned();
+        return tokio::task::spawn_blocking(move || {
+            bcrypt::verify(&pass, &stored_hash).unwrap_or_else(|e| {
+                tracing::error!("[auth] bcrypt::verify error: {}", e);
+                false
+            })
+        })
+        .await
+        .unwrap_or(false);
+    }
     let form1 = md5_hex(&format!("{} {}", name.to_lowercase(), pass));
     let form2 = md5_hex(pass);
     stored_hash == form1 || stored_hash == form2
 }
 
 /// Returns true if master password matches and hasn't expired.
-/// `expire` is `AdmTimer` which is `int(10) unsigned` → u32.
-pub fn ismastpass(pass: &str, mast_md5: &str, expire: u32) -> bool {
-    md5_hex(pass) == mast_md5 && chrono::Utc::now().timestamp() <= expire as i64
+/// Supports both bcrypt and legacy MD5 stored hashes.
+pub async fn ismastpass(pass: &str, stored: &str, expire: u32) -> bool {
+    let now = chrono::Utc::now().timestamp();
+    if now > expire as i64 { return false; }
+    if !is_legacy_hash(stored) {
+        let pass = pass.to_owned();
+        let stored = stored.to_owned();
+        return tokio::task::spawn_blocking(move || {
+            bcrypt::verify(&pass, &stored).unwrap_or_else(|e| {
+                tracing::error!("[auth] bcrypt::verify error: {}", e);
+                false
+            })
+        })
+        .await
+        .unwrap_or(false);
+    }
+    md5_hex(pass) == stored
 }
 
 /// Returns true if character name is already taken.
@@ -45,13 +94,20 @@ pub async fn create_char(
         Ok(true)     => return 1,
         Ok(false)    => {}
     }
+    let hashed = match hash_password(pass).await {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!("[char] hash_password failed: {}", e);
+            return 2;
+        }
+    };
     let res = sqlx::query(
         "INSERT INTO `Character` (`ChaName`, `ChaPassword`, `ChaTotem`, `ChaSex`,
          `ChaNation`, `ChaFace`, `ChaMapId`, `ChaX`, `ChaY`,
          `ChaHair`, `ChaHairColor`, `ChaFaceColor`)
-         VALUES (?, MD5(?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )
-    .bind(name).bind(pass).bind(totem).bind(sex)
+    .bind(name).bind(hashed).bind(totem).bind(sex)
     .bind(country).bind(face).bind(start_m).bind(start_x).bind(start_y)
     .bind(hair).bind(hair_color).bind(face_color)
     .execute(pool)
@@ -118,6 +174,15 @@ pub async fn is_account_banned(pool: &MySqlPool, char_id: u32) -> bool {
     row.map(|(n,)| n > 0).unwrap_or(false)
 }
 
+/// Clear all stale ChaOnline flags on startup (handles crashes/ungraceful shutdowns).
+pub async fn reset_all_online(pool: &MySqlPool) {
+    if let Err(e) = sqlx::query("UPDATE `Character` SET `ChaOnline` = 0 WHERE `ChaOnline` = 1")
+        .execute(pool).await
+    {
+        tracing::error!("Failed to reset ChaOnline flags on startup: {}", e);
+    }
+}
+
 pub async fn set_online(pool: &MySqlPool, char_id: u32, online: bool) {
     let val: u8 = if online { 1 } else { 0 };
     if let Err(e) = sqlx::query("UPDATE `Character` SET `ChaOnline` = ? WHERE `ChaId` = ?")
@@ -135,11 +200,18 @@ pub async fn set_char_password(pool: &MySqlPool, name: &str, pass: &str, newpass
         Ok(None) => return -2,
         Err(_) => return -1,
     };
-    if !ispass(name, pass, &stored) { return -3; }
+    if !ispass(name, pass, &stored).await { return -3; }
+    let hashed = match hash_password(newpass).await {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!("[char] hash_password failed: {}", e);
+            return -1;
+        }
+    };
     let res = sqlx::query(
-        "UPDATE `Character` SET `ChaPassword` = MD5(?) WHERE `ChaName` = ?"
+        "UPDATE `Character` SET `ChaPassword` = ? WHERE `ChaName` = ?"
     )
-    .bind(newpass).bind(name)
+    .bind(hashed).bind(name)
     .execute(pool).await;
     if res.is_err() { -1 } else { 0 }
 }
@@ -349,7 +421,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
     // EqpDurability is int(10) unsigned → u32, EqpSlot is int(10) unsigned → u32
     let equips: Vec<(String, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, String)> =
         sqlx::query_as(
-            "SELECT `EqpEngrave`, `EqpItmId`, 1, `EqpDurability`, \
+            "SELECT `EqpEngrave`, `EqpItmId`, CAST(1 AS UNSIGNED), `EqpDurability`, \
              `EqpChaIdOwner`, `EqpTimer`, `EqpSlot`, `EqpCustom`, \
              `EqpCustomLook`, `EqpCustomLookColor`, `EqpCustomIcon`, \
              `EqpCustomIconColor`, `EqpProtected`, `EqpNote` \
@@ -798,20 +870,71 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_ispass_form1() {
+    fn test_is_legacy_hash_md5() {
+        assert!(is_legacy_hash("5f4dcc3b5aa765d61d8327deb882cf99")); // MD5("password")
+    }
+
+    #[test]
+    fn test_is_legacy_hash_bcrypt() {
+        assert!(!is_legacy_hash("$2b$04$somehashvalue"));
+        assert!(!is_legacy_hash("$2a$04$somehashvalue"));
+        assert!(!is_legacy_hash("$2y$12$L6Bc/AlTQHyd9liGgGEZyOFLPHNgyxeEPfgYfBCVxJ7JIlwxyVU3u"));
+        assert!(!is_legacy_hash("$2x$04$somehashvalue"));
+    }
+
+    #[tokio::test]
+    async fn test_ispass_legacy_md5_form1() {
         let hash = md5_hex("alice password");
-        assert!(ispass("Alice", "password", &hash));
+        assert!(ispass("Alice", "password", &hash).await);
     }
 
-    #[test]
-    fn test_ispass_form2() {
+    #[tokio::test]
+    async fn test_ispass_legacy_md5_form2() {
         let hash = md5_hex("mypass");
-        assert!(ispass("bob", "mypass", &hash));
+        assert!(ispass("bob", "mypass", &hash).await);
     }
 
-    #[test]
-    fn test_ispass_wrong() {
+    #[tokio::test]
+    async fn test_ispass_wrong_legacy() {
         let hash = md5_hex("correct");
-        assert!(!ispass("bob", "wrong", &hash));
+        assert!(!ispass("bob", "wrong", &hash).await);
+    }
+
+    #[tokio::test]
+    async fn test_ispass_bcrypt() {
+        let hash = bcrypt::hash("secret", 4).unwrap();
+        assert!(ispass("alice", "secret", &hash).await);
+    }
+
+    #[tokio::test]
+    async fn test_ispass_bcrypt_wrong() {
+        let hash = bcrypt::hash("secret", 4).unwrap();
+        assert!(!ispass("alice", "wrong", &hash).await);
+    }
+
+    #[tokio::test]
+    async fn test_hash_password_produces_bcrypt() {
+        let h = hash_password("test").await.unwrap();
+        assert!(h.starts_with("$2b$") || h.starts_with("$2a$"));
+    }
+
+    #[tokio::test]
+    async fn test_ismastpass_expired() {
+        let hash = bcrypt::hash("secret", 4).unwrap();
+        assert!(!ismastpass("secret", &hash, 0).await); // expire=0 is always in the past
+    }
+
+    #[tokio::test]
+    async fn test_ismastpass_bcrypt_valid() {
+        let hash = bcrypt::hash("adminpass", 4).unwrap();
+        let expire = (chrono::Utc::now().timestamp() + 3600) as u32;
+        assert!(ismastpass("adminpass", &hash, expire).await);
+    }
+
+    #[tokio::test]
+    async fn test_ismastpass_legacy_md5_valid() {
+        let hash = md5_hex("adminpass");
+        let expire = (chrono::Utc::now().timestamp() + 3600) as u32;
+        assert!(ismastpass("adminpass", &hash, expire).await);
     }
 }
