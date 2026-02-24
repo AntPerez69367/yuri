@@ -27,7 +27,11 @@ pub unsafe extern "C" fn rust_map_init(maps_dir: *const c_char, server_id: c_int
         // Allocate zeroed 65535-slot array on the heap, leak it (lives for process lifetime).
         let raw = unsafe {
             let layout = std::alloc::Layout::new::<[MapData; MAP_SLOTS]>();
-            std::alloc::alloc_zeroed(layout) as *mut MapData
+            let ptr = std::alloc::alloc_zeroed(layout);
+            if ptr.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
+            ptr as *mut MapData
         };
 
         match db::load_maps(dir, server_id, unsafe { &mut *(raw as *mut [MapData; MAP_SLOTS]) }) {

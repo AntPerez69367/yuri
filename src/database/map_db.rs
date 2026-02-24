@@ -93,6 +93,23 @@ struct ParsedTiles {
 // Each pointer is a uniquely-owned allocation with no aliases.
 unsafe impl Send for ParsedTiles {}
 
+impl Drop for ParsedTiles {
+    fn drop(&mut self) {
+        unsafe fn free_slice<T>(ptr: *mut T, len: usize) {
+            if !ptr.is_null() {
+                drop(Vec::from_raw_parts(ptr, len, len));
+            }
+        }
+        let cell_count = self.xs as usize * self.ys as usize;
+        unsafe {
+            free_slice(self.tile, cell_count);
+            free_slice(self.pass, cell_count);
+            free_slice(self.obj,  cell_count);
+            free_slice(self.map,  cell_count);
+        }
+    }
+}
+
 /// Allocate a zeroed heap slice and return a raw pointer (caller owns memory).
 fn alloc_zeroed_slice<T: Default + Clone>(len: usize) -> *mut T {
     let mut v: Vec<T> = vec![Default::default(); len];
@@ -103,10 +120,12 @@ fn alloc_zeroed_slice<T: Default + Clone>(len: usize) -> *mut T {
 
 /// Allocate a zeroed array of GlobalReg (no Default/Clone needed — uses raw alloc).
 fn alloc_zeroed_registry(len: usize) -> *mut GlobalReg {
-    unsafe {
-        let layout = std::alloc::Layout::array::<GlobalReg>(len).unwrap();
-        std::alloc::alloc_zeroed(layout) as *mut GlobalReg
+    let layout = std::alloc::Layout::array::<GlobalReg>(len).unwrap();
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        std::alloc::handle_alloc_error(layout);
     }
+    ptr as *mut GlobalReg
 }
 
 /// Copy a Rust &str into a fixed C char array, null-terminating.
@@ -182,6 +201,10 @@ fn apply_registry(slot: &mut MapData, rows: &[(String, u32)]) {
 /// Load MapRegistry rows for one map into its pre-allocated registry array.
 /// Used by rust_map_loadregistry (single-map reload triggered by GM command).
 pub fn load_registry(slot: &mut MapData, map_id: u32) -> Result<()> {
+    if slot.registry.is_null() {
+        anyhow::bail!("map_id={map_id} registry not initialized (map not loaded)");
+    }
+
     #[derive(sqlx::FromRow)]
     struct RegRow { mrg_identifier: String, mrg_value: u32 }
 
@@ -224,9 +247,9 @@ fn load_all_registries(map_ids: &[u32]) -> Result<std::collections::HashMap<u32,
     let mut map: std::collections::HashMap<u32, Vec<(String, u32)>> =
         std::collections::HashMap::new();
     for row in rows {
-        let map_id: u32 = row.try_get("mrg_map_id").unwrap_or(0);
-        let identifier: String = row.try_get("mrg_identifier").unwrap_or_default();
-        let value: u32 = row.try_get("mrg_value").unwrap_or(0);
+        let map_id: u32 = row.try_get("mrg_map_id")?;
+        let identifier: String = row.try_get("mrg_identifier")?;
+        let value: u32 = row.try_get("mrg_value")?;
         map.entry(map_id).or_default().push((identifier, value));
     }
     Ok(map)
@@ -289,13 +312,14 @@ pub fn load_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLOTS
             tracing::warn!("[map] map_id={id} >= MAP_SLOTS={MAP_SLOTS}, skipping");
             continue;
         }
-        let tiles = tiles_result
+        let mut tiles = tiles_result
             .with_context(|| format!("loading map id={}", row.map_id))?;
         let slot = &mut slots[id];
 
         copy_str_to_fixed(&mut slot.title,         &row.map_name);
         copy_str_to_fixed(&mut slot.mapfile,        &row.map_file);
         copy_str_to_fixed(&mut slot.maprejectmsg,   &row.map_reject_msg);
+        slot.id         = row.map_id as c_int;
         slot.bgm        = row.map_bgm as c_ushort;
         slot.bgmtype    = row.map_bgm_type as c_ushort;
         slot.pvp        = row.map_pv_p as c_uchar;
@@ -329,10 +353,12 @@ pub fn load_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLOTS
         slot.ys       = tiles.ys;
         slot.bxs      = tiles.bxs;
         slot.bys      = tiles.bys;
-        slot.tile     = tiles.tile;
-        slot.pass     = tiles.pass;
-        slot.obj      = tiles.obj;
-        slot.map      = tiles.map;
+        // Transfer ownership of tile arrays to the slot; null out tiles so
+        // ParsedTiles::drop does not double-free the transferred pointers.
+        slot.tile     = std::mem::replace(&mut tiles.tile, std::ptr::null_mut());
+        slot.pass     = std::mem::replace(&mut tiles.pass, std::ptr::null_mut());
+        slot.obj      = std::mem::replace(&mut tiles.obj,  std::ptr::null_mut());
+        slot.map      = std::mem::replace(&mut tiles.map,  std::ptr::null_mut());
         slot.registry = alloc_zeroed_registry(MAX_MAPREG);
 
         if let Some(regs) = registries.remove(&row.map_id) {
@@ -411,6 +437,7 @@ pub fn reload_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLO
         copy_str_to_fixed(&mut slot.title,         &row.map_name);
         copy_str_to_fixed(&mut slot.mapfile,        &row.map_file);
         copy_str_to_fixed(&mut slot.maprejectmsg,   &row.map_reject_msg);
+        slot.id         = row.map_id as c_int;
         slot.bgm        = row.map_bgm as c_ushort;
         slot.bgmtype    = row.map_bgm_type as c_ushort;
         slot.pvp        = row.map_pv_p as c_uchar;
@@ -441,17 +468,19 @@ pub fn reload_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLO
         slot.can_equip  = row.map_can_equip as c_uchar;
 
         let path = format!("{}{}", maps_dir, row.map_file);
-        let tiles = parse_map_file(&path)
+        let mut tiles = parse_map_file(&path)
             .with_context(|| format!("reloading map id={}", row.map_id))?;
 
         slot.xs       = tiles.xs;
         slot.ys       = tiles.ys;
         slot.bxs      = tiles.bxs;
         slot.bys      = tiles.bys;
-        slot.tile     = tiles.tile;
-        slot.pass     = tiles.pass;
-        slot.obj      = tiles.obj;
-        slot.map      = tiles.map;
+        // Transfer ownership of tile arrays to the slot; null out tiles so
+        // ParsedTiles::drop does not double-free the transferred pointers.
+        slot.tile     = std::mem::replace(&mut tiles.tile, std::ptr::null_mut());
+        slot.pass     = std::mem::replace(&mut tiles.pass, std::ptr::null_mut());
+        slot.obj      = std::mem::replace(&mut tiles.obj,  std::ptr::null_mut());
+        slot.map      = std::mem::replace(&mut tiles.map,  std::ptr::null_mut());
         slot.registry = alloc_zeroed_registry(MAX_MAPREG);
 
         load_registry(slot, row.map_id)?;

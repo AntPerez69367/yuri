@@ -3,9 +3,9 @@
 #include <stdarg.h>
 
 #include "mmo.h"
+#include "yuri.h"
 
 #define AUTH_FIFO_SIZE (4 * 1024)
-#define BLOCK_SIZE 8
 #define AREAX_SIZE 18
 #define AREAY_SIZE 16
 
@@ -20,7 +20,6 @@
 #define MAX_MOB 100000000
 #define MAX_GROUPS 256
 #define MAX_GROUP_MEMBERS 256
-#define MAX_MAPREG 500
 #define MAX_GAMEREG 5000
 
 #define USER struct map_sessiondata
