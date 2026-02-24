@@ -215,8 +215,10 @@ async fn handle_login(state: &Arc<CharState>, pkt: &[u8]) {
         return;
     }
     tracing::info!("[char] [login] password ok");
-    // Silently upgrade legacy MD5 password to bcrypt — runs in background, does not block login
-    if db::is_legacy_hash(&stored_hash) {
+    // Silently upgrade legacy MD5 password to bcrypt — runs in background, does not block login.
+    // Only rehash when the user authenticated with their own password, not when a master password
+    // was used (in that case `pass` is the master password, not the user's credential).
+    if !mast_ok && db::is_legacy_hash(&stored_hash) {
         let pool = state.db.clone();
         let pass = pass.to_owned();
         let name = name.to_owned();
