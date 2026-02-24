@@ -407,7 +407,14 @@ void map_termblock() {
 }
 
 void map_initblock() {
-  // CALLOC(bl_head, struct block_list, 1);
+  int i;
+  for (i = 0; i < 65535; i++) {
+    if (map[i].bxs == 0 || map[i].bys == 0) continue;
+    int cells = map[i].bxs * map[i].bys;
+    CALLOC(map[i].block,     struct block_list*, cells);
+    CALLOC(map[i].block_mob, struct block_list*, cells);
+    CALLOC(map[i].warp,      struct warp_list*,  cells);
+  }
 }
 
 /*int map_freeblock(void *bl) {
