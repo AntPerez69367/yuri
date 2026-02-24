@@ -269,7 +269,110 @@ pub fn load_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLOTS
 /// Reload map metadata and tile data in-place. Used by rust_map_reload().
 /// A map is considered "already loaded" if its registry pointer is non-null.
 pub fn reload_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLOTS]) -> Result<usize> {
-    todo!("implement reload_maps — see load_maps for pattern; add free-old-tiles path")
+    #[derive(sqlx::FromRow)]
+    struct MapRow {
+        map_id: u32, map_name: String, map_bgm: u32, map_bgm_type: u32,
+        map_pv_p: u32, map_spells: u32, map_light: u32, map_weather: u32,
+        map_sweep_time: u32, map_chat: u32, map_ghosts: u32, map_region: u32,
+        map_indoor: u32, map_warpout: u32, map_bind: u32, map_file: String,
+        map_req_lvl: i32, map_req_path: u32, map_req_mark: u32,
+        map_can_summon: u32, map_req_vita: u32, map_req_mana: u32,
+        map_lvl_max: u32, map_vita_max: u32, map_mana_max: u32,
+        map_reject_msg: String, map_can_use: u32, map_can_eat: u32,
+        map_can_smoke: u32, map_can_mount: u32, map_can_group: u32, map_can_equip: u32,
+    }
+
+    let rows: Vec<MapRow> = blocking_run(
+        sqlx::query_as(
+            "SELECT MapId AS map_id, MapName AS map_name, MapBGM AS map_bgm,
+             MapBGMType AS map_bgm_type, MapPvP AS map_pv_p, MapSpells AS map_spells,
+             MapLight AS map_light, MapWeather AS map_weather, MapSweepTime AS map_sweep_time,
+             MapChat AS map_chat, MapGhosts AS map_ghosts, MapRegion AS map_region,
+             MapIndoor AS map_indoor, MapWarpout AS map_warpout, MapBind AS map_bind,
+             MapFile AS map_file, MapReqLvl AS map_req_lvl, MapReqPath AS map_req_path,
+             MapReqMark AS map_req_mark, MapCanSummon AS map_can_summon,
+             MapReqVita AS map_req_vita, MapReqMana AS map_req_mana, MapLvlMax AS map_lvl_max,
+             MapVitaMax AS map_vita_max, MapManaMax AS map_mana_max,
+             MapRejectMsg AS map_reject_msg, MapCanUse AS map_can_use, MapCanEat AS map_can_eat,
+             MapCanSmoke AS map_can_smoke, MapCanMount AS map_can_mount,
+             MapCanGroup AS map_can_group, MapCanEquip AS map_can_equip
+             FROM Maps WHERE MapServer = ? ORDER BY MapId"
+        )
+        .bind(server_id)
+        .fetch_all(get_pool())
+    )?;
+
+    for row in &rows {
+        let id = row.map_id as usize;
+        if id >= MAP_SLOTS {
+            eprintln!("[map] map_id {id} >= MAP_SLOTS {MAP_SLOTS}, skipping");
+            continue;
+        }
+        let slot = &mut slots[id];
+
+        // If already loaded, free tile arrays before reallocating.
+        // Save old cell count now — parse_map_file will overwrite xs/ys.
+        if !slot.registry.is_null() {
+            let old_cells = slot.xs as usize * slot.ys as usize;
+            unsafe {
+                // Free tile/pass/obj (c_ushort = u16) and map (c_uchar = u8) arrays.
+                drop(Vec::from_raw_parts(slot.tile, old_cells, old_cells));
+                drop(Vec::from_raw_parts(slot.pass, old_cells, old_cells));
+                drop(Vec::from_raw_parts(slot.obj,  old_cells, old_cells));
+                drop(Vec::from_raw_parts(slot.map,  old_cells, old_cells));
+                // Free registry array.
+                let reg_layout = std::alloc::Layout::array::<GlobalReg>(MAX_MAPREG).unwrap();
+                std::alloc::dealloc(slot.registry as *mut u8, reg_layout);
+            }
+            slot.tile     = std::ptr::null_mut();
+            slot.pass     = std::ptr::null_mut();
+            slot.obj      = std::ptr::null_mut();
+            slot.map      = std::ptr::null_mut();
+            slot.registry = std::ptr::null_mut();
+        }
+
+        copy_str_to_fixed(&mut slot.title,         &row.map_name);
+        copy_str_to_fixed(&mut slot.mapfile,        &row.map_file);
+        copy_str_to_fixed(&mut slot.maprejectmsg,   &row.map_reject_msg);
+        slot.bgm        = row.map_bgm as c_ushort;
+        slot.bgmtype    = row.map_bgm_type as c_ushort;
+        slot.pvp        = row.map_pv_p as c_uchar;
+        slot.spell      = row.map_spells as c_uchar;
+        slot.light      = row.map_light as c_uchar;
+        slot.weather    = row.map_weather as c_uchar;
+        slot.sweeptime  = row.map_sweep_time;
+        slot.cantalk    = row.map_chat as c_uchar;
+        slot.show_ghosts = row.map_ghosts as c_uchar;
+        slot.region     = row.map_region as c_uchar;
+        slot.indoor     = row.map_indoor as c_uchar;
+        slot.warpout    = row.map_warpout as c_uchar;
+        slot.bind       = row.map_bind as c_uchar;
+        slot.reqlvl     = row.map_req_lvl as c_uint;
+        slot.reqpath    = row.map_req_path as c_uchar;
+        slot.reqmark    = row.map_req_mark as c_uchar;
+        slot.summon     = row.map_can_summon as c_uchar;
+        slot.reqvita    = row.map_req_vita;
+        slot.reqmana    = row.map_req_mana;
+        slot.lvlmax     = row.map_lvl_max;
+        slot.vitamax    = row.map_vita_max;
+        slot.manamax    = row.map_mana_max;
+        slot.can_use    = row.map_can_use as c_uchar;
+        slot.can_eat    = row.map_can_eat as c_uchar;
+        slot.can_smoke  = row.map_can_smoke as c_uchar;
+        slot.can_mount  = row.map_can_mount as c_uchar;
+        slot.can_group  = row.map_can_group as c_uchar;
+        slot.can_equip  = row.map_can_equip as c_uchar;
+
+        slot.registry = alloc_zeroed_registry(MAX_MAPREG);
+
+        let path = format!("{}{}", maps_dir, row.map_file);
+        parse_map_file(slot, &path)
+            .with_context(|| format!("reloading map id={}", row.map_id))?;
+
+        load_registry(slot, row.map_id)?;
+    }
+
+    Ok(rows.len())
 }
 
 #[cfg(test)]
