@@ -7,6 +7,7 @@ use std::os::raw::{c_char, c_int, c_uchar, c_uint, c_ushort};
 use std::ptr::null_mut;
 
 use anyhow::{Context, Result};
+use rayon::prelude::*;
 use sqlx::Row;
 
 use crate::database::{blocking_run, get_pool};
@@ -77,6 +78,21 @@ pub struct MapData {
     pub can_equip: c_uchar,
 }
 
+/// Tile arrays parsed from a single .map file. Raw pointers are independently
+/// heap-allocated — no aliases — so safe to move across threads.
+struct ParsedTiles {
+    xs: c_ushort,
+    ys: c_ushort,
+    bxs: c_ushort,
+    bys: c_ushort,
+    tile: *mut c_ushort,
+    pass: *mut c_ushort,
+    obj:  *mut c_ushort,
+    map:  *mut c_uchar,
+}
+// Each pointer is a uniquely-owned allocation with no aliases.
+unsafe impl Send for ParsedTiles {}
+
 /// Allocate a zeroed heap slice and return a raw pointer (caller owns memory).
 fn alloc_zeroed_slice<T: Default + Clone>(len: usize) -> *mut T {
     let mut v: Vec<T> = vec![Default::default(); len];
@@ -103,10 +119,10 @@ fn copy_str_to_fixed<const N: usize>(dest: &mut [c_char; N], src: &str) {
     }
 }
 
-/// Parse a `.map` binary file into a MapData's tile/pass/obj arrays.
+/// Parse a `.map` binary file and return allocated tile arrays.
 /// File format: [xs: u16 BE][ys: u16 BE] then xs*ys × (tile u16 BE, pass u16 BE, obj u16 BE).
 /// Reads the entire file in one syscall, then parses from the in-memory buffer.
-pub fn parse_map_file(slot: &mut MapData, path: &str) -> Result<()> {
+pub fn parse_map_file(path: &str) -> Result<ParsedTiles> {
     let data = std::fs::read(path)
         .with_context(|| format!("map file not found: {path}"))?;
 
@@ -114,17 +130,17 @@ pub fn parse_map_file(slot: &mut MapData, path: &str) -> Result<()> {
         anyhow::bail!("map file too short: {path}");
     }
 
-    slot.xs = u16::from_be_bytes([data[0], data[1]]);
-    slot.ys = u16::from_be_bytes([data[2], data[3]]);
+    let xs = u16::from_be_bytes([data[0], data[1]]);
+    let ys = u16::from_be_bytes([data[2], data[3]]);
 
-    let cell_count = slot.xs as usize * slot.ys as usize;
-    let expected = 4 + cell_count * 6; // header + (tile+pass+obj) * 2 bytes each
+    let cell_count = xs as usize * ys as usize;
+    let expected = 4 + cell_count * 6;
     if data.len() < expected {
         anyhow::bail!("map file truncated: {path} (got {} bytes, need {expected})", data.len());
     }
 
-    slot.bxs = ((slot.xs as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as c_ushort;
-    slot.bys = ((slot.ys as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as c_ushort;
+    let bxs = ((xs as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as c_ushort;
+    let bys = ((ys as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as c_ushort;
 
     let tile = alloc_zeroed_slice::<c_ushort>(cell_count);
     let pass = alloc_zeroed_slice::<c_ushort>(cell_count);
@@ -141,11 +157,7 @@ pub fn parse_map_file(slot: &mut MapData, path: &str) -> Result<()> {
         pos += 6;
     }
 
-    slot.tile = tile;
-    slot.pass = pass;
-    slot.obj  = obj;
-    slot.map  = map;
-    Ok(())
+    Ok(ParsedTiles { xs, ys, bxs, bys, tile, pass, obj, map })
 }
 
 /// Load MapRegistry rows for one map into its pre-allocated registry array.
@@ -218,12 +230,25 @@ pub fn load_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLOTS
         .fetch_all(get_pool())
     )?;
 
-    for row in &rows {
+    // Phase 1: parse all .map files in parallel across rayon's thread pool.
+    // Each entry is (map_id, Result<ParsedTiles>) — errors collected for reporting.
+    let parsed: Vec<(u32, Result<ParsedTiles>)> = rows.par_iter()
+        .map(|row| {
+            let path = format!("{}{}", maps_dir, row.map_file);
+            (row.map_id, parse_map_file(&path))
+        })
+        .collect();
+
+    // Phase 2: apply parsed tiles + scalar fields to slots sequentially.
+    // Registry loads also happen here (DB calls must stay on the runtime thread).
+    for (row, (_, tiles_result)) in rows.iter().zip(parsed.into_iter()) {
         let id = row.map_id as usize;
         if id >= MAP_SLOTS {
             tracing::warn!("[map] map_id={id} >= MAP_SLOTS={MAP_SLOTS}, skipping");
             continue;
         }
+        let tiles = tiles_result
+            .with_context(|| format!("loading map id={}", row.map_id))?;
         let slot = &mut slots[id];
 
         copy_str_to_fixed(&mut slot.title,         &row.map_name);
@@ -258,11 +283,15 @@ pub fn load_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLOTS
         slot.can_group  = row.map_can_group as c_uchar;
         slot.can_equip  = row.map_can_equip as c_uchar;
 
+        slot.xs       = tiles.xs;
+        slot.ys       = tiles.ys;
+        slot.bxs      = tiles.bxs;
+        slot.bys      = tiles.bys;
+        slot.tile     = tiles.tile;
+        slot.pass     = tiles.pass;
+        slot.obj      = tiles.obj;
+        slot.map      = tiles.map;
         slot.registry = alloc_zeroed_registry(MAX_MAPREG);
-
-        let path = format!("{}{}", maps_dir, row.map_file);
-        parse_map_file(slot, &path)
-            .with_context(|| format!("loading map id={}", row.map_id))?;
 
         load_registry(slot, row.map_id as u32)?;
     }
@@ -367,11 +396,19 @@ pub fn reload_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLO
         slot.can_group  = row.map_can_group as c_uchar;
         slot.can_equip  = row.map_can_equip as c_uchar;
 
-        slot.registry = alloc_zeroed_registry(MAX_MAPREG);
-
         let path = format!("{}{}", maps_dir, row.map_file);
-        parse_map_file(slot, &path)
+        let tiles = parse_map_file(&path)
             .with_context(|| format!("reloading map id={}", row.map_id))?;
+
+        slot.xs       = tiles.xs;
+        slot.ys       = tiles.ys;
+        slot.bxs      = tiles.bxs;
+        slot.bys      = tiles.bys;
+        slot.tile     = tiles.tile;
+        slot.pass     = tiles.pass;
+        slot.obj      = tiles.obj;
+        slot.map      = tiles.map;
+        slot.registry = alloc_zeroed_registry(MAX_MAPREG);
 
         load_registry(slot, row.map_id)?;
     }
