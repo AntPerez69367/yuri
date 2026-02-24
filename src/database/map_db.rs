@@ -160,8 +160,27 @@ pub fn parse_map_file(path: &str) -> Result<ParsedTiles> {
     Ok(ParsedTiles { xs, ys, bxs, bys, tile, pass, obj, map })
 }
 
+/// Write a slice of registry rows into a slot's pre-allocated registry array.
+fn apply_registry(slot: &mut MapData, rows: &[(String, u32)]) {
+    slot.registry_num = rows.len().min(MAX_MAPREG) as c_int;
+    for (i, (identifier, value)) in rows.iter().take(MAX_MAPREG).enumerate() {
+        let reg = unsafe { &mut *slot.registry.add(i) };
+        let bytes = identifier.as_bytes();
+        let copy_len = bytes.len().min(63);
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr() as *const c_char,
+                reg.str.as_mut_ptr(),
+                copy_len,
+            );
+            *reg.str.as_mut_ptr().add(copy_len) = 0;
+        }
+        reg.val = *value as c_int;
+    }
+}
+
 /// Load MapRegistry rows for one map into its pre-allocated registry array.
-/// Matches C's map_loadregistry(id): SELECT MrgIdentifier, MrgValue WHERE MrgMapId = id LIMIT 500.
+/// Used by rust_map_loadregistry (single-map reload triggered by GM command).
 pub fn load_registry(slot: &mut MapData, map_id: u32) -> Result<()> {
     #[derive(sqlx::FromRow)]
     struct RegRow { mrg_identifier: String, mrg_value: u32 }
@@ -174,22 +193,43 @@ pub fn load_registry(slot: &mut MapData, map_id: u32) -> Result<()> {
             .fetch_all(get_pool())
     )?;
 
-    slot.registry_num = rows.len() as c_int;
-    for (i, row) in rows.iter().enumerate() {
-        let reg = unsafe { &mut *slot.registry.add(i) };
-        let bytes = row.mrg_identifier.as_bytes();
-        let copy_len = bytes.len().min(63);
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr() as *const c_char,
-                reg.str.as_mut_ptr(),
-                copy_len,
-            );
-            *reg.str.as_mut_ptr().add(copy_len) = 0;
-        }
-        reg.val = row.mrg_value as c_int;
-    }
+    let pairs: Vec<(String, u32)> = rows.into_iter()
+        .map(|r| (r.mrg_identifier, r.mrg_value))
+        .collect();
+    apply_registry(slot, &pairs);
     Ok(())
+}
+
+/// Bulk-load all MapRegistry rows for a set of map IDs in one query.
+/// Returns a HashMap from map_id → Vec<(identifier, value)>.
+fn load_all_registries(map_ids: &[u32]) -> Result<std::collections::HashMap<u32, Vec<(String, u32)>>> {
+    if map_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+
+    // Build "WHERE MrgMapId IN (?,?,?...)" with one placeholder per id.
+    let placeholders = map_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT MrgMapId AS mrg_map_id, MrgIdentifier AS mrg_identifier, MrgValue AS mrg_value \
+         FROM MapRegistry WHERE MrgMapId IN ({placeholders})"
+    );
+
+    let mut query = sqlx::query(&sql);
+    for id in map_ids {
+        query = query.bind(id);
+    }
+
+    let rows = blocking_run(query.fetch_all(get_pool()))?;
+
+    let mut map: std::collections::HashMap<u32, Vec<(String, u32)>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        let map_id: u32 = row.try_get("mrg_map_id").unwrap_or(0);
+        let identifier: String = row.try_get("mrg_identifier").unwrap_or_default();
+        let value: u32 = row.try_get("mrg_value").unwrap_or(0);
+        map.entry(map_id).or_default().push((identifier, value));
+    }
+    Ok(map)
 }
 
 /// Query the Maps table and populate map slots. Called once at startup.
@@ -231,7 +271,6 @@ pub fn load_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLOTS
     )?;
 
     // Phase 1: parse all .map files in parallel across rayon's thread pool.
-    // Each entry is (map_id, Result<ParsedTiles>) — errors collected for reporting.
     let parsed: Vec<(u32, Result<ParsedTiles>)> = rows.par_iter()
         .map(|row| {
             let path = format!("{}{}", maps_dir, row.map_file);
@@ -239,8 +278,11 @@ pub fn load_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLOTS
         })
         .collect();
 
-    // Phase 2: apply parsed tiles + scalar fields to slots sequentially.
-    // Registry loads also happen here (DB calls must stay on the runtime thread).
+    // Phase 2: bulk-load all registry rows in one query.
+    let map_ids: Vec<u32> = rows.iter().map(|r| r.map_id).collect();
+    let mut registries = load_all_registries(&map_ids)?;
+
+    // Phase 3: apply parsed tiles + scalar fields + registry to slots sequentially.
     for (row, (_, tiles_result)) in rows.iter().zip(parsed.into_iter()) {
         let id = row.map_id as usize;
         if id >= MAP_SLOTS {
@@ -293,7 +335,9 @@ pub fn load_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLOTS
         slot.map      = tiles.map;
         slot.registry = alloc_zeroed_registry(MAX_MAPREG);
 
-        load_registry(slot, row.map_id as u32)?;
+        if let Some(regs) = registries.remove(&row.map_id) {
+            apply_registry(slot, &regs);
+        }
     }
 
     Ok(rows.len())
