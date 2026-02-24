@@ -62,7 +62,8 @@ CREATE TABLE `Aethers` (
   `AthPosition` int(10) unsigned NOT NULL DEFAULT '0',
   PRIMARY KEY (`AthId`),
   KEY `AthSplId` (`AthSplId`),
-  KEY `AthChaId` (`AthChaId`)
+  KEY `AthChaId` (`AthChaId`),
+  UNIQUE KEY `uq_char_position` (`AthChaId`, `AthPosition`)
 ) ENGINE=InnoDB AUTO_INCREMENT=1664592 DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 --
@@ -172,7 +173,8 @@ CREATE TABLE `Banks` (
   `BnkNote` varchar(300) NOT NULL DEFAULT '',
   PRIMARY KEY (`BnkId`),
   KEY `BnkChaId` (`BnkChaId`),
-  KEY `BnkItmId` (`BnkItmId`)
+  KEY `BnkItmId` (`BnkItmId`),
+  UNIQUE KEY `uq_char_position` (`BnkChaId`, `BnkPosition`)
 ) ENGINE=InnoDB AUTO_INCREMENT=22305 DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 --
@@ -284,7 +286,8 @@ CREATE TABLE `Boards` (
   PRIMARY KEY (`BrdId`),
   KEY `BrdBnmId` (`BrdBnmId`),
   KEY `BrdChaName` (`BrdChaName`),
-  KEY `BrdBtlId` (`BrdBtlId`)
+  KEY `BrdBtlId` (`BrdBtlId`),
+  KEY `idx_board_position` (`BrdBnmId`, `BrdPosition`)
 ) ENGINE=InnoDB AUTO_INCREMENT=3718 DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 --
@@ -402,7 +405,8 @@ CREATE TABLE `Character` (
   KEY `ChaName` (`ChaName`),
   KEY `ChaClnId` (`ChaClnId`),
   KEY `ChaPthId` (`ChaPthId`),
-  KEY `ChaMapId` (`ChaMapId`)
+  KEY `ChaMapId` (`ChaMapId`),
+  KEY `ChaOnline` (`ChaOnline`)
 ) ENGINE=InnoDB AUTO_INCREMENT=2714 DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 --
@@ -489,7 +493,8 @@ CREATE TABLE `Equipment` (
   `EqpNote` varchar(300) NOT NULL DEFAULT '',
   PRIMARY KEY (`EqpId`),
   KEY `EqpChaId` (`EqpChaId`) USING BTREE,
-  KEY `EqpItmId` (`EqpItmId`) USING BTREE
+  KEY `EqpItmId` (`EqpItmId`) USING BTREE,
+  UNIQUE KEY `uq_char_slot` (`EqpChaId`, `EqpSlot`)
 ) ENGINE=InnoDB AUTO_INCREMENT=48915 DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 --
@@ -603,7 +608,8 @@ CREATE TABLE `Inventory` (
   `InvNote` varchar(300) NOT NULL DEFAULT '',
   PRIMARY KEY (`InvId`),
   KEY `InvChaId` (`InvChaId`) USING BTREE,
-  KEY `InvItmId` (`InvItmId`) USING BTREE
+  KEY `InvItmId` (`InvItmId`) USING BTREE,
+  UNIQUE KEY `uq_char_position` (`InvChaId`, `InvPosition`)
 ) ENGINE=InnoDB AUTO_INCREMENT=694873 DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 --
@@ -735,7 +741,8 @@ CREATE TABLE `Kills` (
   `KilPosition` int(10) unsigned NOT NULL DEFAULT '0',
   PRIMARY KEY (`KilId`),
   KEY `KilChaId` (`KilChaId`),
-  KEY `KilMobId` (`KilMobId`)
+  KEY `KilMobId` (`KilMobId`),
+  UNIQUE KEY `uq_char_position` (`KilChaId`, `KilPosition`)
 ) ENGINE=InnoDB AUTO_INCREMENT=108236 DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 --
@@ -759,7 +766,8 @@ CREATE TABLE `Legends` (
   `LegPosition` int(10) unsigned NOT NULL DEFAULT '0',
   `LegTChaId` int(10) unsigned NOT NULL DEFAULT '0',
   PRIMARY KEY (`LegId`),
-  KEY `LegChaId` (`LegChaId`) USING BTREE
+  KEY `LegChaId` (`LegChaId`) USING BTREE,
+  UNIQUE KEY `uq_char_position` (`LegChaId`, `LegPosition`)
 ) ENGINE=InnoDB AUTO_INCREMENT=15502 DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 --
@@ -787,7 +795,8 @@ CREATE TABLE `Mail` (
   `MalNew` int(11) unsigned NOT NULL DEFAULT '0',
   PRIMARY KEY (`MalId`),
   KEY `MalChaName` (`MalChaName`),
-  KEY `MalChaNameDestination` (`MalChaNameDestination`)
+  KEY `MalChaNameDestination` (`MalChaNameDestination`),
+  KEY `idx_mail_inbox` (`MalChaNameDestination`, `MalDeleted`, `MalPosition`)
 ) ENGINE=InnoDB AUTO_INCREMENT=6200 DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 --
@@ -1378,7 +1387,8 @@ CREATE TABLE `SpellBook` (
   `SbkPosition` int(10) unsigned NOT NULL DEFAULT '0',
   PRIMARY KEY (`SbkId`),
   KEY `SbkChaId` (`SbkChaId`),
-  KEY `SbkSplId` (`SbkSplId`)
+  KEY `SbkSplId` (`SbkSplId`),
+  UNIQUE KEY `uq_char_position` (`SbkChaId`, `SbkPosition`)
 ) ENGINE=InnoDB AUTO_INCREMENT=26593 DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci;
 /*!40101 SET character_set_client = @saved_cs_client */;
 --

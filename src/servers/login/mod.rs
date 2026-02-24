@@ -5,13 +5,16 @@ pub mod meta;
 pub mod packet;
 
 use anyhow::Result;
+use std::os::unix::io::AsRawFd;
 use std::sync::Arc;
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::Mutex;
 use tokio::net::{TcpListener, TcpStream};
 use sqlx::MySqlPool;
 use crate::config::ServerConfig;
+use crate::servers::login::packet::read_client_packet;
 
 /// The 11 localised error messages, indexed by LGN_* constants.
 #[derive(Debug, Clone, Default)]
@@ -121,9 +124,6 @@ start_point:
         mut stream: TcpStream,
         peer: SocketAddr,
     ) {
-        use tokio::io::AsyncWriteExt;
-        use crate::servers::login::packet::read_client_packet;
-
         let ip_u32 = match peer.ip() {
             std::net::IpAddr::V4(v4) => u32::from(v4),
             _ => return,
@@ -169,7 +169,6 @@ start_point:
         } else {
             // Use the OS socket fd as session_id, matching the C login server where
             // session_id == the client's file descriptor (typically 4, 5, 6, ...).
-            use std::os::unix::io::AsRawFd;
             let session_id = stream.as_raw_fd() as u16;
             client::handle_client(state, stream, peer, session_id, first).await;
         }
