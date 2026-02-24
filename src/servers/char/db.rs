@@ -120,9 +120,12 @@ pub async fn is_account_banned(pool: &MySqlPool, char_id: u32) -> bool {
 
 pub async fn set_online(pool: &MySqlPool, char_id: u32, online: bool) {
     let val: u8 = if online { 1 } else { 0 };
-    let _ = sqlx::query("UPDATE `Character` SET `ChaOnline` = ? WHERE `ChaId` = ?")
+    if let Err(e) = sqlx::query("UPDATE `Character` SET `ChaOnline` = ? WHERE `ChaId` = ?")
         .bind(val).bind(char_id)
-        .execute(pool).await;
+        .execute(pool).await
+    {
+        tracing::error!("Failed to update ChaOnline={} for ChaId {}: {}", val, char_id, e);
+    }
 }
 
 /// Change password after verifying old password. Returns 0=ok, -2=no user, -3=wrong pass, -1=db error.
@@ -374,7 +377,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
     // ── SpellBook ─────────────────────────────────────────────────────────────
     // SbkSplId and SbkPosition are int(10) unsigned → u32
     let spells: Vec<(u32, u32)> = sqlx::query_as(
-        "SELECT `SbkSplId`, `SbkPosition` FROM `SpellBook` WHERE `SbkChaId` = ?"
+        "SELECT `SbkSplId`, `SbkPosition` FROM `SpellBook` WHERE `SbkChaId` = ? LIMIT 52"
     ).bind(char_id).fetch_all(pool).await?;
     for (spell_id, pos) in spells {
         let p = pos as usize;
