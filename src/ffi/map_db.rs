@@ -1,18 +1,18 @@
 //! FFI bridge for map data loading.
 //!
-//! Rust allocates the map[] array and populates it; C's map and map_n
-//! globals are set via extern "C" static access.
+//! Rust owns map and map_n as statics, exported to C via #[no_mangle].
+//! map_server.c must NOT define these — they're provided by libyuri.a.
 
 use std::ffi::CStr;
 use std::os::raw::{c_char, c_int};
 
 use crate::database::map_db::{self as db, MapData, MAP_SLOTS};
 
-// C owns these symbol definitions (map_server.c). Rust reaches in to populate them.
-extern "C" {
-    static mut map: *mut MapData;
-    static mut map_n: c_int;
-}
+// Rust owns these globals. Exported to C so map_server.c can read map[id].* unchanged.
+#[no_mangle]
+pub static mut map: *mut MapData = std::ptr::null_mut();
+#[no_mangle]
+pub static mut map_n: c_int = 0;
 
 /// Allocate the 65535-slot map array, load all maps from DB + files, set C globals.
 /// Replaces map_read() in do_init(). Returns 0 on success, -1 on error.

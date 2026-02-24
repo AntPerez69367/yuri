@@ -79,9 +79,9 @@ int map_max = 0;
 // unsigned int blcount_t=0;
 int auth_n = 0;
 struct userlist_data userlist;
-struct map_data* map;
+// map and map_n are defined in src/ffi/map_db.rs (libyuri.a) as Rust statics.
+// extern declarations are in map_server.h.
 struct game_data gamereg;
-int map_n = 0;
 int oldHour;
 int oldMinute;
 int cronjobtimer;
