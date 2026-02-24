@@ -468,7 +468,7 @@ int map_getpostcolor(int, int);
 char *map_id2name(unsigned int);
 void help_screen();
 int mmo_char_fromdb(unsigned int, struct mmo_charstatus *, char *);
-void do_term(void);
+void map_do_term(void);
 void mmo_setonline(unsigned int, int);
 int boards_showposts(struct map_sessiondata *, int);
 int boards_readpost(struct map_sessiondata *, int, int);

@@ -27,4 +27,4 @@ pub mod session;
 /// C-compatible wrapper functions
 /// This entire module will be deleted once C code is fully ported
 #[cfg(not(test))]
-mod ffi;
+pub mod ffi;

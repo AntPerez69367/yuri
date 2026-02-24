@@ -5,33 +5,23 @@ use std::sync::Arc;
 use yuri::config::ServerConfig;
 use yuri::servers::map::MapState;
 
-/// C FFI declarations for game-logic init functions that remain in C.
-/// Linked from libyuri.a + libcommon.a + map game object files.
+/// C game-logic functions from libmap_game.a (pure C, not static inline).
 extern "C" {
     fn map_initblock();
     fn map_initiddb();
     fn npc_init();
     fn warp_init() -> i32;
-    fn itemdb_init();
-    fn recipedb_init();
-    fn mobdb_init();
-    fn magicdb_init();
-    fn classdb_init();
-    fn clandb_init();
-    fn boarddb_init();
     fn intif_init() -> i32;
     fn object_flag_init() -> i32;
     fn sl_init() -> i32;
     fn map_loadgameregistry() -> i32;
-    fn set_defaultparse(f: unsafe extern "C" fn(i32) -> i32);
-    fn set_defaulttimeout(f: unsafe extern "C" fn(i32, i32) -> i32);
-    fn make_listen_port(port: u16) -> i32;
-    fn set_termfunc(f: unsafe extern "C" fn());
     fn clif_parse(fd: i32) -> i32;
-    fn clif_timeout(fd: i32, tick: i32) -> i32;
+    fn clif_timeout(fd: i32) -> i32;
     fn map_do_term(); // renamed from do_term in Task 5
+    fn lang_read(file: *const i8);
+    fn authdb_init(); // from map_char.c — stays until Task 6
 
-    // Legacy C SQL handle (still used by game logic)
+    // Legacy C SQL functions from libdeps.a
     fn Sql_Malloc() -> *mut std::ffi::c_void;
     fn Sql_Connect(
         handle: *mut std::ffi::c_void,
@@ -39,13 +29,47 @@ extern "C" {
         host: *const i8, port: u16,
         db: *const i8,
     ) -> i32;
-    fn lang_read(file: *const i8);
-    fn authdb_init();
 }
 
-// Expose sql_handle to C (map_parse.c uses it as extern Sql* sql_handle).
+// Rust FFI functions from libyuri.a (these replace the static-inline C shims).
+// boarddb_init() → rust_boarddb_init(), etc.
+extern "C" {
+    fn rust_boarddb_init() -> i32;
+    fn rust_clandb_init() -> i32;
+    fn rust_classdb_init(data_dir: *const i8) -> i32;
+    fn rust_itemdb_init() -> i32;
+    fn rust_recipedb_init() -> i32;
+    fn rust_magicdb_init() -> i32;
+    fn rust_mobdb_init() -> i32;
+    // Session functions (from libyuri.a ffi/session.rs)
+    fn rust_session_set_default_parse(f: unsafe extern "C" fn(i32) -> i32);
+    fn rust_session_set_default_timeout(f: unsafe extern "C" fn(i32) -> i32);
+    fn rust_make_listen_port(port: i32) -> i32;
+    fn rust_set_termfunc(f: unsafe extern "C" fn());
+}
+
+// sql_handle is defined in map_server.c; we write to it after Sql_Connect succeeds.
+extern "C" {
+    static mut sql_handle: *mut std::ffi::c_void;
+}
+
+// fd_max is normally defined in core.c (which we exclude to avoid duplicate main()).
+// The Rust session layer updates this via the c_update_fd_max callback.
 #[no_mangle]
-pub static mut sql_handle: *mut std::ffi::c_void = std::ptr::null_mut();
+pub static mut fd_max: std::ffi::c_int = 0;
+
+// Called by Rust session layer to update C's fd_max global.
+#[no_mangle]
+pub unsafe extern "C" fn c_update_fd_max(new_max: std::ffi::c_int) {
+    fd_max = new_max;
+}
+
+extern "C" {
+    fn rust_core_init();
+    fn rust_register_fd_max_updater(cb: unsafe extern "C" fn(std::ffi::c_int));
+    fn db_init();
+    fn timer_init();
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -53,6 +77,14 @@ async fn main() -> Result<()> {
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+
+    // Initialize C core state (mirrors core.c main() preamble).
+    unsafe {
+        rust_core_init();
+        rust_register_fd_max_updater(c_update_fd_max);
+        db_init();
+        timer_init();
+    }
 
     let mut conf_file = "conf/server.yaml".to_string();
     let mut lang_file = "conf/lang.yaml".to_string();
@@ -119,7 +151,7 @@ async fn main() -> Result<()> {
             config.sql_id, config.sql_pw, config.sql_ip, config.sql_port, config.sql_db
         );
         let curl = CString::new(db_url).unwrap();
-        if unsafe { yuri::ffi::database::rust_db_connect(curl.as_ptr()) } != 0 {
+        if yuri::ffi::database::rust_db_connect(curl.as_ptr()) != 0 {
             anyhow::bail!("rust_db_connect failed");
         }
     }
@@ -157,28 +189,31 @@ async fn main() -> Result<()> {
         }
     }
 
-    // C game-logic init — order matches do_init exactly
+    // C game-logic init — order matches do_init exactly.
+    // Static-inline C shims (boarddb_init, etc.) can't be linked from Rust;
+    // we call the rust_* functions they wrap directly.
     unsafe {
         map_initblock();
         map_initiddb();
         npc_init();
         warp_init();
-        itemdb_init();
-        recipedb_init();
-        mobdb_init();
-        magicdb_init();
-        classdb_init();
-        clandb_init();
-        boarddb_init();
+        rust_itemdb_init();
+        rust_recipedb_init();
+        rust_mobdb_init();
+        rust_magicdb_init();
+        let data_dir = CString::new(config.data_dir.as_str()).unwrap();
+        rust_classdb_init(data_dir.as_ptr());
+        rust_clandb_init();
+        rust_boarddb_init();
         intif_init();
         object_flag_init();
         sl_init();
         map_loadgameregistry();
-        set_defaultparse(clif_parse);
-        set_defaulttimeout(clif_timeout);
-        make_listen_port(config.map_port);
+        rust_session_set_default_parse(clif_parse);
+        rust_session_set_default_timeout(clif_timeout);
+        rust_make_listen_port(config.map_port as i32);
         authdb_init();
-        set_termfunc(map_do_term);
+        rust_set_termfunc(map_do_term);
     }
 
     let state = Arc::new(MapState::new(pool, config));

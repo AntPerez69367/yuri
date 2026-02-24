@@ -1308,7 +1308,7 @@ int lang_read(const char* cfg_file) {
   return 0;
 }
 
-void do_term(void) {
+void map_do_term(void) {
   int i;
   map_savechars(0, 0);
   map_clritem();
@@ -1478,137 +1478,6 @@ int object_flag_init(void) {
   }
 
   free(path);
-  return 0;
-}
-int do_init(int argc, char** argv) {
-  int i;
-  char* CONF_FILE = "conf/server.yaml";
-  char* LANG_FILE = "conf/lang.yaml";
-  srand(gettick());
-
-  for (i = 1; i < argc; i++) {
-    if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "--h") == 0 ||
-        strcmp(argv[i], "--?") == 0 || strcmp(argv[i], "/?") == 0) {
-      help_screen();
-    } else if (strcmp(argv[i], "--conf") == 0) {
-      CONF_FILE = argv[i + 1];
-    } else if (strcmp(argv[i], "--lang") == 0) {
-      LANG_FILE = argv[i + 1];
-    }
-  }
-
-  if (rust_config_read(CONF_FILE) != 0) {
-    printf("[map] [config_error] %s\n", CONF_FILE);
-    exit(EXIT_FAILURE);
-  }
-  lang_read(LANG_FILE);
-  set_termfunc(do_term);
-  // CALLOC(userlist,struct userlist_data,1);
-  // gcFixPrematureFrees();
-  printf("[map] Map Server Started.\n");
-  sql_handle = Sql_Malloc();
-  if (sql_handle == NULL) {
-    Sql_ShowDebug(sql_handle);
-    exit(EXIT_FAILURE);
-  }
-  if (SQL_ERROR == Sql_Connect(sql_handle, sql_id, sql_pw, sql_ip,
-                               (uint16_t)sql_port, sql_db)) {
-    Sql_ShowDebug(sql_handle);
-    Sql_Free(sql_handle);
-    exit(EXIT_FAILURE);
-  }
-
-  /* Note: sql_id/sql_pw are not URL-encoded; avoid special chars in credentials.
-   * rust_db_connect is declared in yuri.h. */
-  {
-    char db_url[512];
-    int n = snprintf(db_url, sizeof(db_url), "mysql://%s:%s@%s:%d/%s",
-                     sql_id, sql_pw, sql_ip, sql_port, sql_db);
-    if (n < 0 || (size_t)n >= sizeof(db_url)) {
-      printf("[map] Failed to format database URL (buffer too small)\n");
-      exit(EXIT_FAILURE);
-    }
-    if (rust_db_connect(db_url) != 0) {
-      printf("[map] Failed to initialize MariaDB Rust pool\n");
-      exit(EXIT_FAILURE);
-    }
-  }
-
-  if (SQL_ERROR ==
-      Sql_Query(
-          sql_handle,
-          "UPDATE `Character` SET `ChaOnline` = 0 WHERE `ChaOnline` = 1")) {
-    Sql_ShowDebug(sql_handle);
-  }
-
-  // sql_init();
-  uptime();
-  if (rust_map_init(maps_dir, serverid) != 0) {
-    printf("[map] [fatal] rust_map_init failed\n");
-    exit(EXIT_FAILURE);
-  }
-  map_initblock();
-  map_initiddb();
-  npc_init();
-  warp_init();
-  itemdb_init();
-  recipedb_init();
-  mobdb_init();
-  magicdb_init();
-  classdb_init();
-  clandb_init();
-  {
-    // Load clan banks: was done inside clandb_read(); now done here after rust_clandb_init().
-    if (SQL_SUCCESS == Sql_Query(sql_handle, "SELECT ClnId FROM Clans")) {
-      char *data;
-      while (SQL_SUCCESS == Sql_NextRow(sql_handle)) {
-        int clan_id;
-        struct clan_data *clan;
-        Sql_GetData(sql_handle, 0, &data, NULL);
-        if (data == NULL) continue;
-        clan_id = (int)strtoul(data, NULL, 10);
-        clan = (struct clan_data*)rust_clandb_search(clan_id);
-        if (clan == NULL) {
-          printf("[map] clandb_init: clan %d not found, skipping\n", clan_id);
-          continue;
-        }
-        if (clan->clanbanks == NULL)
-          CALLOC(clan->clanbanks, struct clan_bank, 255);
-        map_loadclanbank(clan_id);
-      }
-      Sql_FreeResult(sql_handle);
-    }
-  }
-  boarddb_init();
-  intif_init();
-  object_flag_init();
-  sl_init();
-  map_loadgameregistry();
-  // set_defaultaccept(clif_accept);
-  set_defaultparse(clif_parse);
-  set_defaulttimeout(clif_timeout);
-  map_fd = make_listen_port(map_port);
-  cur_time = 12;
-  cur_day = 0;
-  cur_year = 1;
-  get_time_thing();
-  authdb_init();
-  timer_insert(450000, 450000, change_time_char, i, i);
-
-  timer_insert(1000, 1000, check_connect_char, char_ip, char_port);
-
-  cronjobtimer = timer_insert(1000, 1000, map_cronjob, 0, 0);
-  timer_insert(100, 100, npc_runtimers, 0, 0);
-  timer_insert(50, 50, mob_timer_spawns, 0, 0);
-  timer_insert(30000, 30000, map_weather, 0, 0);
-  // timer_insert(save_time, save_time, map_savechars, 0, 0);
-  sl_doscript_blargs("startup", NULL, 0);
-
-  for (i = 0; i < MAX_GROUPS; i++) {
-    memset(groups[i], 0, sizeof(unsigned int) * MAX_GROUP_MEMBERS);
-  }
-
-  printf("[map] [ready] port=%d\n", map_port);
   return 0;
 }
 
