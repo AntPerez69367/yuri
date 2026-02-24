@@ -169,6 +169,15 @@ pub async fn is_account_banned(pool: &MySqlPool, char_id: u32) -> bool {
     row.map(|(n,)| n > 0).unwrap_or(false)
 }
 
+/// Clear all stale ChaOnline flags on startup (handles crashes/ungraceful shutdowns).
+pub async fn reset_all_online(pool: &MySqlPool) {
+    if let Err(e) = sqlx::query("UPDATE `Character` SET `ChaOnline` = 0 WHERE `ChaOnline` = 1")
+        .execute(pool).await
+    {
+        tracing::error!("Failed to reset ChaOnline flags on startup: {}", e);
+    }
+}
+
 pub async fn set_online(pool: &MySqlPool, char_id: u32, online: bool) {
     let val: u8 = if online { 1 } else { 0 };
     if let Err(e) = sqlx::query("UPDATE `Character` SET `ChaOnline` = ? WHERE `ChaId` = ?")

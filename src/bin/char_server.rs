@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use sqlx::mysql::MySqlPoolOptions;
 use yuri::config::ServerConfig;
 use yuri::servers::char::CharState;
+use yuri::servers::char::db;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -56,6 +57,7 @@ async fn main() -> Result<()> {
             ))?
     };
 
+    db::reset_all_online(&pool).await;
     tracing::info!("[char] [started] Char Server Started.");
 
     let bind_addr = format!("{}:{}", config.char_ip, config.char_port);
