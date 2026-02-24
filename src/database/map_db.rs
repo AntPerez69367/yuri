@@ -148,7 +148,7 @@ pub fn parse_map_file(slot: &mut MapData, path: &str) -> Result<()> {
 /// Matches C's map_loadregistry(id): SELECT MrgIdentifier, MrgValue WHERE MrgMapId = id LIMIT 500.
 pub fn load_registry(slot: &mut MapData, map_id: u32) -> Result<()> {
     #[derive(sqlx::FromRow)]
-    struct RegRow { mrg_identifier: String, mrg_value: i32 }
+    struct RegRow { mrg_identifier: String, mrg_value: u32 }
 
     let rows: Vec<RegRow> = blocking_run(
         sqlx::query_as("SELECT MrgIdentifier AS mrg_identifier, MrgValue AS mrg_value \
@@ -171,7 +171,7 @@ pub fn load_registry(slot: &mut MapData, map_id: u32) -> Result<()> {
             );
             *reg.str.as_mut_ptr().add(copy_len) = 0;
         }
-        reg.val = row.mrg_value;
+        reg.val = row.mrg_value as c_int;
     }
     Ok(())
 }
@@ -179,17 +179,19 @@ pub fn load_registry(slot: &mut MapData, map_id: u32) -> Result<()> {
 /// Query the Maps table and populate map slots. Called once at startup.
 /// Returns the number of maps loaded, or an error.
 pub fn load_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLOTS]) -> Result<usize> {
+    // Types match DB schema (all INT UNSIGNED except MapReqLvl which is INT).
+    // All int(10) unsigned → u32; MapReqLvl int(10) → i32.
     #[derive(sqlx::FromRow)]
     struct MapRow {
-        map_id: u32, map_name: String, map_bgm: u16, map_bgm_type: u16,
-        map_pv_p: u8, map_spells: u8, map_light: u8, map_weather: u8,
-        map_sweep_time: u32, map_chat: u8, map_ghosts: u8, map_region: u8,
-        map_indoor: u8, map_warpout: u8, map_bind: u8, map_file: String,
-        map_req_lvl: u32, map_req_path: u8, map_req_mark: u8,
-        map_can_summon: u8, map_req_vita: u32, map_req_mana: u32,
+        map_id: u32, map_name: String, map_bgm: u32, map_bgm_type: u32,
+        map_pv_p: u32, map_spells: u32, map_light: u32, map_weather: u32,
+        map_sweep_time: u32, map_chat: u32, map_ghosts: u32, map_region: u32,
+        map_indoor: u32, map_warpout: u32, map_bind: u32, map_file: String,
+        map_req_lvl: i32, map_req_path: u32, map_req_mark: u32,
+        map_can_summon: u32, map_req_vita: u32, map_req_mana: u32,
         map_lvl_max: u32, map_vita_max: u32, map_mana_max: u32,
-        map_reject_msg: String, map_can_use: u8, map_can_eat: u8,
-        map_can_smoke: u8, map_can_mount: u8, map_can_group: u8, map_can_equip: u8,
+        map_reject_msg: String, map_can_use: u32, map_can_eat: u32,
+        map_can_smoke: u32, map_can_mount: u32, map_can_group: u32, map_can_equip: u32,
     }
 
     let rows: Vec<MapRow> = blocking_run(
@@ -223,34 +225,34 @@ pub fn load_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLOTS
         copy_str_to_fixed(&mut slot.title,         &row.map_name);
         copy_str_to_fixed(&mut slot.mapfile,        &row.map_file);
         copy_str_to_fixed(&mut slot.maprejectmsg,   &row.map_reject_msg);
-        slot.bgm        = row.map_bgm;
-        slot.bgmtype    = row.map_bgm_type;
-        slot.pvp        = row.map_pv_p;
-        slot.spell      = row.map_spells;
-        slot.light      = row.map_light;
-        slot.weather    = row.map_weather;
+        slot.bgm        = row.map_bgm as c_ushort;
+        slot.bgmtype    = row.map_bgm_type as c_ushort;
+        slot.pvp        = row.map_pv_p as c_uchar;
+        slot.spell      = row.map_spells as c_uchar;
+        slot.light      = row.map_light as c_uchar;
+        slot.weather    = row.map_weather as c_uchar;
         slot.sweeptime  = row.map_sweep_time;
-        slot.cantalk    = row.map_chat;
-        slot.show_ghosts = row.map_ghosts;
-        slot.region     = row.map_region;
-        slot.indoor     = row.map_indoor;
-        slot.warpout    = row.map_warpout;
-        slot.bind       = row.map_bind;
-        slot.reqlvl     = row.map_req_lvl;
-        slot.reqpath    = row.map_req_path;
-        slot.reqmark    = row.map_req_mark;
-        slot.summon     = row.map_can_summon;
+        slot.cantalk    = row.map_chat as c_uchar;
+        slot.show_ghosts = row.map_ghosts as c_uchar;
+        slot.region     = row.map_region as c_uchar;
+        slot.indoor     = row.map_indoor as c_uchar;
+        slot.warpout    = row.map_warpout as c_uchar;
+        slot.bind       = row.map_bind as c_uchar;
+        slot.reqlvl     = row.map_req_lvl as c_uint;
+        slot.reqpath    = row.map_req_path as c_uchar;
+        slot.reqmark    = row.map_req_mark as c_uchar;
+        slot.summon     = row.map_can_summon as c_uchar;
         slot.reqvita    = row.map_req_vita;
         slot.reqmana    = row.map_req_mana;
         slot.lvlmax     = row.map_lvl_max;
         slot.vitamax    = row.map_vita_max;
         slot.manamax    = row.map_mana_max;
-        slot.can_use    = row.map_can_use;
-        slot.can_eat    = row.map_can_eat;
-        slot.can_smoke  = row.map_can_smoke;
-        slot.can_mount  = row.map_can_mount;
-        slot.can_group  = row.map_can_group;
-        slot.can_equip  = row.map_can_equip;
+        slot.can_use    = row.map_can_use as c_uchar;
+        slot.can_eat    = row.map_can_eat as c_uchar;
+        slot.can_smoke  = row.map_can_smoke as c_uchar;
+        slot.can_mount  = row.map_can_mount as c_uchar;
+        slot.can_group  = row.map_can_group as c_uchar;
+        slot.can_equip  = row.map_can_equip as c_uchar;
 
         slot.registry = alloc_zeroed_registry(MAX_MAPREG);
 
@@ -258,7 +260,7 @@ pub fn load_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLOTS
         parse_map_file(slot, &path)
             .with_context(|| format!("loading map id={}", row.map_id))?;
 
-        load_registry(slot, row.map_id)?;
+        load_registry(slot, row.map_id as u32)?;
     }
 
     Ok(rows.len())
