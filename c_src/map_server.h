@@ -106,8 +106,8 @@ enum {
   MAP_EQCOAT,
   MAP_ERRVITA,
   MAP_ERRMANA,
-  MSG_MAX,
-  MAP_ERRSUMMON
+  MAP_ERRSUMMON,
+  MSG_MAX
 };
 
 /// Packet Descriptors(for incoming data)
