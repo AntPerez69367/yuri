@@ -75,3 +75,4 @@ logs/
 .claude/
 docs/**
 data/**
+.worktrees/

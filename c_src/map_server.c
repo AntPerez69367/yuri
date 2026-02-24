@@ -79,9 +79,9 @@ int map_max = 0;
 // unsigned int blcount_t=0;
 int auth_n = 0;
 struct userlist_data userlist;
-struct map_data* map;
+// map and map_n are defined in src/ffi/map_db.rs (libyuri.a) as Rust statics.
+// extern declarations are in map_server.h.
 struct game_data gamereg;
-int map_n = 0;
 int oldHour;
 int oldMinute;
 int cronjobtimer;
@@ -407,7 +407,14 @@ void map_termblock() {
 }
 
 void map_initblock() {
-  // CALLOC(bl_head, struct block_list, 1);
+  int i;
+  for (i = 0; i < MAP_SLOTS; i++) {
+    if (map[i].bxs == 0 || map[i].bys == 0) continue;
+    int cells = map[i].bxs * map[i].bys;
+    CALLOC(map[i].block,     struct block_list*, cells);
+    CALLOC(map[i].block_mob, struct block_list*, cells);
+    CALLOC(map[i].warp,      struct warp_list*,  cells);
+  }
 }
 
 /*int map_freeblock(void *bl) {
@@ -920,44 +927,7 @@ int map_respawnmobs(int (*func)(struct block_list*, va_list), int m, int type,
 }
 
 int map_loadregistry(int id) {
-  int i;
-
-  struct global_reg reg;
-
-  memset(&reg, 0, sizeof(reg));
-
-  SqlStmt* stmt = SqlStmt_Malloc(sql_handle);
-  if (stmt == NULL) {
-    SqlStmt_ShowDebug(stmt);
-    return 0;
-  }
-
-  if (SQL_ERROR ==
-          SqlStmt_Prepare(stmt,
-                          "SELECT `MrgIdentifier`, `MrgValue` FROM "
-                          "`MapRegistry` WHERE `MrgMapId` = '%d' LIMIT %d",
-                          id, MAX_MAPREG) ||
-      SQL_ERROR == SqlStmt_Execute(stmt) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 0, SQLDT_STRING, &reg.str,
-                                      sizeof(reg.str), NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 1, SQLDT_INT, &reg.val, 0, NULL, NULL)) {
-    SqlStmt_ShowDebug(stmt);
-    SqlStmt_Free(stmt);
-    return 0;
-  }
-
-  map[id].registry_num = 0;
-
-  map[id].registry_num = SqlStmt_NumRows(stmt);
-
-  for (i = 0; i < map[id].registry_num && SQL_SUCCESS == SqlStmt_NextRow(stmt);
-       i++)
-    memcpy(&map[id].registry[i], &reg, sizeof(reg));
-
-  SqlStmt_Free(stmt);
-
-  return 0;
+  return rust_map_loadregistry(id);
 }
 int map_lastdeath_mob(MOB* p) {
   if (SQL_ERROR ==
@@ -1250,216 +1220,16 @@ int map_read() {  // int id, const char *title, char bgm, int pvp, int spell,
 }
 
 int map_reload() {
-  unsigned short buff;
-  unsigned int pos = 0;
-  unsigned int i, x, id, sweeptime, blockcount;
-  unsigned short bgm, bgmtype;
-  unsigned char pvp, spell, light, weather, cantalk, show_ghosts, region,
-      indoor, warpout, bind;
-  unsigned int reqlvl, reqvita, reqmana, lvlmax, manamax, vitamax;
-  unsigned char reqpath, reqmark, summon;
-  char title[64], mapfile[1024], mappath[1024];
-  char maprejectmsg[64];
-  unsigned char canUse, canEat, canSmoke, canMount, canGroup, canEquip;
-
-  SqlStmt* stmt = SqlStmt_Malloc(sql_handle);
-  FILE* fp;
-  // struct map_src_list *i = NULL;
-  if (stmt == NULL) {
-    SqlStmt_ShowDebug(stmt);
-    return 0;
+  int i;
+  if (rust_map_reload(maps_dir, serverid) != 0) {
+    printf("[map] [error] rust_map_reload failed\n");
+    return -1;
   }
-
-  if (SQL_ERROR ==
-          SqlStmt_Prepare(
-              stmt,
-              "SELECT `MapId`, `MapName`, `MapBGM`, `MapBGMType`, `MapPvP`, "
-              "`MapSpells`, `MapLight`, `MapWeather`, `MapSweepTime`, "
-              "`MapChat`, `MapGhosts`, `MapRegion`, `MapIndoor`, `MapWarpout`, "
-              "`MapBind`, `MapFile`, `MapReqLvl`, `MapReqPath`, `MapReqMark`, "
-              "`MapCanSummon`, `MapReqVita`, `MapReqMana`, `MapLvlMax`, "
-              "`MapVitaMax`, `MapManaMax`, `MapRejectMsg`, `MapCanUse`, "
-              "`MapCanEat`, `MapCanSmoke`, `MapCanMount`, `MapCanGroup`, "
-              "`MapCanEquip` FROM `Maps` WHERE `MapServer` = '%d'",
-              serverid) ||
-      SQL_ERROR == SqlStmt_Execute(stmt) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 0, SQLDT_UINT, &id, 0, NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 1, SQLDT_STRING, &title,
-                                      sizeof(title), NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 2, SQLDT_USHORT, &bgm, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 3, SQLDT_USHORT, &bgmtype, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 4, SQLDT_UCHAR, &pvp, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 5, SQLDT_UCHAR, &spell, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 6, SQLDT_UCHAR, &light, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 7, SQLDT_UCHAR, &weather, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 8, SQLDT_UINT, &sweeptime, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 9, SQLDT_UCHAR, &cantalk, 0, NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 10, SQLDT_UCHAR, &show_ghosts, 0,
-                                      NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 11, SQLDT_UCHAR, &region, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 12, SQLDT_UCHAR, &indoor, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 13, SQLDT_UCHAR, &warpout, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 14, SQLDT_UCHAR, &bind, 0, NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 15, SQLDT_STRING, &mapfile,
-                                      sizeof(mapfile), NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 16, SQLDT_UINT, &reqlvl, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 17, SQLDT_UCHAR, &reqpath, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 18, SQLDT_UCHAR, &reqmark, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 19, SQLDT_UCHAR, &summon, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 20, SQLDT_UINT, &reqvita, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 21, SQLDT_UINT, &reqmana, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 22, SQLDT_UINT, &lvlmax, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 23, SQLDT_UINT, &vitamax, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 24, SQLDT_UINT, &manamax, 0, NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 25, SQLDT_STRING, &maprejectmsg,
-                                      sizeof(maprejectmsg), NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 26, SQLDT_UCHAR, &canUse, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 27, SQLDT_UCHAR, &canEat, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 28, SQLDT_UCHAR, &canSmoke, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 29, SQLDT_UCHAR, &canMount, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 30, SQLDT_UCHAR, &canGroup, 0, NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 31, SQLDT_UCHAR, &canEquip, 0, NULL, NULL)) {
-    SqlStmt_ShowDebug(stmt);
-    SqlStmt_Free(stmt);
-    return 0;
+  for (i = 0; i < map_n; i++) {
+    if (map_isloaded(i))
+      map_foreachinarea(sl_updatepeople, i, 0, 0, SAMEMAP, BL_PC);
   }
-
-  map_n = SqlStmt_NumRows(stmt);
-
-  for (i = 0; i < map_n && SQL_SUCCESS == SqlStmt_NextRow(stmt); i++) {
-    sprintf(mappath, "%s%s", maps_dir, mapfile);
-    fp = fopen(mappath, "rb");
-    blockcount = map[id].bxs * map[id].bys;
-
-    if (fp == NULL) {
-      printf("MAP_ERR: Map file not found (%s).\n", mappath);
-      return -1;
-    }
-
-    memcpy(map[id].mapfile, mapfile, sizeof(mapfile));
-    memcpy(map[id].title, title, sizeof(title));
-    if (map[id].bgm != bgm) map[id].bgm = bgm;
-    if (map[id].bgmtype != bgmtype) map[id].bgmtype = bgmtype;
-    if (map[id].spell != spell) map[id].spell = spell;
-    if (map[id].light != light) map[id].light = light;
-    if (map[id].weather != weather) map[id].weather = weather;
-    if (map[id].pvp != pvp) map[id].pvp = pvp;
-    if (map[id].sweeptime != sweeptime) map[id].sweeptime = sweeptime;
-    if (map[id].cantalk != cantalk) map[id].cantalk = cantalk;
-    if (map[id].show_ghosts != show_ghosts) map[id].show_ghosts = show_ghosts;
-    if (map[id].region != region) map[id].region = region;
-    if (map[id].indoor != indoor) map[id].indoor = indoor;
-    if (map[id].warpout != warpout) map[id].warpout = warpout;
-    if (map[id].bind != bind) map[id].bind = bind;
-    if (map[id].reqlvl != reqlvl) map[id].reqlvl = reqlvl;
-    if (map[id].reqmana != reqmana) map[id].reqmana = reqmana;
-    if (map[id].reqvita != reqvita) map[id].reqvita = reqvita;
-    if (map[id].lvlmax != lvlmax) map[id].lvlmax = lvlmax;
-    if (map[id].vitamax != vitamax) map[id].vitamax = vitamax;
-    if (map[id].manamax != manamax) map[id].manamax = manamax;
-    if (map[id].reqpath != reqpath) map[id].reqpath = reqpath;
-    if (map[id].reqmark != reqmark) map[id].reqmark = reqmark;
-    if (map[id].summon != summon) map[id].summon = summon;
-
-    memcpy(map[id].maprejectmsg, maprejectmsg, sizeof(maprejectmsg));
-    if (map[id].canUse != canUse) map[id].canUse = canUse;
-    if (map[id].canEat != canEat) map[id].canEat = canEat;
-    if (map[id].canSmoke != canSmoke) map[id].canSmoke = canSmoke;
-    if (map[id].canMount != canMount) map[id].canMount = canMount;
-    if (map[id].canGroup != canGroup) map[id].canGroup = canGroup;
-    if (map[id].canEquip != canEquip) map[id].canEquip = canEquip;
-
-    fread(&buff, 2, 1, fp);
-    map[id].xs = SWAP16(buff);
-    fread(&buff, 2, 1, fp);
-    map[id].ys = SWAP16(buff);
-
-    if (map_isloaded(id)) {
-      REALLOC(map[id].tile, unsigned short, map[id].xs* map[id].ys);
-      REALLOC(map[id].obj, unsigned short, map[id].xs* map[id].ys);
-      REALLOC(map[id].map, unsigned char, map[id].xs* map[id].ys);
-      REALLOC(map[id].pass, unsigned short, map[id].xs* map[id].ys);
-    } else {
-      CALLOC(map[id].tile, unsigned short, map[id].xs* map[id].ys);
-      CALLOC(map[id].obj, unsigned short, map[id].xs* map[id].ys);
-      CALLOC(map[id].map, unsigned char, map[id].xs* map[id].ys);
-      CALLOC(map[id].pass, unsigned short, map[id].xs* map[id].ys);
-    }
-
-    map[id].bxs = (map[id].xs + BLOCK_SIZE - 1) / BLOCK_SIZE;
-    map[id].bys = (map[id].ys + BLOCK_SIZE - 1) / BLOCK_SIZE;
-
-    if (map_isloaded(id)) {
-      FREE(map[id].warp);
-      CALLOC(map[id].warp, struct warp_list*, map[id].bxs * map[id].bys);
-      REALLOC(map[id].block, struct block_list*, map[id].bxs * map[id].bys);
-      REALLOC(map[id].block_mob, struct block_list*, map[id].bxs * map[id].bys);
-
-      if (map[id].bxs * map[id].bys > blockcount) {
-        for (x = blockcount; x < map[id].bxs * map[id].bys; x++) {
-          map[id].block[x] = NULL;
-          map[id].block_mob[x] = NULL;
-        }
-      }
-    } else {
-      CALLOC(map[id].warp, struct warp_list*, map[id].bxs * map[id].bys);
-      CALLOC(map[id].block, struct block_list*, map[id].bxs * map[id].bys);
-      CALLOC(map[id].block_mob, struct block_list*, map[id].bxs * map[id].bys);
-      CALLOC(map[id].registry, struct global_reg, MAX_MAPREG);
-    }
-
-    while (!feof(fp)) {
-      fread(&buff, 2, 1, fp);
-      map[id].tile[pos] = SWAP16(buff);
-      fread(&buff, 2, 1, fp);
-      map[id].pass[pos] = SWAP16(buff);
-      fread(&buff, 2, 1, fp);
-      map[id].obj[pos] = SWAP16(buff);
-      // map[id].pass[pos]=0;
-      // all map section is walkable
-      // map[id].map[pos] = 0;
-      pos++;
-      if (pos >= map[id].xs * map[id].ys) break;
-    }
-
-    pos = 0;
-    fclose(fp);
-    map_loadregistry(id);
-    map_foreachinarea(sl_updatepeople, id, 0, 0, SAMEMAP, BL_PC);
-  }
-
-  SqlStmt_Free(stmt);
   printf("Map data file reading finished. %d map loaded!\n", map_n);
-  // timer_insert(1800000,1800000,map_saveregistry, id, 0);
-  // map_n++;
   return 0;
 }
 
@@ -1675,7 +1445,7 @@ int object_flag_init(void) {
   int z = 1;
 
   char* filename = "static_objects.tbl";
-  size_t path_size = strlen(data_dir) + strlen(filename);
+  size_t path_size = strlen(data_dir) + strlen(filename) + 1;
   char* path = malloc(path_size);
 
   strncpy(path, data_dir, path_size);
@@ -1773,7 +1543,10 @@ int do_init(int argc, char** argv) {
 
   // sql_init();
   uptime();
-  map_read();
+  if (rust_map_init(maps_dir, serverid) != 0) {
+    printf("[map] [fatal] rust_map_init failed\n");
+    exit(EXIT_FAILURE);
+  }
   map_initblock();
   map_initiddb();
   npc_init();

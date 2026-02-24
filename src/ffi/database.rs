@@ -6,6 +6,13 @@ use std::os::raw::{c_char, c_int};
 /// url format: "mysql://user:pass@host:port/db"
 #[no_mangle]
 pub extern "C" fn rust_db_connect(url: *const c_char) -> c_int {
+    // Initialize tracing here so logs from map/db init are captured.
+    // try_init() is a no-op if rust_server_run already called it.
+    let _ = tracing_subscriber::fmt()
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         if url.is_null() {
             tracing::error!("[db] Connect called with null URL");
