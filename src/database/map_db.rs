@@ -413,25 +413,22 @@ pub fn reload_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLO
         }
         let slot = &mut slots[id];
 
-        // If already loaded, free tile arrays before reallocating.
-        // Save old cell count now — parse_map_file will overwrite xs/ys.
+        // Parse the map file first — on failure, leave the slot untouched.
+        let path = format!("{}{}", maps_dir, row.map_file);
+        let mut tiles = parse_map_file(&path)
+            .with_context(|| format!("reloading map id={}", row.map_id))?;
+
+        // Parse succeeded — now free the old tile arrays and registry.
         if !slot.registry.is_null() {
             let old_cells = slot.xs as usize * slot.ys as usize;
             unsafe {
-                // Free tile/pass/obj (c_ushort = u16) and map (c_uchar = u8) arrays.
                 drop(Vec::from_raw_parts(slot.tile, old_cells, old_cells));
                 drop(Vec::from_raw_parts(slot.pass, old_cells, old_cells));
                 drop(Vec::from_raw_parts(slot.obj,  old_cells, old_cells));
                 drop(Vec::from_raw_parts(slot.map,  old_cells, old_cells));
-                // Free registry array.
                 let reg_layout = std::alloc::Layout::array::<GlobalReg>(MAX_MAPREG).unwrap();
                 std::alloc::dealloc(slot.registry as *mut u8, reg_layout);
             }
-            slot.tile     = std::ptr::null_mut();
-            slot.pass     = std::ptr::null_mut();
-            slot.obj      = std::ptr::null_mut();
-            slot.map      = std::ptr::null_mut();
-            slot.registry = std::ptr::null_mut();
         }
 
         copy_str_to_fixed(&mut slot.title,         &row.map_name);
@@ -466,10 +463,6 @@ pub fn reload_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLO
         slot.can_mount  = row.map_can_mount as c_uchar;
         slot.can_group  = row.map_can_group as c_uchar;
         slot.can_equip  = row.map_can_equip as c_uchar;
-
-        let path = format!("{}{}", maps_dir, row.map_file);
-        let mut tiles = parse_map_file(&path)
-            .with_context(|| format!("reloading map id={}", row.map_id))?;
 
         slot.xs       = tiles.xs;
         slot.ys       = tiles.ys;

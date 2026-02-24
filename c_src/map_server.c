@@ -408,7 +408,7 @@ void map_termblock() {
 
 void map_initblock() {
   int i;
-  for (i = 0; i < 65535; i++) {
+  for (i = 0; i < MAP_SLOTS; i++) {
     if (map[i].bxs == 0 || map[i].bys == 0) continue;
     int cells = map[i].bxs * map[i].bys;
     CALLOC(map[i].block,     struct block_list*, cells);
