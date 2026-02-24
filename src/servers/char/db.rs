@@ -10,11 +10,16 @@ fn md5_hex(input: &str) -> String {
 }
 
 /// Returns true if `stored` is a legacy MD5 hash (not a bcrypt hash).
+/// Recognises all four bcrypt version prefixes the `bcrypt` crate accepts:
+/// $2b$ (canonical), $2a$ (original), $2y$ (PHP compat), $2x$ (rare bugfix).
 pub(crate) fn is_legacy_hash(stored: &str) -> bool {
-    !stored.starts_with("$2b$") && !stored.starts_with("$2a$")
+    !stored.starts_with("$2b$")
+        && !stored.starts_with("$2a$")
+        && !stored.starts_with("$2y$")
+        && !stored.starts_with("$2x$")
 }
 
-/// Hash a plaintext password with bcrypt at cost 12.
+/// Hash a plaintext password with bcrypt at cost 10.
 /// Runs on a blocking thread to avoid stalling the async executor.
 pub async fn hash_password(pass: &str) -> Result<String> {
     let pass = pass.to_owned();
@@ -873,6 +878,8 @@ mod tests {
     fn test_is_legacy_hash_bcrypt() {
         assert!(!is_legacy_hash("$2b$04$somehashvalue"));
         assert!(!is_legacy_hash("$2a$04$somehashvalue"));
+        assert!(!is_legacy_hash("$2y$12$L6Bc/AlTQHyd9liGgGEZyOFLPHNgyxeEPfgYfBCVxJ7JIlwxyVU3u"));
+        assert!(!is_legacy_hash("$2x$04$somehashvalue"));
     }
 
     #[tokio::test]
