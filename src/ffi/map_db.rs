@@ -36,11 +36,11 @@ pub unsafe extern "C" fn rust_map_init(maps_dir: *const c_char, server_id: c_int
                     map = raw;
                     map_n = count as c_int;
                 }
-                println!("[map] Map data file reading finished. {count} maps loaded!");
+                tracing::info!("[map] map data loaded count={count}");
                 0
             }
             Err(e) => {
-                eprintln!("[map] rust_map_init failed: {e}");
+                tracing::error!("[map] rust_map_init failed: {e:#}");
                 // free the allocation since we won't use it
                 unsafe {
                     let layout = std::alloc::Layout::new::<[MapData; MAP_SLOTS]>();
@@ -66,7 +66,7 @@ pub unsafe extern "C" fn rust_map_reload(maps_dir: *const c_char, server_id: c_i
         let slots = unsafe { &mut *(map as *mut [MapData; MAP_SLOTS]) };
         match db::reload_maps(dir, server_id, slots) {
             Ok(_) => 0,
-            Err(e) => { eprintln!("[map] rust_map_reload failed: {e}"); -1 }
+            Err(e) => { tracing::error!("[map] rust_map_reload failed: {e:#}"); -1 }
         }
     })
 }
@@ -82,7 +82,7 @@ pub unsafe extern "C" fn rust_map_loadregistry(map_id: c_int) -> c_int {
         let slot = unsafe { &mut *map.add(id) };
         match db::load_registry(slot, map_id as u32) {
             Ok(_) => 0,
-            Err(e) => { eprintln!("[map] rust_map_loadregistry({map_id}) failed: {e}"); -1 }
+            Err(e) => { tracing::error!("[map] rust_map_loadregistry map_id={map_id} failed: {e:#}"); -1 }
         }
     })
 }

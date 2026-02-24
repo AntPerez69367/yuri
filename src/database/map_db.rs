@@ -221,7 +221,7 @@ pub fn load_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLOTS
     for row in &rows {
         let id = row.map_id as usize;
         if id >= MAP_SLOTS {
-            eprintln!("[map] map_id {id} >= MAP_SLOTS {MAP_SLOTS}, skipping");
+            tracing::warn!("[map] map_id={id} >= MAP_SLOTS={MAP_SLOTS}, skipping");
             continue;
         }
         let slot = &mut slots[id];
@@ -309,7 +309,7 @@ pub fn reload_maps(maps_dir: &str, server_id: i32, slots: &mut [MapData; MAP_SLO
     for row in &rows {
         let id = row.map_id as usize;
         if id >= MAP_SLOTS {
-            eprintln!("[map] map_id {id} >= MAP_SLOTS {MAP_SLOTS}, skipping");
+            tracing::warn!("[map] map_id={id} >= MAP_SLOTS={MAP_SLOTS}, skipping");
             continue;
         }
         let slot = &mut slots[id];
