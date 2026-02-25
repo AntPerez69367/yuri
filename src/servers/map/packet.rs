@@ -50,6 +50,7 @@ async fn handle_accept(state: &Arc<MapState>, pkt: &[u8]) {
     tracing::info!("[map] [charif] handle_accept");
     // Collect loaded map IDs from the Rust-owned map array.
     // map[i].tile != NULL means the map was loaded (same check as C gm_command.c:1504).
+    #[cfg(not(test))]
     let map_ids: Vec<u16> = unsafe {
         let map_ptr = crate::ffi::map_db::map;
         let map_n   = crate::ffi::map_db::map_n as usize;
@@ -63,6 +64,8 @@ async fn handle_accept(state: &Arc<MapState>, pkt: &[u8]) {
                 .collect()
         }
     };
+    #[cfg(test)]
+    let map_ids: Vec<u16> = vec![];
 
     // 0x3001 packet: [0..2]=cmd, [2..6]=total_len (u32 LE), [6..8]=map_count (u16 LE),
     //                [8..] = map_ids (u16 LE each)
@@ -147,9 +150,12 @@ async fn handle_charload(_state: &Arc<MapState>, pkt: &[u8]) {
         }
     }
 
+    #[cfg(not(test))]
     let result = tokio::task::spawn_blocking(move || {
         crate::ffi::map_char::call_intif_mmo_tosd(fd, &mut raw)
     }).await;
+    #[cfg(test)]
+    let result: Result<i32, tokio::task::JoinError> = Ok(0);
     match &result {
         Ok(rc) => tracing::info!("[map] [charif] intif_mmo_tosd returned rc={}", rc),
         Err(e) => tracing::error!("[map] [charif] intif_mmo_tosd PANICKED: {}", e),
