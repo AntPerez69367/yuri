@@ -393,6 +393,7 @@ pub fn load_maps(
     let mut registries = load_all_registries(&map_ids)?;
 
     // Phase 3: apply parsed tiles + scalar fields + registry to slots sequentially.
+    let mut loaded = 0usize;
     for (row, (_, tiles_result)) in rows.iter().zip(parsed.into_iter()) {
         let id = row.map_id as usize;
         if id >= MAP_SLOTS {
@@ -450,9 +451,10 @@ pub fn load_maps(
         if let Some(regs) = registries.remove(&row.map_id) {
             apply_registry(slot, &regs);
         }
+        loaded += 1;
     }
 
-    Ok(rows.len())
+    Ok(loaded)
 }
 
 /// Reload map metadata and tile data in-place. Used by rust_map_reload().
