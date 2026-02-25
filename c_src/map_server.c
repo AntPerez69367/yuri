@@ -92,34 +92,12 @@ int old_time, cur_time, cur_year, cur_day, cur_season;
 
 struct block_list* bl_list[BL_LIST_MAX];
 
-static struct block_list bl_head;
+struct block_list bl_head;
 int bl_list_count = 0;
 
 time_t gettickthing(void) { return time(NULL); }
 int command_input(char* val) { return 0; }
 
-int map_moveblock(struct block_list* bl, int x1, int y1) {
-  int x0 = bl->x, y0 = bl->y;
-  // struct status_change *sc = NULL;
-  if (x1 >= map[bl->m].xs) x1 = map[bl->m].xs - 1;
-  if (y1 >= map[bl->m].ys) y1 = map[bl->m].ys - 1;
-  int moveblock = (x0 / BLOCK_SIZE != x1 / BLOCK_SIZE ||
-                   y0 / BLOCK_SIZE != y1 / BLOCK_SIZE);
-  // int moveblock=1;
-  if (!bl->prev) {
-    // Block not in map, just update coordinates, but do naught else.
-    bl->x = x1;
-    bl->y = y1;
-    return 0;
-  }
-
-  // TODO: Perhaps some outs of bounds checking should be placed here?
-  if (moveblock) map_delblock(bl);
-  bl->x = x1;
-  bl->y = y1;
-  if (moveblock) map_addblock(bl);
-  return 0;
-}
 
 int map_timerthing(int x, int b) { return 0; }
 int nmail_sendmessage(USER* sd, char* message, int other, int type) {
@@ -402,20 +380,6 @@ USER* map_name2sd(const char* name) {
   return NULL;
 }
 
-void map_termblock() {
-  // FREE(bl_head);
-}
-
-void map_initblock() {
-  int i;
-  for (i = 0; i < MAP_SLOTS; i++) {
-    if (map[i].bxs == 0 || map[i].bys == 0) continue;
-    int cells = map[i].bxs * map[i].bys;
-    CALLOC(map[i].block,     struct block_list*, cells);
-    CALLOC(map[i].block_mob, struct block_list*, cells);
-    CALLOC(map[i].warp,      struct warp_list*,  cells);
-  }
-}
 
 /*int map_freeblock(void *bl) {
         if (!bl_free_lock) {
@@ -442,88 +406,7 @@ int map_freeblock_unlock() {
         return bl_free_lock;
 }
 */
-int map_addblock(struct block_list* bl) {
-  int m, x, y, pos;
 
-  nullpo_ret(0, bl);
-  if (bl->prev != NULL) {
-    ShowError("map_addblock: bl->prev != NULL\n");
-    return 1;
-  }
-
-  m = bl->m;
-  x = bl->x;
-  y = bl->y;
-  if (!map_isloaded(m)) {
-    printf("[map_addblock] [error] invalid map id id=%d\n", m);
-    return 1;
-  }
-  if (x < 0 || x >= map[m].xs || y < 0 || y >= map[m].ys) {
-    ShowError(
-        "map_addblock: out-of-bounds coordinates map: %d -> (%d,%d) id: %u\n",
-        m, x, y, bl->id);
-
-    // ShowError("map_addblock: out-of-bounds coordinates (\"%s\",%d,%d), map is
-    // %dx%d\n", map[m].name, x, y, map[m].xs, map[m].ys);
-    return 1;
-  }
-
-  pos = x / BLOCK_SIZE + (y / BLOCK_SIZE) * map[m].bxs;
-
-  if (bl->type == BL_MOB) {
-    bl->next = map[m].block_mob[pos];
-    bl->prev = &bl_head;
-    if (bl->next) bl->next->prev = bl;
-    map[m].block_mob[pos] = bl;
-  } else {
-    bl->next = map[m].block[pos];
-    bl->prev = &bl_head;
-    if (bl->next) bl->next->prev = bl;
-    map[m].block[pos] = bl;
-  }
-
-  if (bl->type == BL_PC) map[m].user++;
-
-  // if (bl->prev < 0x100 || bl->next < 0x100) {
-  //   if (bl->next) {
-  //     printf("Prev = %u : Next = %u\n", bl->prev->id, bl->next->id);
-  //   }
-  // }
-  return 0;
-}
-
-int map_delblock(struct block_list* bl) {
-  int pos;
-  nullpo_ret(0, bl);
-
-  if (bl->prev == NULL) {
-    if (bl->next != NULL) {
-      ShowError("map_delblock error : bl->next!=NULL\n");
-    }
-    return 0;
-  }
-
-  pos = bl->x / BLOCK_SIZE + (bl->y / BLOCK_SIZE) * map[bl->m].bxs;
-
-  if (bl->next) bl->next->prev = bl->prev;
-  if (bl->prev == &bl_head) {
-    // ���X�g�̓��Ȃ̂ŁAmap[]��block_list���X�V����
-    if (bl->type == BL_MOB) {
-      map[bl->m].block_mob[pos] = bl->next;
-    } else {
-      map[bl->m].block[pos] = bl->next;
-    }
-  } else {
-    bl->prev->next = bl->next;
-  }
-
-  if (bl->type == BL_PC) map[bl->m].user--;
-
-  bl->next = NULL;
-  bl->prev = NULL;
-
-  return 0;
-}
 
 int map_foreachinarea(int (*func)(struct block_list*, va_list), int m, int x,
                       int y, int area, int type, ...) {

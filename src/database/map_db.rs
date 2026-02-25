@@ -22,6 +22,47 @@ pub struct GlobalReg {
     pub val: c_int,
 }
 
+/// Mirrors `struct block_list` from `map_server.h`. 48 bytes on 64-bit.
+/// Intrusive doubly-linked list header embedded as first field in every entity
+/// struct (mob, pc, npc, flooritem). `bl_type` selects which grid chain is used.
+#[repr(C)]
+pub struct BlockList {
+    pub next:          *mut BlockList,
+    pub prev:          *mut BlockList,
+    pub id:            c_uint,
+    pub bx:            c_uint,
+    pub by:            c_uint,
+    pub graphic_id:    c_uint,
+    pub graphic_color: c_uint,
+    pub m:             c_ushort,
+    pub x:             c_ushort,
+    pub y:             c_ushort,
+    pub bl_type:       c_uchar,
+    pub subtype:       c_uchar,
+}
+// SAFETY: BlockList contains raw pointers to C-managed intrusive list nodes.
+// All access is gated behind unsafe blocks; no Rust code aliases these pointers.
+unsafe impl Send for BlockList {}
+// SAFETY: same as Send — no interior mutability, no aliasing through Rust references.
+unsafe impl Sync for BlockList {}
+
+/// Mirrors `struct warp_list` from `map_server.h`. 40 bytes on 64-bit.
+#[repr(C)]
+pub struct WarpList {
+    pub x:    c_int,
+    pub y:    c_int,
+    pub tm:   c_int,
+    pub tx:   c_int,
+    pub ty:   c_int,
+    pub next: *mut WarpList,
+    pub prev: *mut WarpList,
+}
+// SAFETY: WarpList contains raw pointers to C-managed warp chain nodes.
+// All access is gated behind unsafe blocks; no Rust code aliases these pointers.
+unsafe impl Send for WarpList {}
+// SAFETY: same as Send — no interior mutability, no aliasing through Rust references.
+unsafe impl Sync for WarpList {}
+
 /// Mirrors `struct map_data` from `map_server.h`.
 /// Pointer fields managed by Rust (tile/pass/obj/map/registry) or C (block/block_mob/warp).
 #[repr(C)]
@@ -29,9 +70,9 @@ pub struct MapData {
     pub title: [c_char; 64],
     pub mapfile: [c_char; 1024],
     pub maprejectmsg: [c_char; 64],
-    pub block: *mut *mut u8, // struct block_list** — C-managed, opaque to Rust
-    pub block_mob: *mut *mut u8, // struct block_list** — C-managed, opaque to Rust
-    pub warp: *mut *mut u8,  // struct warp_list**  — C-managed, opaque to Rust
+    pub block:     *mut *mut BlockList,
+    pub block_mob: *mut *mut BlockList,
+    pub warp:      *mut *mut WarpList,
     pub registry: *mut GlobalReg,
     pub max_sweep_count: c_int,
     pub user: c_int,
@@ -570,5 +611,18 @@ mod layout_tests {
         let size = std::mem::size_of::<MapData>();
         println!("MapData size = {size}");
         assert_eq!(size, 1304, "MapData size mismatch");
+    }
+
+    #[test]
+    fn block_list_layout() {
+        assert_eq!(std::mem::size_of::<BlockList>(), 48);
+        assert_eq!(std::mem::offset_of!(BlockList, m),       36);
+        assert_eq!(std::mem::offset_of!(BlockList, bl_type), 42);
+    }
+
+    #[test]
+    fn warp_list_layout() {
+        assert_eq!(std::mem::size_of::<WarpList>(), 40);
+        assert_eq!(std::mem::offset_of!(WarpList, next), 24);
     }
 }

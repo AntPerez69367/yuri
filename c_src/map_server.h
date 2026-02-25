@@ -399,6 +399,7 @@ extern int map_n;
 extern struct userlist_data userlist;
 extern struct auth_data auth_fifo[];
 extern int auth_n;
+extern struct block_list bl_head; /* sentinel for block grid chains; owned by map_server.c */
 
 extern int map_fd;
 extern int char_fd;
@@ -421,6 +422,8 @@ int map_setmapip(int, unsigned int, unsigned short);
 int map_freeblock(void *);
 int map_freeblock_lock();
 int map_freeblock_unlock();
+void map_termblock();
+void map_initblock();
 int map_addblock(struct block_list *);
 int map_delblock(struct block_list *);
 int map_foreachincell(int (*)(struct block_list *, va_list), int, int, int, int,
