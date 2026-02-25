@@ -15,18 +15,33 @@
 int encrypt(int fd) {
   USER *sd = rust_session_get_data(fd);
 
-  if (sd == NULL) return 1;
-
-  set_packet_indexes((unsigned char *)WFIFOP(fd, 0));
-
-  if (is_key_server(WFIFOB(fd, 3))) {
-    char key[10];
-    generate_key2((unsigned char *)WFIFOP(fd, 0), sd->EncHash, key, 0);
-    tk_crypt_dynamic((unsigned char *)WFIFOP(fd, 0), key);
-  } else {
-    tk_crypt_static((unsigned char *)WFIFOP(fd, 0));
+  if (sd == NULL) {
+    printf("[encrypt] sd is NULL for fd=%d\n", fd);
+    fflush(stdout);
+    return 1;
   }
-  return (int)SWAP16(*(unsigned short *)WFIFOP(fd, 1)) + 3;
+
+  unsigned char *buf = (unsigned char *)WFIFOP(fd, 0);
+  if (!buf) {
+    printf("[encrypt] WFIFOP returned NULL for fd=%d\n", fd);
+    fflush(stdout);
+    return 1;
+  }
+  unsigned char cmd_before = buf[3];
+
+  set_packet_indexes(buf);
+
+  if (is_key_server(buf[3])) {
+    char key[10];
+    generate_key2(buf, sd->EncHash, key, 0);
+    tk_crypt_dynamic(buf, key);
+  } else {
+    tk_crypt_static(buf);
+  }
+  int pkt_len = (int)SWAP16(*(unsigned short *)(buf + 1)) + 3;
+  printf("[encrypt] fd=%d cmd=0x%02X len=%d\n", fd, cmd_before, pkt_len);
+  fflush(stdout);
+  return pkt_len;
 }
 
 int decrypt(int fd) {

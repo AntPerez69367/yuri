@@ -35,11 +35,12 @@ async fn run_char_connection(state: Arc<MapState>, mut stream: TcpStream) {
     let cpw = state.config.char_pw.as_bytes();
     pkt[2..2 + cid.len().min(32)].copy_from_slice(&cid[..cid.len().min(32)]);
     pkt[34..34 + cpw.len().min(32)].copy_from_slice(&cpw[..cpw.len().min(32)]);
-    // map_ip as u32 LE — parse from config string
+    // map_ip as raw bytes in network byte order (big-endian) — matches C convention
+    // where IPs are stored as u32 in network order and written directly to packets.
     let map_ip_u32: u32 = state.config.map_ip.parse::<std::net::Ipv4Addr>()
         .map(u32::from)
         .unwrap_or(0);
-    pkt[66..70].copy_from_slice(&map_ip_u32.to_le_bytes());
+    pkt[66..70].copy_from_slice(&map_ip_u32.to_be_bytes());
     pkt[70..72].copy_from_slice(&state.config.map_port.to_le_bytes());
 
     if stream.write_all(&pkt).await.is_err() { return; }
@@ -92,6 +93,7 @@ async fn run_char_connection(state: Arc<MapState>, mut stream: TcpStream) {
         if let Some(lb) = len_bytes { full_pkt.extend_from_slice(&lb); }
         full_pkt.extend_from_slice(&rest);
 
+        tracing::info!("[map] [charif] recv cmd={:04X} len={}", cmd, pkt_len);
         dispatch(&state, cmd, &full_pkt).await;
     }
 

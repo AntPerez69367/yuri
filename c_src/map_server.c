@@ -1500,6 +1500,7 @@ int boards_delete(USER* sd, int board) {
 
   int post = SWAP16(RFIFOW(sd->fd, 8));
 
+  if (!char_fd) return 0;
   // Board(0) == NMail
   WFIFOHEAD(char_fd, 28);
   WFIFOW(char_fd, 0) = 0x3008;
@@ -1558,7 +1559,7 @@ int boards_showposts(USER* sd, int board) {
   a.popup = sd->board_popup;
   memcpy(a.name, sd->status.name, 16);
 
-  /// Need to add Level Check...Also must add "Hide Flag" for boards.
+  if (!char_fd) return 0;
   WFIFOHEAD(char_fd, sizeof(struct board_show_0) + 2);
   WFIFOW(char_fd, 0) = 0x3009;  // NMail/Board Show
   memcpy(WFIFOP(char_fd, 2), &a, sizeof(struct board_show_0));
@@ -1592,6 +1593,7 @@ int boards_readpost(USER* sd, int board, int post) {
   header.post = post;
   memcpy(header.name, sd->status.name, 16);
 
+  if (!char_fd) return 0;
   WFIFOHEAD(char_fd, sizeof(header) + 2);
   WFIFOW(char_fd, 0) = 0x300A;
   memcpy(WFIFOP(char_fd, 2), &header, sizeof(header));
@@ -1655,6 +1657,7 @@ int boards_post(USER* sd, int board) {
 
   if (sd->status.gm_level) header.nval = 1;
 
+  if (!char_fd) return 0;
   WFIFOHEAD(char_fd,
             sizeof(header) + 2);  // 4001(Body) + 53(topic) + 2(sfd) + 2(ID) +
                                   // 2(board) + 1(null-terminator)*2
@@ -1821,6 +1824,7 @@ int nmail_sendmailcopy(USER* sd, char* to_user, char* topic, char* message) {
   if (strlen(to_user) > 16 || strlen(topic) > 52 || strlen(message) > 4000)
     return 0;
 
+  if (!char_fd) return 0;
   WFIFOHEAD(char_fd, 4124);  // 4000 + 52 + 52 + 16 + 2 +2
   WFIFOW(char_fd, 0) = 0x300F;
   WFIFOW(char_fd, 2) = sd->fd;
@@ -1936,6 +1940,7 @@ int nmail_sendmail(USER* sd, const char* to_user, const char* topic,
   if (strlen(to_user) > 16 || strlen(topic) > 52 || strlen(message) > 4000)
     return 0;
 
+  if (!char_fd) return 0;
   WFIFOHEAD(char_fd, 4124);  // 4000 + 52 + 52 + 16 + 2 +2
   WFIFOW(char_fd, 0) = 0x300D;
   WFIFOW(char_fd, 2) = sd->fd;

@@ -18,8 +18,13 @@ extern "C" {
     fn clif_parse(fd: i32) -> i32;
     fn clif_timeout(fd: i32) -> i32;
     fn map_do_term(); // renamed from do_term in Task 5
+    fn intif_mmo_tosd(fd: i32, status: *mut u8) -> i32;
     fn lang_read(file: *const i8);
     fn authdb_init(); // from map_char.c — stays until Task 6
+    fn mob_timer_spawns(id: i32, n: i32) -> i32;
+    fn map_cronjob(id: i32, n: i32) -> i32;
+    fn npc_runtimers(id: i32, n: i32) -> i32;
+    fn sl_doscript_blargs(name: *const i8, func: *const i8, nargs: i32, ...) -> i32;
 
     // Legacy C SQL functions from libdeps.a
     fn Sql_Malloc() -> *mut std::ffi::c_void;
@@ -41,6 +46,7 @@ extern "C" {
     fn rust_recipedb_init() -> i32;
     fn rust_magicdb_init() -> i32;
     fn rust_mobdb_init() -> i32;
+    fn mobspawn_read() -> i32;
     // Session functions (from libyuri.a ffi/session.rs)
     fn rust_session_set_default_parse(f: unsafe extern "C" fn(i32) -> i32);
     fn rust_session_set_default_timeout(f: unsafe extern "C" fn(i32) -> i32);
@@ -144,17 +150,11 @@ async fn main() -> Result<()> {
             ))?
     };
 
-    // rust_db_connect (for Rust DB modules: map_db, mob_db, etc.)
-    {
-        let db_url = format!(
-            "mysql://{}:{}@{}:{}/{}",
-            config.sql_id, config.sql_pw, config.sql_ip, config.sql_port, config.sql_db
-        );
-        let curl = CString::new(db_url).unwrap();
-        if yuri::ffi::database::rust_db_connect(curl.as_ptr()) != 0 {
-            anyhow::bail!("rust_db_connect failed");
-        }
-    }
+    // Register the pool with the Rust DB module layer (map_db, mob_db, etc.).
+    // We use set_pool() here instead of rust_db_connect() to avoid
+    // block_on-inside-runtime panic (we're already inside #[tokio::main]).
+    yuri::database::set_pool(pool.clone())
+        .context("Failed to register DB pool with Rust DB modules")?;
 
     // Legacy C SQL handle
     unsafe {
@@ -180,46 +180,67 @@ async fn main() -> Result<()> {
         .await
         .ok();
 
-    // rust_map_init
+    // Run all blocking init (rust_map_init, rust_*db_init, C game init) on a
+    // dedicated thread. spawn_blocking is required because these functions call
+    // blocking_run() internally, which panics if called from within the tokio runtime.
     {
-        let maps_dir = CString::new(config.maps_dir.as_str()).unwrap();
+        let maps_dir = config.maps_dir.clone();
+        let data_dir = config.data_dir.clone();
         let serverid = config.server_id;
-        if unsafe { yuri::ffi::map_db::rust_map_init(maps_dir.as_ptr(), serverid) } != 0 {
-            anyhow::bail!("rust_map_init failed");
-        }
-    }
+        let map_port = config.map_port;
 
-    // C game-logic init — order matches do_init exactly.
-    // Static-inline C shims (boarddb_init, etc.) can't be linked from Rust;
-    // we call the rust_* functions they wrap directly.
-    unsafe {
-        map_initblock();
-        map_initiddb();
-        npc_init();
-        warp_init();
-        rust_itemdb_init();
-        rust_recipedb_init();
-        rust_mobdb_init();
-        rust_magicdb_init();
-        let data_dir = CString::new(config.data_dir.as_str()).unwrap();
-        rust_classdb_init(data_dir.as_ptr());
-        rust_clandb_init();
-        rust_boarddb_init();
-        intif_init();
-        object_flag_init();
-        sl_init();
-        map_loadgameregistry();
-        rust_session_set_default_parse(clif_parse);
-        rust_session_set_default_timeout(clif_timeout);
-        rust_make_listen_port(config.map_port as i32);
-        authdb_init();
-        rust_set_termfunc(map_do_term);
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let maps_dir_c = CString::new(maps_dir.as_str()).unwrap();
+            if unsafe { yuri::ffi::map_db::rust_map_init(maps_dir_c.as_ptr(), serverid) } != 0 {
+                anyhow::bail!("rust_map_init failed");
+            }
+
+            // C game-logic init — order matches do_init exactly.
+            // Static-inline C shims (boarddb_init, etc.) can't be linked from Rust;
+            // we call the rust_* functions they wrap directly.
+            unsafe {
+                map_initblock();
+                map_initiddb();
+                npc_init();
+                warp_init();
+                rust_itemdb_init();
+                rust_recipedb_init();
+                rust_mobdb_init();
+                mobspawn_read();
+                rust_magicdb_init();
+                let data_dir_c = CString::new(data_dir.as_str()).unwrap();
+                rust_classdb_init(data_dir_c.as_ptr());
+                rust_clandb_init();
+                rust_boarddb_init();
+                intif_init();
+                object_flag_init();
+                sl_init();
+                map_loadgameregistry();
+                rust_session_set_default_parse(clif_parse);
+                rust_session_set_default_timeout(clif_timeout);
+                rust_make_listen_port(map_port as i32);
+                authdb_init();
+
+                // Timers from the old do_init — restored here after do_init was removed.
+                let startup = std::ffi::CString::new("startup").unwrap();
+                sl_doscript_blargs(startup.as_ptr(), std::ptr::null(), 0);
+                yuri::ffi::timer::timer_insert(50,   50,   Some(mob_timer_spawns), 0, 0);
+                yuri::ffi::timer::timer_insert(100,  100,  Some(npc_runtimers),    0, 0);
+                yuri::ffi::timer::timer_insert(1000, 1000, Some(map_cronjob),      0, 0);
+
+                rust_set_termfunc(map_do_term);
+            }
+            Ok(())
+        }).await
+          .context("Init thread panicked")??;
     }
 
     let state = Arc::new(MapState::new(pool, config));
 
     // Register state with FFI bridge so C game logic can send packets to char_server.
     yuri::ffi::map_char::set_map_state(Arc::clone(&state));
+    // Register intif_mmo_tosd so packet.rs can call it without linking map_game into libyuri.
+    yuri::ffi::map_char::set_mmo_tosd_fn(intif_mmo_tosd);
 
     // Spawn char server reconnect loop (replaces check_connect_char timer)
     {
@@ -243,8 +264,12 @@ async fn main() -> Result<()> {
 
     tracing::info!("[map] [ready] Listening on {}:{}", state.config.map_ip, state.config.map_port);
 
-    // Park the async runtime — C session layer (make_listen_port) drives accept loop.
-    tokio::signal::ctrl_c().await.ok();
+    // Run the C session event loop. LocalSet is required for spawn_local (accept_loop,
+    // session_io_task). This drives client accept + I/O until shutdown is signalled.
+    let local = tokio::task::LocalSet::new();
+    local.run_until(yuri::session::run_async_server(state.config.map_port)).await
+        .map_err(|e| anyhow::anyhow!("session loop error: {}", e))?;
+
     tracing::info!("[map] Shutting down...");
     unsafe { map_do_term(); }
     Ok(())

@@ -654,100 +654,72 @@ fn i8_slice_to_str(src: &[i8]) -> String {
 
 
 async fn save_items_inventory(tx: &mut Transaction<'_, MySql>, char_id: u32, items: &[crate::servers::char::charstatus::Item]) -> Result<()> {
+    sqlx::query("DELETE FROM `Inventory` WHERE `InvChaId`=?")
+        .bind(char_id).execute(&mut **tx).await?;
     for (i, item) in items.iter().enumerate().take(MAX_INVENTORY) {
+        if item.id == 0 { continue; }
         let name = i8_slice_to_str(&item.real_name);
         let note = i8_slice_to_str(&item.note);
-        if item.id == 0 {
-            sqlx::query("DELETE FROM `Inventory` WHERE `InvChaId`=? AND `InvPosition`=?")
-                .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
-        } else {
-            sqlx::query(
-                "INSERT INTO `Inventory` \
-                 (`InvChaId`,`InvItmId`,`InvAmount`,`InvDurability`,`InvChaIdOwner`,\
-                  `InvCustom`,`InvTimer`,`InvEngrave`,`InvCustomLook`,`InvCustomLookColor`,\
-                  `InvCustomIcon`,`InvCustomIconColor`,`InvProtected`,`InvNote`,`InvPosition`) \
-                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) \
-                 ON DUPLICATE KEY UPDATE \
-                 `InvItmId`=VALUES(`InvItmId`),`InvAmount`=VALUES(`InvAmount`),\
-                 `InvDurability`=VALUES(`InvDurability`),`InvChaIdOwner`=VALUES(`InvChaIdOwner`),\
-                 `InvCustom`=VALUES(`InvCustom`),`InvTimer`=VALUES(`InvTimer`),\
-                 `InvEngrave`=VALUES(`InvEngrave`),`InvCustomLook`=VALUES(`InvCustomLook`),\
-                 `InvCustomLookColor`=VALUES(`InvCustomLookColor`),`InvCustomIcon`=VALUES(`InvCustomIcon`),\
-                 `InvCustomIconColor`=VALUES(`InvCustomIconColor`),`InvProtected`=VALUES(`InvProtected`),\
-                 `InvNote`=VALUES(`InvNote`)"
-            ).bind(char_id).bind(item.id).bind(item.amount).bind(item.dura).bind(item.owner)
-             .bind(item.custom).bind(item.time).bind(&name)
-             .bind(item.custom_look).bind(item.custom_look_color)
-             .bind(item.custom_icon).bind(item.custom_icon_color)
-             .bind(item.protected).bind(&note).bind(i as u32)
-             .execute(&mut **tx).await?;
-        }
+        sqlx::query(
+            "INSERT INTO `Inventory` \
+             (`InvChaId`,`InvItmId`,`InvAmount`,`InvDurability`,`InvChaIdOwner`,\
+              `InvCustom`,`InvTimer`,`InvEngrave`,`InvCustomLook`,`InvCustomLookColor`,\
+              `InvCustomIcon`,`InvCustomIconColor`,`InvProtected`,`InvNote`,`InvPosition`) \
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        ).bind(char_id).bind(item.id).bind(item.amount).bind(item.dura).bind(item.owner)
+         .bind(item.custom).bind(item.time).bind(&name)
+         .bind(item.custom_look).bind(item.custom_look_color)
+         .bind(item.custom_icon).bind(item.custom_icon_color)
+         .bind(item.protected).bind(&note).bind(i as u32)
+         .execute(&mut **tx).await?;
     }
     Ok(())
 }
 
 async fn save_items_equipment(tx: &mut Transaction<'_, MySql>, char_id: u32, items: &[crate::servers::char::charstatus::Item]) -> Result<()> {
-    // First, delete any slots that are now empty (item.id == 0).
-    // Then upsert non-empty slots. Requires UNIQUE KEY (EqpChaId, EqpSlot).
+    sqlx::query("DELETE FROM `Equipment` WHERE `EqpChaId`=?")
+        .bind(char_id).execute(&mut **tx).await?;
     for (i, item) in items.iter().enumerate().take(MAX_EQUIP) {
+        if item.id == 0 { continue; }
         let name = i8_slice_to_str(&item.real_name);
         let note = i8_slice_to_str(&item.note);
-        if item.id == 0 {
-            sqlx::query("DELETE FROM `Equipment` WHERE `EqpChaId`=? AND `EqpSlot`=?")
-                .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
-        } else {
-            sqlx::query(
-                "INSERT INTO `Equipment` \
-                 (`EqpChaId`,`EqpItmId`,`EqpDurability`,`EqpChaIdOwner`,`EqpCustom`,`EqpTimer`,\
-                  `EqpEngrave`,`EqpCustomLook`,`EqpCustomLookColor`,`EqpCustomIcon`,\
-                  `EqpCustomIconColor`,`EqpProtected`,`EqpNote`,`EqpSlot`) \
-                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) \
-                 ON DUPLICATE KEY UPDATE \
-                 `EqpItmId`=VALUES(`EqpItmId`),`EqpDurability`=VALUES(`EqpDurability`),\
-                 `EqpChaIdOwner`=VALUES(`EqpChaIdOwner`),`EqpCustom`=VALUES(`EqpCustom`),\
-                 `EqpTimer`=VALUES(`EqpTimer`),`EqpEngrave`=VALUES(`EqpEngrave`),\
-                 `EqpCustomLook`=VALUES(`EqpCustomLook`),`EqpCustomLookColor`=VALUES(`EqpCustomLookColor`),\
-                 `EqpCustomIcon`=VALUES(`EqpCustomIcon`),`EqpCustomIconColor`=VALUES(`EqpCustomIconColor`),\
-                 `EqpProtected`=VALUES(`EqpProtected`),`EqpNote`=VALUES(`EqpNote`)"
-            ).bind(char_id).bind(item.id).bind(item.dura).bind(item.owner)
-             .bind(item.custom).bind(item.time)
-             .bind(&name).bind(item.custom_look).bind(item.custom_look_color)
-             .bind(item.custom_icon).bind(item.custom_icon_color)
-             .bind(item.protected).bind(&note).bind(i as u32)
-             .execute(&mut **tx).await?;
-        }
+        sqlx::query(
+            "INSERT INTO `Equipment` \
+             (`EqpChaId`,`EqpItmId`,`EqpDurability`,`EqpChaIdOwner`,`EqpCustom`,`EqpTimer`,\
+              `EqpEngrave`,`EqpCustomLook`,`EqpCustomLookColor`,`EqpCustomIcon`,\
+              `EqpCustomIconColor`,`EqpProtected`,`EqpNote`,`EqpSlot`) \
+             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+        ).bind(char_id).bind(item.id).bind(item.dura).bind(item.owner)
+         .bind(item.custom).bind(item.time)
+         .bind(&name).bind(item.custom_look).bind(item.custom_look_color)
+         .bind(item.custom_icon).bind(item.custom_icon_color)
+         .bind(item.protected).bind(&note).bind(i as u32)
+         .execute(&mut **tx).await?;
     }
     Ok(())
 }
 
 async fn save_spells(tx: &mut Transaction<'_, MySql>, char_id: u32, skills: &[u16]) -> Result<()> {
+    sqlx::query("DELETE FROM `SpellBook` WHERE `SbkChaId`=?")
+        .bind(char_id).execute(&mut **tx).await?;
     for (i, &spell_id) in skills.iter().enumerate().take(MAX_SPELLS) {
-        if spell_id == 0 {
-            sqlx::query("DELETE FROM `SpellBook` WHERE `SbkChaId`=? AND `SbkPosition`=?")
-                .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
-        } else {
-            sqlx::query(
-                "INSERT INTO `SpellBook` (`SbkChaId`,`SbkSplId`,`SbkPosition`) VALUES(?,?,?) \
-                 ON DUPLICATE KEY UPDATE `SbkSplId`=VALUES(`SbkSplId`)"
-            ).bind(char_id).bind(spell_id).bind(i as u32).execute(&mut **tx).await?;
-        }
+        if spell_id == 0 { continue; }
+        sqlx::query(
+            "INSERT INTO `SpellBook` (`SbkChaId`,`SbkSplId`,`SbkPosition`) VALUES(?,?,?)"
+        ).bind(char_id).bind(spell_id).bind(i as u32).execute(&mut **tx).await?;
     }
     Ok(())
 }
 
 async fn save_aethers(tx: &mut Transaction<'_, MySql>, char_id: u32, aethers: &[crate::servers::char::charstatus::SkillInfo]) -> Result<()> {
+    sqlx::query("DELETE FROM `Aethers` WHERE `AthChaId`=?")
+        .bind(char_id).execute(&mut **tx).await?;
     for (i, a) in aethers.iter().enumerate().take(MAX_MAGIC_TIMERS) {
-        if a.id == 0 {
-            sqlx::query("DELETE FROM `Aethers` WHERE `AthChaId`=? AND `AthPosition`=?")
-                .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
-        } else {
-            sqlx::query(
-                "INSERT INTO `Aethers` (`AthChaId`,`AthSplId`,`AthDuration`,`AthAether`,`AthPosition`) VALUES(?,?,?,?,?) \
-                 ON DUPLICATE KEY UPDATE \
-                 `AthSplId`=VALUES(`AthSplId`),`AthDuration`=VALUES(`AthDuration`),`AthAether`=VALUES(`AthAether`)"
-            ).bind(char_id).bind(a.id).bind(a.duration).bind(a.aether).bind(i as u32)
-             .execute(&mut **tx).await?;
-        }
+        if a.id == 0 { continue; }
+        sqlx::query(
+            "INSERT INTO `Aethers` (`AthChaId`,`AthSplId`,`AthDuration`,`AthAether`,`AthPosition`) VALUES(?,?,?,?,?)"
+        ).bind(char_id).bind(a.id).bind(a.duration).bind(a.aether).bind(i as u32)
+         .execute(&mut **tx).await?;
     }
     Ok(())
 }
@@ -802,65 +774,48 @@ async fn save_quest_registry(tx: &mut Transaction<'_, MySql>, char_id: u32, regs
 }
 
 async fn save_kills(tx: &mut Transaction<'_, MySql>, char_id: u32, kills: &[crate::servers::char::charstatus::KillReg]) -> Result<()> {
+    sqlx::query("DELETE FROM `Kills` WHERE `KilChaId`=?")
+        .bind(char_id).execute(&mut **tx).await?;
     for (i, k) in kills.iter().enumerate().take(MAX_KILLREG) {
-        if k.mob_id == 0 {
-            sqlx::query("DELETE FROM `Kills` WHERE `KilChaId`=? AND `KilPosition`=?")
-                .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
-        } else {
-            sqlx::query(
-                "INSERT INTO `Kills` (`KilChaId`,`KilMobId`,`KilAmount`,`KilPosition`) VALUES(?,?,?,?) \
-                 ON DUPLICATE KEY UPDATE `KilMobId`=VALUES(`KilMobId`),`KilAmount`=VALUES(`KilAmount`)"
-            ).bind(char_id).bind(k.mob_id).bind(k.amount).bind(i as u32).execute(&mut **tx).await?;
-        }
+        if k.mob_id == 0 { continue; }
+        sqlx::query(
+            "INSERT INTO `Kills` (`KilChaId`,`KilMobId`,`KilAmount`,`KilPosition`) VALUES(?,?,?,?)"
+        ).bind(char_id).bind(k.mob_id).bind(k.amount).bind(i as u32).execute(&mut **tx).await?;
     }
     Ok(())
 }
 
 async fn save_legends(tx: &mut Transaction<'_, MySql>, char_id: u32, legends: &[crate::servers::char::charstatus::Legend]) -> Result<()> {
+    sqlx::query("DELETE FROM `Legends` WHERE `LegChaId`=?")
+        .bind(char_id).execute(&mut **tx).await?;
     for (i, leg) in legends.iter().enumerate().take(MAX_LEGENDS) {
         let name = i8_slice_to_str(&leg.name);
         let text = i8_slice_to_str(&leg.text);
-        if name.is_empty() {
-            sqlx::query("DELETE FROM `Legends` WHERE `LegChaId`=? AND `LegPosition`=?")
-                .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
-        } else {
-            sqlx::query(
-                "INSERT INTO `Legends` (`LegChaId`,`LegIcon`,`LegColor`,`LegDescription`,`LegIdentifier`,`LegTChaId`,`LegPosition`) VALUES(?,?,?,?,?,?,?) \
-                 ON DUPLICATE KEY UPDATE \
-                 `LegIcon`=VALUES(`LegIcon`),`LegColor`=VALUES(`LegColor`),\
-                 `LegDescription`=VALUES(`LegDescription`),`LegIdentifier`=VALUES(`LegIdentifier`),\
-                 `LegTChaId`=VALUES(`LegTChaId`)"
-            ).bind(char_id).bind(leg.icon).bind(leg.color).bind(&text).bind(&name).bind(leg.tchaid).bind(i as u32)
-             .execute(&mut **tx).await?;
-        }
+        if name.is_empty() { continue; }
+        sqlx::query(
+            "INSERT INTO `Legends` (`LegChaId`,`LegIcon`,`LegColor`,`LegDescription`,`LegIdentifier`,`LegTChaId`,`LegPosition`) VALUES(?,?,?,?,?,?,?)"
+        ).bind(char_id).bind(leg.icon).bind(leg.color).bind(&text).bind(&name).bind(leg.tchaid).bind(i as u32)
+         .execute(&mut **tx).await?;
     }
     Ok(())
 }
 
 async fn save_banks(tx: &mut Transaction<'_, MySql>, char_id: u32, banks: &[crate::servers::char::charstatus::BankData]) -> Result<()> {
+    sqlx::query("DELETE FROM `Banks` WHERE `BnkChaId`=?")
+        .bind(char_id).execute(&mut **tx).await?;
     for (i, bank) in banks.iter().enumerate().take(MAX_BANK_SLOTS) {
+        if bank.item_id == 0 { continue; }
         let name = i8_slice_to_str(&bank.real_name);
         let note = i8_slice_to_str(&bank.note);
-        if bank.item_id == 0 {
-            sqlx::query("DELETE FROM `Banks` WHERE `BnkChaId`=? AND `BnkPosition`=?")
-                .bind(char_id).bind(i as u32).execute(&mut **tx).await?;
-        } else {
-            sqlx::query(
-                "INSERT INTO `Banks` (`BnkChaId`,`BnkItmId`,`BnkAmount`,`BnkChaIdOwner`,\
-                 `BnkCustomLook`,`BnkCustomLookColor`,`BnkCustomIcon`,`BnkCustomIconColor`,\
-                 `BnkProtected`,`BnkEngrave`,`BnkNote`,`BnkPosition`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) \
-                 ON DUPLICATE KEY UPDATE \
-                 `BnkItmId`=VALUES(`BnkItmId`),`BnkAmount`=VALUES(`BnkAmount`),\
-                 `BnkChaIdOwner`=VALUES(`BnkChaIdOwner`),`BnkCustomLook`=VALUES(`BnkCustomLook`),\
-                 `BnkCustomLookColor`=VALUES(`BnkCustomLookColor`),`BnkCustomIcon`=VALUES(`BnkCustomIcon`),\
-                 `BnkCustomIconColor`=VALUES(`BnkCustomIconColor`),`BnkProtected`=VALUES(`BnkProtected`),\
-                 `BnkEngrave`=VALUES(`BnkEngrave`),`BnkNote`=VALUES(`BnkNote`)"
-            ).bind(char_id).bind(bank.item_id).bind(bank.amount).bind(bank.owner)
-             .bind(bank.custom_look).bind(bank.custom_look_color)
-             .bind(bank.custom_icon).bind(bank.custom_icon_color)
-             .bind(bank.protected).bind(&name).bind(&note).bind(i as u32)
-             .execute(&mut **tx).await?;
-        }
+        sqlx::query(
+            "INSERT INTO `Banks` (`BnkChaId`,`BnkItmId`,`BnkAmount`,`BnkChaIdOwner`,\
+             `BnkCustomLook`,`BnkCustomLookColor`,`BnkCustomIcon`,`BnkCustomIconColor`,\
+             `BnkProtected`,`BnkEngrave`,`BnkNote`,`BnkPosition`) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)"
+        ).bind(char_id).bind(bank.item_id).bind(bank.amount).bind(bank.owner)
+         .bind(bank.custom_look).bind(bank.custom_look_color)
+         .bind(bank.custom_icon).bind(bank.custom_icon_color)
+         .bind(bank.protected).bind(&name).bind(&note).bind(i as u32)
+         .execute(&mut **tx).await?;
     }
     Ok(())
 }

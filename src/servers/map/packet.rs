@@ -47,21 +47,42 @@ async fn handle_accept(state: &Arc<MapState>, pkt: &[u8]) {
     let server_id = pkt[3];
     tracing::info!("[map] [charif] Connected to Char Server server_id={}", server_id);
 
-    // Send 0x3001: register our map list.
-    // Packet: [0..2]=0x3001 cmd, [2..6]=total_len, [6..8]=map_count, [8..]=map_ids (u16 each)
-    // Sending empty list — will be filled once FFI for map enumeration is available.
-    let map_count: u16 = 0;
-    let total_len: u32 = 8 + (map_count as u32) * 2;
+    tracing::info!("[map] [charif] handle_accept");
+    // Collect loaded map IDs from the Rust-owned map array.
+    // map[i].tile != NULL means the map was loaded (same check as C gm_command.c:1504).
+    let map_ids: Vec<u16> = unsafe {
+        let map_ptr = crate::ffi::map_db::map;
+        let map_n   = crate::ffi::map_db::map_n as usize;
+        if map_ptr.is_null() {
+            vec![]
+        } else {
+            (0..crate::database::map_db::MAP_SLOTS)
+                .filter(|&i| !(*map_ptr.add(i)).tile.is_null())
+                .take(map_n)
+                .map(|i| i as u16)
+                .collect()
+        }
+    };
+
+    // 0x3001 packet: [0..2]=cmd, [2..6]=total_len (u32 LE), [6..8]=map_count (u16 LE),
+    //                [8..] = map_ids (u16 LE each)
+    let map_count = map_ids.len() as u16;
+    let total_len = 8u32 + map_count as u32 * 2;
     let mut resp = Vec::with_capacity(total_len as usize);
     resp.extend_from_slice(&0x3001u16.to_le_bytes());
     resp.extend_from_slice(&total_len.to_le_bytes());
     resp.extend_from_slice(&map_count.to_le_bytes());
+    for id in &map_ids {
+        resp.extend_from_slice(&id.to_le_bytes());
+    }
+    tracing::info!("[map] [charif] sending map list count={}", map_count);
     send_to_char(state, resp).await;
 }
 
 /// 0x3802 — char_server is routing a player to this map server.
 /// C: intif_parse_authadd — adds to auth_db, sends 0x3002 ack with char name.
 async fn handle_authadd(state: &Arc<MapState>, pkt: &[u8]) {
+    tracing::info!("[map] [charif] handle_authadd len={}", pkt.len());
     if pkt.len() < 38 { return; }
     // Layout: [2..4]=session_fd, [4..8]=account_id, [8..24]=char_name (16 bytes),
     //         [34..38]=client_ip
@@ -92,8 +113,8 @@ async fn handle_authadd(state: &Arc<MapState>, pkt: &[u8]) {
 
 /// 0x3803 — char_server sent a zlib-compressed mmo_charstatus for a player session.
 /// C: intif_parse_charload — decompresses and calls intif_mmo_tosd(fd, status).
-/// We decompress here; the FFI call to game logic is a TODO until map_parse.c is ported.
 async fn handle_charload(_state: &Arc<MapState>, pkt: &[u8]) {
+    tracing::info!("[map] [charif] handle_charload len={}", pkt.len());
     if pkt.len() < 8 { return; }
     let session_fd = u16::from_le_bytes([pkt[6], pkt[7]]);
     let compressed = &pkt[8..];
@@ -106,12 +127,48 @@ async fn handle_charload(_state: &Arc<MapState>, pkt: &[u8]) {
         tracing::warn!("[map] [charif] charload: zlib decompression failed");
         return;
     }
-    // TODO: forward decompressed mmo_charstatus to C via rust_intif_mmo_tosd (added in Task 6)
-    tracing::info!("[map] [charif] charload session_fd={} bytes={} (mmo_tosd TODO)", session_fd, raw.len());
+    tracing::info!("[map] [charif] charload session_fd={} bytes={}", session_fd, raw.len());
+
+    // Hand off to C game logic: intif_mmo_tosd allocates USER, queries position,
+    // calls pc_setpos + all clif_send* to put the player in the world.
+    //
+    // Suppress write notifications during the spawn sequence so that all packets
+    // are buffered and flushed as a single batch, matching the old C server's
+    // single-threaded behavior where intif_mmo_tosd ran in the event loop and
+    // all writes were flushed together after select().
+    let fd = session_fd as i32;
+    tracing::info!("[map] [charif] calling intif_mmo_tosd fd={} raw_bytes={}", fd, raw.len());
+
+    // Suppress notifications before spawning
+    {
+        let manager = crate::session::get_session_manager();
+        if let Some(session_arc) = manager.get_session(fd) {
+            session_arc.lock().await.suppress_notify = true;
+        }
+    }
+
+    let result = tokio::task::spawn_blocking(move || {
+        crate::ffi::map_char::call_intif_mmo_tosd(fd, &mut raw)
+    }).await;
+    match &result {
+        Ok(rc) => tracing::info!("[map] [charif] intif_mmo_tosd returned rc={}", rc),
+        Err(e) => tracing::error!("[map] [charif] intif_mmo_tosd PANICKED: {}", e),
+    }
+
+    // Re-enable notifications and trigger a single flush of all buffered data
+    {
+        let manager = crate::session::get_session_manager();
+        if let Some(session_arc) = manager.get_session(fd) {
+            let mut session = session_arc.lock().await;
+            session.suppress_notify = false;
+            session.write_notify.notify_one();
+        }
+    }
 }
 
 /// 0x3804 — char_server is checking / forcing a player offline.
 async fn handle_checkonline(_state: &Arc<MapState>, pkt: &[u8]) {
+    tracing::info!("[map] [charif] handle_checkonline len={}", pkt.len());
     if pkt.len() < 6 { return; }
     let char_id = u32::from_le_bytes([pkt[2], pkt[3], pkt[4], pkt[5]]);
     // TODO: kick the player from the map once map_parse.c FFI is wired

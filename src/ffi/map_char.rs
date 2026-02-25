@@ -9,6 +9,25 @@ use crate::servers::map::{MapState, packet};
 
 static MAP_STATE: OnceLock<Arc<MapState>> = OnceLock::new();
 
+// Function pointer set by map_server.rs at startup so packet.rs can call
+// intif_mmo_tosd without the library depending on libmap_game.a.
+static MMO_TOSD_FN: OnceLock<unsafe extern "C" fn(i32, *mut u8) -> i32> = OnceLock::new();
+
+/// Called by map_server.rs main() to register the intif_mmo_tosd C function.
+pub fn set_mmo_tosd_fn(f: unsafe extern "C" fn(i32, *mut u8) -> i32) {
+    let _ = MMO_TOSD_FN.set(f);
+}
+
+/// Call C intif_mmo_tosd with a raw mmo_charstatus buffer.
+/// No-ops if the function was not registered (non-map_server binaries).
+pub fn call_intif_mmo_tosd(fd: i32, raw: &mut Vec<u8>) -> i32 {
+    if let Some(f) = MMO_TOSD_FN.get() {
+        unsafe { f(fd, raw.as_mut_ptr()) }
+    } else {
+        0
+    }
+}
+
 /// Called by map_server.rs main() after MapState is constructed.
 pub fn set_map_state(state: Arc<MapState>) {
     let _ = MAP_STATE.set(state);
