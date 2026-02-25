@@ -17,15 +17,15 @@ fn main() {
         // Group: libmap_game.a ↔ libcommon_nocore.a ↔ libyuri.a ↔ libdeps.a (circular deps).
         // We use common_nocore (no core.c) to avoid a duplicate main() symbol
         // — core.c defines main() for C executables; Rust provides its own main().
-        println!("cargo:rustc-link-arg=-Wl,--start-group");
-        println!("cargo:rustc-link-arg=-Wl,bin/libmap_game.a");
-        println!("cargo:rustc-link-arg=-Wl,bin/libcommon_nocore.a");
-        println!("cargo:rustc-link-arg=-Wl,bin/libdeps.a");
+        println!("cargo:rustc-link-arg-bin=map_server=-Wl,--start-group");
+        println!("cargo:rustc-link-arg-bin=map_server=-Wl,bin/libmap_game.a");
+        println!("cargo:rustc-link-arg-bin=map_server=-Wl,bin/libcommon_nocore.a");
+        println!("cargo:rustc-link-arg-bin=map_server=-Wl,bin/libdeps.a");
         println!(
-            "cargo:rustc-link-arg=-Wl,{}/libyuri.a",
+            "cargo:rustc-link-arg-bin=map_server=-Wl,{}/libyuri.a",
             target_dir.display()
         );
-        println!("cargo:rustc-link-arg=-Wl,--end-group");
+        println!("cargo:rustc-link-arg-bin=map_server=-Wl,--end-group");
 
         // External deps required by map_game and deps
         println!("cargo:rustc-link-lib=luajit-5.1");
