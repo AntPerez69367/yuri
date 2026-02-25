@@ -51,7 +51,7 @@ extern "C" {
     fn rust_session_set_default_parse(f: unsafe extern "C" fn(i32) -> i32);
     fn rust_session_set_default_timeout(f: unsafe extern "C" fn(i32) -> i32);
     fn rust_make_listen_port(port: i32) -> i32;
-    fn rust_set_termfunc(f: unsafe extern "C" fn());
+    fn rust_set_termfunc(f: Option<unsafe extern "C" fn()>);
 }
 
 // sql_handle is defined in map_server.c; we write to it after Sql_Connect succeeds.
@@ -228,7 +228,7 @@ async fn main() -> Result<()> {
                 yuri::ffi::timer::timer_insert(100,  100,  Some(npc_runtimers),    0, 0);
                 yuri::ffi::timer::timer_insert(1000, 1000, Some(map_cronjob),      0, 0);
 
-                rust_set_termfunc(map_do_term);
+                rust_set_termfunc(Some(map_do_term));
             }
             Ok(())
         }).await
@@ -271,6 +271,9 @@ async fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("session loop error: {}", e))?;
 
     tracing::info!("[map] Shutting down...");
+    // Deregister the term callback before calling map_do_term() explicitly so
+    // a signal arriving after the session loop cannot fire it a second time.
+    unsafe { rust_set_termfunc(None); }
     unsafe { map_do_term(); }
     Ok(())
 }
