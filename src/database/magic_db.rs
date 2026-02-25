@@ -105,8 +105,8 @@ async fn load_magic() -> Result<usize, sqlx::Error> {
 pub fn init() -> c_int {
     MAGIC_DB.get_or_init(|| Mutex::new(HashMap::new()));
     match blocking_run(load_magic()) {
-        Ok(n) => { println!("[magic] read done count={}", n); 0 }
-        Err(e) => { eprintln!("[magic_db] load failed: {}", e); -1 }
+        Ok(n) => { tracing::info!("[magic_db] read done count={n}"); 0 }
+        Err(e) => { tracing::error!("[magic_db] load failed: {e}"); -1 }
     }
 }
 

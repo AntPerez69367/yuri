@@ -35,6 +35,10 @@ add_subdirectory("${PROJECT_SOURCE_DIR}/c_deps")
 
 add_library(common STATIC c_src/config.c c_src/core.c c_src/net_crypt.c)
 
+# common_nocore: same as common but without core.c (no main()).
+# Used by the Rust map_server binary which provides its own main().
+add_library(common_nocore STATIC c_src/config.c c_src/net_crypt.c)
+
 # libyuri.a and libcommon.a have circular symbol dependencies (Rust config FFI
 # references C globals defined in common). --start-group/--end-group tells the
 # linker to make multiple passes until all references are resolved.
@@ -46,8 +50,20 @@ target_link_libraries(char_server ${YURI_LINK_GROUP} ZLIB::ZLIB m dl pthread)
 
 # login_server is now a Rust binary (src/bin/login_server.rs); C files removed
 
-add_executable(map_server c_src/map_char.c c_src/gm_command.c c_src/creation_db.c c_src/map_parse.c c_src/map_server.c c_src/mob.c c_src/npc.c c_src/pc.c c_src/scripting.c)
-target_link_libraries(map_server ${YURI_LINK_GROUP} ZLIB::ZLIB PkgConfig::LUAJIT m dl pthread)
+# map_server is now a Rust binary (src/bin/map_server.rs).
+# map_game contains all C game-logic files that Rust links against.
+add_library(map_game STATIC
+    c_src/map_char.c
+    c_src/gm_command.c
+    c_src/creation_db.c
+    c_src/map_parse.c
+    c_src/map_server.c
+    c_src/mob.c
+    c_src/npc.c
+    c_src/pc.c
+    c_src/scripting.c
+)
+target_link_libraries(map_game ${YURI_LINK_GROUP} ZLIB::ZLIB PkgConfig::LUAJIT m dl pthread)
 
 add_executable(decrypt_cli c_src/decrypt_cli.c)
 target_link_libraries(decrypt_cli ${YURI_LINK_GROUP} m dl pthread)

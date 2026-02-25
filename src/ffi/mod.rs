@@ -13,7 +13,9 @@ macro_rules! ffi_catch {
         }
     };
 }
+pub mod block;
 pub mod board_db;
+pub mod map_char;
 pub mod class_db;
 pub mod clan_db;
 pub mod config;

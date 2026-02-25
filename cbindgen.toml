@@ -11,7 +11,13 @@ pragma_once = true
 # Only export functions with rust_ prefix. Statics and structs shared with C
 # are declared in their respective .h files and must not be re-exported here.
 include = ["rust_*"]
-exclude = ["map", "map_n", "MapData", "GlobalReg"]
+exclude = [
+  "map", "map_n", "MapData", "GlobalReg",
+  # Block grid types and functions: declared in map_server.h using C names (block_list/warp_list).
+  # cbindgen would emit BlockList/WarpList with Rust names, conflicting with the C declarations.
+  "BlockList", "WarpList",
+  "map_addblock", "map_delblock", "map_initblock", "map_moveblock", "map_termblock",
+]
 
 [export.rename]
 # No renaming needed - we use rust_ prefix by convention

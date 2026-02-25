@@ -41,8 +41,17 @@ fn update_fd_max(fd: i32) {
     update_fd_max_pub(fd);
 }
 
-/// Helper: access a session synchronously from C FFI without block_on().
-/// Uses try_lock() which works from both inside and outside the Tokio runtime.
+/// Helper: access a session synchronously from C FFI.
+///
+/// Called from two contexts:
+/// 1. The LocalSet async thread (during clif_parse callbacks) — try_lock() always
+///    succeeds here because no other task on the single-threaded LocalSet holds it.
+/// 2. spawn_blocking threads (intif_mmo_tosd, etc.) — try_lock() may fail if the
+///    async task briefly holds the lock. Falls back to blocking_lock() which waits
+///    until the async task releases it (microseconds).
+///
+/// blocking_lock() panics inside an async runtime, so we only use it as fallback
+/// when try_lock fails (which proves we're NOT on the runtime thread).
 fn with_session<F, R>(fd: i32, default: R, f: F) -> R
 where
     F: FnOnce(&mut Session) -> R,
@@ -52,8 +61,10 @@ where
         match session_arc.try_lock() {
             Ok(mut guard) => f(&mut guard),
             Err(_) => {
-                tracing::warn!("[FFI] fd={} session lock contention (try_lock failed)", fd);
-                default
+                // try_lock failed → we must be on a blocking thread (not the runtime
+                // thread where the lock is never contested). Safe to blocking_lock.
+                let mut guard = session_arc.blocking_lock();
+                f(&mut guard)
             }
         }
     } else {

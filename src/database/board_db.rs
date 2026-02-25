@@ -110,7 +110,7 @@ async fn load_bn() -> Result<usize, sqlx::Error> {
         let b = map.entry(id).or_insert_with(|| make_default_bn(id));
         let desc: String = row.try_get(1).unwrap_or_default();
         str_to_fixed(&mut b.name, &desc);
-        println!("[board_db] [bn_read] id={} name={}", id, desc);
+        tracing::debug!("[board_db] [bn_read] id={id} name={desc}");
     }
     Ok(count)
 }
@@ -122,12 +122,12 @@ pub fn init() -> c_int {
     BN_DB.get_or_init(|| Mutex::new(HashMap::new()));
 
     match blocking_run(load_boards()) {
-        Ok(n) => println!("[board_db] read done count={}", n),
-        Err(e) => { eprintln!("[board_db] load failed: {}", e); return -1; }
+        Ok(n) => tracing::info!("[board_db] read done count={n}"),
+        Err(e) => { tracing::error!("[board_db] load failed: {e}"); return -1; }
     }
     match blocking_run(load_bn()) {
         Ok(_) => {}
-        Err(e) => { eprintln!("[bn_db] load failed: {}", e); return -1; }
+        Err(e) => { tracing::error!("[bn_db] load failed: {e}"); return -1; }
     }
     0
 }
@@ -160,9 +160,9 @@ pub fn search(id: i32) -> *mut BoardData {
 /// or clear the cache (e.g. `term()`). If a safer ownership model is needed, consider
 /// returning `Arc<BoardData>` or confining access to within the lock scope.
 pub fn searchexist(id: i32) -> *mut BoardData {
-    let mut map = board_db().lock().unwrap();
-    match map.get_mut(&id) {
-        Some(b) => b.as_mut() as *mut BoardData,
+    let map = board_db().lock().unwrap();
+    match map.get(&id) {
+        Some(b) => b.as_ref() as *const BoardData as *mut BoardData,
         None => null_mut(),
     }
 }

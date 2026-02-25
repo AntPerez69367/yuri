@@ -312,6 +312,13 @@ pub struct Session {
     /// session_io_task selects on this to flush pending writes immediately
     /// instead of waiting for the next read event.
     pub write_notify: Arc<tokio::sync::Notify>,
+
+    /// When true, commit_write() skips notify_one(). Used by spawn_blocking
+    /// callers (intif_mmo_tosd) that write many packets in sequence and need
+    /// to prevent interleaved flushes from the async session_io_task.
+    /// The caller is responsible for calling write_notify.notify_one() once
+    /// after all writes are complete.
+    pub suppress_notify: bool,
 }
 
 impl Session {
@@ -335,6 +342,7 @@ impl Session {
             session_data: None,
             callbacks: SessionCallbacks::default(),
             shutdown_called: false,
+            suppress_notify: false,
         }
     }
 
@@ -536,7 +544,11 @@ impl Session {
         // the next read event. This is critical when a C parse callback writes
         // to a *different* session's buffer (e.g. login server writing to char_fd
         // while handling a client packet).
-        self.write_notify.notify_one();
+        // Skip notification when suppress_notify is set — the caller will
+        // batch-notify after all writes are done.
+        if !self.suppress_notify {
+            self.write_notify.notify_one();
+        }
         Ok(())
     }
 
@@ -937,9 +949,16 @@ async fn flush_wdata_to_socket(fd: i32, manager: &SessionManager) {
             None => return,
         };
         let wdata = if session.wdata_size > 0 {
-            let data = session.wdata[..session.wdata_size].to_vec();
+            let prev_size = session.wdata_size;
+            let data = session.wdata[..prev_size].to_vec();
+            // Zero the flushed region before resetting the logical length.
+            // This prevents stale payload bytes from appearing in the next
+            // packet if C only partially overwrites the committed range.
+            // Don't call wdata.clear() — keep the allocation intact so that
+            // raw pointers returned by WFIFOP (rust_session_wdata_ptr) remain
+            // valid even if a flush races with C code writing to the buffer.
+            session.wdata[..prev_size].fill(0);
             session.wdata_size = 0;
-            session.wdata.clear();
             data
         } else {
             return;
@@ -947,9 +966,10 @@ async fn flush_wdata_to_socket(fd: i32, manager: &SessionManager) {
         (socket_arc, wdata)
     };
 
+    tracing::info!("[session] fd={} flushing {} bytes to socket", fd, wdata.len());
     let mut socket = socket_arc.lock().await;
     if let Err(e) = socket.write_all(&wdata).await {
-        tracing::error!("[session] fd={} accept flush write error: {}", fd, e);
+        tracing::error!("[session] fd={} flush write error: {}", fd, e);
         if let Some(arc) = manager.get_session(fd) {
             arc.lock().await.eof = 2;
         }
@@ -1060,7 +1080,7 @@ async fn session_io_task(fd: i32) {
 
         match event {
             Event::WriteReady => {
-                // Just flush — no read data, no parse callback.
+                tracing::debug!("[session] fd={} WriteReady event", fd);
                 flush_wdata_to_socket(fd, manager).await;
             }
             Event::Read(Ok(0)) => {

@@ -399,6 +399,7 @@ extern int map_n;
 extern struct userlist_data userlist;
 extern struct auth_data auth_fifo[];
 extern int auth_n;
+extern struct block_list bl_head; /* sentinel for block grid chains; owned by map_server.c */
 
 extern int map_fd;
 extern int char_fd;
@@ -421,6 +422,8 @@ int map_setmapip(int, unsigned int, unsigned short);
 int map_freeblock(void *);
 int map_freeblock_lock();
 int map_freeblock_unlock();
+void map_termblock();
+void map_initblock();
 int map_addblock(struct block_list *);
 int map_delblock(struct block_list *);
 int map_foreachincell(int (*)(struct block_list *, va_list), int, int, int, int,
@@ -468,7 +471,7 @@ int map_getpostcolor(int, int);
 char *map_id2name(unsigned int);
 void help_screen();
 int mmo_char_fromdb(unsigned int, struct mmo_charstatus *, char *);
-void do_term(void);
+void map_do_term(void);
 void mmo_setonline(unsigned int, int);
 int boards_showposts(struct map_sessiondata *, int);
 int boards_readpost(struct map_sessiondata *, int, int);

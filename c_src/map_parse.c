@@ -1017,6 +1017,7 @@ int clif_user_list(USER *sd) {
     return 0;
   }
 
+  if (!char_fd) return 0;
   WFIFOHEAD(char_fd, 4);
   WFIFOW(char_fd, 0) = 0x300B;
   WFIFOW(char_fd, 2) = sd->fd;

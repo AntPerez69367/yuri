@@ -85,7 +85,7 @@ fn load_leveldb(data_dir: &str) -> Result<usize, std::io::Error> {
     // "datatnl_exp.csv").
     let path = PathBuf::from(data_dir).join("tnl_exp.csv");
     let contents = fs::read_to_string(&path)
-        .map_err(|e| { eprintln!("DB_ERR: Can't read level db ({}).", path.display()); e })?;
+        .map_err(|e| { tracing::error!("Can't read level db ({}): {e}", path.display()); e })?;
 
     let mut count = 0;
     let mut map = CLASS_DB.get().unwrap().lock().unwrap();
@@ -117,8 +117,8 @@ pub fn init(data_dir: *const c_char) -> c_int {
     lock.lock().unwrap().clear();
 
     match blocking_run(load_classes()) {
-        Ok(n) => println!("[class_db] read done count={}", n),
-        Err(e) => { eprintln!("[class_db] load failed: {}", e); return -1; }
+        Ok(n) => tracing::info!("[class_db] read done count={n}"),
+        Err(e) => { tracing::error!("[class_db] load failed: {e}"); return -1; }
     }
 
     let dir = if data_dir.is_null() {
@@ -127,7 +127,7 @@ pub fn init(data_dir: *const c_char) -> c_int {
         unsafe { CStr::from_ptr(data_dir) }.to_string_lossy().into_owned()
     };
     match load_leveldb(&dir) {
-        Ok(n) => println!("[leveldb] read done count={}", n),
+        Ok(n) => tracing::info!("[leveldb] read done count={n}"),
         Err(_) => return -1,
     }
     0

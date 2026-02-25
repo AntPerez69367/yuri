@@ -92,34 +92,12 @@ int old_time, cur_time, cur_year, cur_day, cur_season;
 
 struct block_list* bl_list[BL_LIST_MAX];
 
-static struct block_list bl_head;
+struct block_list bl_head;
 int bl_list_count = 0;
 
 time_t gettickthing(void) { return time(NULL); }
 int command_input(char* val) { return 0; }
 
-int map_moveblock(struct block_list* bl, int x1, int y1) {
-  int x0 = bl->x, y0 = bl->y;
-  // struct status_change *sc = NULL;
-  if (x1 >= map[bl->m].xs) x1 = map[bl->m].xs - 1;
-  if (y1 >= map[bl->m].ys) y1 = map[bl->m].ys - 1;
-  int moveblock = (x0 / BLOCK_SIZE != x1 / BLOCK_SIZE ||
-                   y0 / BLOCK_SIZE != y1 / BLOCK_SIZE);
-  // int moveblock=1;
-  if (!bl->prev) {
-    // Block not in map, just update coordinates, but do naught else.
-    bl->x = x1;
-    bl->y = y1;
-    return 0;
-  }
-
-  // TODO: Perhaps some outs of bounds checking should be placed here?
-  if (moveblock) map_delblock(bl);
-  bl->x = x1;
-  bl->y = y1;
-  if (moveblock) map_addblock(bl);
-  return 0;
-}
 
 int map_timerthing(int x, int b) { return 0; }
 int nmail_sendmessage(USER* sd, char* message, int other, int type) {
@@ -402,20 +380,6 @@ USER* map_name2sd(const char* name) {
   return NULL;
 }
 
-void map_termblock() {
-  // FREE(bl_head);
-}
-
-void map_initblock() {
-  int i;
-  for (i = 0; i < MAP_SLOTS; i++) {
-    if (map[i].bxs == 0 || map[i].bys == 0) continue;
-    int cells = map[i].bxs * map[i].bys;
-    CALLOC(map[i].block,     struct block_list*, cells);
-    CALLOC(map[i].block_mob, struct block_list*, cells);
-    CALLOC(map[i].warp,      struct warp_list*,  cells);
-  }
-}
 
 /*int map_freeblock(void *bl) {
         if (!bl_free_lock) {
@@ -442,88 +406,7 @@ int map_freeblock_unlock() {
         return bl_free_lock;
 }
 */
-int map_addblock(struct block_list* bl) {
-  int m, x, y, pos;
 
-  nullpo_ret(0, bl);
-  if (bl->prev != NULL) {
-    ShowError("map_addblock: bl->prev != NULL\n");
-    return 1;
-  }
-
-  m = bl->m;
-  x = bl->x;
-  y = bl->y;
-  if (!map_isloaded(m)) {
-    printf("[map_addblock] [error] invalid map id id=%d\n", m);
-    return 1;
-  }
-  if (x < 0 || x >= map[m].xs || y < 0 || y >= map[m].ys) {
-    ShowError(
-        "map_addblock: out-of-bounds coordinates map: %d -> (%d,%d) id: %u\n",
-        m, x, y, bl->id);
-
-    // ShowError("map_addblock: out-of-bounds coordinates (\"%s\",%d,%d), map is
-    // %dx%d\n", map[m].name, x, y, map[m].xs, map[m].ys);
-    return 1;
-  }
-
-  pos = x / BLOCK_SIZE + (y / BLOCK_SIZE) * map[m].bxs;
-
-  if (bl->type == BL_MOB) {
-    bl->next = map[m].block_mob[pos];
-    bl->prev = &bl_head;
-    if (bl->next) bl->next->prev = bl;
-    map[m].block_mob[pos] = bl;
-  } else {
-    bl->next = map[m].block[pos];
-    bl->prev = &bl_head;
-    if (bl->next) bl->next->prev = bl;
-    map[m].block[pos] = bl;
-  }
-
-  if (bl->type == BL_PC) map[m].user++;
-
-  // if (bl->prev < 0x100 || bl->next < 0x100) {
-  //   if (bl->next) {
-  //     printf("Prev = %u : Next = %u\n", bl->prev->id, bl->next->id);
-  //   }
-  // }
-  return 0;
-}
-
-int map_delblock(struct block_list* bl) {
-  int pos;
-  nullpo_ret(0, bl);
-
-  if (bl->prev == NULL) {
-    if (bl->next != NULL) {
-      ShowError("map_delblock error : bl->next!=NULL\n");
-    }
-    return 0;
-  }
-
-  pos = bl->x / BLOCK_SIZE + (bl->y / BLOCK_SIZE) * map[bl->m].bxs;
-
-  if (bl->next) bl->next->prev = bl->prev;
-  if (bl->prev == &bl_head) {
-    // ���X�g�̓��Ȃ̂ŁAmap[]��block_list���X�V����
-    if (bl->type == BL_MOB) {
-      map[bl->m].block_mob[pos] = bl->next;
-    } else {
-      map[bl->m].block[pos] = bl->next;
-    }
-  } else {
-    bl->prev->next = bl->next;
-  }
-
-  if (bl->type == BL_PC) map[bl->m].user--;
-
-  bl->next = NULL;
-  bl->prev = NULL;
-
-  return 0;
-}
 
 int map_foreachinarea(int (*func)(struct block_list*, va_list), int m, int x,
                       int y, int area, int type, ...) {
@@ -1308,7 +1191,7 @@ int lang_read(const char* cfg_file) {
   return 0;
 }
 
-void do_term(void) {
+void map_do_term(void) {
   int i;
   map_savechars(0, 0);
   map_clritem();
@@ -1480,137 +1363,6 @@ int object_flag_init(void) {
   free(path);
   return 0;
 }
-int do_init(int argc, char** argv) {
-  int i;
-  char* CONF_FILE = "conf/server.yaml";
-  char* LANG_FILE = "conf/lang.yaml";
-  srand(gettick());
-
-  for (i = 1; i < argc; i++) {
-    if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "--h") == 0 ||
-        strcmp(argv[i], "--?") == 0 || strcmp(argv[i], "/?") == 0) {
-      help_screen();
-    } else if (strcmp(argv[i], "--conf") == 0) {
-      CONF_FILE = argv[i + 1];
-    } else if (strcmp(argv[i], "--lang") == 0) {
-      LANG_FILE = argv[i + 1];
-    }
-  }
-
-  if (rust_config_read(CONF_FILE) != 0) {
-    printf("[map] [config_error] %s\n", CONF_FILE);
-    exit(EXIT_FAILURE);
-  }
-  lang_read(LANG_FILE);
-  set_termfunc(do_term);
-  // CALLOC(userlist,struct userlist_data,1);
-  // gcFixPrematureFrees();
-  printf("[map] Map Server Started.\n");
-  sql_handle = Sql_Malloc();
-  if (sql_handle == NULL) {
-    Sql_ShowDebug(sql_handle);
-    exit(EXIT_FAILURE);
-  }
-  if (SQL_ERROR == Sql_Connect(sql_handle, sql_id, sql_pw, sql_ip,
-                               (uint16_t)sql_port, sql_db)) {
-    Sql_ShowDebug(sql_handle);
-    Sql_Free(sql_handle);
-    exit(EXIT_FAILURE);
-  }
-
-  /* Note: sql_id/sql_pw are not URL-encoded; avoid special chars in credentials.
-   * rust_db_connect is declared in yuri.h. */
-  {
-    char db_url[512];
-    int n = snprintf(db_url, sizeof(db_url), "mysql://%s:%s@%s:%d/%s",
-                     sql_id, sql_pw, sql_ip, sql_port, sql_db);
-    if (n < 0 || (size_t)n >= sizeof(db_url)) {
-      printf("[map] Failed to format database URL (buffer too small)\n");
-      exit(EXIT_FAILURE);
-    }
-    if (rust_db_connect(db_url) != 0) {
-      printf("[map] Failed to initialize MariaDB Rust pool\n");
-      exit(EXIT_FAILURE);
-    }
-  }
-
-  if (SQL_ERROR ==
-      Sql_Query(
-          sql_handle,
-          "UPDATE `Character` SET `ChaOnline` = 0 WHERE `ChaOnline` = 1")) {
-    Sql_ShowDebug(sql_handle);
-  }
-
-  // sql_init();
-  uptime();
-  if (rust_map_init(maps_dir, serverid) != 0) {
-    printf("[map] [fatal] rust_map_init failed\n");
-    exit(EXIT_FAILURE);
-  }
-  map_initblock();
-  map_initiddb();
-  npc_init();
-  warp_init();
-  itemdb_init();
-  recipedb_init();
-  mobdb_init();
-  magicdb_init();
-  classdb_init();
-  clandb_init();
-  {
-    // Load clan banks: was done inside clandb_read(); now done here after rust_clandb_init().
-    if (SQL_SUCCESS == Sql_Query(sql_handle, "SELECT ClnId FROM Clans")) {
-      char *data;
-      while (SQL_SUCCESS == Sql_NextRow(sql_handle)) {
-        int clan_id;
-        struct clan_data *clan;
-        Sql_GetData(sql_handle, 0, &data, NULL);
-        if (data == NULL) continue;
-        clan_id = (int)strtoul(data, NULL, 10);
-        clan = (struct clan_data*)rust_clandb_search(clan_id);
-        if (clan == NULL) {
-          printf("[map] clandb_init: clan %d not found, skipping\n", clan_id);
-          continue;
-        }
-        if (clan->clanbanks == NULL)
-          CALLOC(clan->clanbanks, struct clan_bank, 255);
-        map_loadclanbank(clan_id);
-      }
-      Sql_FreeResult(sql_handle);
-    }
-  }
-  boarddb_init();
-  intif_init();
-  object_flag_init();
-  sl_init();
-  map_loadgameregistry();
-  // set_defaultaccept(clif_accept);
-  set_defaultparse(clif_parse);
-  set_defaulttimeout(clif_timeout);
-  map_fd = make_listen_port(map_port);
-  cur_time = 12;
-  cur_day = 0;
-  cur_year = 1;
-  get_time_thing();
-  authdb_init();
-  timer_insert(450000, 450000, change_time_char, i, i);
-
-  timer_insert(1000, 1000, check_connect_char, char_ip, char_port);
-
-  cronjobtimer = timer_insert(1000, 1000, map_cronjob, 0, 0);
-  timer_insert(100, 100, npc_runtimers, 0, 0);
-  timer_insert(50, 50, mob_timer_spawns, 0, 0);
-  timer_insert(30000, 30000, map_weather, 0, 0);
-  // timer_insert(save_time, save_time, map_savechars, 0, 0);
-  sl_doscript_blargs("startup", NULL, 0);
-
-  for (i = 0; i < MAX_GROUPS; i++) {
-    memset(groups[i], 0, sizeof(unsigned int) * MAX_GROUP_MEMBERS);
-  }
-
-  printf("[map] [ready] port=%d\n", map_port);
-  return 0;
-}
 
 int map_canmove(int m, int x, int y) {
   // int obj;
@@ -1631,6 +1383,7 @@ int boards_delete(USER* sd, int board) {
 
   int post = SWAP16(RFIFOW(sd->fd, 8));
 
+  if (!char_fd) return 0;
   // Board(0) == NMail
   WFIFOHEAD(char_fd, 28);
   WFIFOW(char_fd, 0) = 0x3008;
@@ -1689,7 +1442,7 @@ int boards_showposts(USER* sd, int board) {
   a.popup = sd->board_popup;
   memcpy(a.name, sd->status.name, 16);
 
-  /// Need to add Level Check...Also must add "Hide Flag" for boards.
+  if (!char_fd) return 0;
   WFIFOHEAD(char_fd, sizeof(struct board_show_0) + 2);
   WFIFOW(char_fd, 0) = 0x3009;  // NMail/Board Show
   memcpy(WFIFOP(char_fd, 2), &a, sizeof(struct board_show_0));
@@ -1723,6 +1476,7 @@ int boards_readpost(USER* sd, int board, int post) {
   header.post = post;
   memcpy(header.name, sd->status.name, 16);
 
+  if (!char_fd) return 0;
   WFIFOHEAD(char_fd, sizeof(header) + 2);
   WFIFOW(char_fd, 0) = 0x300A;
   memcpy(WFIFOP(char_fd, 2), &header, sizeof(header));
@@ -1786,6 +1540,7 @@ int boards_post(USER* sd, int board) {
 
   if (sd->status.gm_level) header.nval = 1;
 
+  if (!char_fd) return 0;
   WFIFOHEAD(char_fd,
             sizeof(header) + 2);  // 4001(Body) + 53(topic) + 2(sfd) + 2(ID) +
                                   // 2(board) + 1(null-terminator)*2
@@ -1952,6 +1707,7 @@ int nmail_sendmailcopy(USER* sd, char* to_user, char* topic, char* message) {
   if (strlen(to_user) > 16 || strlen(topic) > 52 || strlen(message) > 4000)
     return 0;
 
+  if (!char_fd) return 0;
   WFIFOHEAD(char_fd, 4124);  // 4000 + 52 + 52 + 16 + 2 +2
   WFIFOW(char_fd, 0) = 0x300F;
   WFIFOW(char_fd, 2) = sd->fd;
@@ -2067,6 +1823,7 @@ int nmail_sendmail(USER* sd, const char* to_user, const char* topic,
   if (strlen(to_user) > 16 || strlen(topic) > 52 || strlen(message) > 4000)
     return 0;
 
+  if (!char_fd) return 0;
   WFIFOHEAD(char_fd, 4124);  // 4000 + 52 + 52 + 16 + 2 +2
   WFIFOW(char_fd, 0) = 0x300D;
   WFIFOW(char_fd, 2) = sd->fd;

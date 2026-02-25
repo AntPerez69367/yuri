@@ -30,17 +30,19 @@ common: deps
 deps: cmake libyuri yuri.h
 	@cmake --build build --target deps --parallel $(NPROC)
 
-# Build all binaries: cmake handles C targets; cargo handles Rust binaries.
+# Build all binaries: cmake builds C game lib + CLI tools; cargo builds Rust binaries.
 binaries: common
 	@cmake --build build \
 		--target metan_cli \
 		--target decrypt_cli \
-		--target map_server \
+		--target map_game \
+		--target common_nocore \
 		--parallel $(NPROC)
 	@ln -sf metan_cli bin/metan
-	@cargo build --bin login_server --bin char_server $(CARGO_FLAGS)
+	@cargo build --bin login_server --bin char_server --bin map_server $(CARGO_FLAGS)
 	@cp target/$(RUST_PROFILE)/login_server bin/login_server
 	@cp target/$(RUST_PROFILE)/char_server bin/char_server
+	@cp target/$(RUST_PROFILE)/map_server bin/map_server
 
 # Individual targets kept for incremental builds.
 metan_cli: common
@@ -56,8 +58,11 @@ char_server_rust: libyuri
 login_server: libyuri
 	@cargo build --bin login_server $(CARGO_FLAGS)
 	@cp target/$(RUST_PROFILE)/login_server bin/login_server
-map_server: common
-	@cmake --build build --target map_server --parallel $(NPROC)
+map_game: common
+	@cmake --build build --target map_game --target common_nocore --parallel $(NPROC)
+map_server: libyuri map_game
+	@cargo build --bin map_server $(CARGO_FLAGS)
+	@cp target/$(RUST_PROFILE)/map_server bin/map_server
 
 clean:
 	@rm -rf ./bin/*

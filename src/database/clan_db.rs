@@ -7,8 +7,8 @@ use std::sync::{Mutex, OnceLock};
 
 use sqlx::Row;
 
-use super::{blocking_run, get_pool};
 use super::item_db::str_to_fixed;
+use super::{blocking_run, get_pool};
 
 #[repr(C)]
 pub struct ClanBank {
@@ -79,8 +79,7 @@ async fn load_clans() -> Result<usize, sqlx::Error> {
     // Fix C bug: original only processed one row due to loop condition
     for row in rows {
         let raw_id: u32 = row.try_get(0)?;
-        let id: i32 = i32::try_from(raw_id)
-            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+        let id: i32 = i32::try_from(raw_id).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
         let c = map.entry(id).or_insert_with(|| make_default(id));
         c.id = id;
         let name: String = row.try_get(1)?;
@@ -94,8 +93,14 @@ async fn load_clans() -> Result<usize, sqlx::Error> {
 pub fn init() -> c_int {
     CLAN_DB.get_or_init(|| Mutex::new(HashMap::new()));
     match blocking_run(load_clans()) {
-        Ok(n) => { println!("[clan_db] read done count={}", n); 0 }
-        Err(e) => { eprintln!("[clan_db] load failed: {}", e); -1 }
+        Ok(n) => {
+            tracing::info!("[clan_db] read done count={n}");
+            0
+        }
+        Err(e) => {
+            tracing::error!("[clan_db] load failed: {e}");
+            -1
+        }
     }
 }
 
@@ -115,11 +120,14 @@ pub fn term() {
 }
 
 /// Create-if-missing. Returns mutable pointer so C can write clanbanks into it.
-///
+
 /// # Pointer validity invariant
+///
 /// The returned pointer is valid as long as:
+///
 /// 1. The entry is not removed from the map (only `term()` removes entries).
 /// 2. No reallocation of the `Box<ClanData>` occurs (it is heap-stable).
+///
 /// Callers must not hold this pointer across a call to `term()`.
 pub fn search(id: i32) -> *mut ClanData {
     let mut map = db().lock().unwrap();
@@ -139,11 +147,17 @@ pub fn searchexist(id: i32) -> *mut ClanData {
 }
 
 pub fn searchname(s: *const c_char) -> *mut ClanData {
-    if s.is_null() { return null_mut(); }
-    let target = unsafe { CStr::from_ptr(s) }.to_string_lossy().to_lowercase();
+    if s.is_null() {
+        return null_mut();
+    }
+    let target = unsafe { CStr::from_ptr(s) }
+        .to_string_lossy()
+        .to_lowercase();
     let map = db().lock().unwrap();
     for c in map.values() {
-        let name = unsafe { CStr::from_ptr(c.name.as_ptr()) }.to_string_lossy().to_lowercase();
+        let name = unsafe { CStr::from_ptr(c.name.as_ptr()) }
+            .to_string_lossy()
+            .to_lowercase();
         if name == target {
             return c.as_ref() as *const ClanData as *mut ClanData;
         }

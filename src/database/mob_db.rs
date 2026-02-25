@@ -240,8 +240,8 @@ async fn load_mobs() -> Result<usize, sqlx::Error> {
 pub fn init() -> c_int {
     MOB_DB.get_or_init(|| Mutex::new(HashMap::new()));
     match blocking_run(load_mobs()) {
-        Ok(n) => { println!("[mob_db] read done count={}", n); 0 }
-        Err(e) => { eprintln!("[mob_db] load failed: {}", e); -1 }
+        Ok(n) => { tracing::info!("[mob_db] read done count={n}"); 0 }
+        Err(e) => { tracing::error!("[mob_db] load failed: {e}"); -1 }
     }
 }
 

@@ -385,6 +385,52 @@ struct BnData *rust_bn_searchexist(int id);
 
 char *rust_bn_name(int id);
 
+/**
+ * 0x3003 — Request char data (map→char, 24 bytes).
+ * C: intif_load(fd, id, name) — replaces WFIFOW/WFIFOSET dance.
+ *
+ * Layout:
+ *   [0..2]  = 0x3003 cmd (LE)
+ *   [2..4]  = session_fd (u16 LE)
+ *   [4..8]  = char_id (u32 LE)
+ *   [8..24] = char_name (16 bytes, null-padded)
+ */
+void rust_intif_load(int32_t fd, uint32_t char_id, const char *name);
+
+/**
+ * 0x3005 — Logout notification (map→char, 6 bytes).
+ * C: intif_quit(sd) — replaces WFIFOW/WFIFOSET dance.
+ *
+ * Layout:
+ *   [0..2] = 0x3005 cmd (LE)
+ *   [2..6] = char_id (u32 LE)
+ */
+void rust_intif_quit(uint32_t char_id);
+
+/**
+ * 0x3004 — Save char (map→char, variable — zlib-compressed mmo_charstatus).
+ * C: intif_save(sd) — C already does zlib compress2; passes raw packet bytes here.
+ *
+ * Layout:
+ *   [0..2] = 0x3004 cmd (LE)
+ *   [2..6] = total_len (u32 LE)
+ *   [6..]  = zlib-compressed mmo_charstatus
+ *
+ * `data` points to the already-built packet buffer; `len` is total_len.
+ */
+void rust_intif_save(const uint8_t *data, uint32_t len);
+
+/**
+ * 0x3007 — Save-and-quit (map→char, variable — zlib-compressed mmo_charstatus).
+ * C: intif_savequit(sd) — same pattern as rust_intif_save.
+ *
+ * Layout:
+ *   [0..2] = 0x3007 cmd (LE)
+ *   [2..6] = total_len (u32 LE)
+ *   [6..]  = zlib-compressed mmo_charstatus
+ */
+void rust_intif_savequit(const uint8_t *data, uint32_t len);
+
 int rust_classdb_init(const char *data_dir);
 
 void rust_classdb_term(void);

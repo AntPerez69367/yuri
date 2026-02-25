@@ -131,6 +131,7 @@ pub async fn handle_map_server(state: Arc<CharState>, mut stream: TcpStream, fir
         }
         pkt.extend_from_slice(&rest);
 
+        tracing::info!("[char] [mapif] recv cmd={:04X} len={}", cmd, pkt_len);
         dispatch_map_packet(&state, idx, cmd, &pkt).await;
     }
 
@@ -200,6 +201,7 @@ async fn handle_mapset(state: &Arc<CharState>, map_idx: usize, pkt: &[u8]) {
 }
 
 async fn handle_map_login(state: &Arc<CharState>, pkt: &[u8]) {
+    tracing::info!("[char] [mapif] handle_map_login len={}", pkt.len());
     if pkt.len() < 20 {
         return;
     }
@@ -216,6 +218,7 @@ async fn handle_map_login(state: &Arc<CharState>, pkt: &[u8]) {
 }
 
 async fn handle_request_char(state: &Arc<CharState>, map_idx: usize, pkt: &[u8]) {
+    tracing::info!("[char] [mapif] handle_request_char len={}", pkt.len());
     if pkt.len() < 8 {
         return;
     }
@@ -223,9 +226,14 @@ async fn handle_request_char(state: &Arc<CharState>, map_idx: usize, pkt: &[u8])
     let session_id = u16::from_le_bytes([pkt[2], pkt[3]]);
     let login_name = std::str::from_utf8(&pkt[8..]).unwrap_or("").trim_end_matches('\0');
 
+    tracing::info!("[char] [mapif] handle_request_char char_id={} session_id={} login_name={}", char_id, session_id, login_name);
+
     let char_bytes = match db::load_char_bytes(&state.db, char_id, login_name).await {
         Ok(b) => b,
-        Err(_) => return,
+        Err(e) => {
+            tracing::error!("[char] [mapif] load_char_bytes FAILED for char_id={}: {}", char_id, e);
+            return;
+        }
     };
 
     let mut enc = ZlibEncoder::new(Vec::new(), Compression::default());
@@ -241,6 +249,7 @@ async fn handle_request_char(state: &Arc<CharState>, map_idx: usize, pkt: &[u8])
     resp.extend_from_slice(&session_id.to_le_bytes());
     resp.extend_from_slice(&compressed);
 
+    tracing::info!("[char] [mapif] sending 0x3803 response session_id={} compressed_len={} total_len={}", session_id, clen, total_len);
     send_to_map(state, map_idx, resp).await;
 }
 

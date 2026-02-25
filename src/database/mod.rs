@@ -54,3 +54,16 @@ pub fn connect(url: &str) -> Result<(), sqlx::Error> {
     tracing::info!("[db] Connected to MariaDB");
     Ok(())
 }
+
+/// Register an already-connected pool (for use from async Rust binaries that
+/// create their own pool before calling C FFI init functions).
+/// Avoids the `block_on`-inside-runtime panic that `connect()` would cause.
+pub fn set_pool(pool: MySqlPool) -> Result<(), sqlx::Error> {
+    if DB_POOL.set(pool).is_err() {
+        return Err(sqlx::Error::Configuration(
+            "database pool already initialized".into(),
+        ));
+    }
+    tracing::info!("[db] Pool registered from async context");
+    Ok(())
+}
