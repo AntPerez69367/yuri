@@ -3,6 +3,7 @@
 #include "map_server.h"
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 #include <zlib.h>
 
@@ -40,6 +41,7 @@ static inline int intif_quit(USER* sd) {
 }
 
 static inline int intif_load(int fd, int id, char* name) {
+  if (!name) return -1;
   rust_intif_load(fd, (uint32_t)id, name);
   return 0;
 }

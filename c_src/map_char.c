@@ -143,8 +143,9 @@ int intif_mmo_tosd(int fd, struct mmo_charstatus* p) {
   WFIFOB(sd->fd,5)=0x6D;
   WFIFOSET(sd->fd,6);
   */
-  printf("[map] [intif_mmo_tosd] SUCCESS: player spawned name=%s map=%d x=%d y=%d\n",
-         sd->status.name, sd->status.last_pos.m, sd->status.last_pos.x, sd->status.last_pos.y);
+  printf("[map] [intif_mmo_tosd] SUCCESS: player spawned name=%.*s map=%d x=%d y=%d\n",
+         (int)sizeof(sd->status.name), sd->status.name,
+         sd->status.last_pos.m, sd->status.last_pos.x, sd->status.last_pos.y);
   fflush(stdout);
   mmo_setonline(sd->status.id, 1);
 

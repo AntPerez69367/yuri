@@ -53,12 +53,12 @@ fn send(data: Vec<u8>) {
 ///   [8..24] = char_name (16 bytes, null-padded)
 #[no_mangle]
 pub unsafe extern "C" fn rust_intif_load(fd: i32, char_id: u32, name: *const c_char) {
-    let name = std::ffi::CStr::from_ptr(name).to_str().unwrap_or("");
+    if name.is_null() { return; }
+    let nb = std::ffi::CStr::from_ptr(name).to_bytes();
     let mut pkt = vec![0u8; 24];
     pkt[0] = 0x03; pkt[1] = 0x30; // 0x3003 LE
     pkt[2..4].copy_from_slice(&(fd as u16).to_le_bytes());
     pkt[4..8].copy_from_slice(&char_id.to_le_bytes());
-    let nb = name.as_bytes();
     pkt[8..8 + nb.len().min(16)].copy_from_slice(&nb[..nb.len().min(16)]);
     send(pkt);
 }
