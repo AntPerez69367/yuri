@@ -94,8 +94,14 @@ async fn load_clans() -> Result<usize, sqlx::Error> {
 pub fn init() -> c_int {
     CLAN_DB.get_or_init(|| Mutex::new(HashMap::new()));
     match blocking_run(load_clans()) {
-        Ok(n) => { println!("[clan_db] read done count={}", n); 0 }
-        Err(e) => { eprintln!("[clan_db] load failed: {}", e); -1 }
+        Ok(n) => {
+            tracing::info!("[clan_db] read done count={n}");
+            0
+        }
+        Err(e) => {
+            tracing::error!("[clan_db] load failed: {e}");
+            -1
+        }
     }
 }
 

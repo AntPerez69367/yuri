@@ -243,11 +243,11 @@ pub fn init() -> c_int {
     ITEM_DB.get_or_init(|| Mutex::new(HashMap::new()));
     match blocking_run(load_items()) {
         Ok(n) => {
-            println!("[item_db] read done count={}", n);
+            tracing::info!("[item_db] read done count={n}");
             0
         }
         Err(e) => {
-            eprintln!("[item_db] load failed: {}", e);
+            tracing::error!("[item_db] load failed: {e}");
             -1
         }
     }
