@@ -949,14 +949,15 @@ async fn flush_wdata_to_socket(fd: i32, manager: &SessionManager) {
             None => return,
         };
         let wdata = if session.wdata_size > 0 {
-            let data = session.wdata[..session.wdata_size].to_vec();
+            let prev_size = session.wdata_size;
+            let data = session.wdata[..prev_size].to_vec();
             // Zero the flushed region before resetting the logical length.
             // This prevents stale payload bytes from appearing in the next
             // packet if C only partially overwrites the committed range.
             // Don't call wdata.clear() — keep the allocation intact so that
             // raw pointers returned by WFIFOP (rust_session_wdata_ptr) remain
             // valid even if a flush races with C code writing to the buffer.
-            session.wdata[..session.wdata_size].fill(0);
+            session.wdata[..prev_size].fill(0);
             session.wdata_size = 0;
             data
         } else {
