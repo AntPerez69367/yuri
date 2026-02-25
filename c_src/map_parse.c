@@ -298,8 +298,6 @@ int clif_accept2(int fd, char *name, int name_len) {
   }
 
   // session[fd]->name removed — name field is write-only (all reads are commented out)
-  printf("[map] [clif_accept2] calling intif_load fd=%d char_id=%d name=%s\n", fd, id, n);
-  fflush(stdout);
   intif_load(fd, id, n);
   auth_delete(n);
 
@@ -4412,10 +4410,6 @@ int clif_sendmapinfo(USER *sd) {
   }
 
   WFIFOHEAD(sd->fd, 100);
-  printf("[clif_sendmapinfo] fd=%d map=%d xs=%d ys=%d title=%s light=%d\n",
-         sd->fd, sd->bl.m, map[sd->bl.m].xs, map[sd->bl.m].ys,
-         map[sd->bl.m].title, map[sd->bl.m].light);
-  fflush(stdout);
   WFIFOB(sd->fd, 0) = 0xAA;
   WFIFOB(sd->fd, 3) = 0x15;
   // WFIFOB(sd->fd, 4) = 0x03;
