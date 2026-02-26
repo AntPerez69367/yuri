@@ -276,7 +276,17 @@ pub unsafe fn mob_get_new_id() -> c_uint {
 pub unsafe fn mob_get_free_id() -> c_uint {
     let mut x = MOB_ONETIME_START;
     loop {
-        if x == MOB_ONETIME_MAX { MOB_ONETIME_MAX += 1; }
+        if x >= NPC_START_NUM {
+            eprintln!("[mob] mob_get_free_id: onetime range exhausted");
+            return 0;
+        }
+        if x == MOB_ONETIME_MAX {
+            if MOB_ONETIME_MAX >= NPC_START_NUM {
+                eprintln!("[mob] mob_get_free_id: onetime range full");
+                return 0;
+            }
+            MOB_ONETIME_MAX += 1;
+        }
         if map_id2bl(x).is_null() { return x; }
         x += 1;
     }
@@ -296,8 +306,7 @@ pub unsafe fn free_onetime(mob: *mut MobSpawnData) -> c_int {
     let mut x = MOB_ONETIME_START;
     while x <= MOB_ONETIME_MAX {
         let bl = map_id2bl(x);
-        if !bl.is_null() { return 0; }
-        if x < MOB_ONETIME_MAX { return 0; }
+        if bl.is_null() { return 0; }
         if x == MOB_ONETIME_MAX {
             map_deliddb(bl);
             MOB_ONETIME_MAX -= 1;
