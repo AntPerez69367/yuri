@@ -915,9 +915,9 @@ unsafe fn dispatch_ai(mob: *mut MobSpawnData, bl: *mut BlockList, event: *const 
 #[cfg(not(test))]
 pub unsafe extern "C" fn mob_trap_look_ffi(bl: *mut BlockList, mut ap: ...) -> c_int {
     use crate::game::npc::NpcData;
+    if bl.is_null() { return 0; }
     // Only FLOOR (subtype==1) or sub-2 NPCs are traps
     if (*bl).subtype != FLOOR && (*bl).subtype != 2 { return 0; }
-    if bl.is_null() { return 0; }
     let nd = bl as *mut NpcData;
     let mob    = ap.arg::<*mut MobSpawnData>();
     let type_  = ap.arg::<c_int>();
@@ -1205,8 +1205,7 @@ pub unsafe fn mob_move2(mob: *mut MobSpawnData, x: c_int, y: c_int, side: c_int)
     if map_canmove(m, x, y) == 0 && cm == 0 {
         (*mob).bx    = (*mob).bl.x;
         (*mob).by_   = (*mob).bl.y;
-        (*mob).bl.x  = x as c_ushort;
-        (*mob).bl.y  = y as c_ushort;
+        map_moveblock(&mut (*mob).bl, x, y);
         map_foreachinarea(clif_mob_move,
             m, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
             AREA, BL_PC, LOOK_SEND, mob as *mut _);
