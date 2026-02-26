@@ -1,0 +1,672 @@
+//! Mob game logic — replaces `c_src/mob.c`.
+
+#![allow(non_snake_case, dead_code)]
+
+use std::ffi::{c_char, c_double, c_float, c_int, c_schar, c_short, c_uchar, c_uint, c_ushort};
+use crate::database::map_db::{BlockList, GlobalReg};
+use crate::database::mob_db::MobDbData;
+use crate::servers::char::charstatus::{Item, SkillInfo};
+use crate::game::types::GfxViewer;
+
+// ─── Constants ──────────────────────────────────────────────────────────────
+pub const MOB_START_NUM:       u32 = 1073741823;
+pub const MOBOT_START_NUM:     u32 = 1173741823;
+pub const NPC_START_NUM:       u32 = 3221225472;
+pub const FLOORITEM_START_NUM: u32 = 2047483647;
+
+pub const MAX_MAGIC_TIMERS:  usize = 200;
+pub const MAX_INVENTORY:     usize = 52;
+pub const MAX_GLOBALMOBREG:  usize = 50;
+pub const MAX_THREATCOUNT:   usize = 50;
+
+pub const BL_PC:   c_int = 0x01;
+pub const BL_MOB:  c_int = 0x02;
+pub const BL_NPC:  c_int = 0x04;
+pub const BL_ITEM: c_int = 0x08;
+
+// mob state constants
+pub const MOB_ALIVE:  u8 = 0;
+pub const MOB_DEAD:   u8 = 1;
+pub const MOB_PARA:   u8 = 2;
+pub const MOB_BLIND:  u8 = 3;
+pub const MOB_HIT:    u8 = 4;
+pub const MOB_ESCAPE: u8 = 5;
+
+/// `AREA=4` from enum in `c_src/map_parse.h`.
+const AREA: c_int = 4;
+/// `LOOK_SEND=1` from enum `{ LOOK_GET=0, LOOK_SEND=1 }` in `c_src/map_parse.h`.
+const LOOK_SEND: c_int = 1;
+/// `FLOOR=1` from enum `{ SCRIPT=0, FLOOR=1 }` in `c_src/map_server.h`.
+const FLOOR: c_uchar = 1;
+
+// ─── ThreatTable ─────────────────────────────────────────────────────────────
+
+/// Mirrors `struct threat_table` from `map_server.h`. 8 bytes.
+#[repr(C)]
+pub struct ThreatTable {
+    pub user:   c_uint,
+    pub amount: c_uint,
+}
+
+// ─── MobSpawnData ─────────────────────────────────────────────────────────────
+
+/// Mirrors `struct mobspawn_data` from `map_server.h`. (`MOB` typedef in C.)
+///
+/// Field order and types MUST exactly match C. Verify size with:
+/// `cargo test --features map-game mob_spawn_data_size -- --nocapture`
+///
+/// Layout:
+/// ```text
+/// offset  field                    size
+///      0  bl                         48  (BlockList)
+///     48  da[200]                  9600  (200 × SkillInfo@48)
+///   9648  inventory[52]           45760  (52 × Item@880)
+///  55408  data*                       8  (pointer)
+///  55416  threat[50]                400  (50 × ThreatTable@8)
+///  55816  registry[50]             3400  (50 × GlobalReg@68)
+///  59216  gfx                        72  (GfxViewer)
+///  59288  startm..look               12  (6 × u16)
+///  59300  miss, protection            4  (2 × i16)
+///  59304  id..exp                    72  (18 × u32)
+///  59376  ac..will                   44  (11 × i32)
+///  59420  state..look_color           9  (9 × u8)
+///  59429  clone..charstate            5  (5 × i8)  → compiler pads 3 bytes here
+///  59437  sleep..invis               20  (5 × f32) — offset 59437 is wrong after pad
+/// ```
+/// (Use the size test to verify total = 61120.)
+#[repr(C)]
+pub struct MobSpawnData {
+    pub bl:           BlockList,
+    pub da:           [SkillInfo; MAX_MAGIC_TIMERS],
+    pub inventory:    [Item; MAX_INVENTORY],
+    pub data:         *mut MobDbData,
+    pub threat:       [ThreatTable; MAX_THREATCOUNT],
+    pub registry:     [GlobalReg; MAX_GLOBALMOBREG],
+    pub gfx:          GfxViewer,
+    pub startm:       c_ushort,
+    pub startx:       c_ushort,
+    pub starty:       c_ushort,
+    pub bx:           c_ushort,
+    pub by_:          c_ushort,
+    pub look:         c_ushort,
+    pub miss:         c_short,
+    pub protection:   c_short,
+    pub id:           c_uint,
+    pub mobid:        c_uint,
+    pub current_vita: c_uint,
+    pub current_mana: c_uint,
+    pub target:       c_uint,
+    pub attacker:     c_uint,
+    pub owner:        c_uint,
+    pub confused_target: c_uint,
+    pub timer:        c_uint,
+    pub last_death:   c_uint,
+    pub rangeTarget:  c_uint,
+    pub ranged:       c_uint,
+    pub newmove:      c_uint,
+    pub newatk:       c_uint,
+    pub lastvita:     c_uint,
+    pub maxvita:      c_uint,
+    pub maxmana:      c_uint,
+    pub replace:      c_uint,
+    pub mindam:       c_uint,
+    pub maxdam:       c_uint,
+    pub amnesia:      c_uint,
+    pub exp:          c_uint,
+    pub ac:           c_int,
+    pub side:         c_int,
+    pub time_:        c_int,
+    pub spawncheck:   c_int,
+    pub num:          c_int,
+    pub crit:         c_int,
+    pub critchance:   c_int,
+    pub critmult:     c_int,
+    pub snare:        c_int,
+    pub lastaction:   c_int,
+    pub hit:          c_int,
+    pub might:        c_int,
+    pub grace:        c_int,
+    pub will:         c_int,
+    pub state:        c_uchar,
+    pub canmove:      c_uchar,
+    pub onetime:      c_uchar,
+    pub paralyzed:    c_uchar,
+    pub blind:        c_uchar,
+    pub confused:     c_uchar,
+    pub summon:       c_uchar,
+    pub returning:    c_uchar,
+    pub look_color:   c_uchar,
+    pub clone:        c_schar,
+    pub start:        c_schar,
+    pub end:          c_schar,
+    pub block:        c_schar,
+    pub charstate:    c_schar,
+    // compiler inserts 3 bytes of padding here to align c_float to 4 bytes
+    pub sleep:        c_float,
+    pub deduction:    c_float,
+    pub damage:       c_float,
+    pub dmgshield:    c_float,
+    pub invis:        c_float,
+    // compiler inserts padding here to align c_double to 8 bytes
+    pub dmgdealt:     c_double,
+    pub dmgtaken:     c_double,
+    pub maxdmg:       c_double,
+    pub dmgindtable:  [[c_double; 2]; MAX_THREATCOUNT],
+    pub dmggrptable:  [[c_double; 2]; MAX_THREATCOUNT],
+    pub cursed:       c_uchar,
+}
+
+// SAFETY: MobSpawnData contains raw pointers to C-managed entities.
+// All access is gated behind unsafe blocks.
+unsafe impl Send for MobSpawnData {}
+unsafe impl Sync for MobSpawnData {}
+
+// ─── Mutable globals (unsafe statics, C-compatible) ──────────────────────────
+// Use #[export_name] for uppercase globals to avoid sqlx #[derive(FromRow)]
+// let-binding conflicts (see MEMORY.md: "npc_id #[export_name]").
+#[export_name = "mob_id"]          pub static mut MOB_ID:           c_uint = MOB_START_NUM;
+#[export_name = "max_normal_id"]   pub static mut MAX_NORMAL_ID:    c_uint = MOB_START_NUM;
+#[export_name = "cmob_id"]         pub static mut CMOB_ID:          c_uint = 0;
+#[export_name = "MOB_SPAWN_MAX"]   pub static mut MOB_SPAWN_MAX:    c_uint = MOB_START_NUM;
+#[export_name = "MOB_SPAWN_START"] pub static mut MOB_SPAWN_START:  c_uint = MOB_START_NUM;
+#[export_name = "MOB_ONETIME_MAX"] pub static mut MOB_ONETIME_MAX:  c_uint = MOBOT_START_NUM;
+#[export_name = "MOB_ONETIME_START"] pub static mut MOB_ONETIME_START: c_uint = MOBOT_START_NUM;
+#[export_name = "MIN_TIMER"]       pub static mut MIN_TIMER:        c_uint = 1000;
+pub static mut TIMERCHECK: c_uchar = 0;  // internal only
+
+// ─── Extern C declarations ────────────────────────────────────────────────────
+
+#[cfg(not(test))]
+extern "C" {
+    // map entity lookup
+    pub fn map_id2bl(id: c_uint) -> *mut BlockList;
+    pub fn map_id2mob(id: c_uint) -> *mut MobSpawnData;
+    pub fn map_id2sd(id: c_uint) -> *mut std::ffi::c_void;   // USER* — opaque
+    pub fn map_addiddb(bl: *mut BlockList);
+    pub fn map_deliddb(bl: *mut BlockList);
+    pub fn map_addblock(bl: *mut BlockList) -> c_int;
+    pub fn map_delblock(bl: *mut BlockList) -> c_int;
+    pub fn map_moveblock(bl: *mut BlockList, x: c_int, y: c_int);
+    pub fn map_additem(bl: *mut BlockList);
+    pub fn map_canmove(m: c_int, x: c_int, y: c_int) -> c_int;
+    pub fn map_foreachinarea(
+        f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
+        m: c_int, x: c_int, y: c_int, range: c_int, bl_type: c_int, ...
+    ) -> c_int;
+    pub fn map_foreachincell(
+        f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
+        m: c_int, x: c_int, y: c_int, bl_type: c_int, ...
+    ) -> c_int;
+    pub fn map_foreachinblock(
+        f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
+        m: c_int, x0: c_int, y0: c_int, x1: c_int, y1: c_int, bl_type: c_int, ...
+    ) -> c_int;
+
+    // map data
+    pub fn get_map_ptr() -> *mut crate::database::map_db::MapData;
+    pub fn map_is_loaded(m: c_int) -> bool;
+
+    // clif_* network helpers
+    pub fn clif_mob_kill(mob: *mut MobSpawnData);
+    pub fn clif_lookgone(bl: *mut BlockList);
+    pub fn clif_mob_move(bl: *mut BlockList, ...) -> c_int;
+    pub fn clif_cmoblook_sub(bl: *mut BlockList, ...) -> c_int;
+    pub fn clif_mob_look_start_func(bl: *mut BlockList, ...) -> c_int;
+    pub fn clif_mob_look_close_func(bl: *mut BlockList, ...) -> c_int;
+    pub fn clif_object_look_sub(bl: *mut BlockList, ...) -> c_int;
+    pub fn clif_object_look_sub2(bl: *mut BlockList, ...) -> c_int;
+    pub fn clif_sendanimation(bl: *mut BlockList, ...) -> c_int;
+    pub fn clif_sendmob_side(mob: *mut MobSpawnData);
+    pub fn clif_object_canmove(m: c_int, x: c_int, y: c_int, dir: c_int) -> c_int;
+    pub fn clif_object_canmove_from(m: c_int, x: c_int, y: c_int, dir: c_int) -> c_int;
+
+    // scripting
+    pub fn sl_doscript_blargs(
+        yname: *const c_char, event: *const c_char, nargs: c_int, ...
+    ) -> c_int;
+    pub fn sl_doscript_simple(
+        yname: *const c_char, event: *const c_char, bl: *mut BlockList,
+    ) -> c_int;
+
+    // magic db lookup
+    pub fn magicdb_yname(id: c_int) -> *const c_char;
+    pub fn magicdb_name(id: c_int) -> *const c_char;
+
+    // mob_db lookups
+    pub fn mobdb_experience(mobid: c_uint) -> c_uint;
+    pub fn mobdb_search(id: c_uint) -> *mut MobDbData;
+
+    // C helper callbacks that stay in mob.c (USER-dependent or floor-item logic)
+    pub fn mob_find_target(bl: *mut BlockList, ...) -> c_int;
+    pub fn mob_move(bl: *mut BlockList, ...) -> c_int;
+    pub fn mob_attack(mob: *mut MobSpawnData, id: c_int) -> c_int;
+    pub fn mobdb_dropitem(
+        blockid: c_uint, id: c_uint, amount: c_int,
+        dura: c_int, protected_: c_int, owner: c_int,
+        m: c_int, x: c_int, y: c_int,
+        sd: *mut std::ffi::c_void,   // USER*
+    ) -> c_int;
+
+    // mob_free_helper: single-line C wrapper for FREE() macro
+    pub fn mob_free_helper(mob: *mut MobSpawnData);
+
+    // rnd / tick / time
+    pub fn rnd(n: c_int) -> c_int;
+    pub fn gettick() -> c_uint;
+    static cur_time: c_int;
+    static serverid: c_int;
+}
+
+// ─── Mob ID management ────────────────────────────────────────────────────────
+
+pub unsafe fn mob_get_new_id() -> c_uint {
+    let id = MOB_ID;
+    MOB_ID += 1;
+    id
+}
+
+#[cfg(not(test))]
+pub unsafe fn mob_get_free_id() -> c_uint {
+    let mut x = MOB_ONETIME_START;
+    loop {
+        if x == MOB_ONETIME_MAX { MOB_ONETIME_MAX += 1; }
+        if map_id2bl(x).is_null() { return x; }
+        x += 1;
+    }
+}
+
+#[cfg(not(test))]
+pub unsafe fn onetime_avail(id: c_uint) -> *mut BlockList {
+    map_id2bl(id)
+}
+
+#[cfg(not(test))]
+pub unsafe fn free_onetime(mob: *mut MobSpawnData) -> c_int {
+    if mob.is_null() { return 0; }
+    (*mob).data = std::ptr::null_mut();
+    mob_free_helper(mob);
+    // compact onetime range downward
+    let mut x = MOB_ONETIME_START;
+    while x <= MOB_ONETIME_MAX {
+        let bl = map_id2bl(x);
+        if !bl.is_null() { return 0; }
+        if x < MOB_ONETIME_MAX { return 0; }
+        if x == MOB_ONETIME_MAX {
+            map_deliddb(bl);
+            MOB_ONETIME_MAX -= 1;
+        }
+        x += 1;
+    }
+    0
+}
+
+// ─── Stat / respawn functions (forward-defined; also used by Task 8) ─────────
+
+#[cfg(not(test))]
+unsafe fn in_spawn_window(mob: *const MobSpawnData) -> bool {
+    let s = (*mob).start as c_int;
+    let e = (*mob).end  as c_int;
+    let ct = cur_time;
+    (s < e && ct >= s && ct <= e)
+    || (s > e && (ct >= s || ct <= e))
+    || (s == e && ct == s && ct == e)
+    || (s == 25 && e == 25)
+}
+
+#[cfg(not(test))]
+pub unsafe fn mob_respawn_getstats(mob: *mut MobSpawnData) -> c_int {
+    if mob.is_null() { return 0; }
+    (*mob).data = if in_spawn_window(mob) {
+        mobdb_search((*mob).mobid)
+    } else if (*mob).replace != 0 {
+        mobdb_search((*mob).replace)
+    } else {
+        mobdb_search((*mob).mobid)
+    };
+    if (*mob).data.is_null() { return 0; }
+    let d = &*(*mob).data;
+    (*mob).maxvita     = d.vita as c_uint;
+    (*mob).maxmana     = d.mana as c_uint;
+    (*mob).ac          = d.baseac;
+    if (*mob).ac < -95 { (*mob).ac = -95; }
+    if (*mob).exp == 0 { (*mob).exp = mobdb_experience((*mob).mobid); }
+    (*mob).miss        = d.miss;
+    (*mob).newmove     = d.movetime as c_uint;
+    (*mob).newatk      = d.atktime as c_uint;
+    (*mob).current_vita = (*mob).maxvita;
+    (*mob).current_mana = (*mob).maxmana;
+    (*mob).maxdmg      = (*mob).current_vita as c_double;
+    (*mob).hit         = d.hit;
+    (*mob).mindam      = d.mindam;
+    (*mob).maxdam      = d.maxdam;
+    (*mob).might       = d.might;
+    (*mob).grace       = d.grace;
+    (*mob).will        = d.will;
+    (*mob).block       = d.block;
+    (*mob).protection  = d.protection;
+    (*mob).look        = d.look as c_ushort;
+    (*mob).look_color  = d.look_color as c_uchar;
+    (*mob).charstate   = d.state;
+    (*mob).clone       = 0;
+    (*mob).time_       = 0;
+    (*mob).paralyzed   = 0;
+    (*mob).blind       = 0;
+    (*mob).confused    = 0;
+    (*mob).snare       = 0;
+    (*mob).target      = 0;
+    (*mob).attacker    = 0;
+    (*mob).confused_target = 0;
+    (*mob).rangeTarget = 0;
+    (*mob).dmgshield   = 0.0;
+    (*mob).sleep       = 1.0;
+    (*mob).deduction   = 1.0;
+    (*mob).damage      = 0.0;
+    (*mob).critchance  = 0;
+    (*mob).crit        = 0;
+    (*mob).critmult    = 0;
+    (*mob).invis       = 1.0;
+    0
+}
+
+// ─── Spawn table loader ───────────────────────────────────────────────────────
+
+#[cfg(not(test))]
+use crate::database::{blocking_run, get_pool};
+
+#[cfg(not(test))]
+pub unsafe fn mobspawn_read() -> c_int {
+    let serverid_val = serverid;
+    let result = blocking_run(async move {
+        let pool = get_pool();
+        let query = format!(
+            "SELECT `SpnMapId`, `SpnX`, `SpnY`, `SpnMobId`, \
+             `SpnLastDeath`, `SpnId`, `SpnStartTime`, `SpnEndTime`, \
+             `SpnMobIdReplace` FROM `Spawns{}` ORDER BY `SpnId`",
+            serverid_val
+        );
+        sqlx::query(&query).fetch_all(pool).await
+    });
+
+    let rows = match result {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[mob] spawn read error: {}", e);
+            return 0;
+        }
+    };
+
+    let mut mstr = 0i32;
+    for row in &rows {
+        use sqlx::Row;
+        // All Spawns columns are int(10) unsigned → read as u32, cast to dest type
+        let startm:     c_ushort = row.try_get::<u32, _>(0).unwrap_or(0) as c_ushort;
+        let startx:     c_ushort = row.try_get::<u32, _>(1).unwrap_or(0) as c_ushort;
+        let starty:     c_ushort = row.try_get::<u32, _>(2).unwrap_or(0) as c_ushort;
+        let mobid:      c_uint   = row.try_get::<u32, _>(3).unwrap_or(0);
+        let last_death: c_uint   = row.try_get::<u32, _>(4).unwrap_or(0);
+        let spn_id:     c_uint   = row.try_get::<u32, _>(5).unwrap_or(0);
+        let start:      c_schar  = row.try_get::<u32, _>(6).unwrap_or(25) as c_schar;
+        let end:        c_schar  = row.try_get::<u32, _>(7).unwrap_or(25) as c_schar;
+        let replace:    c_uint   = row.try_get::<u32, _>(8).unwrap_or(0);
+
+        let db = map_id2mob(spn_id);
+        let (db, checkspawn) = if db.is_null() {
+            let p = libc::calloc(1, std::mem::size_of::<MobSpawnData>()) as *mut MobSpawnData;
+            (p, true)
+        } else {
+            map_delblock(&mut (*db).bl);
+            map_deliddb(&mut (*db).bl);
+            (db, false)
+        };
+
+        if db.is_null() { continue; }
+
+        if (*db).exp == 0 { (*db).exp = mobdb_experience(mobid); }
+
+        (*db).id           = spn_id;
+        (*db).bl.bl_type   = BL_MOB as c_uchar;
+        (*db).startm       = startm;
+        (*db).startx       = startx;
+        (*db).starty       = starty;
+        (*db).mobid        = mobid;
+        (*db).start        = start;
+        (*db).end          = end;
+        (*db).replace      = replace;
+        (*db).last_death   = last_death;
+        (*db).bl.prev      = std::ptr::null_mut();
+        (*db).bl.next      = std::ptr::null_mut();
+        (*db).onetime      = 0;
+
+        if (*db).bl.id < MOB_START_NUM {
+            let new_id = mob_get_new_id();
+            MAX_NORMAL_ID    = new_id;
+            (*db).bl.m       = startm;
+            (*db).bl.x       = startx;
+            (*db).bl.y       = starty;
+            (*db).bl.id      = new_id;
+            mob_respawn_getstats(db);
+        }
+
+        if checkspawn { (*db).state = MOB_DEAD; }
+
+        let map_ptr = get_map_ptr();
+        if !map_ptr.is_null() && map_is_loaded((*db).bl.m as c_int) {
+            let map_slot = map_ptr.add((*db).bl.m as usize);
+            let xs = (*map_slot).xs;
+            let ys = (*map_slot).ys;
+            if (*db).bl.x >= xs { (*db).bl.x = xs - 1; }
+            if (*db).bl.y >= ys { (*db).bl.y = ys - 1; }
+        }
+
+        map_addblock(&mut (*db).bl);
+        map_addiddb(&mut (*db).bl);
+        mstr += 1;
+    }
+
+    MOB_SPAWN_MAX = MOB_ID;
+    libc::srand(gettick());
+    println!("[mob] [spawn] read done count={}", mstr);
+    0
+}
+
+// Stubs — unused in this server but keep C callers happy
+#[no_mangle]
+pub unsafe extern "C" fn mobspawn2_read() -> c_int { 0 }
+#[no_mangle]
+pub unsafe extern "C" fn mobspeech_read() -> c_int { 0 }
+
+// ─── Magic timer functions ────────────────────────────────────────────────────
+
+#[cfg(not(test))]
+pub unsafe fn mob_duratimer(mob: *mut MobSpawnData) -> c_int {
+    if mob.is_null() { return 0; }
+    for x in 0..MAX_MAGIC_TIMERS {
+        let id = (*mob).da[x].id as c_int;
+        if id <= 0 { continue; }
+
+        let tbl = if (*mob).da[x].caster_id > 0 {
+            map_id2bl((*mob).da[x].caster_id)
+        } else {
+            std::ptr::null_mut()
+        };
+
+        if (*mob).da[x].duration > 0 {
+            (*mob).da[x].duration -= 1000;
+
+            if !tbl.is_null() {
+                let health: i64 = if (*tbl).bl_type as c_int == BL_MOB {
+                    let tmob = tbl as *mut MobSpawnData;
+                    (*tmob).current_vita as i64
+                } else { 0 };
+                if health > 0 || (*tbl).bl_type as c_int == BL_PC {
+                    sl_doscript_blargs(magicdb_yname(id), c"while_cast".as_ptr(),
+                        2, &raw mut (*mob).bl, tbl);
+                }
+            } else {
+                sl_doscript_blargs(magicdb_yname(id), c"while_cast".as_ptr(),
+                    1, &raw mut (*mob).bl);
+            }
+
+            if (*mob).da[x].duration <= 0 {
+                (*mob).da[x].duration  = 0;
+                (*mob).da[x].id        = 0;
+                (*mob).da[x].caster_id = 0;
+                map_foreachinarea(clif_sendanimation, (*mob).bl.m as c_int,
+                    (*mob).bl.x as c_int, (*mob).bl.y as c_int, AREA,
+                    BL_PC, (*mob).da[x].animation as c_int, &raw mut (*mob).bl, -1i32);
+                (*mob).da[x].animation = 0;
+                if !tbl.is_null() {
+                    sl_doscript_blargs(magicdb_yname(id), c"uncast".as_ptr(),
+                        2, &raw mut (*mob).bl, tbl);
+                } else {
+                    sl_doscript_blargs(magicdb_yname(id), c"uncast".as_ptr(),
+                        1, &raw mut (*mob).bl);
+                }
+            }
+        }
+    }
+    0
+}
+
+/// Common body for the 250 / 500 / 1500 ms timers (no expire logic).
+#[cfg(not(test))]
+unsafe fn dura_tick(mob: *mut MobSpawnData, event: *const c_char) {
+    for x in 0..MAX_MAGIC_TIMERS {
+        let id = (*mob).da[x].id as c_int;
+        if id <= 0 { continue; }
+        let tbl = if (*mob).da[x].caster_id > 0 {
+            map_id2bl((*mob).da[x].caster_id)
+        } else {
+            std::ptr::null_mut()
+        };
+        if (*mob).da[x].duration > 0 {
+            if !tbl.is_null() {
+                let health: i64 = if (*tbl).bl_type as c_int == BL_MOB {
+                    let tmob = tbl as *mut MobSpawnData;
+                    (*tmob).current_vita as i64
+                } else { 0 };
+                if health > 0 || (*tbl).bl_type as c_int == BL_PC {
+                    sl_doscript_blargs(magicdb_yname(id), event, 2, &raw mut (*mob).bl, tbl);
+                }
+            } else {
+                sl_doscript_blargs(magicdb_yname(id), event, 1, &raw mut (*mob).bl);
+            }
+        }
+    }
+}
+
+#[cfg(not(test))]
+pub unsafe fn mob_secondduratimer(mob: *mut MobSpawnData) -> c_int {
+    if mob.is_null() { return 0; }
+    dura_tick(mob, c"while_cast_250".as_ptr());
+    0
+}
+
+#[cfg(not(test))]
+pub unsafe fn mob_thirdduratimer(mob: *mut MobSpawnData) -> c_int {
+    if mob.is_null() { return 0; }
+    dura_tick(mob, c"while_cast_500".as_ptr());
+    0
+}
+
+#[cfg(not(test))]
+pub unsafe fn mob_fourthduratimer(mob: *mut MobSpawnData) -> c_int {
+    if mob.is_null() { return 0; }
+    dura_tick(mob, c"while_cast_1500".as_ptr());
+    0
+}
+
+#[cfg(not(test))]
+pub unsafe fn mob_flushmagic(mob: *mut MobSpawnData) -> c_int {
+    for x in 0..MAX_MAGIC_TIMERS {
+        let id = (*mob).da[x].id as c_int;
+        if id <= 0 { continue; }
+        (*mob).da[x].duration  = 0;
+        (*mob).da[x].id        = 0;
+        (*mob).da[x].caster_id = 0;
+        map_foreachinarea(clif_sendanimation, (*mob).bl.m as c_int,
+            (*mob).bl.x as c_int, (*mob).bl.y as c_int, AREA,
+            BL_PC, (*mob).da[x].animation as c_int, &raw mut (*mob).bl, -1i32);
+        (*mob).da[x].animation = 0;
+        // Note: caster_id is already 0 here; map_id2bl(0) returns NULL.
+        // Porting C behavior faithfully (C bug: checks stale zeroed field).
+        let bl = if (*mob).da[x].caster_id != (*mob).bl.id {
+            map_id2bl((*mob).da[x].caster_id)
+        } else {
+            std::ptr::null_mut()
+        };
+        if !bl.is_null() {
+            sl_doscript_blargs(magicdb_yname(id), c"uncast".as_ptr(),
+                2, &raw mut (*mob).bl, bl);
+        } else {
+            sl_doscript_blargs(magicdb_yname(id), c"uncast".as_ptr(),
+                1, &raw mut (*mob).bl);
+        }
+    }
+    0
+}
+
+// ─── Main 50ms tick ──────────────────────────────────────────────────────────
+
+// Forward stub — replaced by full implementation in Task 7 block below.
+#[cfg(not(test))]
+pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) { let _ = mob; }
+
+/// Called every 50ms by the timer system.
+#[cfg(not(test))]
+pub unsafe fn mob_timer_spawns(_id: c_int, _n: c_int) -> c_int {
+    TIMERCHECK = TIMERCHECK.wrapping_add(1);
+
+    if MOB_SPAWN_START != MOB_SPAWN_MAX {
+        let mut x = MOB_SPAWN_START;
+        while x < MOB_SPAWN_MAX {
+            let mob = map_id2mob(x);
+            if !mob.is_null() { tick_mob(mob); }
+            x += 1;
+        }
+    }
+
+    if MOB_ONETIME_START != MOB_ONETIME_MAX {
+        let mut x = MOB_ONETIME_START;
+        while x < MOB_ONETIME_MAX {
+            let mob = map_id2mob(x);
+            if !mob.is_null() { tick_mob(mob); }
+            x += 1;
+        }
+    }
+
+    if TIMERCHECK >= 30 { TIMERCHECK = 0; }
+    0
+}
+
+#[cfg(not(test))]
+unsafe fn tick_mob(mob: *mut MobSpawnData) {
+    let tc = TIMERCHECK;
+    if tc % 5  == 0 { mob_secondduratimer(mob); }
+    if tc % 10 == 0 { mob_thirdduratimer(mob); }
+    if tc % 30 == 0 { mob_fourthduratimer(mob); }
+    if tc % 20 == 0 { mob_duratimer(mob); }
+    mob_handle_sub(mob);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::size_of;
+
+    #[test]
+    fn mob_spawn_data_size() {
+        const EXPECTED: usize = 61120;
+        assert_eq!(
+            size_of::<MobSpawnData>(),
+            EXPECTED,
+            "MobSpawnData size mismatch — check field types and padding"
+        );
+        println!("MobSpawnData = {} bytes", size_of::<MobSpawnData>());
+        println!("SkillInfo    = {} bytes", size_of::<SkillInfo>());
+        println!("ThreatTable  = {} bytes", size_of::<ThreatTable>());
+        println!("Item         = {} bytes", size_of::<Item>());
+        println!("GlobalReg    = {} bytes", size_of::<GlobalReg>());
+        println!("GfxViewer    = {} bytes", size_of::<GfxViewer>());
+    }
+}
