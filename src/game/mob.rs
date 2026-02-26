@@ -1264,7 +1264,10 @@ pub unsafe fn mob_setglobalreg(mob: *mut MobSpawnData, reg: *const c_char, val: 
     // find empty slot
     for i in 0..MAX_GLOBALMOBREG {
         if libc::strcasecmp((*mob).registry[i].str.as_ptr(), c"".as_ptr()) == 0 {
-            libc::strcpy((*mob).registry[i].str.as_mut_ptr(), reg);
+            let dst = (*mob).registry[i].str.as_mut_ptr();
+            let dst_len = core::mem::size_of_val(&(*mob).registry[i].str);
+            libc::strncpy(dst, reg, dst_len - 1);
+            *dst.add(dst_len - 1) = 0;
             (*mob).registry[i].val = val;
             return 0;
         }

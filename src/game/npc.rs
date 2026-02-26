@@ -297,10 +297,12 @@ pub unsafe fn npc_setglobalreg(nd: *mut NpcData, reg: *const c_char, val: c_int)
     // Allocate a new slot.
     for entry in nd.registry.iter_mut() {
         if entry.str[0] == 0 {
-            let bytes = reg_cstr.to_bytes_with_nul();
-            for (dst, &src) in entry.str.iter_mut().zip(bytes.iter()) {
+            let bytes = reg_cstr.to_bytes();
+            let copy_len = bytes.len().min(entry.str.len() - 1);
+            for (dst, &src) in entry.str.iter_mut().zip(bytes[..copy_len].iter()) {
                 *dst = src as c_char;
             }
+            entry.str[copy_len] = 0;
             entry.val = val;
             return 0;
         }
