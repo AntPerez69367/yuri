@@ -45,7 +45,7 @@ pub fn sl_init() {
         let lua = Lua::new();
 
         register_types(&lua).expect("failed to register scripting types");
-        // globals::register(&lua).expect(...);  // uncomment in Phase 3
+        globals::register(&lua).expect("failed to register scripting globals");
 
         SL_STATE = Some(lua);
 
