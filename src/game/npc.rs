@@ -611,7 +611,9 @@ pub async unsafe fn warp_init_async() -> c_int {
 
         let md = &mut *md_src;
 
-        if row.src_x as i32 > md.xs as i32 - 1 || row.src_y as i32 > md.ys as i32 - 1 {
+        if row.src_x < 0 || row.src_y < 0
+            || row.src_x > md.xs as i32 - 1 || row.src_y > md.ys as i32 - 1
+        {
             tracing::error!("[warp] map id: {}, x: {}, y: {}, source out of bounds",
                 row.src_map, row.src_x, row.src_y);
             continue;
@@ -673,11 +675,11 @@ fn server_id() -> u32 {
 
 #[cfg(not(test))]
 fn copy_str_to_array<const N: usize>(s: &str, dst: &mut [c_char; N]) {
-    for (d, b) in dst.iter_mut().zip(s.bytes()) {
+    let copy_len = s.len().min(N - 1);
+    for (d, b) in dst.iter_mut().zip(s.bytes().take(copy_len)) {
         *d = b as c_char;
     }
-    // Ensure null termination if string fits
-    if s.len() < N { dst[s.len()] = 0; }
+    dst[copy_len] = 0;
 }
 
 /// Async implementation of npc_init. Loads all NPCs from DB, allocates NpcData
@@ -812,9 +814,11 @@ pub async unsafe fn npc_init_async() -> c_int {
 
             if row.npc_is_f1npc == 1 {
                 (*nd).bl.id = F1_NPC;
-            } else {
+            } else if row.row_npc_id >= 2 {
                 (*nd).bl.id = NPC_START_NUM + row.row_npc_id - 2;
                 NPC_ID = NPC_START_NUM + row.row_npc_id - 2;
+            } else {
+                tracing::error!("[npc] row_npc_id={} < 2, cannot compute NPC ID", row.row_npc_id);
             }
         }
 

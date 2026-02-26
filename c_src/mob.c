@@ -86,7 +86,9 @@ int mobdb_dropitem(unsigned int blockid, unsigned int id, int amount, int dura,
     struct map_sessiondata *attacker = map_id2sd(mob->attacker);
     if (attacker) {
       if (attacker->group_count > 0) {
-        for (z = 0; z < attacker->group_count; z++) {
+        int safe_count = attacker->group_count < MAX_GROUP_MEMBERS
+                         ? attacker->group_count : MAX_GROUP_MEMBERS;
+        for (z = 0; z < safe_count; z++) {
           fl->looters[z] = groups[attacker->groupid][z];
         }
       } else {
