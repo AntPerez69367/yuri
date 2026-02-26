@@ -81,12 +81,51 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     g.set("MAPREG",   ctor!(lua, MapRegObject))?;
     g.set("GAMEREG",  ctor!(lua, GameRegObject))?;
     g.set("QUESTREG", ctor!(lua, QuestRegObject))?;
-    g.set("ITEM",     ctor!(lua, ItemObject))?;
+    // ITEM/RECIPE/FL need custom ctors that perform DB/id-db lookups.
+    g.set("ITEM", lua.create_function(|lua, v: mlua::Value| -> mlua::Result<mlua::Value> {
+        let ptr: *mut c_void = match v {
+            mlua::Value::Integer(id) => unsafe {
+                crate::ffi::item_db::rust_itemdb_search(id as c_uint) as *mut c_void
+            },
+            mlua::Value::Number(f) => unsafe {
+                crate::ffi::item_db::rust_itemdb_search(f as c_uint) as *mut c_void
+            },
+            mlua::Value::String(ref s) => {
+                let text = s.to_str()?;
+                let cs = CString::new(text.as_bytes()).map_err(mlua::Error::external)?;
+                unsafe { crate::ffi::item_db::rust_itemdb_searchname(cs.as_ptr()) as *mut c_void }
+            }
+            _ => std::ptr::null_mut(),
+        };
+        if ptr.is_null() { return Ok(mlua::Value::Nil); }
+        Ok(mlua::Value::UserData(lua.create_userdata(ItemObject { ptr })?))
+    })?)?;
     g.set("BITEM",    ctor!(lua, BItemObject))?;
     g.set("BANKITEM", ctor!(lua, BankItemObject))?;
     g.set("PARCEL",   ctor!(lua, ParcelObject))?;
-    g.set("RECIPE",   ctor!(lua, RecipeObject))?;
-    g.set("FL",       ctor!(lua, FloorListObject))?;
+    g.set("RECIPE", lua.create_function(|lua, v: mlua::Value| -> mlua::Result<mlua::Value> {
+        let ptr: *mut c_void = match v {
+            mlua::Value::Integer(id) => unsafe {
+                crate::ffi::recipe_db::rust_recipedb_search(id as c_uint) as *mut c_void
+            },
+            mlua::Value::Number(f) => unsafe {
+                crate::ffi::recipe_db::rust_recipedb_search(f as c_uint) as *mut c_void
+            },
+            mlua::Value::String(ref s) => {
+                let text = s.to_str()?;
+                let cs = CString::new(text.as_bytes()).map_err(mlua::Error::external)?;
+                unsafe { crate::ffi::recipe_db::rust_recipedb_searchname(cs.as_ptr()) as *mut c_void }
+            }
+            _ => std::ptr::null_mut(),
+        };
+        if ptr.is_null() { return Ok(mlua::Value::Nil); }
+        Ok(mlua::Value::UserData(lua.create_userdata(RecipeObject { ptr })?))
+    })?)?;
+    g.set("FL", lua.create_function(|lua, id: c_uint| -> mlua::Result<mlua::Value> {
+        let ptr = unsafe { ffi::map_id2fl(id) };
+        if ptr.is_null() { return Ok(mlua::Value::Nil); }
+        Ok(mlua::Value::UserData(lua.create_userdata(FloorListObject { ptr })?))
+    })?)?;
     Ok(())
 }
 
