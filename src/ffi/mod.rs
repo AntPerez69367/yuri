@@ -36,3 +36,5 @@ pub mod timer;
 pub mod mob;
 #[cfg(feature = "map-game")]
 pub mod npc;
+#[cfg(feature = "map-game")]
+pub mod scripting;
