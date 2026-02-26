@@ -1,5 +1,8 @@
-use mlua::{UserData, UserDataMethods};
+use std::ffi::{CString, c_int, c_ulong};
 use std::os::raw::c_void;
+use mlua::{MetaMethod, UserData, UserDataMethods};
+
+use crate::game::scripting::ffi as sffi;
 
 pub struct RegObject       { pub ptr: *mut c_void }
 pub struct RegStringObject { pub ptr: *mut c_void }
