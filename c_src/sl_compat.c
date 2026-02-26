@@ -16,6 +16,7 @@
 #include "clan_db.h"
 #include "config.h"
 #include "db_mysql.h"
+#include "mob.h"
 
 /* -------------------------------------------------------------------------
  * Functions previously in scripting.c that are referenced as callbacks or
@@ -637,4 +638,217 @@ int sl_g_addpathember(int id, int cls) {
 unsigned int sl_g_getxpforlevel(int path, int level) {
     if (path > 5) path = classdb_path(path);
     return classdb_level(path, level);
+}
+
+/* -------------------------------------------------------------------------
+ * Mob scripting helpers — called from scripting/types/mob.rs.
+ * These access MOB and USER fields that Rust cannot safely mirror.
+ * --------------------------------------------------------------------- */
+
+/* addHealth: heal mob and dispatch on_healed to the appropriate AI script. */
+void sl_mob_addhealth(MOB *mob, int damage) {
+    struct block_list *bl = map_id2bl(mob->attacker);
+    if (bl != NULL && damage > 0) {
+        switch (mob->data->subtype) {
+            case 0: sl_doscript_blargs("mob_ai_basic",  "on_healed", 2, &mob->bl, bl); break;
+            case 1: sl_doscript_blargs("mob_ai_normal", "on_healed", 2, &mob->bl, bl); break;
+            case 2: sl_doscript_blargs("mob_ai_hard",   "on_healed", 2, &mob->bl, bl); break;
+            case 3: sl_doscript_blargs("mob_ai_boss",   "on_healed", 2, &mob->bl, bl); break;
+            case 4: sl_doscript_blargs(mob->data->yname,"on_healed", 2, &mob->bl, bl); break;
+            case 5: sl_doscript_blargs("mob_ai_ghost",  "on_healed", 2, &mob->bl, bl); break;
+        }
+    } else if (damage > 0) {
+        switch (mob->data->subtype) {
+            case 0: sl_doscript_blargs("mob_ai_basic",  "on_healed", 1, &mob->bl); break;
+            case 1: sl_doscript_blargs("mob_ai_normal", "on_healed", 1, &mob->bl); break;
+            case 2: sl_doscript_blargs("mob_ai_hard",   "on_healed", 1, &mob->bl); break;
+            case 3: sl_doscript_blargs("mob_ai_boss",   "on_healed", 1, &mob->bl); break;
+            case 4: sl_doscript_blargs(mob->data->yname,"on_healed", 1, &mob->bl); break;
+            case 5: sl_doscript_blargs("mob_ai_ghost",  "on_healed", 1, &mob->bl); break;
+        }
+    }
+    clif_send_mob_healthscript(mob, -damage, 0);
+}
+
+/* removeHealth: set damage on attacking entity, then send the health packet. */
+void sl_mob_removehealth(MOB *mob, int damage, unsigned int caster_id) {
+    struct block_list *bl = NULL;
+    USER *tsd = NULL;
+    MOB  *tmob = NULL;
+    if (caster_id > 0) {
+        bl = map_id2bl(caster_id);
+        mob->attacker = caster_id;
+    } else {
+        bl = map_id2bl(mob->attacker);
+    }
+    if (bl != NULL) {
+        if (bl->type == BL_PC) {
+            tsd = (USER *)bl;
+            tsd->damage = damage;
+            tsd->critchance = 0;
+        } else if (bl->type == BL_MOB) {
+            tmob = (MOB *)bl;
+            tmob->damage = damage;
+            tmob->critchance = 0;
+        }
+    } else {
+        mob->damage = damage;
+        mob->critchance = 0;
+    }
+    if (mob->state != MOB_DEAD)
+        clif_send_mob_healthscript(mob, damage, 0);
+}
+
+/* checkThreat: return the accumulated threat amount from a specific player. */
+int sl_mob_checkthreat(MOB *mob, unsigned int player_id) {
+    USER *tsd = map_id2sd(player_id);
+    int x;
+    if (!tsd) return 0;
+    for (x = 0; x < MAX_THREATCOUNT; x++)
+        if (mob->threat[x].user == tsd->bl.id)
+            return (int)mob->threat[x].amount;
+    return 0;
+}
+
+/* setIndDmg: add individual damage from player (dmg is passed as float from Lua). */
+int sl_mob_setinddmg(MOB *mob, unsigned int player_id, float dmg) {
+    USER *sd = map_id2sd(player_id);
+    int x;
+    if (!sd) return 0;
+    for (x = 0; x < MAX_THREATCOUNT; x++) {
+        if (mob->dmgindtable[x][0] == sd->status.id || mob->dmgindtable[x][0] == 0) {
+            mob->dmgindtable[x][0] = sd->status.id;
+            mob->dmgindtable[x][1] += dmg;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* setGrpDmg: add group damage from player. */
+int sl_mob_setgrpdmg(MOB *mob, unsigned int player_id, float dmg) {
+    USER *sd = map_id2sd(player_id);
+    int x;
+    if (!sd) return 0;
+    for (x = 0; x < MAX_THREATCOUNT; x++) {
+        if (mob->dmggrptable[x][0] == sd->groupid || mob->dmggrptable[x][0] == 0) {
+            mob->dmggrptable[x][0] = sd->groupid;
+            mob->dmggrptable[x][1] += dmg;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* callBase: call a named event on this mob's base AI script. */
+int sl_mob_callbase(MOB *mob, const char *script) {
+    struct block_list *bl = map_id2bl(mob->attacker);
+    if (bl != NULL)
+        sl_doscript_blargs(mob->data->yname, script, 2, &mob->bl, bl);
+    else
+        sl_doscript_blargs(mob->data->yname, script, 2, &mob->bl, &mob->bl);
+    return 1;
+}
+
+/* checkMove: return 1 if the mob can step forward in its current direction. */
+int sl_mob_checkmove(MOB *mob) {
+    short dx = mob->bl.x, dy = mob->bl.y;
+    unsigned short m = mob->bl.m;
+    char direction = mob->side;
+    struct warp_list *i;
+    switch (direction) {
+        case 0: dy -= 1; break;
+        case 1: dx += 1; break;
+        case 2: dy += 1; break;
+        case 3: dx -= 1; break;
+    }
+    if (dx >= map[m].xs) dx = map[m].xs - 1;
+    if (dy >= map[m].ys) dy = map[m].ys - 1;
+    for (i = map[m].warp[dx/BLOCK_SIZE + (dy/BLOCK_SIZE)*map[m].bxs]; i; i = i->next)
+        if (i->x == dx && i->y == dy) return 0;
+    map_foreachincell(mob_move, m, dx, dy, BL_MOB, mob);
+    map_foreachincell(mob_move, m, dx, dy, BL_PC, mob);
+    map_foreachincell(mob_move, m, dx, dy, BL_NPC, mob);
+    if (clif_object_canmove(m, dx, dy, direction)) return 0;
+    if (clif_object_canmove_from(m, mob->bl.x, mob->bl.y, direction)) return 0;
+    if (map_canmove(m, dx, dy) == 1 || mob->canmove == 1) return 0;
+    return 1;
+}
+
+/* setDuration: set or clear a magic effect timer on the mob. */
+void sl_mob_setduration(MOB *mob, const char *name, int time, unsigned int caster_id, int recast) {
+    int id = magicdb_id(name);
+    int x, alreadycast = 0, mid;
+    struct block_list *bl = NULL;
+    if (time < 1000 && time > 0) time = 1000;
+    for (x = 0; x < MAX_MAGIC_TIMERS; x++)
+        if (mob->da[x].id == id && mob->da[x].caster_id == caster_id && mob->da[x].duration > 0)
+            alreadycast = 1;
+    for (x = 0; x < MAX_MAGIC_TIMERS; x++) {
+        mid = mob->da[x].id;
+        if (mid == id && time <= 0 && mob->da[x].caster_id == caster_id && alreadycast == 1) {
+            mob->da[x].duration = 0; mob->da[x].id = 0; mob->da[x].caster_id = 0;
+            map_foreachinarea(clif_sendanimation, mob->bl.m, mob->bl.x, mob->bl.y,
+                              AREA, BL_PC, mob->da[x].animation, &mob->bl, -1);
+            mob->da[x].animation = 0;
+            if (mob->da[x].caster_id != mob->bl.id) bl = map_id2bl(mob->da[x].caster_id);
+            if (bl) sl_doscript_blargs(magicdb_yname(mid), "uncast", 2, &mob->bl, bl);
+            else    sl_doscript_blargs(magicdb_yname(mid), "uncast", 1, &mob->bl);
+            return;
+        } else if (mob->da[x].id == id && mob->da[x].caster_id == caster_id &&
+                   (mob->da[x].duration > time || recast == 1) && alreadycast == 1) {
+            mob->da[x].duration = time;
+            return;
+        } else if (mob->da[x].id == 0 && mob->da[x].duration == 0 && time != 0 && alreadycast != 1) {
+            mob->da[x].id = id;
+            mob->da[x].duration = time;
+            mob->da[x].caster_id = caster_id;
+            return;
+        }
+    }
+}
+
+/* flushDuration: clear magic timers in id range, fire uncast events. */
+void sl_mob_flushduration(MOB *mob, int dis, int minid, int maxid) {
+    int x, id;
+    char flush;
+    struct block_list *bl = NULL;
+    if (maxid < minid) maxid = minid;
+    for (x = 0; x < MAX_MAGIC_TIMERS; x++) {
+        id = mob->da[x].id;
+        if (magicdb_dispel(id) > dis) continue;
+        flush = (minid <= 0) ? 1
+              : (maxid <= 0) ? (id == minid)
+              : (id >= minid && id <= maxid);
+        if (flush) {
+            mob->da[x].duration = 0;
+            map_foreachinarea(clif_sendanimation, mob->bl.m, mob->bl.x, mob->bl.y,
+                              AREA, BL_PC, mob->da[x].animation, &mob->bl, -1);
+            mob->da[x].animation = 0; mob->da[x].id = 0;
+            bl = map_id2bl(mob->da[x].caster_id);
+            mob->da[x].caster_id = 0;
+            if (bl) sl_doscript_blargs(magicdb_yname(id), "uncast", 2, &mob->bl, bl);
+            else    sl_doscript_blargs(magicdb_yname(id), "uncast", 1, &mob->bl);
+        }
+    }
+}
+
+/* flushDurationNoUncast: clear magic timers without firing uncast events. */
+void sl_mob_flushdurationnouncast(MOB *mob, int dis, int minid, int maxid) {
+    int x, id;
+    char flush;
+    if (maxid < minid) maxid = minid;
+    for (x = 0; x < MAX_MAGIC_TIMERS; x++) {
+        id = mob->da[x].id;
+        if (magicdb_dispel(id) > dis) continue;
+        flush = (minid <= 0) ? 1
+              : (maxid <= 0) ? (id == minid)
+              : (id >= minid && id <= maxid);
+        if (flush) {
+            mob->da[x].duration = 0; mob->da[x].caster_id = 0;
+            map_foreachinarea(clif_sendanimation, mob->bl.m, mob->bl.x, mob->bl.y,
+                              AREA, BL_PC, mob->da[x].animation, &mob->bl, -1);
+            mob->da[x].animation = 0; mob->da[x].id = 0;
+        }
+    }
 }
