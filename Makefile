@@ -39,7 +39,8 @@ binaries: common
 		--target common_nocore \
 		--parallel $(NPROC)
 	@ln -sf metan_cli bin/metan
-	@cargo build --bin login_server --bin char_server --bin map_server $(CARGO_FLAGS)
+	@cargo build --bin login_server --bin char_server $(CARGO_FLAGS)
+	@cargo build --bin map_server --features map-game $(CARGO_FLAGS)
 	@cp target/$(RUST_PROFILE)/login_server bin/login_server
 	@cp target/$(RUST_PROFILE)/char_server bin/char_server
 	@cp target/$(RUST_PROFILE)/map_server bin/map_server
@@ -50,8 +51,9 @@ metan_cli: common
 	@ln -sf metan_cli bin/metan
 decrypt_cli: common
 	@cmake --build build --target decrypt_cli --parallel $(NPROC)
-char_server: common
-	@cmake --build build --target char_server --parallel $(NPROC)
+char_server: libyuri
+	@cargo build --bin char_server $(CARGO_FLAGS)
+	@cp target/$(RUST_PROFILE)/char_server bin/char_server
 char_server_rust: libyuri
 	@cargo build --bin char_server $(CARGO_FLAGS)
 	@cp target/$(RUST_PROFILE)/char_server bin/char_server
@@ -61,7 +63,7 @@ login_server: libyuri
 map_game: common
 	@cmake --build build --target map_game --target common_nocore --parallel $(NPROC)
 map_server: libyuri map_game
-	@cargo build --bin map_server $(CARGO_FLAGS)
+	@cargo build --bin map_server --features map-game $(CARGO_FLAGS)
 	@cp target/$(RUST_PROFILE)/map_server bin/map_server
 
 clean:

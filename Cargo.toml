@@ -32,6 +32,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "mysql", "macros", "migrate"] }
 tokio = { version = "1", features = ["full"] }
 
+[features]
+# Includes NPC/block game logic that depends on libmap_game.a C symbols.
+# Only enable when building the map_server binary.
+map-game = []
+
 [dev-dependencies]
 criterion = "0.8.2"
 
@@ -46,3 +51,4 @@ path = "src/bin/char_server.rs"
 [[bin]]
 name = "map_server"
 path = "src/bin/map_server.rs"
+required-features = ["map-game"]

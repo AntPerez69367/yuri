@@ -45,9 +45,7 @@ add_library(common_nocore STATIC c_src/config.c c_src/net_crypt.c)
 set(YURI_LIB ${PROJECT_SOURCE_DIR}/target/${RUST_PROFILE}/libyuri.a)
 set(YURI_LINK_GROUP -Wl,--start-group common ${YURI_LIB} deps -Wl,--end-group)
 
-add_executable(char_server c_src/char_db.c c_src/char_server.c c_src/char_login.c c_src/char_map.c)
-target_link_libraries(char_server ${YURI_LINK_GROUP} ZLIB::ZLIB m dl pthread)
-
+# char_server is now a Rust binary (src/bin/char_server.rs); C files removed
 # login_server is now a Rust binary (src/bin/login_server.rs); C files removed
 
 # map_server is now a Rust binary (src/bin/map_server.rs).
