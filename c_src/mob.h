@@ -55,7 +55,7 @@ static inline unsigned int* mobspawn_onetime(unsigned int id, int m, int x, int 
 static inline int mob_readglobalreg(MOB* m, const char* r) { return rust_mob_readglobalreg(m, r); }
 static inline int mob_setglobalreg(MOB* m, const char* r, int v) { return rust_mob_setglobalreg(m, r, v); }
 static inline int mobdb_drops(MOB* m, USER* sd)         { return rust_mob_drops(m, (void*)sd); }
-static inline int mob_handle_sub(MOB* m)                { rust_mob_handle_sub(m); return 0; }
+static inline int mob_handle_sub(MOB* m)                { return rust_mob_handle_sub(m); }
 static inline int kill_mob(MOB* m)                      { return rust_kill_mob(m); }
 static inline int mob_calcstat(MOB* m)                  { return rust_mob_calcstat(m); }
 

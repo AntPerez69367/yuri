@@ -214,7 +214,7 @@ int mob_attack(MOB *mob, int id) {
         }
       }
     }
-    int dmg = (int)(mob->damage += 0.5f);
+    int dmg = (int)(mob->damage + 0.5f);
     if (sd != NULL) {
       if (mob->critchance == 1) {
         clif_send_pc_health(sd, dmg, 33);
