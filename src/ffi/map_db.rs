@@ -90,10 +90,13 @@ pub unsafe fn map_get_warp(m: u16, dx: u16, dy: u16) -> *mut crate::database::ma
     let md_ptr = get_map_ptr(m);
     if md_ptr.is_null() { return std::ptr::null_mut(); }
     let md = &*md_ptr;
-    if md.xs == 0 { return std::ptr::null_mut(); }
+    if md.xs == 0 || md.ys == 0 { return std::ptr::null_mut(); }
+    if dx >= md.xs || dy >= md.ys { return std::ptr::null_mut(); }
+    if md.warp.is_null() { return std::ptr::null_mut(); }
     let block_size = crate::database::map_db::BLOCK_SIZE;
     let bx = dx as usize / block_size;
     let by = dy as usize / block_size;
+    if bx >= md.bxs as usize || by >= md.bys as usize { return std::ptr::null_mut(); }
     let idx = bx + by * md.bxs as usize;
     md.warp.add(idx).read()
 }

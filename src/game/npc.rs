@@ -612,6 +612,7 @@ pub async unsafe fn warp_init_async() -> c_int {
         if row.src_x as i32 > md.xs as i32 - 1 || row.src_y as i32 > md.ys as i32 - 1 {
             tracing::error!("[warp] map id: {}, x: {}, y: {}, source out of bounds",
                 row.src_map, row.src_x, row.src_y);
+            continue;
         }
 
         // Check destination coords too (log only, don't skip — matches C behavior)
