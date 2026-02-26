@@ -59,6 +59,8 @@ extern "C" {
 
     // Map helpers
     pub fn map_changepostcolor(board: c_int, post: c_int, color: c_int);
+    /// Returns a pointer into the C map[] id-database for floor items.
+    pub fn map_id2fl(id: c_uint) -> *mut c_void;
 
     // Magic/mob DB (Rust #[no_mangle] symbols)
     pub fn rust_magicdb_level(s: *const c_char) -> c_int;
