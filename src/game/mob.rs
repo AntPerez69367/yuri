@@ -3,7 +3,9 @@
 #![allow(non_snake_case, dead_code)]
 
 use std::ffi::{c_char, c_double, c_float, c_int, c_schar, c_short, c_uchar, c_uint, c_ushort};
-use crate::database::map_db::{BlockList, GlobalReg};
+use crate::database::map_db::{BlockList, GlobalReg, WarpList};
+#[cfg(not(test))]
+use crate::database::map_db::BLOCK_SIZE;
 use crate::database::mob_db::MobDbData;
 use crate::servers::char::charstatus::{Item, SkillInfo};
 use crate::game::types::GfxViewer;
@@ -957,6 +959,282 @@ unsafe fn tick_mob(mob: *mut MobSpawnData) {
     if tc % 30 == 0 { mob_fourthduratimer(mob); }
     if tc % 20 == 0 { mob_duratimer(mob); }
     mob_handle_sub(mob);
+}
+
+// ─── Movement functions ───────────────────────────────────────────────────────
+
+/// Shared warp-tile check used by all three move_mob variants.
+#[cfg(not(test))]
+unsafe fn warp_at(map_ptr: *mut crate::database::map_db::MapData, m: c_int, dx: c_int, dy: c_int) -> bool {
+    let slot = map_ptr.add(m as usize);
+    let bxs  = (*slot).bxs as usize;
+    let xs   = (*slot).xs as usize;
+    let ys   = (*slot).ys as usize;
+    let dx   = dx as usize;
+    let dy   = dy as usize;
+    if dx >= xs || dy >= ys { return false; }
+    let idx = dx / BLOCK_SIZE + (dy / BLOCK_SIZE) * bxs;
+    let warp: *mut WarpList = *(*slot).warp.add(idx);
+    let mut w = warp;
+    while !w.is_null() {
+        if (*w).x == dx as c_int && (*w).y == dy as c_int { return true; }
+        w = (*w).next;
+    }
+    false
+}
+
+/// Compute viewport delta strip for a one-step move in `direction`.
+/// Returns `(x0, y0, x1, y1, dx, dy, nothingnew)`.
+#[cfg(not(test))]
+unsafe fn viewport_delta(
+    mob: *const MobSpawnData,
+    map_ptr: *mut crate::database::map_db::MapData,
+) -> (c_int, c_int, c_int, c_int, c_int, c_int, bool) {
+    let m      = (*mob).bl.m as c_int;
+    let backx  = (*mob).bl.x as c_int;
+    let backy  = (*mob).bl.y as c_int;
+    let slot   = map_ptr.add(m as usize);
+    let xs     = (*slot).xs as c_int;
+    let ys     = (*slot).ys as c_int;
+    let (mut x0, mut y0) = (backx, backy);
+    let (mut x1, mut y1) = (0, 0);
+    let mut dx = backx;
+    let mut dy = backy;
+    let mut nothingnew = false;
+
+    match (*mob).side {
+        0 => { // UP
+            if backy > 0 {
+                dy = backy - 1;
+                x0 -= 9;  if x0 < 0 { x0 = 0; }
+                y0 -= 9;  y1 = 1;  x1 = 19;
+                if y0 < 7 { nothingnew = true; }
+                if y0 == 7 { y1 += 7; y0 = 0; }
+                if x0 + 19 + 9 >= xs { x1 += 9 - ((x0 + 19 + 9) - xs); }
+                if x0 <= 8 { x1 += x0; x0 = 0; }
+            }
+        }
+        1 => { // Right
+            if backx < xs {
+                x0 += 10;  y0 -= 8;  if y0 < 0 { y0 = 0; }
+                dx = backx + 1;  y1 = 17;  x1 = 1;
+                if x0 > xs - 9 { nothingnew = true; }
+                if x0 == xs - 9 { x1 += 9; }
+                if y0 + 17 + 8 >= ys { y1 += 8 - ((y0 + 17 + 8) - ys); }
+                if y0 <= 7 { y1 += y0; y0 = 0; }
+            }
+        }
+        2 => { // Down
+            if backy < ys {
+                x0 -= 9;  if x0 < 0 { x0 = 0; }
+                y0 += 9;  dy = backy + 1;  y1 = 1;  x1 = 19;
+                if y0 + 8 > ys { nothingnew = true; }
+                if y0 + 8 == ys { y1 += 8; }
+                if x0 + 19 + 9 >= xs { x1 += 9 - ((x0 + 19 + 9) - xs); }
+                if x0 <= 8 { x1 += x0; x0 = 0; }
+            }
+        }
+        3 => { // Left
+            if backx > 0 {
+                x0 -= 10;  y0 -= 8;  if y0 < 0 { y0 = 0; }
+                y1 = 17;  x1 = 1;  dx = backx - 1;
+                if x0 < 8 { nothingnew = true; }
+                if x0 == 8 { x0 = 0; x1 += 8; }
+                if y0 + 17 + 8 >= ys { y1 += 8 - ((y0 + 17 + 8) - ys); }
+                if y0 <= 7 { y1 += y0; y0 = 0; }
+            }
+        }
+        _ => {}
+    }
+    (x0, y0, x1, y1, dx, dy, nothingnew)
+}
+
+/// Shared post-move broadcast used by move_mob variants.
+#[cfg(not(test))]
+unsafe fn broadcast_move(mob: *mut MobSpawnData, x0: c_int, y0: c_int, x1: c_int, y1: c_int, nothingnew: bool) {
+    let m = (*mob).bl.m as c_int;
+    let mut subt = [0i32; 1];
+    if !nothingnew {
+        if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
+            map_foreachinblock(clif_cmoblook_sub,
+                m, x0, y0, x0 + x1 - 1, y0 + y1 - 1,
+                BL_PC, LOOK_SEND, mob as *mut _);
+        } else {
+            map_foreachinblock(clif_mob_look_start_func,
+                m, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC, mob as *mut _);
+            map_foreachinblock(clif_object_look_sub,
+                m, x0, y0, x0 + x1 - 1, y0 + y1 - 1,
+                BL_PC, LOOK_SEND, &raw mut (*mob).bl);
+            map_foreachinblock(clif_mob_look_close_func,
+                m, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC, mob as *mut _);
+        }
+    }
+    map_foreachincell(mob_trap_look_ffi,
+        m, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
+        BL_NPC, mob as *mut _, 0i32, subt.as_mut_ptr());
+    map_foreachinarea(clif_mob_move,
+        m, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
+        AREA, BL_PC, LOOK_SEND, mob as *mut _);
+}
+
+#[cfg(not(test))]
+pub unsafe fn move_mob(mob: *mut MobSpawnData) -> c_int {
+    let m       = (*mob).bl.m as c_int;
+    let backx   = (*mob).bl.x as c_int;
+    let backy   = (*mob).bl.y as c_int;
+    let map_ptr = get_map_ptr();
+    if map_ptr.is_null() { return 0; }
+
+    let (x0, y0, x1, y1, mut dx, mut dy, nothingnew) = viewport_delta(mob, map_ptr);
+
+    let slot = map_ptr.add(m as usize);
+    let xs   = (*slot).xs as c_int;
+    let ys   = (*slot).ys as c_int;
+
+    if dx >= xs { dx = xs - 1; }
+    if dy >= ys { dy = ys - 1; }
+
+    if warp_at(map_ptr, m, dx, dy) { return 0; }
+
+    map_foreachincell(mob_move, m, dx, dy, BL_MOB, mob as *mut _);
+    map_foreachincell(mob_move, m, dx, dy, BL_PC,  mob as *mut _);
+    map_foreachincell(mob_move, m, dx, dy, BL_NPC, mob as *mut _);
+
+    if clif_object_canmove(m, dx, dy, (*mob).side) != 0 { (*mob).canmove = 0; return 0; }
+    if clif_object_canmove_from(m, backx, backy, (*mob).side) != 0 { (*mob).canmove = 0; return 0; }
+    if map_canmove(m, dx, dy) == 1 || (*mob).canmove == 1 { (*mob).canmove = 0; return 0; }
+
+    // clamp after collision checks
+    let dx = if dx >= xs { backx } else if dx < 0 { backx } else { dx };
+    let dy = if dy >= ys { backy } else if dy < 0 { backy } else { dy };
+
+    if dx != backx || dy != backy {
+        (*mob).bx  = backx as c_ushort;
+        (*mob).by_ = backy as c_ushort;
+        map_moveblock(&mut (*mob).bl, dx, dy);
+        broadcast_move(mob, x0, y0, x1, y1, nothingnew);
+        return 1;
+    }
+    0
+}
+
+#[cfg(not(test))]
+pub unsafe fn move_mob_ignore_object(mob: *mut MobSpawnData) -> c_int {
+    let m       = (*mob).bl.m as c_int;
+    let backx   = (*mob).bl.x as c_int;
+    let backy   = (*mob).bl.y as c_int;
+    let map_ptr = get_map_ptr();
+    if map_ptr.is_null() { return 0; }
+
+    let (x0, y0, x1, y1, mut dx, mut dy, nothingnew) = viewport_delta(mob, map_ptr);
+    let slot = map_ptr.add(m as usize);
+    let xs   = (*slot).xs as c_int;
+    let ys   = (*slot).ys as c_int;
+    if dx >= xs { dx = xs - 1; }
+    if dy >= ys { dy = ys - 1; }
+    if warp_at(map_ptr, m, dx, dy) { return 0; }
+
+    // No collision callbacks — ignore objects
+    if clif_object_canmove(m, dx, dy, (*mob).side) != 0 { (*mob).canmove = 0; return 0; }
+    if clif_object_canmove_from(m, backx, backy, (*mob).side) != 0 { (*mob).canmove = 0; return 0; }
+
+    let dx = if dx >= xs { backx } else if dx < 0 { backx } else { dx };
+    let dy = if dy >= ys { backy } else if dy < 0 { backy } else { dy };
+
+    if dx != backx || dy != backy {
+        (*mob).bx  = backx as c_ushort;
+        (*mob).by_ = backy as c_ushort;
+        map_moveblock(&mut (*mob).bl, dx, dy);
+        broadcast_move(mob, x0, y0, x1, y1, nothingnew);
+        return 1;
+    }
+    0
+}
+
+#[cfg(not(test))]
+pub unsafe fn moveghost_mob(mob: *mut MobSpawnData) -> c_int {
+    let m       = (*mob).bl.m as c_int;
+    let backx   = (*mob).bl.x as c_int;
+    let backy   = (*mob).bl.y as c_int;
+    let map_ptr = get_map_ptr();
+    if map_ptr.is_null() { return 0; }
+
+    let (x0, y0, x1, y1, mut dx, mut dy, nothingnew) = viewport_delta(mob, map_ptr);
+    let slot = map_ptr.add(m as usize);
+    let xs   = (*slot).xs as c_int;
+    let ys   = (*slot).ys as c_int;
+    if dx >= xs { dx = xs - 1; }
+    if dy >= ys { dy = ys - 1; }
+    if warp_at(map_ptr, m, dx, dy) { return 0; }
+
+    map_foreachincell(mob_move, m, dx, dy, BL_MOB, mob as *mut _);
+    map_foreachincell(mob_move, m, dx, dy, BL_PC,  mob as *mut _);
+    map_foreachincell(mob_move, m, dx, dy, BL_NPC, mob as *mut _);
+
+    // Collision checks only apply when mob has no target
+    if (*mob).target == 0 {
+        if clif_object_canmove(m, dx, dy, (*mob).side) != 0 { (*mob).canmove = 0; return 0; }
+        if clif_object_canmove_from(m, backx, backy, (*mob).side) != 0 { (*mob).canmove = 0; return 0; }
+        if map_canmove(m, dx, dy) == 1 || (*mob).canmove == 1 { (*mob).canmove = 0; return 0; }
+    }
+
+    let dx = if dx >= xs { backx } else if dx < 0 { backx } else { dx };
+    let dy = if dy >= ys { backy } else if dy < 0 { backy } else { dy };
+
+    if dx != backx || dy != backy {
+        (*mob).bx  = backx as c_ushort;
+        (*mob).by_ = backy as c_ushort;
+        map_moveblock(&mut (*mob).bl, dx, dy);
+        broadcast_move(mob, x0, y0, x1, y1, nothingnew);
+        return 1;
+    }
+    0
+}
+
+#[cfg(not(test))]
+pub unsafe fn mob_move2(mob: *mut MobSpawnData, x: c_int, y: c_int, side: c_int) -> c_int {
+    if (*mob).canmove != 0 { return 1; }
+    let m = (*mob).bl.m as c_int;
+    (*mob).side = side;
+    map_foreachincell(mob_move, m, x, y, BL_MOB, mob as *mut _);
+    map_foreachincell(mob_move, m, x, y, BL_PC,  mob as *mut _);
+    let cm = (*mob).canmove;
+    if map_canmove(m, x, y) == 0 && cm == 0 {
+        (*mob).bx    = (*mob).bl.x;
+        (*mob).by_   = (*mob).bl.y;
+        (*mob).bl.x  = x as c_ushort;
+        (*mob).bl.y  = y as c_ushort;
+        map_foreachinarea(clif_mob_move,
+            m, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
+            AREA, BL_PC, LOOK_SEND, mob as *mut _);
+        (*mob).canmove = 1;
+    } else {
+        (*mob).canmove = 0;
+        return 0;
+    }
+    1
+}
+
+#[cfg(not(test))]
+pub unsafe fn move_mob_intent(mob: *mut MobSpawnData, bl: *mut BlockList) -> c_int {
+    if bl.is_null() { return 0; }
+    (*mob).canmove = 0;
+    let mx = (*mob).bl.x as c_int;
+    let my = (*mob).bl.y as c_int;
+    let px = (*bl).x as c_int;
+    let py = (*bl).y as c_int;
+    let ax = (mx - px).abs();
+    let ay = (my - py).abs();
+    let side = (*mob).side;
+    if (ax == 0 && ay == 1) || (ax == 1 && ay == 0) {
+        if mx < px { (*mob).side = 1; }
+        if mx > px { (*mob).side = 3; }
+        if my < py { (*mob).side = 2; }
+        if my > py { (*mob).side = 0; }
+        if side != (*mob).side { clif_sendmob_side(mob); }
+        return 1;
+    }
+    0
 }
 
 #[cfg(test)]
