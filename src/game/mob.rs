@@ -608,9 +608,319 @@ pub unsafe fn mob_flushmagic(mob: *mut MobSpawnData) -> c_int {
 
 // ─── Main 50ms tick ──────────────────────────────────────────────────────────
 
-// Forward stub — replaced by full implementation in Task 7 block below.
+// ─── Respawn functions ────────────────────────────────────────────────────────
+
 #[cfg(not(test))]
-pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) { let _ = mob; }
+pub unsafe fn mob_calcstat(mob: *mut MobSpawnData) -> c_int {
+    if mob.is_null() || (*mob).data.is_null() { return 0; }
+    let d = &*(*mob).data;
+    (*mob).maxvita   = d.vita as c_uint;
+    (*mob).maxmana   = d.mana as c_uint;
+    (*mob).ac        = d.baseac;
+    if (*mob).ac < -95 { (*mob).ac = -95; }
+    (*mob).miss      = d.miss;
+    (*mob).newmove   = d.movetime as c_uint;
+    (*mob).newatk    = d.atktime as c_uint;
+    (*mob).hit       = d.hit;
+    (*mob).mindam    = d.mindam;
+    (*mob).maxdam    = d.maxdam;
+    (*mob).might     = d.might;
+    (*mob).grace     = d.grace;
+    (*mob).will      = d.will;
+    (*mob).block     = d.block;
+    (*mob).protection = d.protection;
+    (*mob).charstate = d.state;
+    (*mob).clone     = 0;
+    (*mob).paralyzed = 0;
+    (*mob).blind     = 0;
+    (*mob).confused  = 0;
+    (*mob).snare     = 0;
+    (*mob).sleep     = 1.0;
+    (*mob).deduction = 1.0;
+    (*mob).crit      = 0;
+    (*mob).critmult  = 0;
+    (*mob).invis     = 1.0;
+    (*mob).amnesia   = 0;
+
+    if (*mob).state != MOB_DEAD {
+        for x in 0..MAX_MAGIC_TIMERS {
+            let p = &(*mob).da[x];
+            let id = p.id as c_int;
+            if id > 0 && p.duration > 0 {
+                let tsd = map_id2sd(p.caster_id) as *mut BlockList;
+                if !tsd.is_null() {
+                    sl_doscript_blargs(magicdb_yname(id), c"recast".as_ptr(),
+                        2, &raw mut (*mob).bl, tsd);
+                } else {
+                    sl_doscript_simple(magicdb_yname(id), c"recast".as_ptr(),
+                        &raw mut (*mob).bl);
+                }
+            }
+        }
+    }
+    0
+}
+
+#[cfg(not(test))]
+pub unsafe fn mob_respawn_nousers(mob: *mut MobSpawnData) -> c_int {
+    if (*mob).bl.m != (*mob).startm {
+        mob_warp(mob, (*mob).startm as c_int, (*mob).startx as c_int, (*mob).starty as c_int);
+    } else {
+        map_moveblock(&mut (*mob).bl, (*mob).startx as c_int, (*mob).starty as c_int);
+    }
+    (*mob).state = MOB_ALIVE;
+    mob_respawn_getstats(mob);
+    sl_doscript_blargs(c"on_spawn".as_ptr(), std::ptr::null(), 1, &raw mut (*mob).bl);
+    if !(*mob).data.is_null() {
+        sl_doscript_blargs((*(*mob).data).yname.as_ptr(), c"on_spawn".as_ptr(),
+            1, &raw mut (*mob).bl);
+    }
+    0
+}
+
+#[cfg(not(test))]
+pub unsafe fn mob_respawn(mob: *mut MobSpawnData) -> c_int {
+    if (*mob).bl.m != (*mob).startm {
+        mob_warp(mob, (*mob).startm as c_int, (*mob).startx as c_int, (*mob).starty as c_int);
+    } else {
+        map_moveblock(&mut (*mob).bl, (*mob).startx as c_int, (*mob).starty as c_int);
+    }
+    (*mob).state = MOB_ALIVE;
+    mob_respawn_getstats(mob);
+    if !(*mob).data.is_null() {
+        let d = &*(*mob).data;
+        if d.mobtype == 1 {
+            map_foreachinarea(clif_cmoblook_sub,
+                (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
+                AREA, BL_PC, LOOK_SEND, mob as *mut _);
+        } else {
+            map_foreachinarea(clif_mob_look_start_func,
+                (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
+                AREA, BL_PC);
+            map_foreachinarea(clif_object_look_sub,
+                (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
+                AREA, BL_PC, LOOK_SEND, &raw mut (*mob).bl);
+            map_foreachinarea(clif_mob_look_close_func,
+                (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
+                AREA, BL_PC);
+        }
+    }
+    sl_doscript_blargs(c"on_spawn".as_ptr(), std::ptr::null(), 1, &raw mut (*mob).bl);
+    if !(*mob).data.is_null() {
+        sl_doscript_blargs((*(*mob).data).yname.as_ptr(), c"on_spawn".as_ptr(),
+            1, &raw mut (*mob).bl);
+    }
+    0
+}
+
+// mob_warp forward-declared here; full body follows in the movement section.
+#[cfg(not(test))]
+pub unsafe fn mob_warp(mob: *mut MobSpawnData, m: c_int, x: c_int, y: c_int) -> c_int {
+    if mob.is_null() { return 0; }
+    if ((*mob).bl.id) < MOB_START_NUM || ((*mob).bl.id) >= NPC_START_NUM { return 0; }
+    map_delblock(&mut (*mob).bl);
+    clif_lookgone(&mut (*mob).bl);
+    (*mob).bl.m      = m as c_ushort;
+    (*mob).bl.x      = x as c_ushort;
+    (*mob).bl.y      = y as c_ushort;
+    (*mob).bl.bl_type = BL_MOB as c_uchar;
+    if map_addblock(&mut (*mob).bl) != 0 {
+        eprintln!("Error warping mob.");
+    }
+    if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
+        map_foreachinarea(clif_cmoblook_sub,
+            (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
+            AREA, BL_PC, LOOK_SEND, mob as *mut _);
+    } else {
+        map_foreachinarea(clif_object_look_sub2,
+            (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
+            AREA, BL_PC, LOOK_SEND, mob as *mut _);
+    }
+    0
+}
+
+pub unsafe fn kill_mob(mob: *mut MobSpawnData) -> c_int {
+    #[cfg(not(test))]
+    {
+        clif_mob_kill(mob);
+        mob_flushmagic(mob);
+    }
+    0
+}
+
+// ─── AI state machine ─────────────────────────────────────────────────────────
+
+#[cfg(not(test))]
+pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
+    if mob.is_null() { return; }
+    let sptime = libc::time(std::ptr::null_mut()) as u32;
+
+    if in_spawn_window(mob) {
+        let data = (*mob).data.as_ref();
+        let spawn_delay = data.map_or(0, |d| d.spawntime as u32);
+        if (*mob).last_death + spawn_delay <= sptime {
+            (*mob).spawncheck = 0;
+            if (*mob).state == MOB_DEAD && (*mob).onetime == 0 {
+                (*mob).target   = 0;
+                (*mob).attacker = 0;
+                let map_ptr = get_map_ptr();
+                let has_users = !map_ptr.is_null()
+                    && map_is_loaded((*mob).bl.m as c_int)
+                    && (*map_ptr.add((*mob).bl.m as usize)).user > 0;
+                if has_users { mob_respawn(mob); } else { mob_respawn_nousers(mob); }
+            }
+        }
+    }
+
+    if (*mob).data.as_ref().map_or(0, |d| d.r#type) >= 2 { return; }
+
+    let map_ptr = get_map_ptr();
+    let has_users = !map_ptr.is_null()
+        && map_is_loaded((*mob).bl.m as c_int)
+        && (*map_ptr.add((*mob).bl.m as usize)).user > 0;
+    let subtype2 = (*mob).data.as_ref().map_or(0, |d| d.subtype);
+
+    if !has_users && (*mob).onetime != 0 && subtype2 != 2 {
+        if (*mob).state != MOB_DEAD { return; }
+    }
+    if !has_users && (*mob).onetime == 0 && subtype2 != 4 {
+        if (*mob).state != MOB_DEAD { return; }
+    }
+
+    (*mob).time_ = (*mob).time_.wrapping_add(50);
+
+    match (*mob).state {
+        MOB_DEAD => {
+            if (*mob).onetime != 0 {
+                map_delblock(&mut (*mob).bl);
+                map_deliddb(&mut (*mob).bl);
+                free_onetime(mob);
+            }
+        }
+        MOB_ALIVE => {
+            let data = if (*mob).data.is_null() { return; } else { &*(*mob).data };
+            if ((*mob).time_ >= data.movetime && (*mob).time_ >= (*mob).newmove as c_int)
+                || ((*mob).newmove > 0 && (*mob).time_ >= (*mob).newmove as c_int)
+            {
+                if data.r#type >= 2 { return; }
+                if data.r#type == 1 && (*mob).target == 0 {
+                    map_foreachinarea(mob_find_target,
+                        (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
+                        AREA, BL_PC, mob as *mut _);
+                }
+                let bl = mob_resolve_target(mob);
+                (*mob).time_ = 0;
+                dispatch_ai(mob, bl, c"move".as_ptr());
+            }
+        }
+        MOB_HIT => {
+            let data = if (*mob).data.is_null() { return; } else { &*(*mob).data };
+            if ((*mob).time_ >= data.atktime && (*mob).time_ >= (*mob).newatk as c_int)
+                || ((*mob).newatk > 0 && (*mob).time_ >= (*mob).newatk as c_int)
+            {
+                if data.r#type >= 2 { return; }
+                let bl = mob_resolve_target(mob);
+                if bl.is_null() {
+                    (*mob).target   = 0;
+                    (*mob).attacker = 0;
+                    (*mob).state    = MOB_ALIVE;
+                    return;
+                }
+                if (*bl).m != (*mob).bl.m {
+                    (*mob).target   = 0;
+                    (*mob).attacker = 0;
+                    (*mob).state    = MOB_ALIVE;
+                    return;
+                }
+                (*mob).time_ = 0;
+                dispatch_ai(mob, bl, c"attack".as_ptr());
+            }
+        }
+        MOB_ESCAPE => {
+            let data = if (*mob).data.is_null() { return; } else { &*(*mob).data };
+            if ((*mob).time_ >= data.movetime && (*mob).time_ >= (*mob).newmove as c_int)
+                || ((*mob).newmove > 0 && (*mob).time_ >= (*mob).newmove as c_int)
+            {
+                if data.r#type >= 2 { return; }
+                if data.r#type == 1 && (*mob).target == 0 {
+                    map_foreachinarea(mob_find_target,
+                        (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
+                        AREA, BL_PC, mob as *mut _);
+                }
+                let bl = mob_resolve_target(mob);
+                (*mob).time_ = 0;
+                dispatch_ai(mob, bl, c"escape".as_ptr());
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Resolves mob->target to a block_list*. Clears target if dead/invalid.
+#[cfg(not(test))]
+unsafe fn mob_resolve_target(mob: *mut MobSpawnData) -> *mut BlockList {
+    let bl = map_id2bl((*mob).target);
+    if bl.is_null() {
+        (*mob).target   = 0;
+        (*mob).attacker = 0;
+        return std::ptr::null_mut();
+    }
+    if (*bl).m != (*mob).bl.m {
+        (*mob).target   = 0;
+        (*mob).attacker = 0;
+        return std::ptr::null_mut();
+    }
+    if (*bl).bl_type as c_int == BL_MOB {
+        let tmob = bl as *mut MobSpawnData;
+        if (*tmob).state == MOB_DEAD {
+            (*mob).target   = 0;
+            (*mob).attacker = 0;
+            return std::ptr::null_mut();
+        }
+    }
+    bl
+}
+
+/// Dispatches to the correct Lua AI script based on mob subtype.
+#[cfg(not(test))]
+unsafe fn dispatch_ai(mob: *mut MobSpawnData, bl: *mut BlockList, event: *const c_char) {
+    let data = if (*mob).data.is_null() { return; } else { &*(*mob).data };
+    let script: *const c_char = match data.subtype {
+        0 => c"mob_ai_basic".as_ptr(),
+        1 => c"mob_ai_normal".as_ptr(),
+        2 => c"mob_ai_hard".as_ptr(),
+        3 => c"mob_ai_boss".as_ptr(),
+        4 => data.yname.as_ptr(),
+        5 => c"mob_ai_ghost".as_ptr(),
+        _ => return,
+    };
+    sl_doscript_blargs(script, event, 2, &raw mut (*mob).bl, bl);
+}
+
+// ─── mob_trap_look (va_list callback) ────────────────────────────────────────
+
+/// va_list callback: activates NPC trap if mob steps on its cell.
+/// Stays as Rust FFI export so C `map_foreachincell` can call it.
+#[cfg(not(test))]
+pub unsafe extern "C" fn mob_trap_look_ffi(bl: *mut BlockList, mut ap: ...) -> c_int {
+    use crate::game::npc::NpcData;
+    // Only FLOOR (subtype==1) or sub-2 NPCs are traps
+    if (*bl).subtype != FLOOR && (*bl).subtype != 2 { return 0; }
+    if bl.is_null() { return 0; }
+    let nd = bl as *mut NpcData;
+    let mob    = ap.arg::<*mut MobSpawnData>();
+    let type_  = ap.arg::<c_int>();
+    let def    = ap.arg::<*mut c_int>();
+    if !def.is_null() && *def != 0 { return 0; }
+    if type_ != 0 && (*bl).subtype == 2 {
+        // skip sub-2 NPCs when type_ is non-zero
+    } else {
+        if !def.is_null() { *def = 1; }
+        sl_doscript_blargs((*nd).name.as_ptr(), c"click".as_ptr(),
+            2, &raw mut (*mob).bl, &raw mut (*nd).bl);
+    }
+    0
+}
 
 /// Called every 50ms by the timer system.
 #[cfg(not(test))]
