@@ -72,6 +72,11 @@ fn get_config() -> Option<&'static ServerConfig> {
     CONFIG.get()
 }
 
+/// Public accessor for the loaded config — used by game modules (e.g. scripting).
+pub fn config() -> &'static ServerConfig {
+    CONFIG.get().expect("config not loaded — rust_config_read must be called first")
+}
+
 //
 // C-compatible getter functions
 // These replace direct access to global variables in C
