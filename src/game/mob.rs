@@ -1340,10 +1340,13 @@ pub unsafe fn mobspawn_onetime(
         (*db).bl.prev  = std::ptr::null_mut();
         (*db).bl.next  = std::ptr::null_mut();
 
-        loop {
-            (*db).bl.id = mob_get_free_id();
-            if map_id2bl((*db).bl.id).is_null() { break; }
+        let new_id = mob_get_free_id();
+        if new_id == 0 {
+            eprintln!("[mob] mobspawn_onetime: no free onetime ID, skipping spawn");
+            mob_free_helper(db);
+            continue;
         }
+        (*db).bl.id = new_id;
 
         *spawnedmobs.add(z as usize) = (*db).bl.id;
         map_addblock(&mut (*db).bl);
