@@ -29,3 +29,8 @@ pub mod mob_db;
 pub mod recipe_db;
 pub mod session;
 pub mod timer;
+// NPC FFI bridge — only compile when map-game feature is enabled.
+// Without the feature, the npc game CGUs are absent from libyuri.a,
+// preventing transitive symbol pulls into non-map binaries.
+#[cfg(feature = "map-game")]
+pub mod npc;
