@@ -33,4 +33,6 @@ pub mod timer;
 // Without the feature, the npc game CGUs are absent from libyuri.a,
 // preventing transitive symbol pulls into non-map binaries.
 #[cfg(feature = "map-game")]
+pub mod mob;
+#[cfg(feature = "map-game")]
 pub mod npc;

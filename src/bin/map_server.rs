@@ -21,7 +21,7 @@ extern "C" {
     fn intif_mmo_tosd(fd: i32, status: *mut u8) -> i32;
     fn lang_read(file: *const i8);
     fn authdb_init(); // from map_char.c — stays until Task 6
-    fn mob_timer_spawns(id: i32, n: i32) -> i32;
+    fn rust_mob_timer_spawns(id: i32, n: i32) -> i32;
     fn map_cronjob(id: i32, n: i32) -> i32;
     fn npc_runtimers(id: i32, n: i32) -> i32;
     fn sl_doscript_blargs(name: *const i8, func: *const i8, nargs: i32, ...) -> i32;
@@ -46,7 +46,7 @@ extern "C" {
     fn rust_recipedb_init() -> i32;
     fn rust_magicdb_init() -> i32;
     fn rust_mobdb_init() -> i32;
-    fn mobspawn_read() -> i32;
+    fn rust_mobspawn_read() -> i32;
     // Session functions (from libyuri.a ffi/session.rs)
     fn rust_session_set_default_parse(f: unsafe extern "C" fn(i32) -> i32);
     fn rust_session_set_default_timeout(f: unsafe extern "C" fn(i32) -> i32);
@@ -206,7 +206,7 @@ async fn main() -> Result<()> {
                 rust_itemdb_init();
                 rust_recipedb_init();
                 rust_mobdb_init();
-                mobspawn_read();
+                rust_mobspawn_read();
                 rust_magicdb_init();
                 let data_dir_c = CString::new(data_dir.as_str()).unwrap();
                 rust_classdb_init(data_dir_c.as_ptr());
@@ -224,7 +224,7 @@ async fn main() -> Result<()> {
                 // Timers from the old do_init — restored here after do_init was removed.
                 let startup = std::ffi::CString::new("startup").unwrap();
                 sl_doscript_blargs(startup.as_ptr(), std::ptr::null(), 0);
-                yuri::ffi::timer::timer_insert(50,   50,   Some(mob_timer_spawns), 0, 0);
+                yuri::ffi::timer::timer_insert(50,   50,   Some(rust_mob_timer_spawns), 0, 0);
                 yuri::ffi::timer::timer_insert(100,  100,  Some(npc_runtimers),    0, 0);
                 yuri::ffi::timer::timer_insert(1000, 1000, Some(map_cronjob),      0, 0);
 
