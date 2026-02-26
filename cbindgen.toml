@@ -17,6 +17,36 @@ exclude = [
   # cbindgen would emit BlockList/WarpList with Rust names, conflicting with the C declarations.
   "BlockList", "WarpList",
   "map_addblock", "map_delblock", "map_initblock", "map_moveblock", "map_termblock",
+
+  # NPC game types: declared in map_server.h using C names (npc_data / struct gfxViewer).
+  # cbindgen emits NpcData/GfxViewer with Rust names which conflict.
+  "NpcData", "GfxViewer",
+
+  # NPC constants: redefined in map_server.h (BL_PC/MOB/NPC, NPC_START_NUM, etc.).
+  "BL_PC", "BL_MOB", "BL_NPC",
+  "NPC_START_NUM", "NPCT_START_NUM", "F1_NPC", "MAX_GLOBALNPCREG",
+
+  # NPC globals: npc_id exported via #[export_name] — declared in npc.h as extern.
+  "NPC_ID", "NPCTEMP_ID",
+
+  # NPC FFI bridge functions (ffi/npc.rs): declared via npc.h inline wrappers.
+  "npc_init", "warp_init", "npc_runtimers", "npc_move_sub",
+  "npc_action_ffi", "npc_movetime_ffi", "npc_duration_ffi",
+  "npc_warp_ffi", "npc_move_ffi",
+  "npc_readglobalreg_ffi", "npc_setglobalreg_ffi",
+  "npc_idlower_ffi", "npc_src_clear_ffi", "npc_src_add_ffi", "npc_warp_add_ffi",
+  "npc_get_new_npctempid_ffi",
+
+  # C extern declarations that leaked from game/npc.rs (declared in map_server.h / npc.h).
+  "map_id2bl", "map_id2npc", "map_id2sd",
+  "map_addiddb", "map_deliddb", "map_canmove",
+  "map_foreachinarea", "map_foreachincell", "map_foreachinblock",
+  "clif_lookgone", "clif_cnpclook_sub", "clif_object_look_sub2",
+  "clif_object_canmove", "clif_object_canmove_from",
+  "clif_mob_look_start_func", "clif_mob_look_close_func",
+  "clif_object_look_sub", "clif_npc_move",
+  "npc_helper_mob_is_dead", "npc_helper_pc_is_skip",
+  "sl_doscript_blargs", "serverid",
 ]
 
 [export.rename]
@@ -25,3 +55,11 @@ exclude = [
 [parse]
 parse_deps = false
 include = []
+
+# Use cargo to properly evaluate #[cfg] attributes (including feature flags).
+# Without this, cbindgen's UncheckedCfgEvaluator treats ALL cfgs as true,
+# causing it to export game/npc.rs content even when map-game is not enabled.
+# With expand, #[cfg(feature = "map-game")] correctly evaluates to false.
+[parse.expand]
+crates = ["yuri"]
+features = []

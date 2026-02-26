@@ -75,6 +75,34 @@ pub unsafe extern "C" fn rust_map_reload(maps_dir: *const c_char, server_id: c_i
     })
 }
 
+/// Returns a raw pointer to the MapData slot for `id`, or null if out of range.
+pub unsafe fn get_map_ptr(id: u16) -> *mut MapData {
+    if map.is_null() || id as usize >= MAP_SLOTS {
+        std::ptr::null_mut()
+    } else {
+        map.add(id as usize)
+    }
+}
+
+/// Returns the warp list head at the block containing `(dx, dy)` on map `m`.
+/// Returns null if the map is not loaded or coords are out of range.
+pub unsafe fn map_get_warp(m: u16, dx: u16, dy: u16) -> *mut crate::database::map_db::WarpList {
+    let md_ptr = get_map_ptr(m);
+    if md_ptr.is_null() { return std::ptr::null_mut(); }
+    let md = &*md_ptr;
+    if md.xs == 0 { return std::ptr::null_mut(); }
+    let block_size = crate::database::map_db::BLOCK_SIZE;
+    let bx = dx as usize / block_size;
+    let by = dy as usize / block_size;
+    let idx = bx + by * md.bxs as usize;
+    md.warp.add(idx).read()
+}
+
+/// Returns true if the map slot for `id` is loaded (xs > 0).
+pub unsafe fn map_is_loaded(id: u16) -> bool {
+    let ptr = get_map_ptr(id);
+    !ptr.is_null() && (*ptr).xs > 0
+}
 /// Reload the MapRegistry for a single map. Called from map_loadregistry() C shim.
 /// Returns 0 on success, -1 on error.
 #[no_mangle]
