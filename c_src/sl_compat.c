@@ -24,3 +24,13 @@ int sl_doscript_strings(char *root, const char *method, int nargs, ...) {
     va_end(ap);
     return rust_sl_doscript_strings_vec(root, method, nargs, args);
 }
+
+/* Map registry helpers — extract map index from USER* so Rust can call without
+ * knowing the block_list struct layout. */
+int map_readglobalreg_sd(void *sd, const char *attrname) {
+    return map_readglobalreg(((USER *)sd)->bl.m, attrname);
+}
+
+int map_setglobalreg_sd(void *sd, const char *attrname, int val) {
+    return map_setglobalreg(((USER *)sd)->bl.m, attrname, val);
+}
