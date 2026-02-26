@@ -1,250 +1,58 @@
 #pragma once
 
+#include <stdarg.h>
+#include <stdbool.h>
 #include <lua.h>
 #include <luajit.h>
 
 #include "class_db.h"
 #include "map_server.h"
 
-extern lua_State *sl_gstate;
-void sl_init();
-void sl_runfunc(char *, struct block_list *);
-int sl_doscript_blargs(char *, const char *, int, ...);
-int sl_doscript_stackargs(char *, const char *, int);
-int sl_doscript_strings(char *root, const char *method, int nargs, ...);
-int sl_updatepeople(struct block_list *, va_list);
-#define sl_doscript_simple(root, method, bl) \
-  sl_doscript_blargs(root, method, 1, bl)
-void sl_resumemenu(unsigned int, USER *);
-void sl_resumemenuseq(unsigned int selection, int choice, USER *sd);
-void sl_resumeinputseq(unsigned int choice, char *input, USER *sd);
-void sl_resumedialog(unsigned int, USER *);
-// void sl_resumebuy(unsigned int,USER *);
-void sl_resumebuy(char *, USER *);
-void sl_resumeinput(char *, char *, USER *);
-void sl_resumesell(unsigned int, USER *);
-void sl_exec(USER *, char *);
-void sl_async_freeco(USER *);
-int sl_reload(lua_State *);
-int sl_luasize(USER *);
-void sl_fixmem();
+/* Rust-provided non-variadic entry points */
+extern void  rust_sl_init(void);
+extern void  rust_sl_fixmem(void);
+extern int   rust_sl_reload(void);
+extern int   rust_sl_luasize(void *user);
+extern int   rust_sl_doscript_blargs_vec(const char *root, const char *method,
+                                          int nargs, struct block_list **args);
+extern int   rust_sl_doscript_strings_vec(const char *root, const char *method,
+                                           int nargs, const char **args);
+extern int   rust_sl_doscript_stackargs(const char *root, const char *method, int nargs);
+extern int   rust_sl_updatepeople(struct block_list *bl, void *ap);
+extern void  rust_sl_resumemenu(unsigned int id, void *sd);
+extern void  rust_sl_resumemenuseq(unsigned int id, int choice, void *sd);
+extern void  rust_sl_resumeinputseq(unsigned int id, char *input, void *sd);
+extern void  rust_sl_resumedialog(unsigned int id, void *sd);
+extern void  rust_sl_resumebuy(char *items, void *sd);
+extern void  rust_sl_resumeinput(char *tag, char *input, void *sd);
+extern void  rust_sl_resumesell(unsigned int id, void *sd);
+extern void  rust_sl_async_freeco(void *user);
+extern void  rust_sl_exec(void *user, char *code);
+extern void *sl_gstate;
 
-int pcl_addhealth(lua_State *, void *);
-int pcl_removehealth(lua_State *, void *);
-int pcl_resurrect(lua_State *, void *);
-int pcl_warp(lua_State *, void *);
-int pcl_forcedrop(lua_State *, void *);
-int pcl_useitem(lua_State *, void *);
-int pcl_level(lua_State *, void *);
-int pcl_sendminitext(lua_State *, void *);
-int pcl_setduration(lua_State *, void *);
-int pcl_dialog(lua_State *, void *);
-int pcl_getattr(lua_State *, void *, const char *);
-int pcl_setattr(lua_State *, void *, const char *);
-int pcl_setaether(lua_State *, void *);
-int pcl_hasaether(lua_State *, void *);
-int pcl_getaether(lua_State *, void *);
-int pcl_getallaethers(lua_State *, void *);
-int pcl_forcesave(lua_State *, void *);
-int pcl_refreshdurations(lua_State *, void *);
-int pcl_hasduration(lua_State *, void *);
-int pcl_hasdurationid(lua_State *, void *);
-int pcl_getduration(lua_State *, void *);
-int pcl_getdurationid(lua_State *, void *);
-int pcl_getalldurations(lua_State *, void *);
-int pcl_addlegend(lua_State *, void *);
-int pcl_haslegend(lua_State *, void *);
-int pcl_getlegend(lua_State *, void *);
-int pcl_buy(lua_State *, void *);
-int pcl_input(lua_State *, void *);
-int pcl_sell(lua_State *, void *);
-int pcl_sendstatus(lua_State *, void *);
-int pcl_sendhealthscript(lua_State *, void *);
-int pcl_calcstat(lua_State *, void *);
-int pcl_getinventoryitem(lua_State *, void *);
-int pcl_getexchangeitem(lua_State *, void *);
-int pcl_getboditem(lua_State *, void *);
-int pcl_getequippeditem(lua_State *, void *);
-int pcl_removelegendbyname(lua_State *, void *);
-int pcl_removelegendbycolor(lua_State *, void *);
-int pcl_menu(lua_State *, void *);
-int pcl_showhealth(lua_State *, void *);
-int pcl_addclan(lua_State *, void *);
-int pcl_ctor(lua_State *);
-int pcl_talkself(lua_State *, void *);
-int pcl_hasequipped(lua_State *, void *);
-int pcl_killcount(lua_State *, void *);
-int pcl_setkillcount(lua_State *, void *);
-int pcl_flushkills(lua_State *, void *);
-int pcl_flushallkills(lua_State *, void *);
-int pcl_removeinventoryitem(lua_State *, void *);
-int pcl_removeitemslot(lua_State *, void *);
-int pcl_removeitemdura(lua_State *, void *);
-int pcl_addGift(lua_State *, void *);
-int pcl_retrieveGift(lua_State *, void *);
-int pcl_additem(lua_State *, void *);
-int pcl_init(lua_State *, void *, int, void *);
-int pcl_showboard(lua_State *, void *);
-int pcl_showpost(lua_State *, void *);
-int pcl_hasitem(lua_State *, void *);
-int pcl_hasitemdura(lua_State *, void *);
-int pcl_addspell(lua_State *, void *);
-int pcl_removespell(lua_State *, void *);
-int pcl_mapselection(lua_State *, void *);
-int pcl_hasspell(lua_State *, void *);
-int pcl_getspells(lua_State *, void *);              // for remove spells
-int pcl_getspellname(lua_State *, void *);           // for remove spells
-int pcl_getspellyname(lua_State *, void *);          // for remove spells
-int pcl_getspellnamefromyname(lua_State *, void *);  // for remove spells
-int pcl_getspellsubspec(lua_State *, void *);        // for remove spells
-int pcl_addEventXP(lua_State *, void *);
-int pcl_flushduration(lua_State *, void *);
-int pcl_flushdurationnouncast(lua_State *, void *);
-int pcl_flushaether(lua_State *, void *);
-int pcl_hasspace(lua_State *, void *);
-int pcl_deductarmor(lua_State *, void *);
-int pcl_deductweapon(lua_State *, void *);
-int pcl_updateinv(lua_State *, void *);
-int pcl_durationamount(lua_State *, void *);
-int pcl_addguide(lua_State *, void *);
-int pcl_delguide(lua_State *, void *);
-int pcl_popup(lua_State *, void *);
-int pcl_paperpopup(lua_State *, void *);
-// int pcl_paperpopupwrite(lua_State*,void*, struct item *bitem);
-int pcl_paperpopupwrite(lua_State *, void *);
-int pcl_menuseq(lua_State *, void *);
-int pcl_inputseq(lua_State *, void *);
-int pcl_sendboardquestions(lua_State *, void *);
-int pcl_powerboard(lua_State *, void *);
-int pcl_lock(lua_State *, void *);
-int pcl_unlock(lua_State *, void *);
-int pcl_swing(lua_State *, void *);
-int pcl_swingtarget(lua_State *, void *);
-// int pcl_givexp(lua_State*, void*);
-// int pcl_givexpgroup(lua_State *, void *);
-int pcl_addthreat(lua_State *, void *);         // threat table
-int pcl_setthreat(lua_State *, void *);         // threat table
-int pcl_addthreatgeneral(lua_State *, void *);  // threat table
-int pcl_getbankitem(lua_State *, void *);
-int pcl_getbankitems(lua_State *, void *);
-int pcl_bankdeposit(lua_State *, void *);
-int pcl_bankwithdraw(lua_State *, void *);
-int pcl_getclanbankitems(lua_State *, void *);
-int pcl_clanbankdeposit(lua_State *, void *);
-int pcl_clanbankwithdraw(lua_State *, void *);
-int pcl_getsubpathbankitems(lua_State *, void *);
-int pcl_subpathbankdeposit(lua_State *, void *);
-int pcl_subpathbankwithdraw(lua_State *, void *);
-int pcl_speak(lua_State *, void *);
-int pcl_freeasync(lua_State *, void *);
-int pcl_sendhealth(lua_State *, void *);
-int pcl_sendmail(lua_State *, void *);
-int pcl_sendurl(lua_State *, void *);
-int pcl_pickup(lua_State *, void *);
-int pcl_equip(lua_State *, void *);
-int pcl_forceequip(lua_State *, void *);
-int pcl_takeoff(lua_State *, void *);
-int pcl_stripequip(lua_State *, void *);
-int pcl_die(lua_State *, void *);
-int pcl_throwitem(lua_State *, void *);
-int pcl_minirefresh(lua_State *, void *);
-int pcl_refresh(lua_State *, void *);
-int pcl_refreshInventory(lua_State *, void *);
-int pcl_move(lua_State *, void *);
-int pcl_respawn(lua_State *, void *);
-int pcl_deductdura(lua_State *, void *);
-int pcl_deductdurainv(lua_State *, void *);
-int pcl_deductduraequip(lua_State *, void *);
-int pcl_checkinvbod(lua_State *, void *);
-int pcl_setpk(lua_State *, void *);
-int pcl_getpk(lua_State *, void *);
-int pcl_guitext(lua_State *, void *);
-int pcl_getcreationitems(lua_State *, void *);
-int pcl_getcreationamounts(lua_State *, void *);
-int pcl_getparcel(lua_State *, void *);
-int pcl_getparcellist(lua_State *, void *);
-int pcl_removeparcel(lua_State *, void *);
-int pcl_expireitem(lua_State *, void *);
-int pcl_logbuysell(lua_State *, void *);
-int pcl_settimevalues(lua_State *, void *);
-int pcl_gettimevalues(lua_State *, void *);
-int pcl_setHeroShow(lua_State *, void *);
-int pcl_setAccountBan(lua_State *, void *);
-int pcl_setCaptchaKey(lua_State *, void *);
-int pcl_getCaptchaKey(lua_State *, void *);
-int pcl_sendminimap(lua_State *, void *);
-int pcl_addKan(lua_State *, void *);
-int pcl_removeKan(lua_State *, void *);
-int pcl_setKan(lua_State *, void *);
-int pcl_checkKan(lua_State *, void *);
-int pcl_claimKan(lua_State *, void *);
-int pcl_updatePath(lua_State *, void *);
-int pcl_updateCountry(lua_State *, void *);
-int pcl_updateMail(lua_State *, void *);
-int pcl_kanBalance(lua_State *, void *);
-int pcl_lookat(lua_State *, void *);
-int pcl_getunknownspells(lua_State *, void *);
-int pcl_getallclassspells(lua_State *, void *);
-int pcl_getallspells(lua_State *, void *);
-int pcl_status(lua_State *, void *);
-int pcl_testpacket(lua_State *, void *);
-int pcl_getcasterid(lua_State *, void *);
-int pcl_changeview(lua_State *, void *);
-int pcl_settimer(lua_State *, void *);
-int pcl_addtime(lua_State *, void *);
-int pcl_removetime(lua_State *, void *);
-int pcl_checklevel(lua_State *, void *);
-int pcl_setMiniMapToggle(lua_State *, void *);  // miniMapToggle 1 or 0
+#define sl_init()          rust_sl_init()
+#define sl_fixmem()        rust_sl_fixmem()
+#define sl_luasize(u)      rust_sl_luasize(u)
 
-int mobl_attack(lua_State *, void *);
-int mobl_addhealth(lua_State *, void *);
-int mobl_getattr(lua_State *, void *, const char *);
-int mobl_setattr(lua_State *, void *, const char *);
-int mobl_move(lua_State *, void *);
-int mobl_move_ignore_object(lua_State *, void *);
-int mobl_init(lua_State *, void *, int, void *);
-int mobl_ctor(lua_State *);
-int mobl_setduration(lua_State *, void *);
-int mobl_moveintent(lua_State *, void *);
-int mobl_hasduration(lua_State *, void *);
-int mobl_hasdurationid(lua_State *, void *);  // hasduration with id check
-int mobl_getduration(lua_State *, void *);
-int mobl_getdurationid(lua_State *, void *);
-int mobl_removehealth(lua_State *, void *);
-int mobl_flushduration(lua_State *, void *);
-int mobl_flushdurationnouncast(lua_State *, void *);
-int mobl_durationamount(lua_State *, void *);
-int mobl_checkthreat(lua_State *, void *);
-int mobl_sendhealth(lua_State *, void *);
-int mobl_warp(lua_State *, void *);
-int mobl_moveghost(lua_State *, void *);
-int mobl_callbase(lua_State *, void *);
-int mobl_checkmove(lua_State *, void *);
-int mobl_setinddmg(lua_State *, void *);
-int mobl_setgrpdmg(lua_State *, void *);
-int mobl_getinddmg(lua_State *, void *);
-int mobl_getgrpdmg(lua_State *, void *);
-int mobl_getequippeditem(lua_State *, void *);
-int mobl_calcstat(lua_State *, void *);
-int mobl_sendstatus(lua_State *, void *);
-int mobl_sendminitext(lua_State *, void *);
-int mobregl_getattr(lua_State *, void *, const char *);
-int mobregl_setattr(lua_State *, void *, const char *);
+static inline int sl_reload(lua_State *L) {
+    (void)L; return rust_sl_reload();
+}
 
-int npcl_ctor(lua_State *);
-int npcl_init(lua_State *, void *, int, void *);
-int npcl_getattr(lua_State *, void *, const char *);
-int npcl_setattr(lua_State *, void *, const char *);
-int npcregl_getattr(lua_State *, void *, const char *);
-int npcregl_setattr(lua_State *, void *, const char *);
-int npcl_move(lua_State *, void *);
-int npcl_warp(lua_State *, void *);
-int npcl_getequippeditem(lua_State *, void *);
+extern int   sl_doscript_blargs(char *root, const char *method, int nargs, ...);
+extern int   sl_doscript_strings(char *root, const char *method, int nargs, ...);
 
-int fll_getattr(lua_State *, void *, const char *);
-int fll_setattr(lua_State *, void *, const char *);
-int fll_move(lua_State *, void *);
-int fll_init(lua_State *, void *, int, void *);
-int fll_ctor(lua_State *);
-int fll_getTrapSpotters(lua_State *, void *);
-int fll_addTrapSpotters(lua_State *, void *);
+#define sl_doscript_stackargs(r,m,n)   rust_sl_doscript_stackargs(r,m,n)
+extern int   sl_updatepeople(struct block_list *bl, void *ap);
+#define sl_resumemenu(id, sd)          rust_sl_resumemenu(id, sd)
+#define sl_resumemenuseq(id,ch,sd)     rust_sl_resumemenuseq(id,ch,sd)
+#define sl_resumeinputseq(id,inp,sd)   rust_sl_resumeinputseq(id,inp,sd)
+#define sl_resumedialog(id, sd)        rust_sl_resumedialog(id, sd)
+#define sl_resumebuy(items, sd)        rust_sl_resumebuy(items, sd)
+#define sl_resumeinput(tag, inp, sd)   rust_sl_resumeinput(tag, inp, sd)
+#define sl_resumesell(id, sd)          rust_sl_resumesell(id, sd)
+#define sl_async_freeco(u)             rust_sl_async_freeco(u)
+#define sl_doscript_simple(root,method,bl) sl_doscript_blargs(root, method, 1, bl)
+#define sl_runfunc(r,bl)               /* no-op until Phase 3 */
+#define sl_exec(u,c)                   rust_sl_exec(u,c)
+
+/* pcl_* / mobl_* / npcl_* / fll_* declarations removed: scripting.c is now Rust */
