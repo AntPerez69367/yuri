@@ -7,7 +7,7 @@ pub mod globals;
 pub mod types;
 
 use mlua::Lua;
-use std::ffi::{CStr, c_char, c_int};
+use std::ffi::{CStr, CString, c_char, c_int, c_uint};
 use std::os::raw::c_void;
 
 use types::floor::FloorListObject;
