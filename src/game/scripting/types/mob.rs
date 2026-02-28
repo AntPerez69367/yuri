@@ -3,14 +3,18 @@ use std::ffi::{c_char, c_float, c_int, c_uint, CString};
 use std::os::raw::c_void;
 
 use crate::database::map_db::{BlockList, MapData};
-use crate::database::mob_db::MobDbData;
 use crate::ffi::map_db::get_map_ptr;
+use crate::database::mob_db::MobDbData;
 use crate::game::mob::{
     mob_calcstat, mob_warp, move_mob, move_mob_ignore_object, move_mob_intent, moveghost_mob,
     MobSpawnData, BL_MOB, BL_PC, MAX_MAGIC_TIMERS, MAX_THREATCOUNT,
 };
+use crate::game::scripting::ffi as sffi;
 use crate::game::scripting::types::item::fixed_str;
+use crate::game::scripting::types::npc::NpcObject;
+use crate::game::scripting::types::pc::PcObject;
 use crate::game::scripting::types::registry::{GameRegObject, MapRegObject, MobRegObject};
+use crate::game::scripting::types::shared;
 
 pub struct MobObject {
     pub ptr: *mut c_void,
@@ -97,6 +101,11 @@ impl UserData for MobObject {
                     Ok(mlua::Value::Integer($e as i64))
                 };
             }
+            macro_rules! bool {
+                ($e:expr) => {
+                    Ok(mlua::Value::Boolean($e != 0))
+                };
+            }
             macro_rules! cstr {
                 ($arr:expr) => {{
                     let s = unsafe { fixed_str($arr) };
@@ -133,7 +142,7 @@ impl UserData for MobObject {
             match key.as_str() {
                 "attack" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, id: c_int| {
+                        move |_, (_, id): (mlua::Value, c_int)| {
                             if ptr.is_null() {
                                 return Ok(0i32);
                             }
@@ -143,7 +152,7 @@ impl UserData for MobObject {
                 }
                 "addHealth" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, damage: c_int| {
+                        move |_, (_, damage): (mlua::Value, c_int)| {
                             if ptr.is_null() {
                                 return Ok(());
                             }
@@ -156,7 +165,7 @@ impl UserData for MobObject {
                 }
                 "removeHealth" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (damage, caster_id): (c_int, c_uint)| {
+                        move |_, (_, damage, caster_id): (mlua::Value, c_int, c_uint)| {
                             if ptr.is_null() {
                                 return Ok(());
                             }
@@ -199,7 +208,7 @@ impl UserData for MobObject {
                 }
                 "moveIntent" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, target_id: c_uint| {
+                        move |_, (_, target_id): (mlua::Value, c_uint)| {
                             if ptr.is_null() {
                                 return Ok(0i32);
                             }
@@ -213,7 +222,7 @@ impl UserData for MobObject {
                 }
                 "warp" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (m, x, y): (c_int, c_int, c_int)| {
+                        move |_, (_, m, x, y): (mlua::Value, c_int, c_int, c_int)| {
                             if ptr.is_null() {
                                 return Ok(());
                             }
@@ -226,7 +235,7 @@ impl UserData for MobObject {
                 }
                 "sendHealth" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (dmg, critical): (c_float, c_int)| {
+                        move |_, (_, dmg, critical): (mlua::Value, c_float, c_int)| {
                             if ptr.is_null() {
                                 return Ok(());
                             }
@@ -253,7 +262,8 @@ impl UserData for MobObject {
                     return Ok(mlua::Value::Function(
                         lua.create_function(
                             move |_,
-                                  (name, time, caster_id, recast): (
+                                  (_, name, time, caster_id, recast): (
+                                mlua::Value,
                                 String,
                                 c_int,
                                 c_uint,
@@ -274,7 +284,7 @@ impl UserData for MobObject {
                 }
                 "flushDuration" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (dis, minid, maxid): (c_int, c_int, c_int)| {
+                        move |_, (_, dis, minid, maxid): (mlua::Value, c_int, c_int, c_int)| {
                             if ptr.is_null() {
                                 return Ok(());
                             }
@@ -287,7 +297,7 @@ impl UserData for MobObject {
                 }
                 "flushDurationNoUncast" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (dis, minid, maxid): (c_int, c_int, c_int)| {
+                        move |_, (_, dis, minid, maxid): (mlua::Value, c_int, c_int, c_int)| {
                             if ptr.is_null() {
                                 return Ok(());
                             }
@@ -300,7 +310,7 @@ impl UserData for MobObject {
                 }
                 "hasDuration" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, name: String| -> mlua::Result<bool> {
+                        move |_, (_, name): (mlua::Value, String)| -> mlua::Result<bool> {
                             if ptr.is_null() {
                                 return Ok(false);
                             }
@@ -315,7 +325,7 @@ impl UserData for MobObject {
                 }
                 "hasDurationID" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (name, caster_id): (String, c_uint)| -> mlua::Result<bool> {
+                        move |_, (_, name, caster_id): (mlua::Value, String, c_uint)| -> mlua::Result<bool> {
                             if ptr.is_null() {
                                 return Ok(false);
                             }
@@ -333,7 +343,7 @@ impl UserData for MobObject {
                 }
                 "getDuration" | "durationAmount" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, name: String| -> mlua::Result<c_int> {
+                        move |_, (_, name): (mlua::Value, String)| -> mlua::Result<c_int> {
                             if ptr.is_null() {
                                 return Ok(0);
                             }
@@ -352,7 +362,7 @@ impl UserData for MobObject {
                 }
                 "getDurationID" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (name, caster_id): (String, c_uint)| -> mlua::Result<c_int> {
+                        move |_, (_, name, caster_id): (mlua::Value, String, c_uint)| -> mlua::Result<c_int> {
                             if ptr.is_null() {
                                 return Ok(0);
                             }
@@ -374,7 +384,7 @@ impl UserData for MobObject {
                 }
                 "checkThreat" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, player_id: c_uint| {
+                        move |_, (_, player_id): (mlua::Value, c_uint)| {
                             if ptr.is_null() {
                                 return Ok(0i32);
                             }
@@ -384,7 +394,7 @@ impl UserData for MobObject {
                 }
                 "callBase" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, script: String| -> mlua::Result<bool> {
+                        move |_, (_, script): (mlua::Value, String)| -> mlua::Result<bool> {
                             if ptr.is_null() {
                                 return Ok(false);
                             }
@@ -406,7 +416,7 @@ impl UserData for MobObject {
                 }
                 "setIndDmg" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (player_id, dmg): (c_uint, c_float)| -> mlua::Result<bool> {
+                        move |_, (_, player_id, dmg): (mlua::Value, c_uint, c_float)| -> mlua::Result<bool> {
                             if ptr.is_null() {
                                 return Ok(false);
                             }
@@ -416,7 +426,7 @@ impl UserData for MobObject {
                 }
                 "setGrpDmg" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (player_id, dmg): (c_uint, c_float)| -> mlua::Result<bool> {
+                        move |_, (_, player_id, dmg): (mlua::Value, c_uint, c_float)| -> mlua::Result<bool> {
                             if ptr.is_null() {
                                 return Ok(false);
                             }
@@ -468,7 +478,7 @@ impl UserData for MobObject {
                 }
                 "getEquippedItem" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |lua, num: usize| -> mlua::Result<mlua::Value> {
+                        move |lua, (_, num): (mlua::Value, usize)| -> mlua::Result<mlua::Value> {
                             if ptr.is_null() {
                                 return Ok(mlua::Value::Nil);
                             }
@@ -510,6 +520,43 @@ impl UserData for MobObject {
                         lua.create_function(move |_, _: mlua::MultiValue| Ok(()))?,
                     ))
                 }
+                // sendSide() — send a side-update to nearby players.
+                "sendSide" => {
+                    return Ok(mlua::Value::Function(lua.create_function(
+                        move |_, _: mlua::MultiValue| {
+                            unsafe { sffi::sl_g_sendside(ptr); }
+                            Ok(())
+                        }
+                    )?));
+                }
+                // delete() — remove mob from world and free its memory.
+                "delete" => {
+                    return Ok(mlua::Value::Function(lua.create_function(
+                        move |_, _: mlua::MultiValue| {
+                            unsafe { sffi::sl_g_delete_bl(ptr); }
+                            Ok(())
+                        }
+                    )?));
+                }
+                // talk(type, msg) — speak in the surrounding area.
+                "talk" => {
+                    return Ok(mlua::Value::Function(lua.create_function(
+                        move |_, args: mlua::MultiValue| {
+                            let a: Vec<mlua::Value> = args.into_iter().collect();
+                            let talk_type = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
+                            let msg = match a.get(2) {
+                                Some(mlua::Value::String(s)) => {
+                                    String::from_utf8_lossy(&*s.as_bytes()).into_owned()
+                                }
+                                _ => String::new(),
+                            };
+                            if let Ok(cs) = CString::new(msg.as_bytes()) {
+                                unsafe { sffi::sl_g_talk(ptr, talk_type, cs.as_ptr()); }
+                            }
+                            Ok(())
+                        }
+                    )?));
+                }
                 // Registry sub-objects (set during mobl_init; exposed via __index here)
                 "registry" => return lua.pack(MobRegObject { ptr }),
                 "mapRegistry" => return lua.pack(MapRegObject { ptr }),
@@ -522,6 +569,15 @@ impl UserData for MobObject {
             }
 
             // ── block_list / map fields ──────────────────────────────────────
+            // Shared map properties (pvp, mapTitle, bgm, etc.) — delegate to shared module.
+            if let Some(v) = unsafe { shared::map_field(lua, bl.m as c_int, key.as_str()) } {
+                return v;
+            }
+            // Shared GfxViewer properties (gfxFace, gfxWeap, etc.) — delegate to shared module.
+            if let Some(v) = unsafe { shared::gfx_read(lua, &mob.gfx, key.as_str()) } {
+                return v;
+            }
+
             match key.as_str() {
                 "x" => int!(bl.x),
                 "y" => int!(bl.y),
@@ -530,60 +586,14 @@ impl UserData for MobObject {
                 "ID" => int!(bl.id),
                 "xmax" => {
                     let mp = unsafe { mob_map(mob as *const MobSpawnData) };
-                    if mp.is_null() {
-                        return Ok(mlua::Value::Nil);
-                    }
+                    if mp.is_null() { return Ok(mlua::Value::Nil); }
                     int!(unsafe { (*mp).xs.saturating_sub(1) })
                 }
                 "ymax" => {
                     let mp = unsafe { mob_map(mob as *const MobSpawnData) };
-                    if mp.is_null() {
-                        return Ok(mlua::Value::Nil);
-                    }
+                    if mp.is_null() { return Ok(mlua::Value::Nil); }
                     int!(unsafe { (*mp).ys.saturating_sub(1) })
                 }
-                "mapId" => map_int!(id),
-                "mapTitle" => {
-                    let mp = unsafe { mob_map(mob as *const MobSpawnData) };
-                    if mp.is_null() {
-                        return Ok(mlua::Value::Nil);
-                    }
-                    cstr!(unsafe { &(*mp).title })
-                }
-                "mapFile" => {
-                    let mp = unsafe { mob_map(mob as *const MobSpawnData) };
-                    if mp.is_null() {
-                        return Ok(mlua::Value::Nil);
-                    }
-                    cstr!(unsafe { &(*mp).mapfile })
-                }
-                "bgm" => map_int!(bgm),
-                "bgmType" => map_int!(bgmtype),
-                "pvp" => map_int!(pvp),
-                "spell" => map_int!(spell),
-                "light" => map_int!(light),
-                "weather" => map_int!(weather),
-                "sweepTime" => map_int!(sweeptime),
-                "canTalk" => map_int!(cantalk),
-                "showGhosts" => map_int!(show_ghosts),
-                "region" => map_int!(region),
-                "indoor" => map_int!(indoor),
-                "warpOut" => map_int!(warpout),
-                "bind" => map_int!(bind),
-                "reqLvl" => map_int!(reqlvl),
-                "reqVita" => map_int!(reqvita),
-                "reqMana" => map_int!(reqmana),
-                "maxLvl" => map_int!(lvlmax),
-                "maxVita" => map_int!(vitamax),
-                "maxMana" => map_int!(manamax),
-                "reqPath" => map_int!(reqpath),
-                "reqMark" => map_int!(reqmark),
-                "canSummon" => map_int!(summon),
-                "canUse" => map_int!(can_use),
-                "canEat" => map_int!(can_eat),
-                "canSmoke" => map_int!(can_smoke),
-                "canMount" => map_int!(can_mount),
-                "canGroup" => map_int!(can_group),
                 // ── mob-instance fields ──────────────────────────────────────
                 "state" => int!(mob.state),
                 "startX" => int!(mob.startx),
@@ -593,8 +603,8 @@ impl UserData for MobObject {
                 "id" => int!(mob.id),
                 "side" => int!(mob.side),
                 "amnesia" => int!(mob.amnesia),
-                "paralyzed" => int!(mob.paralyzed),
-                "blind" => int!(mob.blind),
+                "paralyzed" => bool!(mob.paralyzed),
+                "blind" => bool!(mob.blind),
                 "hit" => int!(mob.hit),
                 "miss" => int!(mob.miss),
                 "minDam" => int!(mob.mindam),
@@ -609,7 +619,7 @@ impl UserData for MobObject {
                 "maxMagic" => int!(mob.maxmana),
                 "armor" => int!(mob.ac),
                 "attacker" => int!(mob.attacker),
-                "confused" => int!(mob.confused),
+                "confused" => bool!(mob.confused),
                 "owner" => int!(mob.owner),
                 "sleep" => Ok(mlua::Value::Number(mob.sleep as f64)),
                 "target" => int!(mob.target),
@@ -622,12 +632,12 @@ impl UserData for MobObject {
                 "rangeTarget" => int!(mob.rangeTarget),
                 "newMove" => int!(mob.newmove),
                 "newAttack" => int!(mob.newatk),
-                "snare" => int!(mob.snare),
+                "snare" => bool!(mob.snare),
                 "lastAction" => int!(mob.lastaction),
-                "summon" => int!(mob.summon),
+                "summon" => bool!(mob.summon),
                 "block" => int!(mob.block),
                 "protection" => int!(mob.protection),
-                "returning" => int!(mob.returning),
+                "returning" => bool!(mob.returning),
                 "dmgShield" => Ok(mlua::Value::Number(mob.dmgshield as f64)),
                 "dmgDealt" => Ok(mlua::Value::Number(mob.dmgdealt)),
                 "dmgTaken" => Ok(mlua::Value::Number(mob.dmgtaken)),
@@ -638,35 +648,6 @@ impl UserData for MobObject {
                 "gfxClone" => int!(mob.clone),
                 "lastDeath" => int!(mob.last_death),
                 "cursed" => int!(mob.cursed),
-                // gfxViewer fields
-                "gfxFace" => int!(mob.gfx.face),
-                "gfxFaceC" => int!(mob.gfx.cface),
-                "gfxHair" => int!(mob.gfx.hair),
-                "gfxHairC" => int!(mob.gfx.chair),
-                "gfxSkinC" => int!(mob.gfx.cskin),
-                "gfxDye" => int!(mob.gfx.dye),
-                "gfxTitleColor" => int!(mob.gfx.title_color),
-                "gfxWeap" => int!(mob.gfx.weapon),
-                "gfxWeapC" => int!(mob.gfx.cweapon),
-                "gfxArmor" => int!(mob.gfx.armor),
-                "gfxArmorC" => int!(mob.gfx.carmor),
-                "gfxShield" => int!(mob.gfx.shield),
-                "gfxShieldC" | "gfxShiedlC" => int!(mob.gfx.cshield),
-                "gfxHelm" => int!(mob.gfx.helm),
-                "gfxHelmC" => int!(mob.gfx.chelm),
-                "gfxMantle" => int!(mob.gfx.mantle),
-                "gfxMantleC" => int!(mob.gfx.cmantle),
-                "gfxCrown" => int!(mob.gfx.crown),
-                "gfxCrownC" => int!(mob.gfx.ccrown),
-                "gfxFaceA" => int!(mob.gfx.face_acc),
-                "gfxFaceAC" => int!(mob.gfx.cface_acc),
-                "gfxFaceAT" => int!(mob.gfx.face_acc_t),
-                "gfxFaceATC" => int!(mob.gfx.cface_acc_t),
-                "gfxBoots" => int!(mob.gfx.boots),
-                "gfxBootsC" => int!(mob.gfx.cboots),
-                "gfxNeck" => int!(mob.gfx.necklace),
-                "gfxNeckC" => int!(mob.gfx.cnecklace),
-                "gfxName" => cstr!(&mob.gfx.name),
                 // ── mob-data (template) fields ───────────────────────────────
                 "behavior" => data_int!(r#type),
                 "aiType" => data_int!(subtype),
@@ -697,7 +678,26 @@ impl UserData for MobObject {
                 "race" => data_int!(race),
                 "seeInvis" => data_int!(seeinvis),
                 "isBoss" => data_int!(isboss),
-                _ => Ok(mlua::Value::Nil),
+                "getBlock" =>
+                    return shared::make_getblock_fn(lua),
+                "getObjectsInCell" | "getAliveObjectsInCell" | "getObjectsInCellWithTraps" =>
+                    return shared::make_cell_query_fn(lua, key.as_str()),
+                "getObjectsInArea" | "getAliveObjectsInArea"
+                | "getObjectsInSameMap" | "getAliveObjectsInSameMap" =>
+                    return shared::make_area_query_fn(lua, key.as_str(), ptr),
+                "getObjectsInMap" =>
+                    return shared::make_map_query_fn(lua),
+                _ => {
+                    if let Ok(tbl) = lua.globals().get::<mlua::Table>("Mob") {
+                        if let Ok(v) = tbl.get::<mlua::Value>(key.as_str()) {
+                            if !matches!(v, mlua::Value::Nil) {
+                                return Ok(v);
+                            }
+                        }
+                    }
+                    tracing::debug!("[scripting] MobObject: unimplemented __index key={key:?}");
+                    Ok(mlua::Value::Nil)
+                }
             }
         });
 
@@ -811,41 +811,16 @@ impl UserData for MobObject {
                     // mob.data fields
                     "baseMagic"     => if !mob.data.is_null() { unsafe { (*mob.data).mana   = val_to_int(&val) as _; } }
                     "isBoss"        => if !mob.data.is_null() { unsafe { (*mob.data).isboss = val_to_int(&val) as _; } }
-                    // gfx appearance
-                    "gfxFace"       => { mob.gfx.face        = val_to_int(&val) as _; }
-                    "gfxHair"       => { mob.gfx.hair        = val_to_int(&val) as _; }
-                    "gfxHairC"      => { mob.gfx.chair       = val_to_int(&val) as _; }
-                    "gfxFaceC"      => { mob.gfx.cface       = val_to_int(&val) as _; }
-                    "gfxSkinC"      => { mob.gfx.cskin       = val_to_int(&val) as _; }
-                    "gfxDye"        => { mob.gfx.dye         = val_to_int(&val) as _; }
-                    "gfxTitleColor" => { mob.gfx.title_color = val_to_int(&val) as _; }
-                    "gfxWeap"       => { mob.gfx.weapon      = val_to_int(&val) as _; }
-                    "gfxWeapC"      => { mob.gfx.cweapon     = val_to_int(&val) as _; }
-                    "gfxArmor"      => { mob.gfx.armor       = val_to_int(&val) as _; }
-                    "gfxArmorC"     => { mob.gfx.carmor      = val_to_int(&val) as _; }
-                    "gfxShield"     => { mob.gfx.shield      = val_to_int(&val) as _; }
-                    "gfxShieldC"    => { mob.gfx.cshield     = val_to_int(&val) as _; }
-                    "gfxHelm"       => { mob.gfx.helm        = val_to_int(&val) as _; }
-                    "gfxHelmC"      => { mob.gfx.chelm       = val_to_int(&val) as _; }
-                    "gfxMantle"     => { mob.gfx.mantle      = val_to_int(&val) as _; }
-                    "gfxMantleC"    => { mob.gfx.cmantle     = val_to_int(&val) as _; }
-                    "gfxCrown"      => { mob.gfx.crown       = val_to_int(&val) as _; }
-                    "gfxCrownC"     => { mob.gfx.ccrown      = val_to_int(&val) as _; }
-                    "gfxFaceA"      => { mob.gfx.face_acc    = val_to_int(&val) as _; }
-                    "gfxFaceAC"     => { mob.gfx.cface_acc   = val_to_int(&val) as _; }
-                    "gfxFaceAT"     => { mob.gfx.face_acc_t  = val_to_int(&val) as _; }
-                    "gfxFaceATC"    => { mob.gfx.cface_acc_t = val_to_int(&val) as _; }
-                    "gfxBoots"      => { mob.gfx.boots       = val_to_int(&val) as _; }
-                    "gfxBootsC"     => { mob.gfx.cboots      = val_to_int(&val) as _; }
-                    "gfxNeck"       => { mob.gfx.necklace    = val_to_int(&val) as _; }
-                    "gfxNeckC"      => { mob.gfx.cnecklace   = val_to_int(&val) as _; }
-                    "gfxName"       => if let mlua::Value::String(ref s) = val {
-                        let bytes = s.as_bytes();
-                        let n = bytes.len().min(33);
-                        unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const c_char, mob.gfx.name.as_mut_ptr(), n); }
-                        mob.gfx.name[n] = 0;
+                    // GfxViewer fields — delegated to shared module.
+                    key if key.starts_with("gfx") && key != "gfxClone" => {
+                        let str_owned = if let mlua::Value::String(ref s) = val {
+                            s.to_str().ok().map(|x| x.to_string())
+                        } else { None };
+                        unsafe { shared::gfx_write(&mut mob.gfx, key, val_to_int(&val), str_owned.as_deref()); }
                     }
-                    _ => {}
+                    _ => {
+                        tracing::debug!("[scripting] MobObject: unimplemented __newindex key={key:?}");
+                    }
                 }
                 Ok(())
             },
