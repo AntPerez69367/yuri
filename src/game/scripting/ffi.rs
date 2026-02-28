@@ -132,4 +132,51 @@ extern "C" {
     // pc_* stubs added in Phase 6 as method bodies are written.
     // clif_* stubs added as method bodies are written.
     // mob_* stubs added in Phase 5 as method bodies are written.
+
+    // NPC scripting helpers — sl_compat.c
+    pub fn sl_g_getobjectscell(
+        m: c_int, x: c_int, y: c_int, bl_type: c_int,
+        out_ptrs: *mut *mut c_void, max_count: c_int,
+    ) -> c_int;
+    pub fn sl_g_getobjectscellwithtraps(
+        m: c_int, x: c_int, y: c_int, bl_type: c_int,
+        out_ptrs: *mut *mut c_void, max_count: c_int,
+    ) -> c_int;
+    pub fn sl_g_getaliveobjectscell(
+        m: c_int, x: c_int, y: c_int, bl_type: c_int,
+        out_ptrs: *mut *mut c_void, max_count: c_int,
+    ) -> c_int;
+    pub fn sl_g_getobjectsarea(
+        bl: *mut c_void, bl_type: c_int,
+        out_ptrs: *mut *mut c_void, max_count: c_int,
+    ) -> c_int;
+    pub fn sl_g_getaliveobjectsarea(
+        bl: *mut c_void, bl_type: c_int,
+        out_ptrs: *mut *mut c_void, max_count: c_int,
+    ) -> c_int;
+    pub fn sl_g_getobjectssamemap(
+        bl: *mut c_void, bl_type: c_int,
+        out_ptrs: *mut *mut c_void, max_count: c_int,
+    ) -> c_int;
+    pub fn sl_g_getaliveobjectssamemap(
+        bl: *mut c_void, bl_type: c_int,
+        out_ptrs: *mut *mut c_void, max_count: c_int,
+    ) -> c_int;
+    pub fn sl_g_getmappvp(m: c_int) -> c_int;
+    pub fn sl_g_getmaptitle(m: c_int, buf: *mut c_char, buflen: c_int) -> c_int;
+    pub fn sl_pc_getpk(sd: *mut c_void, id: c_int) -> c_int;
+    pub fn sl_g_getobjectsinmap(
+        m: c_int, bl_type: c_int,
+        out_ptrs: *mut *mut c_void, max_count: c_int,
+    ) -> c_int;
+    pub fn sl_g_sendside(bl: *mut c_void);
+    pub fn sl_g_sendanimxy(bl: *mut c_void, anim: c_int, x: c_int, y: c_int, times: c_int);
+    pub fn sl_g_delete_bl(bl: *mut c_void);
+    pub fn sl_g_talk(bl: *mut c_void, talk_type: c_int, msg: *const c_char);
+    pub fn sl_g_getusers(out_ptrs: *mut *mut c_void, max_count: c_int) -> c_int;
+    pub fn sl_g_addnpc(
+        name: *const c_char, m: c_int, x: c_int, y: c_int, subtype: c_int,
+        timer: c_int, duration: c_int, owner: c_int, movetime: c_int,
+        npc_yname: *const c_char,
+    );
 }
