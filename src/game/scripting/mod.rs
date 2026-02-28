@@ -260,11 +260,20 @@ unsafe fn call_lua(
     args: mlua::MultiValue,
 ) -> bool {
     let lua = sl_state();
-    let root_s   = match CStr::from_ptr(root).to_str()   { Ok(s) => s, Err(_) => return false };
-    let method_s = match CStr::from_ptr(method).to_str() { Ok(s) => s, Err(_) => return false };
+    let root_s = match CStr::from_ptr(root).to_str() { Ok(s) => s, Err(_) => return false };
 
-    let tbl: mlua::Table = match lua.globals().get(root_s)   { Ok(t) => t, Err(_) => return false };
-    let func: mlua::Function = match tbl.get(method_s)        { Ok(f) => f, Err(_) => return false };
+    if method.is_null() {
+        // Direct function call: sl_doscript_blargs("startup", NULL, 0) → startup()
+        let func: mlua::Function = match lua.globals().get(root_s) { Ok(f) => f, Err(_) => return false };
+        if let Err(e) = func.call::<mlua::MultiValue>(args) {
+            tracing::warn!("[scripting] {root_s}: {e}");
+        }
+        return true;
+    }
+
+    let method_s = match CStr::from_ptr(method).to_str() { Ok(s) => s, Err(_) => return false };
+    let tbl: mlua::Table  = match lua.globals().get(root_s)  { Ok(t) => t, Err(_) => return false };
+    let func: mlua::Function = match tbl.get(method_s)       { Ok(f) => f, Err(_) => return false };
 
     if let Err(e) = func.call::<mlua::MultiValue>(args) {
         tracing::warn!("[scripting] {root_s}.{method_s}: {e}");

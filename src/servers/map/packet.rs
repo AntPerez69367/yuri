@@ -150,15 +150,14 @@ async fn handle_charload(_state: &Arc<MapState>, pkt: &[u8]) {
         }
     }
 
+    // Call intif_mmo_tosd synchronously on the LocalSet thread (same thread as timer_do).
+    // This prevents concurrent Lua state access: timer callbacks (mob AI, NPC timers) and
+    // charload both call sl_doscript_blargs, and LuaJIT is single-threaded.
+    // spawn_blocking would put this on a separate OS thread, racing with timer_do.
     #[cfg(not(test))]
-    let result = tokio::task::spawn_blocking(move || {
-        crate::ffi::map_char::call_intif_mmo_tosd(fd, &mut raw)
-    }).await;
-    #[cfg(test)]
-    let result: Result<i32, tokio::task::JoinError> = Ok(0);
-    match &result {
-        Ok(rc) => tracing::info!("[map] [charif] intif_mmo_tosd returned rc={}", rc),
-        Err(e) => tracing::error!("[map] [charif] intif_mmo_tosd PANICKED: {}", e),
+    {
+        let rc = crate::ffi::map_char::call_intif_mmo_tosd(fd, &mut raw);
+        tracing::info!("[map] [charif] intif_mmo_tosd returned rc={}", rc);
     }
 
     // Re-enable notifications and trigger a single flush of all buffered data
