@@ -8,8 +8,14 @@ use crate::database::mob_db::MobDbData;
 pub const BL_PC:  c_int = 0x01;
 pub const BL_MOB: c_int = 0x02;
 pub const BL_NPC: c_int = 0x04;
+pub const BL_ALL: c_int = 0x0F;
 
 extern "C" {
+    // --- Map id/name lookups used by constructors ---
+    pub fn map_id2sd(id: c_uint) -> *mut c_void;
+    pub fn map_name2sd(name: *const c_char) -> *mut c_void;
+    pub fn map_id2mob(id: c_uint) -> *mut c_void;
+
     // --- Phase 2: registry types ---
 
     // Player (USER*) integer registries
@@ -65,6 +71,13 @@ extern "C" {
     // Magic/mob DB (Rust #[no_mangle] symbols)
     pub fn rust_magicdb_level(s: *const c_char) -> c_int;
     pub fn rust_mobdb_search(id: c_uint) -> *mut MobDbData;
+    pub fn rust_mobdb_id(s: *const c_char) -> c_int;
+    pub fn rust_mobspawn_onetime(
+        id: c_uint, m: c_int, x: c_int, y: c_int,
+        times: c_int, start: c_int, end: c_int,
+        replace: c_uint, owner: c_uint,
+    ) -> *mut c_uint;
+    pub fn map_id2bl(id: c_uint) -> *mut c_void;
 
     // sl_globals — typed wrappers in sl_compat.c
     pub fn sl_g_realtime(day: *mut c_int, hour: *mut c_int, minute: *mut c_int, second: *mut c_int);

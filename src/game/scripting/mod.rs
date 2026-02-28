@@ -10,6 +10,7 @@ use mlua::Lua;
 use std::ffi::{CStr, CString, c_char, c_int, c_uint};
 use std::os::raw::c_void;
 
+use crate::database::map_db::BlockList;
 use types::floor::FloorListObject;
 use types::item::*;
 use types::mob::MobObject;
@@ -74,6 +75,43 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     g.set("PC",       ctor!(lua, PcObject))?;
     g.set("MOB",      ctor!(lua, MobObject))?;
     g.set("NPC",      ctor!(lua, NpcObject))?;
+
+    // Player — callable namespace table for PC scripts.
+    // Player(id)   → map_id2sd(id), nil if not found.
+    // Player(name) → map_name2sd(name), nil if not found.
+    let player_tbl = lua.create_table()?;
+    let player_mt  = lua.create_table()?;
+    player_mt.set("__call", lua.create_function(|lua, (_tbl, v): (mlua::Value, mlua::Value)| -> mlua::Result<mlua::Value> {
+        let ptr = match v {
+            mlua::Value::Integer(id) => unsafe { ffi::map_id2sd(id as c_uint) },
+            mlua::Value::Number(f)   => unsafe { ffi::map_id2sd(f as c_uint) },
+            mlua::Value::String(ref s) => {
+                let cs = CString::new(s.as_bytes().to_vec()).map_err(mlua::Error::external)?;
+                unsafe { ffi::map_name2sd(cs.as_ptr()) }
+            }
+            _ => std::ptr::null_mut(),
+        };
+        if ptr.is_null() { return Ok(mlua::Value::Nil); }
+        Ok(mlua::Value::UserData(lua.create_userdata(PcObject { ptr })?))
+    })?)?;
+    player_tbl.set_metatable(Some(player_mt));
+    g.set("Player", player_tbl)?;
+
+    // Mob — callable namespace table for mob scripts.
+    // Mob(id) → map_id2mob(id), nil if not found.
+    let mob_tbl = lua.create_table()?;
+    let mob_mt  = lua.create_table()?;
+    mob_mt.set("__call", lua.create_function(|lua, (_tbl, v): (mlua::Value, mlua::Value)| -> mlua::Result<mlua::Value> {
+        let ptr = match v {
+            mlua::Value::Integer(id) => unsafe { ffi::map_id2mob(id as c_uint) },
+            mlua::Value::Number(f)   => unsafe { ffi::map_id2mob(f as c_uint) },
+            _ => std::ptr::null_mut(),
+        };
+        if ptr.is_null() { return Ok(mlua::Value::Nil); }
+        Ok(mlua::Value::UserData(lua.create_userdata(MobObject { ptr })?))
+    })?)?;
+    mob_tbl.set_metatable(Some(mob_mt));
+    g.set("Mob", mob_tbl)?;
     g.set("REG",      ctor!(lua, RegObject))?;
     g.set("REGS",     ctor!(lua, RegStringObject))?;
     g.set("NPCREG",   ctor!(lua, NpcRegObject))?;
@@ -197,9 +235,9 @@ pub unsafe fn sl_luasize() -> c_int {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-unsafe fn bl_to_lua(lua: &Lua, bl: *mut c_void) -> mlua::Result<mlua::Value> {
+pub(crate) unsafe fn bl_to_lua(lua: &Lua, bl: *mut c_void) -> mlua::Result<mlua::Value> {
     if bl.is_null() { return Ok(mlua::Value::Nil); }
-    let bl_type = *(bl as *const c_int);
+    let bl_type = (*(bl as *const BlockList)).bl_type as c_int;
     match bl_type {
         ffi::BL_PC  => lua.pack(PcObject  { ptr: bl }),
         ffi::BL_MOB => lua.pack(MobObject { ptr: bl }),
