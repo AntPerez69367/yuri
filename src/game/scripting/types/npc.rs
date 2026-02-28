@@ -1,10 +1,15 @@
-use std::ffi::c_int;
+use std::ffi::{c_int, c_uint, CString};
 use std::os::raw::c_void;
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
-use crate::database::map_db::MapData;
+use crate::database::map_db::{BlockList, MapData};
 use crate::ffi::map_db::get_map_ptr;
 use crate::game::npc::{NpcData, npc_move, npc_warp};
+use crate::game::scripting::ffi as sffi;
+use crate::game::scripting::types::mob::MobObject;
+use crate::game::scripting::types::pc::PcObject;
+use crate::game::scripting::types::registry::{GameRegObject, MapRegObject, NpcRegObject};
+use crate::game::scripting::types::shared;
 use crate::servers::char::charstatus::MAX_EQUIP;
 
 pub struct NpcObject { pub ptr: *mut c_void }
@@ -57,7 +62,7 @@ impl UserData for NpcObject {
                 "warp" => {
                     let ptr = this.ptr;
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (m, x, y): (c_int, c_int, c_int)| {
+                        move |_, (_, m, x, y): (mlua::Value, c_int, c_int, c_int)| {
                             unsafe { npc_warp(ptr as *mut NpcData, m, x, y); }
                             Ok(())
                         }
@@ -66,7 +71,7 @@ impl UserData for NpcObject {
                 "getEquippedItem" => {
                     let ptr = this.ptr;
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |lua, num: usize| -> mlua::Result<mlua::Value> {
+                        move |lua, (_, num): (mlua::Value, usize)| -> mlua::Result<mlua::Value> {
                             if num >= MAX_EQUIP { return Ok(mlua::Value::Nil); }
                             let item = unsafe { &(*(ptr as *const NpcData)).equip[num] };
                             if item.id == 0 { return Ok(mlua::Value::Nil); }
@@ -77,10 +82,165 @@ impl UserData for NpcObject {
                         }
                     )?));
                 }
+                // Registry sub-objects — constructed lazily from the NPC pointer.
+                "registry"     => return lua.pack(NpcRegObject { ptr: this.ptr }),
+                "mapRegistry"  => return lua.pack(MapRegObject { ptr: this.ptr }),
+                "gameRegistry" => return lua.pack(GameRegObject { ptr: std::ptr::null_mut() }),
+
+                // sendSide() — send a side-update packet to nearby players.
+                "sendSide" => {
+                    let ptr = this.ptr;
+                    return Ok(mlua::Value::Function(lua.create_function(
+                        move |_, _: mlua::MultiValue| {
+                            unsafe { sffi::sl_g_sendside(ptr); }
+                            Ok(())
+                        }
+                    )?));
+                }
+                // sendAnimationXY(anim, x, y, times) — broadcast animation at (x,y).
+                "sendAnimationXY" => {
+                    let ptr = this.ptr;
+                    return Ok(mlua::Value::Function(lua.create_function(
+                        move |_, args: mlua::MultiValue| {
+                            let a: Vec<mlua::Value> = args.into_iter().collect();
+                            let anim  = a.get(1).map(val_to_int).unwrap_or(0);
+                            let x     = a.get(2).map(val_to_int).unwrap_or(0);
+                            let y     = a.get(3).map(val_to_int).unwrap_or(0);
+                            let times = a.get(4).map(val_to_int).unwrap_or(0);
+                            unsafe { sffi::sl_g_sendanimxy(ptr, anim, x, y, times); }
+                            Ok(())
+                        }
+                    )?));
+                }
+                // talk(type, msg) — speak in the surrounding area.
+                "talk" => {
+                    let ptr = this.ptr;
+                    return Ok(mlua::Value::Function(lua.create_function(
+                        move |_, args: mlua::MultiValue| {
+                            let a: Vec<mlua::Value> = args.into_iter().collect();
+                            let talk_type = a.get(1).map(val_to_int).unwrap_or(0);
+                            let msg = match a.get(2) {
+                                Some(mlua::Value::String(s)) => {
+                                    String::from_utf8_lossy(&*s.as_bytes()).into_owned()
+                                }
+                                _ => String::new(),
+                            };
+                            if let Ok(cs) = CString::new(msg.as_bytes()) {
+                                unsafe { sffi::sl_g_talk(ptr, talk_type, cs.as_ptr()); }
+                            }
+                            Ok(())
+                        }
+                    )?));
+                }
+
+                "getBlock" =>
+                    return shared::make_getblock_fn(lua),
+                "getObjectsInCell" | "getAliveObjectsInCell" | "getObjectsInCellWithTraps" =>
+                    return shared::make_cell_query_fn(lua, key.as_str()),
+                "getObjectsInArea" | "getAliveObjectsInArea"
+                | "getObjectsInSameMap" | "getAliveObjectsInSameMap" =>
+                    return shared::make_area_query_fn(lua, key.as_str(), this.ptr),
+                "getObjectsInMap" =>
+                    return shared::make_map_query_fn(lua),
+                // spawn(mob_name_or_id, x, y, amount [,m [,owner]])
+                // Spawns `amount` mobs at (x,y) on map m (or NPC's own map if m=0).
+                // Returns a Lua table of MobObject userdata.
+                "spawn" => {
+                    let ptr = this.ptr;
+                    return Ok(mlua::Value::Function(lua.create_function(
+                        move |lua, args: mlua::MultiValue| -> mlua::Result<mlua::Value> {
+                            let args: Vec<mlua::Value> = args.into_iter().collect();
+                            // args[0]=self, [1]=mob, [2]=x, [3]=y, [4]=amount, [5]=m, [6]=owner
+                            let mob_id: c_uint = match args.get(1) {
+                                Some(mlua::Value::String(s)) => {
+                                    let cs = CString::new(&*s.as_bytes()).map_err(mlua::Error::external)?;
+                                    unsafe { sffi::rust_mobdb_id(cs.as_ptr()) as c_uint }
+                                }
+                                Some(mlua::Value::Integer(n)) => *n as c_uint,
+                                Some(mlua::Value::Number(f))  => *f as c_uint,
+                                _ => return Ok(mlua::Value::Table(lua.create_table()?)),
+                            };
+                            let vi = |i: usize| -> c_int { match args.get(i) {
+                                Some(mlua::Value::Integer(n)) => *n as c_int,
+                                Some(mlua::Value::Number(f))  => *f as c_int,
+                                _ => 0,
+                            }};
+                            let x = vi(2);
+                            let y = vi(3);
+                            let amount = vi(4);
+                            let owner  = vi(6) as c_uint;
+                            let mut m  = vi(5);
+                            if m == 0 {
+                                let align = std::mem::align_of::<NpcData>();
+                                if ptr.is_null() || ptr as usize % align != 0 {
+                                    return Ok(mlua::Value::Table(lua.create_table()?));
+                                }
+                                m = unsafe { (*(ptr as *const NpcData)).bl.m as c_int };
+                            }
+                            let tbl = lua.create_table()?;
+                            if amount <= 0 { return Ok(mlua::Value::Table(tbl)); }
+                            let spawned = unsafe {
+                                sffi::rust_mobspawn_onetime(mob_id, m, x, y, amount, 0, 0, 0, owner)
+                            };
+                            if spawned.is_null() { return Ok(mlua::Value::Table(tbl)); }
+                            for i in 0..amount as usize {
+                                let id = unsafe { *spawned.add(i) };
+                                let bl = unsafe { sffi::map_id2bl(id) };
+                                if !bl.is_null() {
+                                    tbl.set(i + 1, lua.create_userdata(MobObject { ptr: bl })?)?;
+                                }
+                            }
+                            unsafe { libc::free(spawned as *mut c_void) };
+                            Ok(mlua::Value::Table(tbl))
+                        }
+                    )?));
+                }
+
+                // addNPC(name, m, x, y, subtype [,timer, duration, owner, movetime, yname])
+                // Mirrors bll_addnpc from scripting.c.
+                // Does not dereference self.ptr — works with the sentinel core NPC.
+                "addNPC" => {
+                    return Ok(mlua::Value::Function(lua.create_function(
+                        |_, args: mlua::MultiValue| {
+                            let args: Vec<mlua::Value> = args.into_iter().collect();
+                            let name = match args.get(1) {
+                                Some(mlua::Value::String(s)) => s.to_str()?.to_owned(),
+                                _ => return Ok(()),
+                            };
+                            let vi = |i: usize| -> c_int { match args.get(i) {
+                                Some(mlua::Value::Integer(n)) => *n as c_int,
+                                Some(mlua::Value::Number(f))  => *f as c_int,
+                                _ => 0,
+                            }};
+                            let vs = |i: usize| -> Option<String> { match args.get(i) {
+                                Some(mlua::Value::String(s)) => s.to_str().ok().map(|s| s.to_owned()),
+                                _ => None,
+                            }};
+                            let cname  = CString::new(name).map_err(mlua::Error::external)?;
+                            let yname  = vs(9);
+                            let cyname = yname.as_deref()
+                                .and_then(|s| CString::new(s).ok());
+                            unsafe {
+                                sffi::sl_g_addnpc(
+                                    cname.as_ptr(),
+                                    vi(2), vi(3), vi(4), vi(5),
+                                    vi(6), vi(7), vi(8), vi(9),
+                                    cyname.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+                                );
+                            }
+                            Ok(())
+                        }
+                    )?));
+                }
                 _ => {}
             }
 
             // ── Field getters ─────────────────────────────────────────────
+            // Guard against sentinel / misaligned pointers (e.g. core = NPC(4294967295)).
+            // 0xFFFFFFFF is not 8-byte aligned so NpcData would fault on deref.
+            if (nd as usize) % std::mem::align_of::<NpcData>() != 0 {
+                return Ok(mlua::Value::Nil);
+            }
             let nd = unsafe { &*nd };
             let bl = &nd.bl;
 
@@ -90,14 +250,17 @@ impl UserData for NpcObject {
                     unsafe { cstr_to_string($e) }
                 )?))
             }; }
-            macro_rules! map_int { ($field:ident) => {{
-                let mp = unsafe { npc_map(nd as *const NpcData) };
-                if mp.is_null() { return Ok(mlua::Value::Nil); }
-                int!(unsafe { (*mp).$field })
-            }}; }
+            // Shared map properties (pvp, mapTitle, bgm, etc.) — delegate to shared module.
+            if let Some(v) = unsafe { shared::map_field(lua, bl.m as c_int, key.as_str()) } {
+                return v;
+            }
+            // Shared GfxViewer properties (gfxFace, gfxWeap, etc.) — delegate to shared module.
+            if let Some(v) = unsafe { shared::gfx_read(lua, &nd.gfx, key.as_str()) } {
+                return v;
+            }
 
             match key.as_str() {
-                // block_list / map fields
+                // block_list fields
                 "x"          => int!(bl.x),
                 "y"          => int!(bl.y),
                 "m"          => int!(bl.m),
@@ -113,44 +276,6 @@ impl UserData for NpcObject {
                     if mp.is_null() { return Ok(mlua::Value::Nil); }
                     int!(unsafe { (*mp).ys.saturating_sub(1) })
                 }
-                "mapId"      => map_int!(id),
-                "mapTitle"   => {
-                    let mp = unsafe { npc_map(nd as *const NpcData) };
-                    if mp.is_null() { return Ok(mlua::Value::Nil); }
-                    str_!(unsafe { (*mp).title.as_ptr() })
-                }
-                "mapFile"    => {
-                    let mp = unsafe { npc_map(nd as *const NpcData) };
-                    if mp.is_null() { return Ok(mlua::Value::Nil); }
-                    str_!(unsafe { (*mp).mapfile.as_ptr() })
-                }
-                "bgm"        => map_int!(bgm),
-                "bgmType"    => map_int!(bgmtype),
-                "pvp"        => map_int!(pvp),
-                "spell"      => map_int!(spell),
-                "light"      => map_int!(light),
-                "weather"    => map_int!(weather),
-                "sweepTime"  => map_int!(sweeptime),
-                "canTalk"    => map_int!(cantalk),
-                "showGhosts" => map_int!(show_ghosts),
-                "region"     => map_int!(region),
-                "indoor"     => map_int!(indoor),
-                "warpOut"    => map_int!(warpout),
-                "bind"       => map_int!(bind),
-                "reqLvl"     => map_int!(reqlvl),
-                "reqVita"    => map_int!(reqvita),
-                "reqMana"    => map_int!(reqmana),
-                "maxLvl"     => map_int!(lvlmax),
-                "maxVita"    => map_int!(vitamax),
-                "maxMana"    => map_int!(manamax),
-                "reqPath"    => map_int!(reqpath),
-                "reqMark"    => map_int!(reqmark),
-                "canSummon"  => map_int!(summon),
-                "canUse"     => map_int!(can_use),
-                "canEat"     => map_int!(can_eat),
-                "canSmoke"   => map_int!(can_smoke),
-                "canMount"   => map_int!(can_mount),
-                "canGroup"   => map_int!(can_group),
                 // NPC-specific fields
                 "id"          => int!(nd.id),
                 "look"        => int!(bl.graphic_id),
@@ -180,36 +305,18 @@ impl UserData for NpcObject {
                 "retDist"     => int!(nd.retdist),
                 "returning"   => Ok(mlua::Value::Boolean(nd.returning != 0)),
                 "bankNPC"     => int!(nd.bank_npc),
-                "gfxFace"     => int!(nd.gfx.face),
-                "gfxHair"     => int!(nd.gfx.hair),
-                "gfxHairC"    => int!(nd.gfx.chair),
-                "gfxFaceC"    => int!(nd.gfx.cface),
-                "gfxSkinC"    => int!(nd.gfx.cskin),
-                "gfxDye"      => int!(nd.gfx.dye),
-                "gfxTitleColor" => int!(nd.gfx.title_color),
-                "gfxWeap"     => int!(nd.gfx.weapon),
-                "gfxWeapC"    => int!(nd.gfx.cweapon),
-                "gfxArmor"    => int!(nd.gfx.armor),
-                "gfxArmorC"   => int!(nd.gfx.carmor),
-                "gfxShield"   => int!(nd.gfx.shield),
-                "gfxShiedlC"  => int!(nd.gfx.cshield),  // note: C typo preserved
-                "gfxHelm"     => int!(nd.gfx.helm),
-                "gfxHelmC"    => int!(nd.gfx.chelm),
-                "gfxMantle"   => int!(nd.gfx.mantle),
-                "gfxMantleC"  => int!(nd.gfx.cmantle),
-                "gfxCrown"    => int!(nd.gfx.crown),
-                "gfxCrownC"   => int!(nd.gfx.ccrown),
-                "gfxFaceA"    => int!(nd.gfx.face_acc),
-                "gfxFaceAC"   => int!(nd.gfx.cface_acc),
-                "gfxFaceAT"   => int!(nd.gfx.face_acc_t),
-                "gfxFaceATC"  => int!(nd.gfx.cface_acc_t),
-                "gfxBoots"    => int!(nd.gfx.boots),
-                "gfxBootsC"   => int!(nd.gfx.cboots),
-                "gfxNeck"     => int!(nd.gfx.necklace),
-                "gfxNeckC"    => int!(nd.gfx.cnecklace),
-                "gfxName"     => str_!(nd.gfx.name.as_ptr()),
                 "gfxClone"    => int!(nd.clone),
-                _ => Ok(mlua::Value::Nil),
+                _ => {
+                    if let Ok(tbl) = lua.globals().get::<mlua::Table>("NPC") {
+                        if let Ok(v) = tbl.get::<mlua::Value>(key.as_str()) {
+                            if !matches!(v, mlua::Value::Nil) {
+                                return Ok(v);
+                            }
+                        }
+                    }
+                    tracing::debug!("[scripting] NpcObject: unimplemented __index key={key:?}");
+                    Ok(mlua::Value::Nil)
+                }
             }
         });
 
@@ -217,6 +324,7 @@ impl UserData for NpcObject {
         methods.add_meta_method(MetaMethod::NewIndex, |_, this, (key, val): (String, mlua::Value)| {
             let nd = this.ptr as *mut NpcData;
             if nd.is_null() { return Ok(()); }
+            if (nd as usize) % std::mem::align_of::<NpcData>() != 0 { return Ok(()); }
             let nd = unsafe { &mut *nd };
             let mp = unsafe { npc_map(nd as *const NpcData) };
             let bl = &mut nd.bl;
@@ -296,46 +404,17 @@ impl UserData for NpcObject {
                 "lastAction"  => nd.lastaction  = val_to_int(&val) as u32,
                 "actionTime"  => nd.actiontime  = val_to_int(&val) as u32,
                 "duration"    => nd.duration    = val_to_int(&val) as u32,
-                "gfxFace"     => nd.gfx.face      = val_to_int(&val) as u8,
-                "gfxHair"     => nd.gfx.hair      = val_to_int(&val) as u8,
-                "gfxHairC"    => nd.gfx.chair     = val_to_int(&val) as u8,
-                "gfxFaceC"    => nd.gfx.cface     = val_to_int(&val) as u8,
-                "gfxSkinC"    => nd.gfx.cskin     = val_to_int(&val) as u8,
-                "gfxDye"      => nd.gfx.dye       = val_to_int(&val) as u8,
-                "gfxTitleColor" => nd.gfx.title_color = val_to_int(&val) as u8,
-                "gfxWeap"     => nd.gfx.weapon    = val_to_int(&val) as u16,
-                "gfxWeapC"    => nd.gfx.cweapon   = val_to_int(&val) as u8,
-                "gfxArmor"    => nd.gfx.armor     = val_to_int(&val) as u16,
-                "gfxArmorC"   => nd.gfx.carmor    = val_to_int(&val) as u8,
-                "gfxShield"   => nd.gfx.shield    = val_to_int(&val) as u16,
-                "gfxShieldC"  => nd.gfx.cshield   = val_to_int(&val) as u8,
-                "gfxHelm"     => nd.gfx.helm      = val_to_int(&val) as u16,
-                "gfxHelmC"    => nd.gfx.chelm     = val_to_int(&val) as u8,
-                "gfxMantle"   => nd.gfx.mantle    = val_to_int(&val) as u16,
-                "gfxMantleC"  => nd.gfx.cmantle   = val_to_int(&val) as u8,
-                "gfxCrown"    => nd.gfx.crown     = val_to_int(&val) as u16,
-                "gfxCrownC"   => nd.gfx.ccrown    = val_to_int(&val) as u8,
-                "gfxFaceA"    => nd.gfx.face_acc  = val_to_int(&val) as u16,
-                "gfxFaceAC"   => nd.gfx.cface_acc = val_to_int(&val) as u8,
-                "gfxFaceAT"   => nd.gfx.face_acc_t  = val_to_int(&val) as u16,
-                "gfxFaceATC"  => nd.gfx.cface_acc_t = val_to_int(&val) as u8,
-                "gfxBoots"    => nd.gfx.boots     = val_to_int(&val) as u16,
-                "gfxBootsC"   => nd.gfx.cboots    = val_to_int(&val) as u8,
-                "gfxNeck"     => nd.gfx.necklace  = val_to_int(&val) as u16,
-                "gfxNeckC"    => nd.gfx.cnecklace = val_to_int(&val) as u8,
-                "gfxName" => {
-                    if let mlua::Value::String(ref s) = val {
-                        let bytes = s.as_bytes();
-                        let len = bytes.len().min(33);
-                        unsafe {
-                            std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const i8,
-                                nd.gfx.name.as_mut_ptr(), len);
-                            nd.gfx.name[len] = 0;
-                        }
-                    }
+                // GfxViewer fields — delegated to shared module.
+                key if key.starts_with("gfx") && key != "gfxClone" => {
+                    let str_owned = if let mlua::Value::String(ref s) = val {
+                        s.to_str().ok().map(|x| x.to_string())
+                    } else { None };
+                    unsafe { shared::gfx_write(&mut nd.gfx, key, val_to_int(&val), str_owned.as_deref()); }
                 }
                 "gfxClone"    => nd.clone = val_to_int(&val) as i8,
-                _ => {}
+                _ => {
+                    tracing::debug!("[scripting] NpcObject: unimplemented __newindex key={key:?}");
+                }
             }
             Ok(())
         });
