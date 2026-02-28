@@ -26,7 +26,8 @@ static mut SL_STATE: Option<Lua> = None;
 
 /// Returns a reference to the global Lua state.
 /// # Safety
-/// Must only be called after `sl_init()` and from the game thread.
+/// Must only be called after `sl_init()`.  All scripting runs on the LocalSet
+/// thread (timer_do + session_io_task), so no external locking is needed.
 pub unsafe fn sl_state() -> &'static Lua {
     SL_STATE.as_ref().expect("sl_init() not called")
 }
@@ -49,6 +50,13 @@ pub fn sl_init() {
         globals::register(&lua).expect("failed to register scripting globals");
 
         SL_STATE = Some(lua);
+
+        // Capture the raw lua_State* via exec_raw and store in sl_gstate so C
+        // helpers (sl_compat.c) and async_coro.rs can access it without going
+        // through the mlua lock (safe: pointer is stable for process lifetime).
+        let _ = SL_STATE.as_ref().unwrap().exec_raw::<()>((), |L| {
+            sl_gstate = L as *mut c_void;
+        });
 
         // Reload scripts (lua_dir comes from config).
         sl_reload();

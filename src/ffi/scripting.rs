@@ -71,46 +71,46 @@ pub unsafe extern "C" fn sl_updatepeople(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_sl_resumemenu(_id: c_uint, _sd: *mut c_void) {
-    // Phase 5
+pub unsafe extern "C" fn rust_sl_resumemenu(selection: c_uint, sd: *mut c_void) {
+    ffi_catch!((), sl::async_coro::resume_menu(selection, sd))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_sl_resumemenuseq(_id: c_uint, _choice: c_int, _sd: *mut c_void) {
-    // Phase 5
+pub unsafe extern "C" fn rust_sl_resumemenuseq(selection: c_uint, choice: c_int, sd: *mut c_void) {
+    ffi_catch!((), sl::async_coro::resume_menuseq(selection, choice, sd))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn rust_sl_resumeinputseq(
-    _id:    c_uint,
-    _input: *mut c_char,
-    _sd:    *mut c_void,
+    choice: c_uint,
+    input:  *mut c_char,
+    sd:     *mut c_void,
 ) {
-    // Phase 5
+    ffi_catch!((), sl::async_coro::resume_inputseq(choice, input, sd))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_sl_resumedialog(_id: c_uint, _sd: *mut c_void) {
-    // Phase 5
+pub unsafe extern "C" fn rust_sl_resumedialog(choice: c_uint, sd: *mut c_void) {
+    ffi_catch!((), sl::async_coro::resume_dialog(choice, sd))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_sl_resumebuy(_items: *mut c_char, _sd: *mut c_void) {
-    // Phase 5
+pub unsafe extern "C" fn rust_sl_resumebuy(items: *mut c_char, sd: *mut c_void) {
+    ffi_catch!((), sl::async_coro::resume_buy(items, sd))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn rust_sl_resumeinput(
-    _tag:   *mut c_char,
-    _input: *mut c_char,
-    _sd:    *mut c_void,
+    tag:   *mut c_char,
+    input: *mut c_char,
+    sd:    *mut c_void,
 ) {
-    // Phase 5
+    ffi_catch!((), sl::async_coro::resume_input(tag, input, sd))
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_sl_resumesell(_id: c_uint, _sd: *mut c_void) {
-    // Phase 5
+pub unsafe extern "C" fn rust_sl_resumesell(choice: c_uint, sd: *mut c_void) {
+    ffi_catch!((), sl::async_coro::resume_sell(choice, sd))
 }
 
 #[no_mangle]
@@ -119,6 +119,6 @@ pub unsafe extern "C" fn rust_sl_exec(user: *mut c_void, code: *mut c_char) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn rust_sl_async_freeco(_user: *mut c_void) {
-    // Phase 5
+pub unsafe extern "C" fn rust_sl_async_freeco(user: *mut c_void) {
+    ffi_catch!((), sl::async_coro::free_coref(user))
 }

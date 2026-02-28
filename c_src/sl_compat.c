@@ -839,6 +839,15 @@ void sl_mob_flushduration(MOB *mob, int dis, int minid, int maxid) {
     }
 }
 
+// ─── USER coroutine field accessors (for async_coro.rs) ──────────────────────
+// Rust cannot safely compute C struct field offsets at compile time, so we
+// expose thin wrappers that read/write USER->coref and USER->coref_container.
+
+unsigned int  sl_user_coref(void *sd)                    { return ((USER *)sd)->coref; }
+void          sl_user_set_coref(void *sd, unsigned int v){ ((USER *)sd)->coref = v; }
+unsigned int  sl_user_coref_container(void *sd)          { return ((USER *)sd)->coref_container; }
+void         *sl_user_map_id2sd(unsigned int id)         { return (void *)map_id2sd(id); }
+
 /* flushDurationNoUncast: clear magic timers without firing uncast events. */
 void sl_mob_flushdurationnouncast(MOB *mob, int dis, int minid, int maxid) {
     int x, id;
