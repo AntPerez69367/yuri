@@ -179,4 +179,68 @@ extern "C" {
         timer: c_int, duration: c_int, owner: c_int, movetime: c_int,
         npc_yname: *const c_char,
     );
+
+    // PC attribute getters/setters — Task 4
+    pub fn sl_pc_vregenoverflow(sd: *mut c_void) -> c_int;
+    pub fn sl_pc_set_vregenoverflow(sd: *mut c_void, v: c_int);
+    pub fn sl_pc_mregenoverflow(sd: *mut c_void) -> c_int;
+    pub fn sl_pc_set_mregenoverflow(sd: *mut c_void, v: c_int);
+    pub fn sl_pc_group_count(sd: *mut c_void) -> c_int;
+    pub fn sl_pc_set_group_count(sd: *mut c_void, v: c_int);
+    pub fn sl_pc_group_on(sd: *mut c_void) -> c_int;
+    pub fn sl_pc_set_group_on(sd: *mut c_void, v: c_int);
+    pub fn sl_pc_group_leader(sd: *mut c_void) -> c_int;
+    pub fn sl_pc_set_group_leader(sd: *mut c_void, v: c_int);
+    pub fn sl_pc_getgroup(sd: *mut c_void, out: *mut c_uint, max: c_int) -> c_int;
+
+    // Shared block-object helpers — Task 6
+    pub fn sl_g_sendanimation(bl: *mut c_void, anim: c_int, times: c_int);
+    pub fn sl_g_playsound(bl: *mut c_void, sound: c_int);
+    pub fn sl_g_sendaction(bl: *mut c_void, action: c_int, speed: c_int);
+    pub fn sl_g_msg(bl: *mut c_void, color: c_int, msg: *const c_char, target: c_int);
+    pub fn sl_g_dropitem(bl: *mut c_void, item_id: c_int, amount: c_int, owner: c_int);
+    pub fn sl_g_dropitemxy(bl: *mut c_void, item_id: c_int, amount: c_int,
+                           m: c_int, x: c_int, y: c_int, owner: c_int);
+    pub fn sl_g_objectcanmove(bl: *mut c_void, x: c_int, y: c_int, side: c_int) -> c_int;
+    pub fn sl_g_objectcanmovefrom(bl: *mut c_void, x: c_int, y: c_int, side: c_int) -> c_int;
+    pub fn sl_g_repeatanimation(bl: *mut c_void, anim: c_int, duration: c_int);
+    pub fn sl_g_selfanimation(bl: *mut c_void, target_id: c_int, anim: c_int, times: c_int);
+    pub fn sl_g_selfanimationxy(bl: *mut c_void, target_id: c_int,
+                                anim: c_int, x: c_int, y: c_int, times: c_int);
+    pub fn sl_g_sendparcel(bl: *mut c_void, receiver: c_int, sender: c_int,
+                           item: c_int, amount: c_int, owner: c_int,
+                           engrave: *const c_char, npcflag: c_int);
+    pub fn sl_g_throwblock(bl: *mut c_void, x: c_int, y: c_int,
+                           icon: c_int, color: c_int, action: c_int);
+    pub fn sl_g_deliddb(bl: *mut c_void);
+    pub fn sl_g_addpermanentspawn(bl: *mut c_void);
+    pub fn sl_fl_delete(bl: *mut c_void);
+
+    // Async dialog send helpers — Task 10
+    pub fn sl_pc_input_send(sd: *mut c_void, msg: *const c_char);
+    pub fn sl_pc_dialog_send(sd: *mut c_void, msg: *const c_char, graphics: *const c_int, ngraphics: c_int);
+    pub fn sl_pc_dialogseq_send(sd: *mut c_void, entries: *const *const c_char, n: c_int, can_continue: c_int);
+    pub fn sl_pc_menu_send(sd: *mut c_void, msg: *const c_char, options: *const *const c_char, n: c_int);
+    pub fn sl_pc_menuseq_send(sd: *mut c_void, msg: *const c_char, options: *const *const c_char, n: c_int);
+    pub fn sl_pc_menustring_send(sd: *mut c_void, msg: *const c_char, options: *const *const c_char, n: c_int);
+    pub fn sl_pc_menustring2_send(sd: *mut c_void, msg: *const c_char, options: *const *const c_char, n: c_int);
+    pub fn sl_pc_buy_send(sd: *mut c_void, msg: *const c_char, items: *const c_int, values: *const c_int,
+                          displaynames: *const *const c_char, buytext: *const *const c_char, n: c_int);
+    pub fn sl_pc_buydialog_send(sd: *mut c_void, msg: *const c_char, items: *const c_int, n: c_int);
+    pub fn sl_pc_buyextend_send(sd: *mut c_void, msg: *const c_char, items: *const c_int,
+                                prices: *const c_int, maxamounts: *const c_int, n: c_int);
+    pub fn sl_pc_sell_send(sd: *mut c_void, msg: *const c_char, items: *const c_int, n: c_int);
+    pub fn sl_pc_sell2_send(sd: *mut c_void, msg: *const c_char, items: *const c_int, n: c_int);
+    pub fn sl_pc_sellextend_send(sd: *mut c_void, msg: *const c_char, items: *const c_int, n: c_int);
+    pub fn sl_pc_showbank_send(sd: *mut c_void, msg: *const c_char);
+    pub fn sl_pc_showbankadd_send(sd: *mut c_void);
+    pub fn sl_pc_bankaddmoney_send(sd: *mut c_void);
+    pub fn sl_pc_bankwithdrawmoney_send(sd: *mut c_void);
+    pub fn sl_pc_clanshowbank_send(sd: *mut c_void, msg: *const c_char);
+    pub fn sl_pc_clanshowbankadd_send(sd: *mut c_void);
+    pub fn sl_pc_clanbankaddmoney_send(sd: *mut c_void);
+    pub fn sl_pc_clanbankwithdrawmoney_send(sd: *mut c_void);
+    pub fn sl_pc_clanviewbank_send(sd: *mut c_void);
+    pub fn sl_pc_repairextend_send(sd: *mut c_void);
+    pub fn sl_pc_repairall_send(sd: *mut c_void, npc_bl: *mut c_void);
 }

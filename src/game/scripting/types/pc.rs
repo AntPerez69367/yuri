@@ -148,6 +148,7 @@ extern "C" {
     fn sl_pc_enchanted(sd: *mut c_void) -> c_int;
     fn sl_pc_confused(sd: *mut c_void) -> c_int;
     fn sl_pc_target(sd: *mut c_void) -> c_int;
+    fn sl_pc_set_target(sd: *mut c_void, v: c_int);
     fn sl_pc_deduction(sd: *mut c_void) -> c_int;
     fn sl_pc_speed(sd: *mut c_void) -> c_int;
     fn sl_pc_disguise(sd: *mut c_void) -> c_int;
