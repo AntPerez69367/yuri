@@ -1896,3 +1896,1109 @@ int sl_pc_getpk(void *sd_ptr, int id) {
     }
     return 0;
 }
+
+/* --- PC regen overflow accumulators (float fields) --- */
+int  sl_pc_vregenoverflow(void *sd) { return (int)((USER*)sd)->vregenoverflow; }
+void sl_pc_set_vregenoverflow(void *sd, int v) { ((USER*)sd)->vregenoverflow = (float)v; }
+int  sl_pc_mregenoverflow(void *sd) { return (int)((USER*)sd)->mregenoverflow; }
+void sl_pc_set_mregenoverflow(void *sd, int v) { ((USER*)sd)->mregenoverflow = (float)v; }
+
+/* --- PC group membership fields --- */
+int  sl_pc_group_count(void *sd)  { return ((USER*)sd)->group_count; }
+void sl_pc_set_group_count(void *sd, int v) { ((USER*)sd)->group_count = v; }
+int  sl_pc_group_on(void *sd)     { return ((USER*)sd)->group_on; }
+void sl_pc_set_group_on(void *sd, int v) { ((USER*)sd)->group_on = v; }
+int  sl_pc_group_leader(void *sd) { return (int)((USER*)sd)->group_leader; }
+void sl_pc_set_group_leader(void *sd, int v) { ((USER*)sd)->group_leader = (unsigned int)v; }
+
+/* Fill `out` with group member char IDs. Returns the count written.
+ * Mirrors the original scripting.c `group` table construction:
+ *   - in a group: fills with groups[groupid][0..group_count-1]
+ *   - solo:       fills with the player's own status.id (count = 1) */
+int sl_pc_getgroup(void *sd, unsigned int *out, int max) {
+    USER *user = (USER*)sd;
+    if (user->group_count > 0) {
+        int n = user->group_count < max ? user->group_count : max;
+        for (int i = 0; i < n; i++)
+            out[i] = groups[user->groupid][i];
+        return n;
+    }
+    if (max > 0) out[0] = user->status.id;
+    return 1;
+}
+
+/* ---- Shared block-object methods (Task 5) ---- */
+
+/* sendAnimation — broadcast spell/skill animation to players in AREA around bl.
+ * clif_sendanimation(struct block_list *bl, va_list): reads anim, target-bl, times. */
+void sl_g_sendanimation(void *bl_ptr, int anim, int times) {
+    struct block_list *bl = (struct block_list *)bl_ptr;
+    if (!bl) return;
+    map_foreachinarea(clif_sendanimation, bl->m, bl->x, bl->y, AREA, BL_PC,
+                      anim, bl, times);
+}
+
+/* playSound — play a sound effect at bl's position.
+ * clif_playsound(struct block_list *, int) */
+void sl_g_playsound(void *bl_ptr, int sound) {
+    struct block_list *bl = (struct block_list *)bl_ptr;
+    if (!bl) return;
+    clif_playsound(bl, sound);
+}
+
+/* sendAction — broadcast action animation to players in AREA around bl.
+ * clif_sendaction(struct block_list *, int type, int time, int sound) */
+void sl_g_sendaction(void *bl_ptr, int action, int speed) {
+    struct block_list *bl = (struct block_list *)bl_ptr;
+    if (!bl) return;
+    clif_sendaction(bl, action, speed, 0);
+}
+
+/* msg — send a colored message to a specific player (by ID).
+ * clif_sendmsg(USER *, int color, const char *msg).
+ * target==0: broadcast not implemented (matches bll_talkcolor in scripting.c). */
+void sl_g_msg(void *bl_ptr, int color, const char *msg, int target) {
+    struct block_list *bl = (struct block_list *)bl_ptr;
+    if (!bl || !msg) return;
+    if (target != 0) {
+        USER *tsd = map_id2sd((unsigned int)target);
+        if (tsd) clif_sendmsg(tsd, color, msg);
+    }
+}
+
+/* delete a floor item from the world (mirrors bll_delete for BL_ITEM).
+ * Removes from spatial grid, ID DB, and sends lookgone to nearby players.
+ * Does NOT free memory — the Lua object may still read fields after delete. */
+void sl_fl_delete(void *bl_ptr) {
+    struct block_list *bl = (struct block_list *)bl_ptr;
+    if (!bl || bl->type == BL_PC) return;
+    map_delblock(bl);
+    map_deliddb(bl);
+    if (bl->id > 0) {
+        clif_lookgone(bl);
+    }
+}
+
+/* dropItem — drop item at bl's position using mobdb_dropitem.
+ * owner==0 means no specific owner USER*. */
+void sl_g_dropitem(void *bl_ptr, int item_id, int amount, int owner) {
+    struct block_list *bl = (struct block_list *)bl_ptr;
+    if (!bl) return;
+    USER *sd  = (owner != 0) ? map_id2sd((unsigned int)owner) : NULL;
+    int dura  = itemdb_dura((unsigned int)item_id);
+    int prot  = itemdb_protected((unsigned int)item_id);
+    mobdb_dropitem(bl->id, (unsigned int)item_id, (unsigned int)amount,
+                   dura, prot, 0, bl->m, bl->x, bl->y, sd);
+}
+
+/* dropItemXY — drop item at specified map coordinates. */
+void sl_g_dropitemxy(void *bl_ptr, int item_id, int amount, int m, int x, int y, int owner) {
+    (void)bl_ptr;
+    USER *sd  = (owner != 0) ? map_id2sd((unsigned int)owner) : NULL;
+    int dura  = itemdb_dura((unsigned int)item_id);
+    int prot  = itemdb_protected((unsigned int)item_id);
+    mobdb_dropitem(0, (unsigned int)item_id, (unsigned int)amount,
+                   dura, prot, 0, m, x, y, sd);
+}
+
+/* objectCanMove — 1 if cell (x,y) is passable from side, 0 if blocked.
+ * clif_object_canmove(int m, int x, int y, int side) returns non-zero when BLOCKED. */
+int sl_g_objectcanmove(void *bl_ptr, int x, int y, int side) {
+    struct block_list *bl = (struct block_list *)bl_ptr;
+    if (!bl) return 0;
+    return clif_object_canmove(bl->m, x, y, side) ? 0 : 1;
+}
+
+/* objectCanMoveFrom — 1 if block can move FROM (x,y) facing side, 0 if blocked. */
+int sl_g_objectcanmovefrom(void *bl_ptr, int x, int y, int side) {
+    struct block_list *bl = (struct block_list *)bl_ptr;
+    if (!bl) return 0;
+    return clif_object_canmove_from(bl->m, x, y, side) ? 0 : 1;
+}
+
+/* repeatAnimation — send animation to all PCs in AREA (mirrors bll_repeatanimation).
+ * duration is in ms; divide by 1000 for the wire format. */
+void sl_g_repeatanimation(void *bl_ptr, int anim, int duration) {
+    struct block_list *bl = (struct block_list *)bl_ptr;
+    if (!bl) return;
+    if (duration > 0) duration /= 1000;
+    map_foreachinarea(clif_sendanimation, bl->m, bl->x, bl->y, AREA, BL_PC,
+                      anim, bl, duration);
+}
+
+/* selfAnimation — send animation from bl to the single player at target_id.
+ * Uses foreachincell on the target's own cell so the va_list handler sees
+ * exactly one BL_PC (the target sd). */
+void sl_g_selfanimation(void *bl_ptr, int target_id, int anim, int times) {
+    struct block_list *bl = (struct block_list *)bl_ptr;
+    if (!bl) return;
+    USER *sd = map_id2sd((unsigned int)target_id);
+    if (!sd) return;
+    map_foreachincell(clif_sendanimation, sd->bl.m, sd->bl.x, sd->bl.y, BL_PC,
+                      anim, bl, times);
+}
+
+/* selfAnimationXY — send XY animation to a single player at target_id.
+ * clif_sendanimation_xy reads: anim, times, x, y from va_list. */
+void sl_g_selfanimationxy(void *bl_ptr, int target_id, int anim, int x, int y, int times) {
+    (void)bl_ptr;
+    USER *sd = map_id2sd((unsigned int)target_id);
+    if (!sd) return;
+    map_foreachincell(clif_sendanimation_xy, sd->bl.m, sd->bl.x, sd->bl.y, BL_PC,
+                      anim, times, x, y);
+}
+
+/* sendParcel — insert a parcel into the Parcels table for receiver.
+ * Mirrors bll_sendparcel in scripting.c; custom look/icon fields default to 0. */
+void sl_g_sendparcel(void *bl_ptr, int receiver, int sender,
+                     int item, int amount, int owner,
+                     const char *engrave, int npcflag) {
+    (void)bl_ptr;
+    int pos    = -1;
+    int newest = -1;
+    int x;
+    char escape[255];
+
+    SqlStmt *stmt = SqlStmt_Malloc(sql_handle);
+    if (!stmt) { SqlStmt_ShowDebug(stmt); return; }
+
+    if (SQL_ERROR == SqlStmt_Prepare(stmt,
+            "SELECT `ParPosition` FROM `Parcels` WHERE `ParChaIdDestination` = '%u'",
+            (unsigned int)receiver) ||
+        SQL_ERROR == SqlStmt_Execute(stmt) ||
+        SQL_ERROR == SqlStmt_BindColumn(stmt, 0, SQLDT_INT, &pos, 0, NULL, NULL)) {
+        SqlStmt_ShowDebug(stmt);
+        SqlStmt_Free(stmt);
+        return;
+    }
+
+    if (SqlStmt_NumRows(stmt) > 0) {
+        for (x = 0; x < SqlStmt_NumRows(stmt) && SQL_SUCCESS == SqlStmt_NextRow(stmt); x++) {
+            if (pos > newest) newest = pos;
+        }
+    }
+    newest += 1;
+    SqlStmt_Free(stmt);
+
+    Sql_EscapeString(sql_handle, escape, engrave ? engrave : "");
+
+    if (SQL_ERROR == Sql_Query(sql_handle,
+            "INSERT INTO `Parcels` (`ParChaIdDestination`, `ParSender`, `ParItmId`,"
+            " `ParAmount`, `ParChaIdOwner`, `ParEngrave`, `ParPosition`, `ParNpc`,"
+            " `ParCustomLook`, `ParCustomLookColor`, `ParCustomIcon`, `ParCustomIconColor`,"
+            " `ParProtected`, `ParItmDura`) VALUES"
+            " ('%u','%u','%u','%u','%u','%s','%d','%d',0,0,0,0,%d,%u)",
+            (unsigned int)receiver, (unsigned int)sender, (unsigned int)item,
+            (unsigned int)amount, (unsigned int)owner, escape, newest, npcflag,
+            itemdb_protected((unsigned int)item),
+            (unsigned int)itemdb_dura((unsigned int)item))) {
+        Sql_ShowDebug(sql_handle);
+    }
+}
+
+/* throwBlock — send throw animation from bl's position to (x,y).
+ * Mirrors bll_throw in scripting.c; uses raw clif_send with SAMEAREA. */
+void sl_g_throwblock(void *bl_ptr, int x, int y, int icon, int color, int action) {
+    struct block_list *bl = (struct block_list *)bl_ptr;
+    if (!bl) return;
+    unsigned char buf[255];
+    WBUFB(buf, 0)  = 0xAA;
+    WBUFW(buf, 1)  = SWAP16(0x1B);
+    WBUFB(buf, 3)  = 0x16;
+    WBUFB(buf, 4)  = 0x03;
+    WBUFL(buf, 5)  = SWAP32(bl->id);
+    WBUFW(buf, 9)  = SWAP16(icon + 49152);
+    WBUFB(buf, 11) = (unsigned char)color;
+    WBUFL(buf, 12) = 0;
+    WBUFW(buf, 16) = SWAP16(bl->x);
+    WBUFW(buf, 18) = SWAP16(bl->y);
+    WBUFW(buf, 20) = SWAP16(x);
+    WBUFW(buf, 22) = SWAP16(y);
+    WBUFL(buf, 24) = 0;
+    WBUFB(buf, 28) = (unsigned char)action;
+    WBUFB(buf, 29) = 0x00;
+    clif_send(buf, 30, bl, SAMEAREA);
+}
+
+/* delFromIDDB — remove block from map id database.
+ * map_deliddb(struct block_list *) */
+void sl_g_deliddb(void *bl_ptr) {
+    struct block_list *bl = (struct block_list *)bl_ptr;
+    if (!bl) return;
+    map_deliddb(bl);
+}
+
+/* addPermanentSpawn — no-op (matches bll_permspawn in scripting.c) */
+void sl_g_addpermanentspawn(void *bl_ptr) {
+    (void)bl_ptr;
+}
+
+/* ---- PC non-dialog methods (Task 7) ---- */
+
+/* --- Inventory --- */
+
+/* addItem — build a struct item and call pc_additem.
+ * dura==0 uses itemdb default; owner==0 means no owner; engrave may be NULL. */
+void sl_pc_additem(void *sd_ptr, unsigned int id, unsigned int amount,
+                   int dura, unsigned int owner, const char *engrave) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    struct item fl;
+    memset(&fl, 0, sizeof(fl));
+    fl.id     = id;
+    fl.amount = amount;
+    fl.owner  = owner;
+    fl.dura   = dura ? (unsigned int)dura : (unsigned int)itemdb_dura(id);
+    fl.protected = (unsigned int)itemdb_protected(id);
+    if (engrave && engrave[0])
+        strncpy(fl.real_name, engrave, sizeof(fl.real_name) - 1);
+    pc_additem(sd, &fl);
+}
+
+/* getInventoryItem — return pointer into sd->status.inventory[slot].
+ * Returns NULL if slot is empty (id == 0). */
+void *sl_pc_getinventoryitem(void *sd_ptr, int slot) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return NULL;
+    if (sd->status.inventory[slot].id == 0) return NULL;
+    return &sd->status.inventory[slot];
+}
+
+/* getEquippedItem — return pointer into sd->status.equip[slot].
+ * Returns NULL if slot is empty. */
+void *sl_pc_getequippeditem_sd(void *sd_ptr, int slot) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return NULL;
+    if (sd->status.equip[slot].id == 0) return NULL;
+    return &sd->status.equip[slot];
+}
+
+/* removeItem — remove items matching id/amount/engrave/owner from inventory.
+ * Mirrors pcl_removeinventoryitem: iterates inventory and calls pc_delitem. */
+void sl_pc_removeitem(void *sd_ptr, unsigned int id, unsigned int amount,
+                      int type, unsigned int owner, const char *engrave) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    if (!engrave) engrave = "";
+    int x;
+    /* First pass: prefer partial stacks */
+    for (x = 0; x < sd->status.maxinv && amount > 0; x++) {
+        if (sd->status.inventory[x].id != id) continue;
+        if (owner && sd->status.inventory[x].owner != owner) continue;
+        if (strcasecmp(sd->status.inventory[x].real_name, engrave) != 0) continue;
+        unsigned int avail = sd->status.inventory[x].amount;
+        if (avail == 0) continue;
+        unsigned int take = (avail < amount) ? avail : amount;
+        pc_delitem(sd, x, (int)take, type);
+        amount -= take;
+    }
+}
+
+/* removeItemDura — remove items matching id with full durability.
+ * Mirrors pcl_removeitemdura logic. */
+void sl_pc_removeitemdura(void *sd_ptr, unsigned int id, unsigned int amount,
+                          int type) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    int x;
+    for (x = 0; x < sd->status.maxinv && amount > 0; x++) {
+        if (sd->status.inventory[x].id != id) continue;
+        if (sd->status.inventory[x].dura != (unsigned int)itemdb_dura(id))
+            continue;
+        unsigned int avail = sd->status.inventory[x].amount;
+        if (avail == 0) continue;
+        unsigned int take = (avail < amount) ? avail : amount;
+        pc_delitem(sd, x, (int)take, type);
+        amount -= take;
+    }
+}
+
+/* hasItemDura — return remaining amount needed (0 = has enough full-dura items).
+ * Mirrors pcl_hasitemdura: negative return means surplus. */
+int sl_pc_hasitemdura(void *sd_ptr, unsigned int id, unsigned int amount) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return (int)amount;
+    int x;
+    unsigned int dura = (unsigned int)itemdb_dura(id);
+    for (x = 0; x < sd->status.maxinv && amount > 0; x++) {
+        if (sd->status.inventory[x].id != id) continue;
+        if (sd->status.inventory[x].dura != dura) continue;
+        if (sd->status.inventory[x].amount == 0) continue;
+        if (sd->status.inventory[x].amount >= amount)
+            return 0;
+        amount -= sd->status.inventory[x].amount;
+    }
+    return (int)amount;
+}
+
+/* --- Bank --- */
+
+/* checkBankItemId — return item_id at bank slot, 0 if empty. */
+int sl_pc_checkbankitems(void *sd_ptr, int slot) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return 0;
+    return (int)sd->status.banks[slot].item_id;
+}
+
+/* checkBankAmount — return amount at bank slot. */
+int sl_pc_checkbankamounts(void *sd_ptr, int slot) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return 0;
+    return (int)sd->status.banks[slot].amount;
+}
+
+/* checkBankOwner — return owner char-id at bank slot. */
+int sl_pc_checkbankowners(void *sd_ptr, int slot) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return 0;
+    return (int)sd->status.banks[slot].owner;
+}
+
+/* checkBankEngrave — return engrave string at bank slot. */
+const char *sl_pc_checkbankengraves(void *sd_ptr, int slot) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return "";
+    return sd->status.banks[slot].real_name;
+}
+
+/* bankDeposit — add item/amount/owner/engrave to a matching or empty bank slot.
+ * Mirrors pcl_bankdeposit (simplified: no custom look/icon). */
+void sl_pc_bankdeposit(void *sd_ptr, unsigned int item, unsigned int amount,
+                       unsigned int owner, const char *engrave) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    if (!engrave) engrave = "";
+    int x, deposit = -1;
+    for (x = 0; x < MAX_BANK_SLOTS; x++) {
+        if (sd->status.banks[x].item_id == item &&
+            sd->status.banks[x].owner   == owner &&
+            !strcasecmp(sd->status.banks[x].real_name, engrave)) {
+            deposit = x;
+            break;
+        }
+    }
+    if (deposit != -1) {
+        sd->status.banks[deposit].amount += amount;
+    } else {
+        for (x = 0; x < MAX_BANK_SLOTS; x++) {
+            if (sd->status.banks[x].item_id == 0) {
+                sd->status.banks[x].item_id = item;
+                sd->status.banks[x].amount  = amount;
+                sd->status.banks[x].owner   = owner;
+                strncpy(sd->status.banks[x].real_name, engrave,
+                        sizeof(sd->status.banks[x].real_name) - 1);
+                break;
+            }
+        }
+    }
+}
+
+/* bankWithdraw — reduce amount from matching bank slot. Removes slot when empty.
+ * Mirrors pcl_bankwithdraw (simplified). */
+void sl_pc_bankwithdraw(void *sd_ptr, unsigned int item, unsigned int amount,
+                        unsigned int owner, const char *engrave) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    if (!engrave) engrave = "";
+    int x, deposit = -1;
+    for (x = 0; x < MAX_BANK_SLOTS; x++) {
+        if (sd->status.banks[x].item_id == item &&
+            sd->status.banks[x].owner   == owner &&
+            !strcasecmp(sd->status.banks[x].real_name, engrave)) {
+            deposit = x;
+            break;
+        }
+    }
+    if (deposit == -1) return;
+    if (sd->status.banks[deposit].amount <= amount) {
+        memset(&sd->status.banks[deposit], 0, sizeof(sd->status.banks[deposit]));
+    } else {
+        sd->status.banks[deposit].amount -= amount;
+    }
+}
+
+/* bankCheckAmount — return amount of matching item in bank (all matching slots summed). */
+int sl_pc_bankcheckamount(void *sd_ptr, unsigned int item, unsigned int amount,
+                          unsigned int owner, const char *engrave) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return 0;
+    if (!engrave) engrave = "";
+    unsigned int total = 0;
+    int x;
+    for (x = 0; x < MAX_BANK_SLOTS; x++) {
+        if (sd->status.banks[x].item_id == item &&
+            sd->status.banks[x].owner   == owner &&
+            !strcasecmp(sd->status.banks[x].real_name, engrave)) {
+            total += sd->status.banks[x].amount;
+        }
+    }
+    (void)amount; /* caller compares total against their own threshold */
+    return (int)total;
+}
+
+/* --- Clan bank — no separate struct; no-ops until a clan_bank struct exists --- */
+/* sl_pc_clanbankdeposit: no-op — clan bank lives in a separate SQL table, not in sd. */
+void sl_pc_clanbankdeposit(void *sd_ptr, unsigned int item, unsigned int amount,
+                           unsigned int owner, const char *engrave) {
+    (void)sd_ptr; (void)item; (void)amount; (void)owner; (void)engrave;
+    /* Clan bank is SQL-backed; deposit logic is in pcl_clanbankdeposit in scripting.c */
+}
+
+void sl_pc_clanbankwithdraw(void *sd_ptr, unsigned int item, unsigned int amount,
+                            unsigned int owner, const char *engrave) {
+    (void)sd_ptr; (void)item; (void)amount; (void)owner; (void)engrave;
+    /* No-op: clan bank is SQL-backed */
+}
+
+/* sl_pc_getclanitems — return item_id at clan bank slot.
+ * Mirrors pcl_getclanbankitems: clan->clanbanks[slot].item_id. */
+int sl_pc_getclanitems(void *sd_ptr, int slot) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return 0;
+    struct clan_data *clan = clandb_search((int)sd->status.clan);
+    if (!clan || !clan->clanbanks) return 0;
+    if (slot < 0 || slot >= 255) return 0;
+    return (int)clan->clanbanks[slot].item_id;
+}
+
+/* sl_pc_getclanamounts — return amount at clan bank slot. */
+int sl_pc_getclanamounts(void *sd_ptr, int slot) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return 0;
+    struct clan_data *clan = clandb_search((int)sd->status.clan);
+    if (!clan || !clan->clanbanks) return 0;
+    if (slot < 0 || slot >= 255) return 0;
+    return (int)clan->clanbanks[slot].amount;
+}
+
+/* sl_pc_checkclankitemamounts — total amount of a given item across all clan bank slots.
+ * The `amount` parameter is unused (caller compares the returned total). */
+int sl_pc_checkclankitemamounts(void *sd_ptr, int item, int amount) {
+    USER *sd = (USER *)sd_ptr;
+    (void)amount;
+    if (!sd) return 0;
+    struct clan_data *clan = clandb_search((int)sd->status.clan);
+    if (!clan || !clan->clanbanks) return 0;
+    unsigned int total = 0;
+    int x;
+    for (x = 0; x < 255; x++) {
+        if ((int)clan->clanbanks[x].item_id == item)
+            total += clan->clanbanks[x].amount;
+    }
+    return (int)total;
+}
+
+/* --- Spell lists --- */
+
+/* getAllDurations — fill out_names[0..max) with magicdb ynames of active durations.
+ * Returns count written. */
+int sl_pc_getalldurations(void *sd_ptr, const char **out_names, int max) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd || !out_names) return 0;
+    int i, count = 0;
+    for (i = 0; i < MAX_MAGIC_TIMERS && count < max; i++) {
+        if (sd->status.dura_aether[i].id > 0 &&
+            sd->status.dura_aether[i].duration > 0) {
+            out_names[count++] = magicdb_yname(sd->status.dura_aether[i].id);
+        }
+    }
+    return count;
+}
+
+/* getSpells — fill out_ids[0..max) with spell IDs from sd->status.skill[].
+ * Returns count written. Mirrors pcl_getspells. */
+int sl_pc_getspells(void *sd_ptr, int *out_ids, int max) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd || !out_ids) return 0;
+    int x, count = 0;
+    for (x = 0; x < MAX_SPELLS && count < max; x++) {
+        if (sd->status.skill[x])
+            out_ids[count++] = (int)sd->status.skill[x];
+    }
+    return count;
+}
+
+/* getSpellNames — fill out_names[0..max) with magicdb names of known spells.
+ * Mirrors pcl_getspellname. */
+int sl_pc_getspellnames(void *sd_ptr, const char **out_names, int max) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd || !out_names) return 0;
+    int x, count = 0;
+    for (x = 0; x < MAX_SPELLS && count < max; x++) {
+        if (sd->status.skill[x])
+            out_names[count++] = magicdb_name(sd->status.skill[x]);
+    }
+    return count;
+}
+
+/* getUnknownSpells — no-op: requires SQL query (pcl_getunknownspells in scripting.c).
+ * Returns 0; caller should use the scripting.c version for real behaviour. */
+int sl_pc_getunknownspells(void *sd_ptr, int *out_ids, int max) {
+    (void)sd_ptr; (void)out_ids; (void)max;
+    /* SQL-backed; not implementable without lua_State. */
+    return 0;
+}
+
+/* --- Legends --- */
+
+/* getLegend — return the text of the first legend matching name, or NULL. */
+const char *sl_pc_getlegend(void *sd_ptr, const char *name) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd || !name) return NULL;
+    int x;
+    for (x = 0; x < MAX_LEGENDS; x++) {
+        if (!strcasecmp(sd->status.legends[x].name, name))
+            return sd->status.legends[x].text;
+    }
+    return NULL;
+}
+
+/* --- Combat --- */
+
+/* giveXP — call pc_givexp with the global xp_rate multiplier. */
+void sl_pc_givexp(void *sd_ptr, unsigned int amount) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    pc_givexp(sd, amount, xp_rate);
+}
+
+/* updateState — broadcast state packet to nearby players. Mirrors bll_updatestate for PCs. */
+void sl_pc_updatestate(void *sd_ptr) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    map_foreachinarea(clif_updatestate, sd->bl.m, sd->bl.x, sd->bl.y, AREA,
+                      BL_PC, sd);
+}
+
+/* addMagic (addMana alias) — add to sd->status.mp; send status.
+ * No dedicated C function; mirrors inline logic from scripting.c. */
+void sl_pc_addmagic(void *sd_ptr, int amount) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    sd->status.mp = (unsigned int)((int)sd->status.mp + amount);
+    clif_sendstatus(sd, SFLAG_HPMP);
+}
+
+/* addManaExtend — no separate "extend" function exists; same as addMagic. */
+void sl_pc_addmanaextend(void *sd_ptr, int amount) {
+    sl_pc_addmagic(sd_ptr, amount);
+}
+
+/* setTimeValues — shift timevalues[] ring buffer, prepend newval.
+ * Mirrors pcl_settimevalues. */
+void sl_pc_settimevalues(void *sd_ptr, unsigned int newval) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    int i, n = (int)(sizeof(sd->timevalues) / sizeof(sd->timevalues[0]));
+    for (i = n - 1; i > 0; i--)
+        sd->timevalues[i] = sd->timevalues[i - 1];
+    sd->timevalues[0] = newval;
+}
+
+/* setPK — record id in sd->pvp[]; mirrors pcl_setpk. */
+void sl_pc_setpk(void *sd_ptr, int id) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    int x, exist = -1;
+    for (x = 0; x < 20; x++) {
+        if ((int)sd->pvp[x][0] == id) { exist = x; break; }
+    }
+    if (exist != -1) {
+        sd->pvp[exist][1] = (unsigned int)time(NULL);
+    } else {
+        for (x = 0; x < 20; x++) {
+            if (!sd->pvp[x][0]) {
+                sd->pvp[x][0] = (unsigned int)id;
+                sd->pvp[x][1] = (unsigned int)time(NULL);
+                clif_getchararea(sd);
+                break;
+            }
+        }
+    }
+}
+
+/* activeSpells — return 1 if named duration is active on sd, else 0.
+ * Mirrors pcl_hasduration logic. */
+int sl_pc_activespells(void *sd_ptr, const char *name) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd || !name) return 0;
+    int id = magicdb_id(name);
+    int x;
+    for (x = 0; x < MAX_MAGIC_TIMERS; x++) {
+        if (sd->status.dura_aether[x].id == (unsigned short)id &&
+            sd->status.dura_aether[x].duration > 0)
+            return 1;
+    }
+    return 0;
+}
+
+/* getEquippedDura — return durability of equipped item at slot matching id.
+ * Returns -1 if not found. */
+int sl_pc_getequippeddura(void *sd_ptr, unsigned int id, int slot) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return -1;
+    if (slot >= 0 && slot < MAX_EQUIP) {
+        if (sd->status.equip[slot].id == id)
+            return (int)sd->status.equip[slot].dura;
+    } else {
+        int x;
+        for (x = 0; x < MAX_EQUIP; x++) {
+            if (sd->status.equip[x].id == id)
+                return (int)sd->status.equip[x].dura;
+        }
+    }
+    return -1;
+}
+
+/* addHealth (extend variant) — send health packet without triggering combat scripts.
+ * Mirrors pcl_addhealth: negative damage = heal. */
+void sl_pc_addhealth_extend(void *sd_ptr, int amount) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    clif_send_pc_healthscript(sd, -amount, 0);
+    clif_sendstatus(sd, SFLAG_HPMP);
+}
+
+/* removeHealth (extend variant) — reduce HP by damage, send packet. */
+void sl_pc_removehealth_extend(void *sd_ptr, int damage) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    if (sd->status.state != PC_DIE) {
+        clif_send_pc_healthscript(sd, damage, 0);
+        clif_sendstatus(sd, SFLAG_HPMP);
+    }
+}
+
+/* addHealth2 — heal sd by amount; mirrors pcl_addhealth (type unused). */
+void sl_pc_addhealth2(void *sd_ptr, int amount, int type) {
+    (void)type;
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    struct block_list *bl = map_id2bl(sd->attacker);
+    if (bl && amount > 0)
+        sl_doscript_blargs("player_combat", "on_healed", 2, &sd->bl, bl);
+    else if (amount > 0)
+        sl_doscript_blargs("player_combat", "on_healed", 1, &sd->bl);
+    clif_send_pc_healthscript(sd, -amount, 0);
+    clif_sendstatus(sd, SFLAG_HPMP);
+}
+
+/* removeHealthNoDmgNum — reduce HP without displaying a damage number.
+ * No dedicated C function; use clif_send_pc_health which takes type. */
+void sl_pc_removehealth_nodmgnum(void *sd_ptr, int damage, int type) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    if (sd->status.state != PC_DIE)
+        clif_send_pc_health(sd, damage, type);
+}
+
+/* --- Economy --- */
+
+/* addGold — add gold to sd->status.money and send status update. */
+void sl_pc_addgold(void *sd_ptr, int amount) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    sd->status.money = (unsigned int)((int)sd->status.money + amount);
+    clif_sendstatus(sd, SFLAG_XPMONEY);
+}
+
+/* removeGold — subtract gold from sd->status.money (floor at 0). */
+void sl_pc_removegold(void *sd_ptr, int amount) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    if ((int)sd->status.money < amount)
+        sd->status.money = 0;
+    else
+        sd->status.money -= (unsigned int)amount;
+    clif_sendstatus(sd, SFLAG_XPMONEY);
+}
+
+/* logBuySell — no-op: logging is commented out in pcl_logbuysell in scripting.c. */
+void sl_pc_logbuysell(void *sd_ptr, unsigned int item, unsigned int amount,
+                      unsigned int gold, int flag) {
+    (void)sd_ptr; (void)item; (void)amount; (void)gold; (void)flag;
+    /* Body intentionally empty — matches pcl_logbuysell which is a commented-out no-op. */
+}
+
+/* --- Ranged --- */
+
+/* calcThrow — no dedicated C function; no-op placeholder. */
+void sl_pc_calcthrow(void *sd_ptr) {
+    (void)sd_ptr;
+    /* No pc_calcthrow exists in pc.h */
+}
+
+/* calcRangedDamage — no dedicated C function; no-op placeholder. */
+int sl_pc_calcrangeddamage(void *sd_ptr, void *bl_ptr) {
+    (void)sd_ptr; (void)bl_ptr;
+    return 0;
+}
+
+/* calcRangedHit — no dedicated C function; no-op placeholder. */
+int sl_pc_calcrangedhit(void *sd_ptr, void *bl_ptr) {
+    (void)sd_ptr; (void)bl_ptr;
+    return 0;
+}
+
+/* --- Misc --- */
+
+/* gmMsg — send a GM broadcast message to a specific player.
+ * Uses clif_sendmsg (color 0 = system message). */
+void sl_pc_gmmsg(void *sd_ptr, const char *msg) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd || !msg) return;
+    clif_sendmsg(sd, 0, msg);
+}
+
+/* broadcastSd — broadcast msg to all PCs on map m.
+ * Uses clif_broadcast (same map); bl_ptr ignored. */
+void sl_pc_broadcast_sd(void *sd_ptr, const char *msg, int m) {
+    (void)sd_ptr;
+    if (!msg) return;
+    clif_broadcast(msg, m);
+}
+
+/* killRank — return kill count for mob_id from sd->status.killreg[].
+ * Mirrors pcl_killcount. */
+int sl_pc_killrank(void *sd_ptr, int mob_id) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return 0;
+    int x;
+    for (x = 0; x < MAX_KILLREG; x++) {
+        if ((int)sd->status.killreg[x].mob_id == mob_id)
+            return (int)sd->status.killreg[x].amount;
+    }
+    return 0;
+}
+
+/* getParcel — no-op: parcel retrieval requires SQL + lua_State (pcl_getparcel).
+ * Returns NULL; caller should invoke the Lua-layer function instead. */
+void *sl_pc_getparcel(void *sd_ptr) {
+    (void)sd_ptr;
+    return NULL;
+}
+
+/* getParcelList — no-op: requires SQL + lua_State. Returns 0. */
+int sl_pc_getparcellist(void *sd_ptr, void **out, int max) {
+    (void)sd_ptr; (void)out; (void)max;
+    return 0;
+}
+
+/* removeParcel — delete a parcel row from Parcels by position.
+ * Mirrors pcl_removeparcel (position key only). */
+void sl_pc_removeparcel(void *sd_ptr, int sender, unsigned int item,
+                        unsigned int amount, int pos, unsigned int owner,
+                        const char *engrave, int npcflag) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    (void)sender; (void)item; (void)amount; (void)owner; (void)engrave; (void)npcflag;
+    if (SQL_ERROR == Sql_Query(sql_handle,
+            "DELETE FROM `Parcels` WHERE `ParChaIdDestination` = '%u' AND"
+            " `ParPosition` = '%d'",
+            sd->status.id, pos)) {
+        Sql_ShowDebug(sql_handle);
+    }
+    Sql_FreeResult(sql_handle);
+}
+
+/* expireItem — expire timed items in inventory and equipped slots.
+ * Mirrors pcl_expireitem. */
+void sl_pc_expireitem(void *sd_ptr) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    unsigned int t = (unsigned int)time(NULL);
+    char msg[255];
+    int x, eqdel = 0;
+
+    for (x = 0; x < sd->status.maxinv; x++) {
+        if (!sd->status.inventory[x].id) continue;
+        if ((sd->status.inventory[x].time > 0 && sd->status.inventory[x].time < t) ||
+            ((unsigned int)itemdb_time(sd->status.inventory[x].id) > 0 &&
+             (unsigned int)itemdb_time(sd->status.inventory[x].id) < t)) {
+            snprintf(msg, sizeof(msg),
+                "Your %s has expired! Please visit the cash shop to purchase another.",
+                itemdb_name(sd->status.inventory[x].id));
+            pc_delitem(sd, x, 1, 8);
+            clif_sendminitext(sd, msg);
+        }
+    }
+
+    for (x = 0; x < sd->status.maxinv; x++) {
+        if (!sd->status.inventory[x].id) { eqdel = x; break; }
+    }
+
+    for (x = 0; x < MAX_EQUIP; x++) {
+        if (!sd->status.equip[x].id) continue;
+        if ((sd->status.equip[x].time > 0 && sd->status.equip[x].time < t) ||
+            ((unsigned int)itemdb_time(sd->status.equip[x].id) > 0 &&
+             (unsigned int)itemdb_time(sd->status.equip[x].id) < t)) {
+            snprintf(msg, sizeof(msg),
+                "Your %s has expired! Please visit the cash shop to purchase another.",
+                itemdb_name(sd->status.equip[x].id));
+            pc_unequip(sd, x);
+            pc_delitem(sd, eqdel, 1, 8);
+            clif_sendminitext(sd, msg);
+        }
+    }
+}
+
+/* addGuide / delGuide — commented out in scripting.c; no-ops here. */
+void sl_pc_addguide(void *sd_ptr, int guide) {
+    (void)sd_ptr; (void)guide;
+    /* pcl_addguide is commented out in scripting.c */
+}
+void sl_pc_delguide(void *sd_ptr, int guide) {
+    (void)sd_ptr; (void)guide;
+    /* pcl_delguide is commented out in scripting.c */
+}
+
+/* getCreationItems — return item id from sd's creation packet at slot len.
+ * Mirrors pcl_getcreationitems: reads RFIFOB(fd, len)-1 as inventory index. */
+int sl_pc_getcreationitems(void *sd_ptr, int len, unsigned int *out) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd || !out) return 0;
+    int curitem = RFIFOB(sd->fd, len) - 1;
+    if (curitem >= 0 && sd->status.inventory[curitem].id) {
+        *out = sd->status.inventory[curitem].id;
+        return 1;
+    }
+    return 0;
+}
+
+/* getCreationAmounts — return amount for creation slot.
+ * Mirrors pcl_getcreationamounts: stackable items use RFIFOB, non-stackable return 1. */
+int sl_pc_getcreationamounts(void *sd_ptr, int len, unsigned int item_id) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return 0;
+    if (itemdb_type((int)item_id) < 3 || itemdb_type((int)item_id) > 17)
+        return (int)RFIFOB(sd->fd, len);
+    return 1;
+}
+
+/* =========================================================================
+ * Task 9 — Async dialog send helpers
+ *
+ * Each function sends the network packet for one dialog type but does NOT
+ * yield the coroutine.  Yielding is Task 10's responsibility.
+ *
+ * Sources:
+ *   pcl_input      → clif_input(sd, sd->last_click, dialog, "")
+ *   pcl_dialog     → clif_scriptmes(sd, sd->last_click, msg, previous, next)
+ *   pcl_inputseq   → clif_inputseq(sd, sd->last_click, t1,t2,t3, opts, n, prev, next)
+ *   pcl_menu       → clif_scriptmenuseq(sd, sd->last_click, msg, opts, n, prev, next)
+ *   pcl_menuseq    → clif_scriptmenuseq (same function, different Lua method name)
+ *   pcl_buy        → clif_buydialog(sd, sd->last_click, dialog, item[], price[], n)
+ *   pcl_sell       → clif_selldialog(sd, sd->last_click, dialog, slot[], count)
+ *   clif_scriptmenu → used for menustring variant (non-seq menu)
+ *   bank / repair  → no corresponding clif_ function exists; implemented as no-ops.
+ * ========================================================================= */
+
+/* input — mirrors pcl_input.
+ * Sends a text-input dialog to the client.
+ * clif_input(sd, npc_id, prompt, item_name) */
+void sl_pc_input_send(void *sd_ptr, const char *msg) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    clif_input(sd, sd->last_click, msg, "");
+}
+
+/* dialog — mirrors pcl_dialog.
+ * Sends a dialog box (with optional previous/next buttons).
+ * clif_scriptmes(sd, npc_id, msg, previous, next)
+ * The task spec lists a "graphics" array, but the underlying packet only
+ * supports previous/next flags; encode previous=graphics[0], next=graphics[1]. */
+void sl_pc_dialog_send(void *sd_ptr, const char *msg, int *graphics, int ngraphics) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    int previous = (graphics && ngraphics > 0) ? graphics[0] : 0;
+    int next     = (graphics && ngraphics > 1) ? graphics[1] : 0;
+    clif_scriptmes(sd, sd->last_click, msg, previous, next);
+}
+
+/* dialogseq — mirrors pcl_inputseq.
+ * Sends a sequenced dialog box with a menu embedded (clif_inputseq).
+ * clif_inputseq(sd, npc_id, title, subtitle, body, menu_opts, n, previous, next)
+ * can_continue maps to the "next" flag. */
+void sl_pc_dialogseq_send(void *sd_ptr, const char **entries, int n, int can_continue) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    /* entries layout expected by caller: [0]=title, [1]=subtitle, [2]=body,
+     * [3..n-1]=menu options.  Remaining entries become the menu options array. */
+    const char *title    = (n > 0 && entries) ? entries[0] : "";
+    const char *subtitle = (n > 1 && entries) ? entries[1] : "";
+    const char *body     = (n > 2 && entries) ? entries[2] : "";
+    int nopts = (n > 3) ? n - 3 : 0;
+    const char **opts = (nopts > 0) ? (entries + 3) : NULL;
+    clif_inputseq(sd, sd->last_click, title, subtitle, body,
+                  opts, nopts, 0, can_continue);
+}
+
+/* menu — mirrors pcl_menu.
+ * Sends a menu to the client via the seq-menu packet.
+ * clif_scriptmenuseq(sd, npc_id, topic, options[], n, previous, next) */
+void sl_pc_menu_send(void *sd_ptr, const char *msg, const char **options, int n) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    clif_scriptmenuseq(sd, sd->last_click, msg, options, n, 0, 0);
+}
+
+/* menuseq — mirrors pcl_menuseq (same packet as menu, different Lua name).
+ * clif_scriptmenuseq(sd, npc_id, topic, options[], n, previous, next) */
+void sl_pc_menuseq_send(void *sd_ptr, const char *msg, const char **options, int n) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    clif_scriptmenuseq(sd, sd->last_click, msg, options, n, 0, 0);
+}
+
+/* menustring — uses the non-seq menu packet (clif_scriptmenu).
+ * clif_scriptmenu(sd, npc_id, topic, options[], n)
+ * Note: clif_scriptmenu takes non-const char* arrays; cast away const. */
+void sl_pc_menustring_send(void *sd_ptr, const char *msg, const char **options, int n) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd) return;
+    clif_scriptmenu(sd, sd->last_click, (char *)msg, (char **)options, n);
+}
+
+/* menustring2 — no corresponding clif_ function exists in the original codebase.
+ * No-op: packet variant was never implemented on the server. */
+void sl_pc_menustring2_send(void *sd_ptr, const char *msg, const char **options, int n) {
+    (void)sd_ptr; (void)msg; (void)options; (void)n;
+    /* no matching clif_ function */
+}
+
+/* buy — mirrors pcl_buy.
+ * Constructs an item[] array from raw ids/displaynames/buytexts and calls
+ * clif_buydialog(sd, npc_id, dialog, item[], price[], count).
+ *
+ * items[i]      — item id (resolved via itemdb_id-equivalent; passed as id directly)
+ * values[i]     — prices
+ * displaynames[i] — written into item[i].real_name
+ * buytext[i]    — written into item[i].buytext
+ */
+void sl_pc_buy_send(void *sd_ptr, const char *msg, int *items, int *values,
+                    const char **displaynames, const char **buytext, int n) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd || n <= 0) return;
+
+    struct item *ilist = (struct item *)calloc((size_t)n, sizeof(struct item));
+    if (!ilist) return;
+
+    for (int i = 0; i < n; i++) {
+        ilist[i].id = (unsigned int)items[i];
+        if (displaynames && displaynames[i])
+            strncpy(ilist[i].real_name, displaynames[i], sizeof(ilist[i].real_name) - 1);
+        if (buytext && buytext[i])
+            strncpy((char *)ilist[i].buytext, buytext[i], sizeof(ilist[i].buytext) - 1);
+    }
+
+    clif_buydialog(sd, (unsigned int)sd->last_click, msg, ilist, values, n);
+    free(ilist);
+}
+
+/* buydialog — simplified buy dialog: only item ids, no prices/display-names.
+ * Sends a buy dialog with item ids; prices array left as NULL. */
+void sl_pc_buydialog_send(void *sd_ptr, const char *msg, int *items, int n) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd || n <= 0) return;
+
+    struct item *ilist = (struct item *)calloc((size_t)n, sizeof(struct item));
+    if (!ilist) return;
+
+    for (int i = 0; i < n; i++)
+        ilist[i].id = (unsigned int)items[i];
+
+    clif_buydialog(sd, (unsigned int)sd->last_click, msg, ilist, NULL, n);
+    free(ilist);
+}
+
+/* buyextend — extended buy dialog with separate prices and max amounts.
+ * No distinct clif_ function exists; falls back to clif_buydialog with prices. */
+void sl_pc_buyextend_send(void *sd_ptr, const char *msg, int *items, int *prices,
+                          int *maxamounts, int n) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd || n <= 0) return;
+    (void)maxamounts; /* max amounts are enforced server-side, not in the packet */
+
+    struct item *ilist = (struct item *)calloc((size_t)n, sizeof(struct item));
+    if (!ilist) return;
+
+    for (int i = 0; i < n; i++)
+        ilist[i].id = (unsigned int)items[i];
+
+    clif_buydialog(sd, (unsigned int)sd->last_click, msg, ilist, prices, n);
+    free(ilist);
+}
+
+/* sell — mirrors pcl_sell.
+ * Finds inventory slots for each item id, then calls clif_selldialog.
+ * clif_selldialog(sd, npc_id, dialog, slot_indices[], count) */
+void sl_pc_sell_send(void *sd_ptr, const char *msg, int *items, int n) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd || n <= 0) return;
+
+    int slots[MAX_INVENTORY];
+    int count = 0;
+
+    for (int j = 0; j < n && count < MAX_INVENTORY; j++) {
+        unsigned int item_id = (unsigned int)items[j];
+        for (int x = 0; x < sd->status.maxinv && count < MAX_INVENTORY; x++) {
+            if (sd->status.inventory[x].id == item_id) {
+                slots[count++] = x;
+            }
+        }
+    }
+    clif_selldialog(sd, (unsigned int)sd->last_click, msg, slots, count);
+}
+
+/* sell2 — variant of sell; no distinct packet, same clif_selldialog call. */
+void sl_pc_sell2_send(void *sd_ptr, const char *msg, int *items, int n) {
+    sl_pc_sell_send(sd_ptr, msg, items, n);
+}
+
+/* sellextend — extended sell dialog; same packet as sell. */
+void sl_pc_sellextend_send(void *sd_ptr, const char *msg, int *items, int n) {
+    sl_pc_sell_send(sd_ptr, msg, items, n);
+}
+
+/* showbank / clan bank / bank-add / bank-money — no corresponding clif_
+ * function exists in the original codebase (pcl_bank was a no-op stub).
+ * All bank-show variants are no-ops. */
+void sl_pc_showbank_send(void *sd_ptr, const char *msg) {
+    (void)sd_ptr; (void)msg;
+    /* pcl_bank in scripting.c was an empty stub; no clif_ send function exists */
+}
+void sl_pc_showbankadd_send(void *sd_ptr) {
+    (void)sd_ptr;
+}
+void sl_pc_bankaddmoney_send(void *sd_ptr) {
+    (void)sd_ptr;
+}
+void sl_pc_bankwithdrawmoney_send(void *sd_ptr) {
+    (void)sd_ptr;
+}
+void sl_pc_clanshowbank_send(void *sd_ptr, const char *msg) {
+    (void)sd_ptr; (void)msg;
+}
+void sl_pc_clanshowbankadd_send(void *sd_ptr) {
+    (void)sd_ptr;
+}
+void sl_pc_clanbankaddmoney_send(void *sd_ptr) {
+    (void)sd_ptr;
+}
+void sl_pc_clanbankwithdrawmoney_send(void *sd_ptr) {
+    (void)sd_ptr;
+}
+void sl_pc_clanviewbank_send(void *sd_ptr) {
+    (void)sd_ptr;
+}
+
+/* repairextend / repairall — no corresponding clif_ function in original codebase.
+ * No-ops: repair dialog was never implemented server-side. */
+void sl_pc_repairextend_send(void *sd_ptr) {
+    (void)sd_ptr;
+    /* no clif_ repair dialog function exists in this codebase */
+}
+void sl_pc_repairall_send(void *sd_ptr, void *npc_bl) {
+    (void)sd_ptr; (void)npc_bl;
+    /* no clif_ repair dialog function exists in this codebase */
+}
