@@ -67,6 +67,26 @@ pub struct BankItemObject { pub ptr: *mut c_void }
 pub struct ParcelObject   { pub ptr: *mut c_void }
 pub struct RecipeObject   { pub ptr: *mut c_void }
 
+// SAFETY: Each wrapper holds a raw C pointer that is managed entirely by the
+// game engine's C layer.  Sending the wrapper across threads is sound only when
+// ALL of the following invariants hold:
+//
+//  1. **Lifetime** – The pointee (game struct) must remain allocated and valid
+//     for the entire lifetime of any thread that holds the wrapper.  The C API
+//     guarantees this for the duration of a script callback; callers must not
+//     cache these objects beyond the callback's scope.
+//
+//  2. **No concurrent mutation** – Only one thread may access the pointee at a
+//     time.  The engine serialises script execution on a single thread; if that
+//     invariant is ever broken, data races on the fields will cause UB.
+//
+//  3. **No `Sync` implied** – `Send` is implemented manually because mlua may
+//     move Lua values between threads.  These types are deliberately *not*
+//     `Sync`; taking a shared reference on two threads simultaneously is
+//     unsound.
+//
+// Violation of any invariant leads to data races or use-after-free.  The FFI
+// layer (script dispatch in `async_coro.rs`) is responsible for upholding them.
 unsafe impl Send for ItemObject {}
 unsafe impl Send for BItemObject {}
 unsafe impl Send for BankItemObject {}
@@ -87,14 +107,22 @@ fn val_to_int(v: &mlua::Value) -> c_int {
 
 fn val_to_uint(v: &mlua::Value) -> c_uint {
     match v {
-        mlua::Value::Integer(i) => *i as c_uint,
-        mlua::Value::Number(f)  => *f as c_uint,
+        mlua::Value::Integer(i) => if *i < 0 { 0 } else { *i as c_uint },
+        mlua::Value::Number(f)  => if f.is_nan() || *f < 0.0 { 0 } else { *f as c_uint },
         _ => 0,
     }
 }
 
-pub unsafe fn fixed_str(arr: &[c_char]) -> String {
-    CStr::from_ptr(arr.as_ptr()).to_string_lossy().into_owned()
+/// Safely converts a fixed-length C char array into a Rust `String`.
+///
+/// Performs a bounded NUL search within `arr`. If a NUL is found the bytes
+/// before it are decoded; if the buffer has no NUL terminator the entire
+/// slice is decoded lossily. Neither path reads beyond `arr.len()`.
+pub fn fixed_str(arr: &[c_char]) -> String {
+    let nul_pos = arr.iter().position(|&c| c == 0);
+    let len = nul_pos.unwrap_or(arr.len());
+    let bytes: Vec<u8> = arr[..len].iter().map(|&c| c as u8).collect();
+    String::from_utf8_lossy(&bytes).into_owned()
 }
 
 pub fn write_str_field(arr: &mut [c_char], s: &mlua::String) {
@@ -116,8 +144,8 @@ pub fn item_data_getattr(
     let d = unsafe { &*d };
     macro_rules! int   { ($e:expr) => { Ok(mlua::Value::Integer($e as i64)) }; }
     macro_rules! bool_ { ($e:expr) => { Ok(mlua::Value::Boolean($e != 0)) }; }
-    macro_rules! cstr  { ($p:expr) => {{
-        let s = unsafe { CStr::from_ptr($p as *const c_char).to_string_lossy().into_owned() };
+    macro_rules! cstr  { ($arr:expr) => {{
+        let s = fixed_str($arr);
         Ok(mlua::Value::String(lua.create_string(s)?))
     }}; }
     match key {
@@ -126,8 +154,8 @@ pub fn item_data_getattr(
         "dam"          => int!(d.dam),
         "price"        => int!(d.price),
         "sell"         => int!(d.sell),
-        "name"         => cstr!(d.name.as_ptr()),
-        "yname"        => cstr!(d.yname.as_ptr()),
+        "name"         => cstr!(&d.name),
+        "yname"        => cstr!(&d.yname),
         "armor" | "ac" => int!(d.ac),
         "icon"         => int!(d.icon),
         "iconC"        => int!(d.icon_color),
@@ -212,7 +240,7 @@ impl UserData for BItemObject {
             let bi = unsafe { &*(this.ptr as *const BoundItem) };
             macro_rules! int  { ($e:expr) => { Ok(mlua::Value::Integer($e as i64)) }; }
             macro_rules! cstr { ($arr:expr) => {{
-                let s = unsafe { fixed_str($arr) };
+                let s = fixed_str($arr);
                 Ok(mlua::Value::String(lua.create_string(s)?))
             }}; }
             match key.as_str() {
@@ -279,7 +307,7 @@ impl UserData for BankItemObject {
             let bd = unsafe { &*(this.ptr as *const BankData) };
             macro_rules! int  { ($e:expr) => { Ok(mlua::Value::Integer($e as i64)) }; }
             macro_rules! cstr { ($arr:expr) => {{
-                let s = unsafe { fixed_str($arr) };
+                let s = fixed_str($arr);
                 Ok(mlua::Value::String(lua.create_string(s)?))
             }}; }
             match key.as_str() {
@@ -341,7 +369,7 @@ impl UserData for ParcelObject {
             let p = unsafe { &*(this.ptr as *const Parcel) };
             macro_rules! int  { ($e:expr) => { Ok(mlua::Value::Integer($e as i64)) }; }
             macro_rules! cstr { ($arr:expr) => {{
-                let s = unsafe { fixed_str($arr) };
+                let s = fixed_str($arr);
                 Ok(mlua::Value::String(lua.create_string(s)?))
             }}; }
             match key.as_str() {
@@ -374,7 +402,7 @@ impl UserData for RecipeObject {
             let r = unsafe { &*(this.ptr as *const RecipeData) };
             macro_rules! int  { ($e:expr) => { Ok(mlua::Value::Integer($e as i64)) }; }
             macro_rules! cstr { ($arr:expr) => {{
-                let s = unsafe { fixed_str($arr) };
+                let s = fixed_str($arr);
                 Ok(mlua::Value::String(lua.create_string(s)?))
             }}; }
             match key.as_str() {
