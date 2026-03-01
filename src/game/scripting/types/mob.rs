@@ -19,6 +19,12 @@ use crate::game::scripting::types::shared;
 pub struct MobObject {
     pub ptr: *mut c_void,
 }
+// SAFETY: MobObject.ptr points to a MobSpawnData owned by the single-threaded Lua
+// scripting runtime. All Lua callbacks are invoked on the same game-server thread,
+// and the pointee's lifetime is managed by the C game loop, which guarantees it
+// outlives any cross-thread transfer. No concurrent access to the underlying C
+// structure occurs; the game server's event loop fully serializes all access before
+// MobObject values are created or used.
 unsafe impl Send for MobObject {}
 
 // ---------------------------------------------------------------------------
@@ -524,6 +530,9 @@ impl UserData for MobObject {
                 "sendSide" => {
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
+                            if ptr.is_null() {
+                                return Ok(());
+                            }
                             unsafe { sffi::sl_g_sendside(ptr); }
                             Ok(())
                         }
@@ -533,6 +542,9 @@ impl UserData for MobObject {
                 "delete" => {
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
+                            if ptr.is_null() {
+                                return Ok(());
+                            }
                             unsafe { sffi::sl_g_delete_bl(ptr); }
                             Ok(())
                         }
@@ -542,6 +554,9 @@ impl UserData for MobObject {
                 "talk" => {
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, args: mlua::MultiValue| {
+                            if ptr.is_null() {
+                                return Ok(());
+                            }
                             let a: Vec<mlua::Value> = args.into_iter().collect();
                             let talk_type = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
                             let msg = match a.get(2) {
@@ -705,12 +720,18 @@ impl UserData for MobObject {
                 "throw"             => return shared::make_throwblock_fn(lua, ptr),
                 "delFromIDDB" => return Ok(mlua::Value::Function(lua.create_function(
                     move |_, _: mlua::MultiValue| {
+                        if ptr.is_null() {
+                            return Ok(());
+                        }
                         unsafe { sffi::sl_g_deliddb(ptr); }
                         Ok(())
                     }
                 )?)),
                 "addPermanentSpawn" => return Ok(mlua::Value::Function(lua.create_function(
                     move |_, _: mlua::MultiValue| {
+                        if ptr.is_null() {
+                            return Ok(());
+                        }
                         unsafe { sffi::sl_g_addpermanentspawn(ptr); }
                         Ok(())
                     }
@@ -749,14 +770,18 @@ impl UserData for MobObject {
                                 sffi::rust_mobspawn_onetime(mob_id, m, x, y, amount, 0, 0, 0, owner)
                             };
                             if spawned.is_null() { return Ok(mlua::Value::Table(tbl)); }
-                            for i in 0..amount as usize {
-                                let id = unsafe { *spawned.add(i) };
-                                let bl = unsafe { sffi::map_id2bl(id) };
-                                if !bl.is_null() {
-                                    tbl.set(i + 1, lua.create_userdata(crate::game::scripting::types::mob::MobObject { ptr: bl })?)?;
+                            let fill_result = (|| -> mlua::Result<()> {
+                                for i in 0..amount as usize {
+                                    let id = unsafe { *spawned.add(i) };
+                                    let bl = unsafe { sffi::map_id2bl(id) };
+                                    if !bl.is_null() {
+                                        tbl.set(i + 1, lua.create_userdata(crate::game::scripting::types::mob::MobObject { ptr: bl })?)?;
+                                    }
                                 }
-                            }
+                                Ok(())
+                            })();
                             unsafe { libc::free(spawned as *mut c_void) };
+                            fill_result?;
                             Ok(mlua::Value::Table(tbl))
                         }
                     )?));
