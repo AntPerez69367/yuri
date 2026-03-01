@@ -530,11 +530,17 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("setClanTribute", lua.create_function(|_, (clan, val): (i32, i32)| {
+        if val < 0 {
+            return Err(mlua::Error::external("setClanTribute: val must be non-negative"));
+        }
         unsafe { sffi::sl_g_setclantribute(clan as c_int, val as c_uint); }
         Ok(())
     })?)?;
 
     g.set("addClanTribute", lua.create_function(|_, (clan, val): (i32, i32)| {
+        if val < 0 {
+            return Err(mlua::Error::external("addClanTribute: val must be non-negative"));
+        }
         unsafe { sffi::sl_g_addclantribute(clan as c_int, val as c_uint); }
         Ok(())
     })?)?;
