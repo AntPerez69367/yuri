@@ -39,12 +39,8 @@ pub fn make_cell_query_fn(lua: &mlua::Lua, variant: &str) -> mlua::Result<mlua::
             } as usize;
             let tbl = lua.create_table()?;
             for (i, &bl) in ptrs[..count].iter().enumerate() {
-                let bl_type_actual = unsafe { (*(bl as *const BlockList)).bl_type as c_int };
-                let val = match bl_type_actual {
-                    t if t == sffi::BL_PC  => lua.pack(PcObject  { ptr: bl })?,
-                    t if t == sffi::BL_MOB => lua.pack(MobObject { ptr: bl })?,
-                    t if t == sffi::BL_NPC => lua.pack(NpcObject { ptr: bl })?,
-                    _ => mlua::Value::Nil,
+                let val = unsafe {
+                    crate::game::scripting::bl_to_lua(lua, bl).unwrap_or(mlua::Value::Nil)
                 };
                 tbl.raw_set(i + 1, val)?;
             }
@@ -79,12 +75,8 @@ pub fn make_area_query_fn(lua: &mlua::Lua, variant: &str, self_ptr: *mut c_void)
             } as usize;
             let tbl = lua.create_table()?;
             for (i, &bl) in ptrs[..count].iter().enumerate() {
-                let bl_type_actual = unsafe { (*(bl as *const BlockList)).bl_type as c_int };
-                let val = match bl_type_actual {
-                    t if t == sffi::BL_PC  => lua.pack(PcObject  { ptr: bl })?,
-                    t if t == sffi::BL_MOB => lua.pack(MobObject { ptr: bl })?,
-                    t if t == sffi::BL_NPC => lua.pack(NpcObject { ptr: bl })?,
-                    _ => mlua::Value::Nil,
+                let val = unsafe {
+                    crate::game::scripting::bl_to_lua(lua, bl).unwrap_or(mlua::Value::Nil)
                 };
                 tbl.raw_set(i + 1, val)?;
             }

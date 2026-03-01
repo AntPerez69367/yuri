@@ -5,10 +5,11 @@ use std::ffi::{c_char, c_int, c_uint, c_ulong, c_uchar};
 use std::os::raw::c_void;
 use crate::database::mob_db::MobDbData;
 
-pub const BL_PC:  c_int = 0x01;
-pub const BL_MOB: c_int = 0x02;
-pub const BL_NPC: c_int = 0x04;
-pub const BL_ALL: c_int = 0x0F;
+pub const BL_PC:   c_int = 0x01;
+pub const BL_MOB:  c_int = 0x02;
+pub const BL_NPC:  c_int = 0x04;
+pub const BL_ITEM: c_int = 0x08;
+pub const BL_ALL:  c_int = 0x0F;
 
 extern "C" {
     // --- Map id/name lookups used by constructors ---

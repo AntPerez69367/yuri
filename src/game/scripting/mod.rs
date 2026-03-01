@@ -167,11 +167,13 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
         if ptr.is_null() { return Ok(mlua::Value::Nil); }
         Ok(mlua::Value::UserData(lua.create_userdata(RecipeObject { ptr })?))
     })?)?;
-    g.set("FL", lua.create_function(|lua, id: c_uint| -> mlua::Result<mlua::Value> {
+    let fl_ctor = lua.create_function(|lua, id: c_uint| -> mlua::Result<mlua::Value> {
         let ptr = unsafe { ffi::map_id2fl(id) };
         if ptr.is_null() { return Ok(mlua::Value::Nil); }
         Ok(mlua::Value::UserData(lua.create_userdata(FloorListObject { ptr })?))
-    })?)?;
+    })?;
+    g.set("FL",        fl_ctor.clone())?;
+    g.set("FloorItem", fl_ctor)?;
     Ok(())
 }
 
@@ -247,10 +249,14 @@ pub(crate) unsafe fn bl_to_lua(lua: &Lua, bl: *mut c_void) -> mlua::Result<mlua:
     if bl.is_null() { return Ok(mlua::Value::Nil); }
     let bl_type = (*(bl as *const BlockList)).bl_type as c_int;
     match bl_type {
-        ffi::BL_PC  => lua.pack(PcObject  { ptr: bl }),
-        ffi::BL_MOB => lua.pack(MobObject { ptr: bl }),
-        ffi::BL_NPC => lua.pack(NpcObject { ptr: bl }),
-        _           => Ok(mlua::Value::Nil),
+        ffi::BL_PC   => lua.pack(PcObject       { ptr: bl }),
+        ffi::BL_MOB  => lua.pack(MobObject      { ptr: bl }),
+        ffi::BL_NPC  => lua.pack(NpcObject      { ptr: bl }),
+        ffi::BL_ITEM => lua.pack(FloorListObject { ptr: bl }),
+        other => {
+            tracing::warn!("[scripting] bl_to_lua: unhandled bl_type={other:#04x}, returning nil");
+            Ok(mlua::Value::Nil)
+        }
     }
 }
 

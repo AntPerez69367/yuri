@@ -13,10 +13,11 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     // BL type constants — used by getObjectsInCell, foreachincell etc.
     // -----------------------------------------------------------------------
-    g.set("BL_PC",  sffi::BL_PC  as i64)?;
-    g.set("BL_MOB", sffi::BL_MOB as i64)?;
-    g.set("BL_NPC", sffi::BL_NPC as i64)?;
-    g.set("BL_ALL", sffi::BL_ALL as i64)?;
+    g.set("BL_PC",   sffi::BL_PC   as i64)?;
+    g.set("BL_MOB",  sffi::BL_MOB  as i64)?;
+    g.set("BL_NPC",  sffi::BL_NPC  as i64)?;
+    g.set("BL_ITEM", sffi::BL_ITEM as i64)?;
+    g.set("BL_ALL",  sffi::BL_ALL  as i64)?;
 
     // -----------------------------------------------------------------------
     // Async coroutines — Phase 5 stubs
