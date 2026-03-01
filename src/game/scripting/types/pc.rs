@@ -820,6 +820,31 @@ impl UserData for PcObject {
                     )?));
                 }
                 "getObjectsInMap" => return shared::make_map_query_fn(lua),
+                "sendAnimation"     => return shared::make_sendanimation_fn(lua, sd),
+                "playSound"         => return shared::make_playsound_fn(lua, sd),
+                "sendAction"        => return shared::make_sendaction_fn(lua, sd),
+                "msg"               => return shared::make_msg_fn(lua, sd),
+                "dropItem"          => return shared::make_dropitem_fn(lua, sd),
+                "dropItemXY"        => return shared::make_dropitemxy_fn(lua, sd),
+                "objectCanMove"     => return shared::make_objectcanmove_fn(lua, sd),
+                "objectCanMoveFrom" => return shared::make_objectcanmovefrom_fn(lua, sd),
+                "repeatAnimation"   => return shared::make_repeatanimation_fn(lua, sd),
+                "selfAnimation"     => return shared::make_selfanimation_fn(lua, sd),
+                "selfAnimationXY"   => return shared::make_selfanimationxy_fn(lua, sd),
+                "sendParcel"        => return shared::make_sendparcel_fn(lua, sd),
+                "throw"             => return shared::make_throwblock_fn(lua, sd),
+                "delFromIDDB" => return Ok(mlua::Value::Function(lua.create_function(
+                    move |_, _: mlua::MultiValue| {
+                        unsafe { sffi::sl_g_deliddb(sd); }
+                        Ok(())
+                    }
+                )?)),
+                "addPermanentSpawn" => return Ok(mlua::Value::Function(lua.create_function(
+                    move |_, _: mlua::MultiValue| {
+                        unsafe { sffi::sl_g_addpermanentspawn(sd); }
+                        Ok(())
+                    }
+                )?)),
                 _ => {
                     // Delegate to the global Player table for Lua-defined methods (e.g. Player.regen).
                     if let Ok(tbl) = lua.globals().get::<mlua::Table>("Player") {
