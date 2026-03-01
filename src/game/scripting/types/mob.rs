@@ -648,6 +648,7 @@ impl UserData for MobObject {
                 "gfxClone" => int!(mob.clone),
                 "lastDeath" => int!(mob.last_death),
                 "cursed" => int!(mob.cursed),
+                "color"  => int!(mob.look_color),
                 // ── mob-data (template) fields ───────────────────────────────
                 "behavior" => data_int!(r#type),
                 "aiType" => data_int!(subtype),
@@ -658,6 +659,7 @@ impl UserData for MobObject {
                 "level" => data_int!(level),
                 "tier" => data_int!(tier),
                 "mark" => data_int!(mark),
+                "IsBoss" => data_int!(isboss),
                 "baseHit" => data_int!(hit),
                 "baseMiss" => data_int!(miss),
                 "baseMinDam" => data_int!(mindam),
@@ -668,6 +670,7 @@ impl UserData for MobObject {
                 "baseHealth" => data_int!(vita),
                 "baseMagic" => data_int!(mana),
                 "baseArmor" => data_int!(baseac),
+                "baseAc"    => data_int!(baseac),
                 "sound" => data_int!(sound),
                 "baseMove" => data_int!(movetime),
                 "baseAttack" => data_int!(atktime),
@@ -687,6 +690,95 @@ impl UserData for MobObject {
                     return shared::make_area_query_fn(lua, key.as_str(), ptr),
                 "getObjectsInMap" =>
                     return shared::make_map_query_fn(lua),
+                "sendAnimation"     => return shared::make_sendanimation_fn(lua, ptr),
+                "playSound"         => return shared::make_playsound_fn(lua, ptr),
+                "sendAction"        => return shared::make_sendaction_fn(lua, ptr),
+                "msg"               => return shared::make_msg_fn(lua, ptr),
+                "dropItem"          => return shared::make_dropitem_fn(lua, ptr),
+                "dropItemXY"        => return shared::make_dropitemxy_fn(lua, ptr),
+                "objectCanMove"     => return shared::make_objectcanmove_fn(lua, ptr),
+                "objectCanMoveFrom" => return shared::make_objectcanmovefrom_fn(lua, ptr),
+                "repeatAnimation"   => return shared::make_repeatanimation_fn(lua, ptr),
+                "selfAnimation"     => return shared::make_selfanimation_fn(lua, ptr),
+                "selfAnimationXY"   => return shared::make_selfanimationxy_fn(lua, ptr),
+                "sendParcel"        => return shared::make_sendparcel_fn(lua, ptr),
+                "throw"             => return shared::make_throwblock_fn(lua, ptr),
+                "delFromIDDB" => return Ok(mlua::Value::Function(lua.create_function(
+                    move |_, _: mlua::MultiValue| {
+                        unsafe { sffi::sl_g_deliddb(ptr); }
+                        Ok(())
+                    }
+                )?)),
+                "addPermanentSpawn" => return Ok(mlua::Value::Function(lua.create_function(
+                    move |_, _: mlua::MultiValue| {
+                        unsafe { sffi::sl_g_addpermanentspawn(ptr); }
+                        Ok(())
+                    }
+                )?)),
+                // spawn(mob_name_or_id, x, y, amount [,m [,owner]])
+                // Mirrors npc:spawn but for a mob's own map context.
+                "spawn" => {
+                    return Ok(mlua::Value::Function(lua.create_function(
+                        move |lua, args: mlua::MultiValue| -> mlua::Result<mlua::Value> {
+                            let args: Vec<mlua::Value> = args.into_iter().collect();
+                            let mob_id: c_uint = match args.get(1) {
+                                Some(mlua::Value::String(s)) => {
+                                    let cs = CString::new(&*s.as_bytes()).map_err(mlua::Error::external)?;
+                                    unsafe { sffi::rust_mobdb_id(cs.as_ptr()) as c_uint }
+                                }
+                                Some(mlua::Value::Integer(n)) => *n as c_uint,
+                                Some(mlua::Value::Number(f))  => *f as c_uint,
+                                _ => return Ok(mlua::Value::Table(lua.create_table()?)),
+                            };
+                            let vi = |i: usize| -> c_int { match args.get(i) {
+                                Some(mlua::Value::Integer(n)) => *n as c_int,
+                                Some(mlua::Value::Number(f))  => *f as c_int,
+                                _ => 0,
+                            }};
+                            let x = vi(2);
+                            let y = vi(3);
+                            let amount = vi(4);
+                            let owner  = vi(6) as c_uint;
+                            let mut m  = vi(5);
+                            if m == 0 && !ptr.is_null() {
+                                m = unsafe { (*(ptr as *const crate::game::mob::MobSpawnData)).bl.m as c_int };
+                            }
+                            let tbl = lua.create_table()?;
+                            if amount <= 0 { return Ok(mlua::Value::Table(tbl)); }
+                            let spawned = unsafe {
+                                sffi::rust_mobspawn_onetime(mob_id, m, x, y, amount, 0, 0, 0, owner)
+                            };
+                            if spawned.is_null() { return Ok(mlua::Value::Table(tbl)); }
+                            for i in 0..amount as usize {
+                                let id = unsafe { *spawned.add(i) };
+                                let bl = unsafe { sffi::map_id2bl(id) };
+                                if !bl.is_null() {
+                                    tbl.set(i + 1, lua.create_userdata(crate::game::scripting::types::mob::MobObject { ptr: bl })?)?;
+                                }
+                            }
+                            unsafe { libc::free(spawned as *mut c_void) };
+                            Ok(mlua::Value::Table(tbl))
+                        }
+                    )?));
+                }
+                // getUsers() — mirrors pc:getUsers, returns all online players.
+                "getUsers" => {
+                    return Ok(mlua::Value::Function(lua.create_function(
+                        |lua, _: mlua::MultiValue| {
+                            const MAX: usize = 4096;
+                            let mut ptrs: Vec<*mut c_void> = vec![std::ptr::null_mut(); MAX];
+                            let count = unsafe { sffi::sl_g_getusers(ptrs.as_mut_ptr(), MAX as c_int) } as usize;
+                            let tbl = lua.create_table()?;
+                            for (i, &bl) in ptrs[..count].iter().enumerate() {
+                                let val = unsafe {
+                                    crate::game::scripting::bl_to_lua(lua, bl).unwrap_or(mlua::Value::Nil)
+                                };
+                                tbl.raw_set(i + 1, val)?;
+                            }
+                            Ok(tbl)
+                        },
+                    )?));
+                }
                 _ => {
                     if let Ok(tbl) = lua.globals().get::<mlua::Table>("Mob") {
                         if let Ok(v) = tbl.get::<mlua::Value>(key.as_str()) {
@@ -803,6 +895,7 @@ impl UserData for MobObject {
                     "dmgTaken"      => { mob.dmgtaken        = val_to_int(&val) as _; }
                     "look"          => { mob.look            = val_to_int(&val) as _; }
                     "lookColor"     => { mob.look_color      = val_to_int(&val) as _; }
+                    "color"         => { mob.look_color      = val_to_int(&val) as _; }
                     "charState"     => { mob.charstate       = val_to_int(&val) as _; }
                     "invis"         => { mob.invis           = val_to_int(&val) as _; }
                     "lastDeath"     => { mob.last_death      = val_to_int(&val) as _; }
