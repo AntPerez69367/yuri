@@ -142,6 +142,94 @@ impl UserData for NpcObject {
                     return shared::make_area_query_fn(lua, key.as_str(), this.ptr),
                 "getObjectsInMap" =>
                     return shared::make_map_query_fn(lua),
+                "sendAnimation" => {
+                    let ptr = this.ptr;
+                    return shared::make_sendanimation_fn(lua, ptr);
+                }
+                "playSound" => {
+                    let ptr = this.ptr;
+                    return shared::make_playsound_fn(lua, ptr);
+                }
+                "sendAction" => {
+                    let ptr = this.ptr;
+                    return shared::make_sendaction_fn(lua, ptr);
+                }
+                "msg" => {
+                    let ptr = this.ptr;
+                    return shared::make_msg_fn(lua, ptr);
+                }
+                "dropItem" => {
+                    let ptr = this.ptr;
+                    return shared::make_dropitem_fn(lua, ptr);
+                }
+                "dropItemXY" => {
+                    let ptr = this.ptr;
+                    return shared::make_dropitemxy_fn(lua, ptr);
+                }
+                "objectCanMove" => {
+                    let ptr = this.ptr;
+                    return shared::make_objectcanmove_fn(lua, ptr);
+                }
+                "objectCanMoveFrom" => {
+                    let ptr = this.ptr;
+                    return shared::make_objectcanmovefrom_fn(lua, ptr);
+                }
+                "repeatAnimation" => {
+                    let ptr = this.ptr;
+                    return shared::make_repeatanimation_fn(lua, ptr);
+                }
+                "selfAnimation" => {
+                    let ptr = this.ptr;
+                    return shared::make_selfanimation_fn(lua, ptr);
+                }
+                "selfAnimationXY" => {
+                    let ptr = this.ptr;
+                    return shared::make_selfanimationxy_fn(lua, ptr);
+                }
+                "sendParcel" => {
+                    let ptr = this.ptr;
+                    return shared::make_sendparcel_fn(lua, ptr);
+                }
+                "throw" => {
+                    let ptr = this.ptr;
+                    return shared::make_throwblock_fn(lua, ptr);
+                }
+                "delFromIDDB" => {
+                    let ptr = this.ptr;
+                    return Ok(mlua::Value::Function(lua.create_function(
+                        move |_, _: mlua::MultiValue| {
+                            unsafe { sffi::sl_g_deliddb(ptr); }
+                            Ok(())
+                        }
+                    )?));
+                }
+                "addPermanentSpawn" => {
+                    let ptr = this.ptr;
+                    return Ok(mlua::Value::Function(lua.create_function(
+                        move |_, _: mlua::MultiValue| {
+                            unsafe { sffi::sl_g_addpermanentspawn(ptr); }
+                            Ok(())
+                        }
+                    )?));
+                }
+                // getUsers() — returns all online players.
+                "getUsers" => {
+                    return Ok(mlua::Value::Function(lua.create_function(
+                        |lua, _: mlua::MultiValue| {
+                            const MAX: usize = 4096;
+                            let mut ptrs: Vec<*mut c_void> = vec![std::ptr::null_mut(); MAX];
+                            let count = unsafe { sffi::sl_g_getusers(ptrs.as_mut_ptr(), MAX as c_int) } as usize;
+                            let tbl = lua.create_table()?;
+                            for (i, &bl) in ptrs[..count].iter().enumerate() {
+                                let val = unsafe {
+                                    crate::game::scripting::bl_to_lua(lua, bl).unwrap_or(mlua::Value::Nil)
+                                };
+                                tbl.raw_set(i + 1, val)?;
+                            }
+                            Ok(tbl)
+                        },
+                    )?));
+                }
                 // spawn(mob_name_or_id, x, y, amount [,m [,owner]])
                 // Spawns `amount` mobs at (x,y) on map m (or NPC's own map if m=0).
                 // Returns a Lua table of MobObject userdata.
