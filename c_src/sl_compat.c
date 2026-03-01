@@ -970,6 +970,7 @@ int  sl_pc_attack_speed(void *sd) { return ((USER*)sd)->attack_speed; }
 int  sl_pc_enchanted(void *sd)    { return ((USER*)sd)->enchanted; }
 int  sl_pc_confused(void *sd)     { return ((USER*)sd)->confused; }
 int  sl_pc_target(void *sd)       { return ((USER*)sd)->target; }
+void sl_pc_set_target(void *sd, int v) { ((USER*)sd)->target = (unsigned int)v; }
 int  sl_pc_deduction(void *sd)    { return ((USER*)sd)->deduction; }
 int  sl_pc_speed(void *sd)        { return ((USER*)sd)->speed; }
 int  sl_pc_disguise(void *sd)     { return ((USER*)sd)->disguise; }

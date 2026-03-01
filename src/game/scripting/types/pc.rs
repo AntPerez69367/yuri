@@ -743,6 +743,28 @@ impl UserData for PcObject {
                 "gfxNeck" => int_!(sl_pc_gfx_necklace),
                 "gfxNeckC" => int_!(sl_pc_gfx_cnecklace),
                 "gfxName" => str_!(sl_pc_gfx_name),
+                // Task 4: new attribute bindings
+                "vRegenOverflow"  => int_!(sl_pc_vregenoverflow),
+                "mRegenOverflow"  => int_!(sl_pc_mregenoverflow),
+                "groupCount"      => int_!(sl_pc_group_count),
+                "groupOn"         => int_!(sl_pc_group_on),
+                "groupLeader"     => int_!(sl_pc_group_leader),
+                "group" => {
+                    const MAX_MEMBERS: usize = 256;
+                    let mut ids = [0u32; MAX_MEMBERS];
+                    let n = unsafe {
+                        sffi::sl_pc_getgroup(this.ptr, ids.as_mut_ptr(), MAX_MEMBERS as c_int)
+                    };
+                    let t = lua.create_table()?;
+                    for i in 0..n.max(0) as usize {
+                        t.raw_set(i + 1, ids[i] as i64)?;
+                    }
+                    return Ok(mlua::Value::Table(t));
+                }
+                // Alias: docs use "spouse", implementation uses "partner"
+                "spouse"          => int_!(sl_pc_status_partner),
+                // Alias: docs use "ac", implementation uses "armor"
+                "ac"              => int_!(sl_pc_armor),
                 // Registry sub-objects — mirroring pcl_init from scripting.c.
                 "registry" => return lua.pack(RegObject { ptr: sd }),
                 "registryString" => return lua.pack(RegStringObject { ptr: sd }),
@@ -947,11 +969,20 @@ impl UserData for PcObject {
                     "state" => unsafe { sl_pc_set_state(sd, v) },
                     "subpathChat" => unsafe { sl_pc_set_subpath_chat(sd, v) },
                     "talkType" => unsafe { sl_pc_set_talktype(sd, v) },
+                    "target"   => unsafe { sl_pc_set_target(sd, v) },
                     "tier" => unsafe { sl_pc_set_tier(sd, v) },
                     "totem" => unsafe { sl_pc_set_totem(sd, v) },
                     "tutor" => unsafe { sl_pc_set_tutor(sd, v) },
                     "uflags" => unsafe { sl_pc_set_uflags_xor(sd, v) },
                     "wisdom" => unsafe { sl_pc_set_wisdom(sd, v) },
+                    // Task 4: new attribute bindings
+                    "vRegenOverflow"  => unsafe { sl_pc_set_vregenoverflow(sd, v) },
+                    "mRegenOverflow"  => unsafe { sl_pc_set_mregenoverflow(sd, v) },
+                    "groupCount"      => unsafe { sl_pc_set_group_count(sd, v) },
+                    "groupOn"         => unsafe { sl_pc_set_group_on(sd, v) },
+                    "groupLeader"     => unsafe { sl_pc_set_group_leader(sd, v) },
+                    "spouse"          => unsafe { sl_pc_set_partner(sd, v) },
+                    "ac"              => unsafe { sl_pc_set_basearmor(sd, v) },
                     // string fields
                     "name" => {
                         if let Some(cs) = val_to_str(&val) {
@@ -1168,6 +1199,12 @@ impl UserData for PcObject {
             }
             Ok(())
         });
+        methods.add_method("popUp", |_, this, msg: String| {
+            if let Ok(cs) = CString::new(msg.as_bytes()) {
+                unsafe { sl_pc_popup(this.ptr, cs.as_ptr()) };
+            }
+            Ok(())
+        });
         methods.add_method("guiText", |_, this, msg: String| {
             if let Ok(cs) = CString::new(msg.as_bytes()) {
                 unsafe { sl_pc_guitext(this.ptr, cs.as_ptr()) };
@@ -1175,6 +1212,12 @@ impl UserData for PcObject {
             Ok(())
         });
         methods.add_method("sendMiniText", |_, this, msg: String| {
+            if let Ok(cs) = CString::new(msg.as_bytes()) {
+                unsafe { sl_pc_sendminitext(this.ptr, cs.as_ptr()) };
+            }
+            Ok(())
+        });
+        methods.add_method("sendMinitext", |_, this, msg: String| {
             if let Ok(cs) = CString::new(msg.as_bytes()) {
                 unsafe { sl_pc_sendminitext(this.ptr, cs.as_ptr()) };
             }
@@ -1223,7 +1266,25 @@ impl UserData for PcObject {
             }
             Ok(())
         });
-        methods.add_method("swingTarget", |_, this, id: c_int| {
+        methods.add_method("swingTarget", |_, this, val: mlua::Value| {
+            // swing.lua passes MobObject/PcObject userdata, not a raw integer.
+            let id: c_int = match val {
+                mlua::Value::Integer(n) => n as c_int,
+                mlua::Value::Number(n) => n as c_int,
+                mlua::Value::UserData(ud) => {
+                    if let Ok(mob) = ud.borrow::<MobObject>() {
+                        let mob_data = unsafe {
+                            &*(mob.ptr as *const crate::game::mob::MobSpawnData)
+                        };
+                        mob_data.bl.id as c_int
+                    } else if let Ok(pc) = ud.borrow::<PcObject>() {
+                        unsafe { sl_pc_bl_id(pc.ptr) }
+                    } else {
+                        return Ok(());
+                    }
+                }
+                _ => return Ok(()),
+            };
             unsafe { sl_pc_swingtarget(this.ptr, id) };
             Ok(())
         });
@@ -1296,12 +1357,30 @@ impl UserData for PcObject {
                 }) != 0)
             },
         );
+        methods.add_method(
+            "hasDurationID",
+            |_, this, (name, caster): (String, c_int)| {
+                let cs = CString::new(name.as_bytes()).ok();
+                Ok(cs.map_or(0, |c| unsafe {
+                    sl_pc_hasdurationid(this.ptr, c.as_ptr(), caster)
+                }) != 0)
+            },
+        );
         methods.add_method("getDuration", |_, this, name: String| {
             let cs = CString::new(name.as_bytes()).ok();
             Ok(cs.map_or(0, |c| unsafe { sl_pc_getduration(this.ptr, c.as_ptr()) }))
         });
         methods.add_method(
             "getDurationId",
+            |_, this, (name, caster): (String, c_int)| {
+                let cs = CString::new(name.as_bytes()).ok();
+                Ok(cs.map_or(0, |c| unsafe {
+                    sl_pc_getdurationid(this.ptr, c.as_ptr(), caster)
+                }))
+            },
+        );
+        methods.add_method(
+            "getDurationID",
             |_, this, (name, caster): (String, c_int)| {
                 let cs = CString::new(name.as_bytes()).ok();
                 Ok(cs.map_or(0, |c| unsafe {
@@ -1379,6 +1458,10 @@ impl UserData for PcObject {
 
         // ── Misc ─────────────────────────────────────────────────────────────
         methods.add_method("getCasterId", |_, this, name: String| {
+            let cs = CString::new(name.as_bytes()).ok();
+            Ok(cs.map_or(0, |c| unsafe { sl_pc_getcasterid(this.ptr, c.as_ptr()) }))
+        });
+        methods.add_method("getCasterID", |_, this, name: String| {
             let cs = CString::new(name.as_bytes()).ok();
             Ok(cs.map_or(0, |c| unsafe { sl_pc_getcasterid(this.ptr, c.as_ptr()) }))
         });

@@ -400,6 +400,8 @@ pub unsafe fn gfx_read(lua: &mlua::Lua, gfx: *const GfxViewer, key: &str) -> Opt
         "gfxNeckC"     => int!((*gfx).cnecklace),
         "gfxMantle"    => int!((*gfx).mantle),
         "gfxMantleC"   => int!((*gfx).cmantle),
+        "gfxCape"      => int!((*gfx).mantle),
+        "gfxCapeC"     => int!((*gfx).cmantle),
         "gfxBoots"     => int!((*gfx).boots),
         "gfxBootsC"    => int!((*gfx).cboots),
         "gfxFaceAT"    => int!((*gfx).face_acc_t),
@@ -442,6 +444,8 @@ pub unsafe fn gfx_write(gfx: *mut GfxViewer, key: &str, val: c_int, str_val: Opt
         "gfxNeckC"     => { (*gfx).cnecklace   = val as u8;  true }
         "gfxMantle"    => { (*gfx).mantle      = val as u16; true }
         "gfxMantleC"   => { (*gfx).cmantle     = val as u8;  true }
+        "gfxCape"      => { (*gfx).mantle      = val as u16; true }
+        "gfxCapeC"     => { (*gfx).cmantle     = val as u8;  true }
         "gfxBoots"     => { (*gfx).boots       = val as u16; true }
         "gfxBootsC"    => { (*gfx).cboots      = val as u8;  true }
         "gfxFaceAT"    => { (*gfx).face_acc_t  = val as u16; true }
