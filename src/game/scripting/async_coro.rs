@@ -73,7 +73,11 @@ unsafe fn do_resume(user: *mut c_void, nargs: c_int) {
     // `from` is ignored by LuaJIT; `nres` is an out-param we don't need.
     let mut nresults: c_int = 0;
     let status = lua_ffi::lua_resume(costate, std::ptr::null_mut(), nargs, &mut nresults);
-    if status == lua_ffi::LUA_ERRRUN {
+    if status == lua_ffi::LUA_OK {
+        // Coroutine returned normally (finished); free its registry slot.
+        free_coref(user);
+    } else if status != lua_ffi::LUA_YIELD {
+        // Any error (LUA_ERRRUN, LUA_ERRMEM, LUA_ERRERR, or unknown).
         let msg_ptr = lua_ffi::lua_tolstring(costate, -1, std::ptr::null_mut());
         let msg = if msg_ptr.is_null() {
             "(unknown error)".to_owned()
@@ -82,8 +86,9 @@ unsafe fn do_resume(user: *mut c_void, nargs: c_int) {
         };
         lua_ffi::lua_settop(costate, lua_ffi::lua_gettop(costate) - 1);
         free_coref(user);
-        tracing::warn!("[scripting] coroutine error: {msg}");
+        tracing::warn!("[scripting] coroutine error (status={status}): {msg}");
     }
+    // LUA_YIELD: coroutine is suspended and waiting; keep the registry reference.
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
@@ -110,6 +115,9 @@ pub unsafe fn resume_menuseq(selection: c_uint, choice: c_int, user: *mut c_void
     if selection == 2 {
         lua_ffi::lua_pushnumber(L(), choice as f64);
         do_resume(user, 1);
+    } else {
+        tracing::warn!("[scripting] resume_menuseq: unexpected selection={selection}");
+        free_coref(user);
     }
 }
 
