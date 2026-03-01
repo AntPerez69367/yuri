@@ -606,11 +606,11 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // Path member management
     // -----------------------------------------------------------------------
     g.set("removePathMember", lua.create_function(|_, id: i32| {
-        Ok(unsafe { sffi::sl_g_removepathember(id as c_int) != 0 })
+        Ok(unsafe { sffi::sl_g_removepathmember(id as c_int) != 0 })
     })?)?;
 
     g.set("addPathMember", lua.create_function(|_, (id, cls): (i32, i32)| {
-        Ok(unsafe { sffi::sl_g_addpathember(id as c_int, cls as c_int) != 0 })
+        Ok(unsafe { sffi::sl_g_addpathmember(id as c_int, cls as c_int) != 0 })
     })?)?;
 
     // setOfflinePlayerRegistry — core logic was commented out in C, no-op.

@@ -126,8 +126,8 @@ extern "C" {
     pub fn sl_g_addclanmember(id: c_int, clan: c_int) -> c_int;
     pub fn sl_g_updateclanmemberrank(id: c_int, rank: c_int) -> c_int;
     pub fn sl_g_updateclanmembertitle(id: c_int, title: *const c_char) -> c_int;
-    pub fn sl_g_removepathember(id: c_int) -> c_int;
-    pub fn sl_g_addpathember(id: c_int, cls: c_int) -> c_int;
+    pub fn sl_g_removepathmember(id: c_int) -> c_int;
+    pub fn sl_g_addpathmember(id: c_int, cls: c_int) -> c_int;
     pub fn sl_g_getxpforlevel(path: c_int, level: c_int) -> c_uint;
 
     // pc_* stubs added in Phase 6 as method bodies are written.

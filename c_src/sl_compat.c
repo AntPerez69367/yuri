@@ -594,24 +594,28 @@ int sl_g_updateclanmemberrank(int id, int rank) {
 }
 
 int sl_g_updateclanmembertitle(int id, const char *title) {
-    char esc[128];
+    size_t titlen = title ? strlen(title) : 0;
+    char *esc = (char *)malloc(2 * titlen + 1);
+    if (!esc) return 0;
     USER *sd = map_id2sd((unsigned int)id);
     if (sd) {
-        strncpy(sd->status.clan_title, title, sizeof(sd->status.clan_title) - 1);
+        strncpy(sd->status.clan_title, title ? title : "", sizeof(sd->status.clan_title) - 1);
+        sd->status.clan_title[sizeof(sd->status.clan_title) - 1] = '\0';
         clif_mystaytus(sd);
     }
-    Sql_EscapeString(sql_handle, esc, title);
+    Sql_EscapeString(sql_handle, esc, title ? title : "");
     if (SQL_ERROR == Sql_Query(sql_handle,
         "UPDATE `Character` SET `ChaClanTitle`='%s' WHERE `ChaId`='%u'",
         esc, (unsigned)id)) {
-        Sql_ShowDebug(sql_handle); Sql_FreeResult(sql_handle); return 0;
+        Sql_ShowDebug(sql_handle); Sql_FreeResult(sql_handle); free(esc); return 0;
     }
     Sql_FreeResult(sql_handle);
+    free(esc);
     return 1;
 }
 
 /* --- PathMember --- */
-int sl_g_removepathember(int id) {
+int sl_g_removepathmember(int id) {
     USER *sd = map_id2sd((unsigned int)id);
     if (sd) {
         sd->status.class = classdb_path(sd->status.class);
@@ -647,7 +651,7 @@ int sl_g_removepathember(int id) {
     }
 }
 
-int sl_g_addpathember(int id, int cls) {
+int sl_g_addpathmember(int id, int cls) {
     USER *sd = map_id2sd((unsigned int)id);
     if (sd) { sd->status.class = cls; sd->status.classRank = 0; clif_mystaytus(sd); }
     if (SQL_ERROR == Sql_Query(sql_handle,
