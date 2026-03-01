@@ -27,7 +27,7 @@ pub fn make_cell_query_fn(lua: &mlua::Lua, variant: &str) -> mlua::Result<mlua::
         move |lua, (_self, m, x, y, bl_type): (mlua::Value, c_int, c_int, c_int, c_int)| {
             const MAX: usize = 256;
             let mut ptrs = vec![std::ptr::null_mut::<c_void>(); MAX];
-            let count = unsafe {
+            let raw_count = unsafe {
                 match variant.as_str() {
                     "getAliveObjectsInCell" =>
                         sffi::sl_g_getaliveobjectscell(m, x, y, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
@@ -36,7 +36,8 @@ pub fn make_cell_query_fn(lua: &mlua::Lua, variant: &str) -> mlua::Result<mlua::
                     _ =>
                         sffi::sl_g_getobjectscell(m, x, y, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
                 }
-            } as usize;
+            };
+            let count = (raw_count.max(0) as usize).min(MAX);
             let tbl = lua.create_table()?;
             for (i, &bl) in ptrs[..count].iter().enumerate() {
                 let val = unsafe {
@@ -102,9 +103,10 @@ pub fn make_map_query_fn(lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
     lua.create_function(|lua, (_self, m, bl_type): (mlua::Value, c_int, c_int)| {
         const MAX: usize = 4096;
         let mut ptrs = vec![std::ptr::null_mut::<c_void>(); MAX];
-        let count = unsafe {
+        let raw_count = unsafe {
             sffi::sl_g_getobjectsinmap(m, bl_type, ptrs.as_mut_ptr(), MAX as c_int)
-        } as usize;
+        };
+        let count = (raw_count.max(0) as usize).min(MAX);
         let tbl = lua.create_table()?;
         for (i, &bl) in ptrs[..count].iter().enumerate() {
             let val = unsafe {
@@ -159,35 +161,45 @@ fn val_to_item_id(v: &mlua::Value) -> c_int {
 }
 
 pub fn make_sendanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let anim  = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let times = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
-        unsafe { sffi::sl_g_sendanimation(self_ptr, anim, times); }
+        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        if bl_ptr.is_null() { return Ok(()); }
+        unsafe { sffi::sl_g_sendanimation(bl_ptr, anim, times); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
 pub fn make_playsound_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let sound = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
-        unsafe { sffi::sl_g_playsound(self_ptr, sound); }
+        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        if bl_ptr.is_null() { return Ok(()); }
+        unsafe { sffi::sl_g_playsound(bl_ptr, sound); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
 pub fn make_sendaction_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let action = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let speed  = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
-        unsafe { sffi::sl_g_sendaction(self_ptr, action, speed); }
+        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        if bl_ptr.is_null() { return Ok(()); }
+        unsafe { sffi::sl_g_sendaction(bl_ptr, action, speed); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
 pub fn make_msg_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let color  = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -202,23 +214,29 @@ pub fn make_msg_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua:
                 e.nul_position()
             ))
         })?;
-        unsafe { sffi::sl_g_msg(self_ptr, color, cs.as_ptr(), target); }
+        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        if bl_ptr.is_null() { return Ok(()); }
+        unsafe { sffi::sl_g_msg(bl_ptr, color, cs.as_ptr(), target); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
 pub fn make_dropitem_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let item   = a.get(1).map(|v| val_to_item_id(v)).unwrap_or(0);
         let amount = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
         let owner  = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
-        unsafe { sffi::sl_g_dropitem(self_ptr, item, amount, owner); }
+        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        if bl_ptr.is_null() { return Ok(()); }
+        unsafe { sffi::sl_g_dropitem(bl_ptr, item, amount, owner); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
 pub fn make_dropitemxy_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let item   = a.get(1).map(|v| val_to_item_id(v)).unwrap_or(0);
@@ -227,53 +245,68 @@ pub fn make_dropitemxy_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Resul
         let x      = a.get(4).map(|v| val_to_int(v)).unwrap_or(0);
         let y      = a.get(5).map(|v| val_to_int(v)).unwrap_or(0);
         let owner  = a.get(6).map(|v| val_to_int(v)).unwrap_or(0);
-        unsafe { sffi::sl_g_dropitemxy(self_ptr, item, amount, m, x, y, owner); }
+        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        if bl_ptr.is_null() { return Ok(()); }
+        unsafe { sffi::sl_g_dropitemxy(bl_ptr, item, amount, m, x, y, owner); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
 pub fn make_objectcanmove_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let x    = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let y    = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
         let side = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
-        Ok(unsafe { sffi::sl_g_objectcanmove(self_ptr, x, y, side) } != 0)
+        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        if bl_ptr.is_null() { return Ok(false); }
+        Ok(unsafe { sffi::sl_g_objectcanmove(bl_ptr, x, y, side) } != 0)
     }).map(mlua::Value::Function)
 }
 
 pub fn make_objectcanmovefrom_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let x    = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let y    = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
         let side = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
-        Ok(unsafe { sffi::sl_g_objectcanmovefrom(self_ptr, x, y, side) } != 0)
+        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        if bl_ptr.is_null() { return Ok(false); }
+        Ok(unsafe { sffi::sl_g_objectcanmovefrom(bl_ptr, x, y, side) } != 0)
     }).map(mlua::Value::Function)
 }
 
 pub fn make_repeatanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let anim     = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let duration = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
-        unsafe { sffi::sl_g_repeatanimation(self_ptr, anim, duration); }
+        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        if bl_ptr.is_null() { return Ok(()); }
+        unsafe { sffi::sl_g_repeatanimation(bl_ptr, anim, duration); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
 pub fn make_selfanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let target = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let anim   = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
         let times  = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
-        unsafe { sffi::sl_g_selfanimation(self_ptr, target, anim, times); }
+        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        if bl_ptr.is_null() { return Ok(()); }
+        unsafe { sffi::sl_g_selfanimation(bl_ptr, target, anim, times); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
 pub fn make_selfanimationxy_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let target = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -281,12 +314,15 @@ pub fn make_selfanimationxy_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::
         let x      = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
         let y      = a.get(4).map(|v| val_to_int(v)).unwrap_or(0);
         let times  = a.get(5).map(|v| val_to_int(v)).unwrap_or(0);
-        unsafe { sffi::sl_g_selfanimationxy(self_ptr, target, anim, x, y, times); }
+        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        if bl_ptr.is_null() { return Ok(()); }
+        unsafe { sffi::sl_g_selfanimationxy(bl_ptr, target, anim, x, y, times); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
 pub fn make_sendparcel_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let receiver = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -305,12 +341,15 @@ pub fn make_sendparcel_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Resul
                 e.nul_position()
             ))
         })?;
-        unsafe { sffi::sl_g_sendparcel(self_ptr, receiver, sender, item, amount, owner, cs.as_ptr(), npcflag); }
+        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        if bl_ptr.is_null() { return Ok(()); }
+        unsafe { sffi::sl_g_sendparcel(bl_ptr, receiver, sender, item, amount, owner, cs.as_ptr(), npcflag); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
 pub fn make_throwblock_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let x      = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -318,7 +357,9 @@ pub fn make_throwblock_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Resul
         let icon   = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
         let color  = a.get(4).map(|v| val_to_int(v)).unwrap_or(0);
         let action = a.get(5).map(|v| val_to_int(v)).unwrap_or(0);
-        unsafe { sffi::sl_g_throwblock(self_ptr, x, y, icon, color, action); }
+        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        if bl_ptr.is_null() { return Ok(()); }
+        unsafe { sffi::sl_g_throwblock(bl_ptr, x, y, icon, color, action); }
         Ok(())
     }).map(mlua::Value::Function)
 }
@@ -448,7 +489,7 @@ pub unsafe fn gfx_read(lua: &mlua::Lua, gfx: *const GfxViewer, key: &str) -> Opt
 ///
 /// # Safety
 /// Dereferences `gfx`.
-pub unsafe fn gfx_write(gfx: *mut GfxViewer, key: &str, val: c_int, str_val: Option<&str>) -> bool {
+pub unsafe fn gfx_write(gfx: *mut GfxViewer, key: &str, val: c_int, str_val: Option<&[u8]>) -> bool {
     match key {
         "gfxWeap"      => { (*gfx).weapon      = val as u16; true }
         "gfxWeapC"     => { (*gfx).cweapon     = val as u8;  true }
@@ -461,7 +502,7 @@ pub unsafe fn gfx_write(gfx: *mut GfxViewer, key: &str, val: c_int, str_val: Opt
         "gfxCrown"     => { (*gfx).crown       = val as u16; true }
         "gfxCrownC"    => { (*gfx).ccrown      = val as u8;  true }
         "gfxShield"    => { (*gfx).shield      = val as u16; true }
-        "gfxShieldC"   => { (*gfx).cshield     = val as u8;  true }
+        "gfxShieldC" | "gfxShiedlC" => { (*gfx).cshield = val as u8; true }  // gfxShiedlC: C typo preserved
         "gfxNeck"      => { (*gfx).necklace    = val as u16; true }
         "gfxNeckC"     => { (*gfx).cnecklace   = val as u8;  true }
         "gfxMantle"    => { (*gfx).mantle      = val as u16; true }
@@ -480,14 +521,16 @@ pub unsafe fn gfx_write(gfx: *mut GfxViewer, key: &str, val: c_int, str_val: Opt
         "gfxDye"       => { (*gfx).dye         = val as u8;  true }
         "gfxTitleColor" => { (*gfx).title_color = val as u8; true }
         "gfxName" => {
-            if let Some(s) = str_val {
+            if let Some(bytes) = str_val {
                 let dst = (*gfx).name.as_mut_ptr();
-                let bytes = s.as_bytes();
-                let n = bytes.len().min((*gfx).name.len() - 1);
-                for i in 0..n {
-                    *dst.add(i) = bytes[i] as c_char;
+                let cap = (*gfx).name.len().saturating_sub(1);
+                if cap > 0 {
+                    let n = bytes.len().min(cap);
+                    for i in 0..n {
+                        *dst.add(i) = bytes[i] as c_char;
+                    }
+                    *dst.add(n) = 0;
                 }
-                *dst.add(n) = 0;
             }
             true
         }
