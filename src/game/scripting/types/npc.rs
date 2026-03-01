@@ -497,12 +497,13 @@ impl UserData for NpcObject {
                 "lastAction"  => nd.lastaction  = val_to_int(&val) as u32,
                 "actionTime"  => nd.actiontime  = val_to_int(&val) as u32,
                 "duration"    => nd.duration    = val_to_int(&val) as u32,
+                "returning"   => nd.returning   = val_to_int(&val) as _,
                 // GfxViewer fields — delegated to shared module.
                 key if key.starts_with("gfx") && key != "gfxClone" => {
-                    let str_owned = if let mlua::Value::String(ref s) = val {
-                        s.to_str().ok().map(|x| x.to_string())
+                    let bytes_owned: Option<Vec<u8>> = if let mlua::Value::String(ref s) = val {
+                        Some(s.as_bytes().to_vec())
                     } else { None };
-                    unsafe { shared::gfx_write(&mut nd.gfx, key, val_to_int(&val), str_owned.as_deref()); }
+                    unsafe { shared::gfx_write(&mut nd.gfx, key, val_to_int(&val), bytes_owned.as_deref()); }
                 }
                 "gfxClone"    => nd.clone = val_to_int(&val) as i8,
                 _ => {

@@ -35,16 +35,25 @@ fn val_to_int(v: &mlua::Value) -> Result<c_int, mlua::Error> {
             })
         }
         mlua::Value::Number(f) => {
-            let truncated = *f as i64;
-            if truncated as f64 != *f {
+            if !f.is_finite() {
+                return Err(mlua::Error::external(format!(
+                    "float value {} is not finite; expected integer for registry",
+                    f
+                )));
+            }
+            if f.fract() != 0.0 {
                 return Err(mlua::Error::external(format!(
                     "float value {} is not a whole number; expected integer for registry",
                     f
                 )));
             }
-            c_int::try_from(truncated).map_err(|_| {
-                mlua::Error::external(format!("float value {} out of range for c_int", f))
-            })
+            if *f < c_int::MIN as f64 || *f > c_int::MAX as f64 {
+                return Err(mlua::Error::external(format!(
+                    "float value {} out of range for c_int",
+                    f
+                )));
+            }
+            Ok(*f as c_int)
         }
         other => Err(mlua::Error::external(format!(
             "expected integer for registry value, got {}",
@@ -61,16 +70,25 @@ fn val_to_ulong(v: &mlua::Value) -> Result<c_ulong, mlua::Error> {
             })
         }
         mlua::Value::Number(f) => {
-            let truncated = *f as i64;
-            if truncated as f64 != *f {
+            if !f.is_finite() {
+                return Err(mlua::Error::external(format!(
+                    "float value {} is not finite; expected integer for registry",
+                    f
+                )));
+            }
+            if f.fract() != 0.0 {
                 return Err(mlua::Error::external(format!(
                     "float value {} is not a whole number; expected integer for registry",
                     f
                 )));
             }
-            c_ulong::try_from(truncated).map_err(|_| {
-                mlua::Error::external(format!("float value {} out of range for c_ulong", f))
-            })
+            if *f < 0.0 || *f > c_ulong::MAX as f64 {
+                return Err(mlua::Error::external(format!(
+                    "float value {} out of range for c_ulong",
+                    f
+                )));
+            }
+            Ok(*f as c_ulong)
         }
         other => Err(mlua::Error::external(format!(
             "expected integer for registry value, got {}",
@@ -127,7 +145,10 @@ impl UserData for RegStringObject {
             }
             let sval = match &val {
                 mlua::Value::String(s) => s.to_str().map(|s| s.to_owned()).unwrap_or_default(),
-                _ => String::new(),
+                other => return Err(mlua::Error::external(format!(
+                    "expected string for registry value, got {}",
+                    other.type_name()
+                ))),
             };
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
             let cval = CString::new(sval).map_err(mlua::Error::external)?;

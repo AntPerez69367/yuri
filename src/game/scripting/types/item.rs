@@ -99,16 +99,22 @@ unsafe impl Send for RecipeObject {}
 
 fn val_to_int(v: &mlua::Value) -> c_int {
     match v {
-        mlua::Value::Integer(i) => *i as c_int,
-        mlua::Value::Number(f)  => *f as c_int,
+        mlua::Value::Integer(i) => (*i).clamp(c_int::MIN as i64, c_int::MAX as i64) as c_int,
+        mlua::Value::Number(f)  => {
+            if f.is_nan() { return 0; }
+            f.clamp(c_int::MIN as f64, c_int::MAX as f64) as c_int
+        }
         _ => 0,
     }
 }
 
 fn val_to_uint(v: &mlua::Value) -> c_uint {
     match v {
-        mlua::Value::Integer(i) => if *i < 0 { 0 } else { *i as c_uint },
-        mlua::Value::Number(f)  => if f.is_nan() || *f < 0.0 { 0 } else { *f as c_uint },
+        mlua::Value::Integer(i) => (*i).clamp(0, c_uint::MAX as i64) as c_uint,
+        mlua::Value::Number(f)  => {
+            if f.is_nan() || *f < 0.0 { return 0; }
+            f.clamp(0.0, c_uint::MAX as f64) as c_uint
+        }
         _ => 0,
     }
 }
@@ -126,8 +132,9 @@ pub fn fixed_str(arr: &[c_char]) -> String {
 }
 
 pub fn write_str_field(arr: &mut [c_char], s: &mlua::String) {
+    if arr.is_empty() { return; }
     let bytes = s.as_bytes();
-    let len = bytes.len().min(arr.len().saturating_sub(1));
+    let len = bytes.len().min(arr.len() - 1);
     unsafe {
         std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const c_char, arr.as_mut_ptr(), len);
         arr[len] = 0;

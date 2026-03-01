@@ -78,8 +78,8 @@ fn val_to_int(v: &mlua::Value) -> c_int {
 
 fn val_to_uint(v: &mlua::Value) -> c_uint {
     match v {
-        mlua::Value::Integer(i) => *i as c_uint,
-        mlua::Value::Number(f) => *f as c_uint,
+        mlua::Value::Integer(i) => if *i < 0 { 0 } else { *i as c_uint },
+        mlua::Value::Number(f)  => if *f < 0.0 { 0 } else { *f as c_uint },
         _ => 0,
     }
 }
@@ -906,10 +906,10 @@ impl UserData for MobObject {
                     "confused"      => { mob.confused        = val_to_int(&val) as _; }
                     "owner"         => { mob.owner           = val_to_int(&val) as _; }
                     "experience"    => { mob.exp             = val_to_int(&val) as _; }
-                    "sleep"         => { mob.sleep           = val_to_int(&val) as _; }
+                    "sleep"         => { mob.sleep           = val_to_float(&val) as _; }
                     "target"        => { mob.target          = val_to_int(&val) as _; }
                     "confusedTarget"=> { mob.confused_target = val_to_int(&val) as _; }
-                    "deduction"     => { mob.deduction       = val_to_int(&val) as _; }
+                    "deduction"     => { mob.deduction       = val_to_float(&val) as _; }
                     "state"         => { mob.state           = val_to_int(&val) as _; }
                     "rangeTarget"   => { mob.rangeTarget     = val_to_int(&val) as _; }
                     "newMove"       => { mob.newmove         = val_to_int(&val) as _; }
@@ -919,14 +919,14 @@ impl UserData for MobObject {
                     "crit"          => { mob.crit            = val_to_int(&val) as _; }
                     "critChance"    => { mob.critchance      = val_to_int(&val) as _; }
                     "critMult"      => { mob.critmult        = val_to_int(&val) as _; }
-                    "damage"        => { mob.damage          = val_to_int(&val) as _; }
+                    "damage"        => { mob.damage          = val_to_float(&val) as _; }
                     "summon"        => { mob.summon          = val_to_int(&val) as _; }
                     "block"         => { mob.block           = val_to_int(&val) as _; }
                     "protection"    => { mob.protection      = val_to_int(&val) as _; }
                     "returning"     => { mob.returning       = val_to_int(&val) as _; }
-                    "dmgShield"     => { mob.dmgshield       = val_to_int(&val) as _; }
-                    "dmgDealt"      => { mob.dmgdealt        = val_to_int(&val) as _; }
-                    "dmgTaken"      => { mob.dmgtaken        = val_to_int(&val) as _; }
+                    "dmgShield"     => { mob.dmgshield       = val_to_float(&val) as _; }
+                    "dmgDealt"      => { mob.dmgdealt        = val_to_float(&val) as _; }
+                    "dmgTaken"      => { mob.dmgtaken        = val_to_float(&val) as _; }
                     "look"          => { mob.look            = val_to_int(&val) as _; }
                     "lookColor"     => { mob.look_color      = val_to_int(&val) as _; }
                     "color"         => { mob.look_color      = val_to_int(&val) as _; }
@@ -940,10 +940,10 @@ impl UserData for MobObject {
                     "isBoss"        => if !mob.data.is_null() { unsafe { (*mob.data).isboss = val_to_int(&val) as _; } }
                     // GfxViewer fields — delegated to shared module.
                     key if key.starts_with("gfx") && key != "gfxClone" => {
-                        let str_owned = if let mlua::Value::String(ref s) = val {
-                            s.to_str().ok().map(|x| x.to_string())
+                        let bytes_owned: Option<Vec<u8>> = if let mlua::Value::String(ref s) = val {
+                            Some(s.as_bytes().to_vec())
                         } else { None };
-                        unsafe { shared::gfx_write(&mut mob.gfx, key, val_to_int(&val), str_owned.as_deref()); }
+                        unsafe { shared::gfx_write(&mut mob.gfx, key, val_to_int(&val), bytes_owned.as_deref()); }
                     }
                     _ => {
                         tracing::debug!("[scripting] MobObject: unimplemented __newindex key={key:?}");
