@@ -121,6 +121,190 @@ pub fn make_getblock_fn(lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
     .map(mlua::Value::Function)
 }
 
+// ── Shared block-object method factories — Task 6 ─────────────────────────────
+
+fn val_to_int(v: &mlua::Value) -> c_int {
+    match v {
+        mlua::Value::Integer(i) => *i as c_int,
+        mlua::Value::Number(f)  => *f as c_int,
+        _ => 0,
+    }
+}
+
+/// Resolve a Lua value to an item database ID.
+/// Integers pass through directly; strings are resolved via itemdb_searchname.
+fn val_to_item_id(v: &mlua::Value) -> c_int {
+    match v {
+        mlua::Value::Integer(i) => *i as c_int,
+        mlua::Value::Number(f)  => *f as c_int,
+        mlua::Value::String(s)  => {
+            if let Some(cs) = s.to_str().ok().and_then(|r| std::ffi::CString::new(r.as_bytes()).ok()) {
+                let data = unsafe { crate::ffi::item_db::rust_itemdb_searchname(cs.as_ptr()) };
+                if !data.is_null() { return unsafe { (*data).id } as c_int; }
+            }
+            0
+        }
+        _ => 0,
+    }
+}
+
+pub fn make_sendanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    lua.create_function(move |_, args: mlua::MultiValue| {
+        let a: Vec<mlua::Value> = args.into_iter().collect();
+        let anim  = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
+        let times = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
+        unsafe { sffi::sl_g_sendanimation(self_ptr, anim, times); }
+        Ok(())
+    }).map(mlua::Value::Function)
+}
+
+pub fn make_playsound_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    lua.create_function(move |_, args: mlua::MultiValue| {
+        let a: Vec<mlua::Value> = args.into_iter().collect();
+        let sound = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
+        unsafe { sffi::sl_g_playsound(self_ptr, sound); }
+        Ok(())
+    }).map(mlua::Value::Function)
+}
+
+pub fn make_sendaction_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    lua.create_function(move |_, args: mlua::MultiValue| {
+        let a: Vec<mlua::Value> = args.into_iter().collect();
+        let action = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
+        let speed  = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
+        unsafe { sffi::sl_g_sendaction(self_ptr, action, speed); }
+        Ok(())
+    }).map(mlua::Value::Function)
+}
+
+pub fn make_msg_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    lua.create_function(move |_, args: mlua::MultiValue| {
+        let a: Vec<mlua::Value> = args.into_iter().collect();
+        let color  = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
+        let msg    = match a.get(2) {
+            Some(mlua::Value::String(s)) => String::from_utf8_lossy(&*s.as_bytes()).into_owned(),
+            _ => String::new(),
+        };
+        let target = a.get(3).map(|v| val_to_int(v)).unwrap_or(-1);
+        if let Ok(cs) = std::ffi::CString::new(msg.as_bytes()) {
+            unsafe { sffi::sl_g_msg(self_ptr, color, cs.as_ptr(), target); }
+        }
+        Ok(())
+    }).map(mlua::Value::Function)
+}
+
+pub fn make_dropitem_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    lua.create_function(move |_, args: mlua::MultiValue| {
+        let a: Vec<mlua::Value> = args.into_iter().collect();
+        let item   = a.get(1).map(|v| val_to_item_id(v)).unwrap_or(0);
+        let amount = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
+        let owner  = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
+        unsafe { sffi::sl_g_dropitem(self_ptr, item, amount, owner); }
+        Ok(())
+    }).map(mlua::Value::Function)
+}
+
+pub fn make_dropitemxy_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    lua.create_function(move |_, args: mlua::MultiValue| {
+        let a: Vec<mlua::Value> = args.into_iter().collect();
+        let item   = a.get(1).map(|v| val_to_item_id(v)).unwrap_or(0);
+        let amount = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
+        let m      = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
+        let x      = a.get(4).map(|v| val_to_int(v)).unwrap_or(0);
+        let y      = a.get(5).map(|v| val_to_int(v)).unwrap_or(0);
+        let owner  = a.get(6).map(|v| val_to_int(v)).unwrap_or(0);
+        unsafe { sffi::sl_g_dropitemxy(self_ptr, item, amount, m, x, y, owner); }
+        Ok(())
+    }).map(mlua::Value::Function)
+}
+
+pub fn make_objectcanmove_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    lua.create_function(move |_, args: mlua::MultiValue| {
+        let a: Vec<mlua::Value> = args.into_iter().collect();
+        let x    = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
+        let y    = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
+        let side = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
+        Ok(unsafe { sffi::sl_g_objectcanmove(self_ptr, x, y, side) } != 0)
+    }).map(mlua::Value::Function)
+}
+
+pub fn make_objectcanmovefrom_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    lua.create_function(move |_, args: mlua::MultiValue| {
+        let a: Vec<mlua::Value> = args.into_iter().collect();
+        let x    = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
+        let y    = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
+        let side = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
+        Ok(unsafe { sffi::sl_g_objectcanmovefrom(self_ptr, x, y, side) } != 0)
+    }).map(mlua::Value::Function)
+}
+
+pub fn make_repeatanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    lua.create_function(move |_, args: mlua::MultiValue| {
+        let a: Vec<mlua::Value> = args.into_iter().collect();
+        let anim     = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
+        let duration = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
+        unsafe { sffi::sl_g_repeatanimation(self_ptr, anim, duration); }
+        Ok(())
+    }).map(mlua::Value::Function)
+}
+
+pub fn make_selfanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    lua.create_function(move |_, args: mlua::MultiValue| {
+        let a: Vec<mlua::Value> = args.into_iter().collect();
+        let target = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
+        let anim   = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
+        let times  = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
+        unsafe { sffi::sl_g_selfanimation(self_ptr, target, anim, times); }
+        Ok(())
+    }).map(mlua::Value::Function)
+}
+
+pub fn make_selfanimationxy_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    lua.create_function(move |_, args: mlua::MultiValue| {
+        let a: Vec<mlua::Value> = args.into_iter().collect();
+        let target = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
+        let anim   = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
+        let x      = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
+        let y      = a.get(4).map(|v| val_to_int(v)).unwrap_or(0);
+        let times  = a.get(5).map(|v| val_to_int(v)).unwrap_or(0);
+        unsafe { sffi::sl_g_selfanimationxy(self_ptr, target, anim, x, y, times); }
+        Ok(())
+    }).map(mlua::Value::Function)
+}
+
+pub fn make_sendparcel_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    lua.create_function(move |_, args: mlua::MultiValue| {
+        let a: Vec<mlua::Value> = args.into_iter().collect();
+        let receiver = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
+        let sender   = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
+        let item     = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
+        let amount   = a.get(4).map(|v| val_to_int(v)).unwrap_or(0);
+        let owner    = a.get(5).map(|v| val_to_int(v)).unwrap_or(0);
+        let engrave  = match a.get(6) {
+            Some(mlua::Value::String(s)) => String::from_utf8_lossy(&*s.as_bytes()).into_owned(),
+            _ => String::new(),
+        };
+        let npcflag  = a.get(7).map(|v| val_to_int(v)).unwrap_or(0);
+        if let Ok(cs) = std::ffi::CString::new(engrave.as_bytes()) {
+            unsafe { sffi::sl_g_sendparcel(self_ptr, receiver, sender, item, amount, owner, cs.as_ptr(), npcflag); }
+        }
+        Ok(())
+    }).map(mlua::Value::Function)
+}
+
+pub fn make_throwblock_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    lua.create_function(move |_, args: mlua::MultiValue| {
+        let a: Vec<mlua::Value> = args.into_iter().collect();
+        let x      = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
+        let y      = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
+        let icon   = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
+        let color  = a.get(4).map(|v| val_to_int(v)).unwrap_or(0);
+        let action = a.get(5).map(|v| val_to_int(v)).unwrap_or(0);
+        unsafe { sffi::sl_g_throwblock(self_ptr, x, y, icon, color, action); }
+        Ok(())
+    }).map(mlua::Value::Function)
+}
+
 // ── Map property fields ───────────────────────────────────────────────────────
 
 /// Read a map property by Lua key for the map at index `m`.
