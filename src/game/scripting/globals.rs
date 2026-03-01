@@ -140,6 +140,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
         let md = unsafe { &*mp };
+        if x < 0 || y < 0 || x >= md.xs as i32 || y >= md.ys as i32 { return Ok(0i64); }
         let idx = (x + y * md.xs as i32) as usize;
         Ok(unsafe { *md.obj.add(idx) as i64 })
     })?)?;
@@ -148,6 +149,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(()); }
         let md = unsafe { &*mp };
+        if x < 0 || y < 0 || x >= md.xs as i32 || y >= md.ys as i32 { return Ok(()); }
         let idx = (x + y * md.xs as i32) as usize;
         unsafe { *md.obj.add(idx) = val as u16; }
         // map_foreachinarea(sl_updatepeople) omitted until foreachinarea is ported.
@@ -158,6 +160,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
         let md = unsafe { &*mp };
+        if x < 0 || y < 0 || x >= md.xs as i32 || y >= md.ys as i32 { return Ok(0i64); }
         let idx = (x + y * md.xs as i32) as usize;
         Ok(unsafe { *md.tile.add(idx) as i64 })
     })?)?;
@@ -166,6 +169,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(()); }
         let md = unsafe { &*mp };
+        if x < 0 || y < 0 || x >= md.xs as i32 || y >= md.ys as i32 { return Ok(()); }
         let idx = (x + y * md.xs as i32) as usize;
         unsafe { *md.tile.add(idx) = val as u16; }
         Ok(())
@@ -175,6 +179,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(()); }
         let md = unsafe { &*mp };
+        if x < 0 || y < 0 || x >= md.xs as i32 || y >= md.ys as i32 { return Ok(()); }
         let idx = (x + y * md.xs as i32) as usize;
         unsafe { *md.pass.add(idx) = val as u16; }
         Ok(())
@@ -184,7 +189,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
         let md = unsafe { &*mp };
-        if x > md.xs as i32 - 1 || y > md.ys as i32 - 1 { return Ok(1i64); }
+        if x < 0 || y < 0 || x >= md.xs as i32 || y >= md.ys as i32 { return Ok(1i64); }
         let idx = (x + y * md.xs as i32) as usize;
         Ok(unsafe { *md.pass.add(idx) as i64 })
     })?)?;
