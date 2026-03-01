@@ -54,9 +54,12 @@ pub fn sl_init() {
         // Capture the raw lua_State* via exec_raw and store in sl_gstate so C
         // helpers (sl_compat.c) and async_coro.rs can access it without going
         // through the mlua lock (safe: pointer is stable for process lifetime).
-        let _ = SL_STATE.as_ref().unwrap().exec_raw::<()>((), |L| {
+        // Capture the raw lua_State* so sl_compat.c and async_coro.rs can access
+        // it without going through the mlua lock.  Panic on failure — sl_gstate
+        // must be non-null before any C code can call back into Lua.
+        SL_STATE.as_ref().unwrap().exec_raw::<()>((), |L| {
             sl_gstate = L as *mut c_void;
-        });
+        }).expect("exec_raw failed: sl_gstate could not be initialised");
 
         // Reload scripts (lua_dir comes from config).
         sl_reload();
@@ -64,9 +67,12 @@ pub fn sl_init() {
 }
 
 /// Convert a Lua value (integer id or light userdata pointer) to a C pointer.
+/// Integer values that are negative or exceed `usize::MAX` map to null.
 fn lua_val_to_ptr(v: mlua::Value) -> *mut c_void {
     match v {
-        mlua::Value::Integer(i)         => i as usize as *mut c_void,
+        mlua::Value::Integer(i)         => {
+            usize::try_from(i).map_or(std::ptr::null_mut(), |u| u as *mut c_void)
+        }
         mlua::Value::LightUserData(ud)  => ud.0,
         _                               => std::ptr::null_mut(),
     }
@@ -287,14 +293,29 @@ unsafe fn call_lua(
     true
 }
 
+/// # Safety
+/// `args` must point to an array of at least `nargs` valid (or null) block-list
+/// pointers.  `nargs` must be non-negative and accurate; the caller owns the
+/// array for the duration of this call.
 pub unsafe fn sl_doscript_blargs_vec(
     root: *const c_char, method: *const c_char,
     nargs: c_int, args: *const *mut c_void,
 ) -> c_int {
+    debug_assert!(nargs >= 0, "sl_doscript_blargs_vec: nargs must be non-negative");
+    debug_assert!(nargs <= 64, "sl_doscript_blargs_vec: nargs={nargs} exceeds sanity limit");
+    if nargs <= 0 || args.is_null() {
+        return call_lua(root, method, mlua::MultiValue::new()) as c_int;
+    }
     let lua = sl_state();
+    let slice = std::slice::from_raw_parts(args, nargs as usize);
     let mut mv = mlua::MultiValue::new();
-    for i in 0..nargs as usize {
-        mv.push_back(bl_to_lua(lua, *args.add(i)).unwrap_or(mlua::Value::Nil));
+    for &bl in slice {
+        let val = if bl.is_null() {
+            mlua::Value::Nil
+        } else {
+            bl_to_lua(lua, bl).unwrap_or(mlua::Value::Nil)
+        };
+        mv.push_back(val);
     }
     call_lua(root, method, mv) as c_int
 }
