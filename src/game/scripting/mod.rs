@@ -101,8 +101,14 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     let player_mt  = lua.create_table()?;
     player_mt.set("__call", lua.create_function(|lua, (_tbl, v): (mlua::Value, mlua::Value)| -> mlua::Result<mlua::Value> {
         let ptr = match v {
-            mlua::Value::Integer(id) => unsafe { ffi::map_id2sd(id as c_uint) },
-            mlua::Value::Number(f)   => unsafe { ffi::map_id2sd(f as c_uint) },
+            mlua::Value::Integer(id) => {
+                if id < 0 || id > c_uint::MAX as i64 { return Ok(mlua::Value::Nil); }
+                unsafe { ffi::map_id2sd(id as c_uint) }
+            }
+            mlua::Value::Number(f) => {
+                if !f.is_finite() || f < 0.0 || f > c_uint::MAX as f64 { return Ok(mlua::Value::Nil); }
+                unsafe { ffi::map_id2sd(f as c_uint) }
+            }
             mlua::Value::String(ref s) => {
                 let cs = CString::new(s.as_bytes().to_vec()).map_err(mlua::Error::external)?;
                 unsafe { ffi::map_name2sd(cs.as_ptr()) }
@@ -224,7 +230,10 @@ fn load_dir_recursive(lua: &Lua, dir: &str) -> mlua::Result<()> {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         if name.starts_with('.') || name == "sys.lua" { continue; }
         if path.is_dir() {
-            load_dir_recursive(lua, path.to_str().unwrap_or(""))?;
+            if path.to_str().is_none() {
+                tracing::warn!("[scripting] skipping non-UTF8 directory path: {}", path.display());
+            }
+            load_dir_recursive(lua, &path.to_string_lossy())?;
         } else if path.extension().and_then(|e| e.to_str()) == Some("lua") {
             if let Err(e) = load_lua_file(lua, &path) {
                 tracing::warn!("[scripting] error loading {}: {e}", path.display());
@@ -329,11 +338,20 @@ pub unsafe fn sl_doscript_strings_vec(
     root: *const c_char, method: *const c_char,
     nargs: c_int, args: *const *const c_char,
 ) -> c_int {
+    if nargs <= 0 || args.is_null() {
+        return call_lua(root, method, mlua::MultiValue::new()) as c_int;
+    }
     let lua = sl_state();
     let mut mv = mlua::MultiValue::new();
     for i in 0..nargs as usize {
-        let s = CStr::from_ptr(*args.add(i)).to_string_lossy().into_owned();
-        mv.push_back(lua.pack(s).unwrap_or(mlua::Value::Nil));
+        let p = *args.add(i);
+        let val = if p.is_null() {
+            mlua::Value::Nil
+        } else {
+            let s = CStr::from_ptr(p).to_string_lossy().into_owned();
+            lua.pack(s).unwrap_or(mlua::Value::Nil)
+        };
+        mv.push_back(val);
     }
     call_lua(root, method, mv) as c_int
 }
