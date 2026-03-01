@@ -376,7 +376,7 @@ int sl_g_getofflineid(const char *name) {
 /* --- MapModifiers --- */
 int sl_g_addmapmodifier(unsigned int mapid, const char *modifier, int value) {
     char esc[255];
-    Sql_EscapeString(sql_handle, esc, modifier);
+    Sql_EscapeStringLen(sql_handle, esc, modifier, strlen(modifier));
     if (SQL_ERROR == Sql_Query(sql_handle,
         "INSERT INTO `MapModifiers` (`ModMapId`,`ModModifier`,`ModValue`) "
         "VALUES('%u','%s','%d')", mapid, esc, value)) {
@@ -387,7 +387,7 @@ int sl_g_addmapmodifier(unsigned int mapid, const char *modifier, int value) {
 
 int sl_g_removemapmodifier(unsigned int mapid, const char *modifier) {
     char esc[255];
-    Sql_EscapeString(sql_handle, esc, modifier);
+    Sql_EscapeStringLen(sql_handle, esc, modifier, strlen(modifier));
     if (SQL_ERROR == Sql_Query(sql_handle,
         "DELETE FROM `MapModifiers` WHERE `ModMapId`='%u' AND `ModModifier`='%s'",
         mapid, esc)) {
@@ -667,7 +667,7 @@ unsigned int sl_g_getxpforlevel(int path, int level) {
 /* addHealth: heal mob and dispatch on_healed to the appropriate AI script. */
 void sl_mob_addhealth(MOB *mob, int damage) {
     struct block_list *bl = map_id2bl(mob->attacker);
-    if (bl != NULL && damage > 0) {
+    if (mob->data != NULL && bl != NULL && damage > 0) {
         switch (mob->data->subtype) {
             case 0: sl_doscript_blargs("mob_ai_basic",  "on_healed", 2, &mob->bl, bl); break;
             case 1: sl_doscript_blargs("mob_ai_normal", "on_healed", 2, &mob->bl, bl); break;
@@ -676,7 +676,7 @@ void sl_mob_addhealth(MOB *mob, int damage) {
             case 4: sl_doscript_blargs(mob->data->yname,"on_healed", 2, &mob->bl, bl); break;
             case 5: sl_doscript_blargs("mob_ai_ghost",  "on_healed", 2, &mob->bl, bl); break;
         }
-    } else if (damage > 0) {
+    } else if (mob->data != NULL && damage > 0) {
         switch (mob->data->subtype) {
             case 0: sl_doscript_blargs("mob_ai_basic",  "on_healed", 1, &mob->bl); break;
             case 1: sl_doscript_blargs("mob_ai_normal", "on_healed", 1, &mob->bl); break;
@@ -781,6 +781,8 @@ int sl_mob_checkmove(MOB *mob) {
         case 2: dy += 1; break;
         case 3: dx -= 1; break;
     }
+    if (dx < 0) dx = 0;
+    if (dy < 0) dy = 0;
     if (dx >= map[m].xs) dx = map[m].xs - 1;
     if (dy >= map[m].ys) dy = map[m].ys - 1;
     for (i = map[m].warp[dx/BLOCK_SIZE + (dy/BLOCK_SIZE)*map[m].bxs]; i; i = i->next)
@@ -2073,7 +2075,7 @@ void sl_g_sendparcel(void *bl_ptr, int receiver, int sender,
     char escape[255];
 
     SqlStmt *stmt = SqlStmt_Malloc(sql_handle);
-    if (!stmt) { SqlStmt_ShowDebug(stmt); return; }
+    if (!stmt) { Sql_ShowDebug(sql_handle); return; }
 
     if (SQL_ERROR == SqlStmt_Prepare(stmt,
             "SELECT `ParPosition` FROM `Parcels` WHERE `ParChaIdDestination` = '%u'",
@@ -2169,19 +2171,21 @@ void sl_pc_additem(void *sd_ptr, unsigned int id, unsigned int amount,
 }
 
 /* getInventoryItem — return pointer into sd->status.inventory[slot].
- * Returns NULL if slot is empty (id == 0). */
+ * Returns NULL if sd is NULL, slot is out of range, or slot is empty (id == 0). */
 void *sl_pc_getinventoryitem(void *sd_ptr, int slot) {
     USER *sd = (USER *)sd_ptr;
     if (!sd) return NULL;
+    if (slot < 0 || slot >= MAX_INVENTORY) return NULL;
     if (sd->status.inventory[slot].id == 0) return NULL;
     return &sd->status.inventory[slot];
 }
 
 /* getEquippedItem — return pointer into sd->status.equip[slot].
- * Returns NULL if slot is empty. */
+ * Returns NULL if sd is NULL, slot is out of range, or slot is empty. */
 void *sl_pc_getequippeditem_sd(void *sd_ptr, int slot) {
     USER *sd = (USER *)sd_ptr;
     if (!sd) return NULL;
+    if (slot < 0 || slot >= MAX_EQUIP) return NULL;
     if (sd->status.equip[slot].id == 0) return NULL;
     return &sd->status.equip[slot];
 }
