@@ -615,8 +615,11 @@ unsafe fn setup_coref_and_yield(sd: *mut c_void) -> c_int {
     use mlua::ffi as lua_ffi;
     let l = crate::game::scripting::sl_gstate as *mut lua_ffi::lua_State;
     lua_ffi::lua_pushthread(l);
-    let coref = lua_ffi::luaL_ref(l, lua_ffi::LUA_REGISTRYINDEX);
-    sl_user_set_coref(sd, coref as c_uint);
+    let coref: c_int = lua_ffi::luaL_ref(l, lua_ffi::LUA_REGISTRYINDEX);
+    // luaL_ref returns LUA_REFNIL (-1) or LUA_NOREF (-2) on failure; do not
+    // cast negative values to c_uint as that wraps to a garbage reference id.
+    let safe_coref: c_uint = if coref < 0 { 0 } else { coref as c_uint };
+    sl_user_set_coref(sd, safe_coref);
     lua_ffi::lua_yield(l, 0)
 }
 
@@ -1815,10 +1818,16 @@ impl UserData for PcObject {
         methods.add_method("calcThrow", |_, this, ()| { unsafe { sl_pc_calcthrow(this.ptr) }; Ok(()) });
         methods.add_method("calcRangedDamage", |_, this, bl: mlua::AnyUserData| {
             let bl_ptr = extract_bl_ptr(&bl);
+            if bl_ptr.is_null() {
+                return Err(mlua::Error::external("calcRangedDamage: bl pointer is null"));
+            }
             Ok(unsafe { sl_pc_calcrangeddamage(this.ptr, bl_ptr) })
         });
         methods.add_method("calcRangedHit", |_, this, bl: mlua::AnyUserData| {
             let bl_ptr = extract_bl_ptr(&bl);
+            if bl_ptr.is_null() {
+                return Err(mlua::Error::external("calcRangedHit: bl pointer is null"));
+            }
             Ok(unsafe { sl_pc_calcrangedhit(this.ptr, bl_ptr) })
         });
 
