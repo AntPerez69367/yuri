@@ -20,6 +20,7 @@ unsafe impl Send for NpcObject {}
 // ---------------------------------------------------------------------------
 
 unsafe fn npc_map(nd: *const NpcData) -> *mut MapData {
+    if nd.is_null() { return std::ptr::null_mut(); }
     get_map_ptr((*nd).bl.m)
 }
 
@@ -73,6 +74,9 @@ impl UserData for NpcObject {
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |lua, (_, num): (mlua::Value, usize)| -> mlua::Result<mlua::Value> {
                             if num >= MAX_EQUIP { return Ok(mlua::Value::Nil); }
+                            if ptr.is_null() || (ptr as usize) % std::mem::align_of::<NpcData>() != 0 {
+                                return Ok(mlua::Value::Nil);
+                            }
                             let item = unsafe { &(*(ptr as *const NpcData)).equip[num] };
                             if item.id == 0 { return Ok(mlua::Value::Nil); }
                             let t = lua.create_table()?;
@@ -305,7 +309,7 @@ impl UserData for NpcObject {
                                 _ => None,
                             }};
                             let cname  = CString::new(name).map_err(mlua::Error::external)?;
-                            let yname  = vs(9);
+                            let yname  = vs(10);
                             let cyname = yname.as_deref()
                                 .and_then(|s| CString::new(s).ok());
                             unsafe {
