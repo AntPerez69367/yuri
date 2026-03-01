@@ -27,7 +27,6 @@ int encrypt(int fd) {
     fflush(stdout);
     return 1;
   }
-  unsigned char cmd_before = buf[3];
 
   set_packet_indexes(buf);
 
@@ -39,8 +38,6 @@ int encrypt(int fd) {
     tk_crypt_static(buf);
   }
   int pkt_len = (int)SWAP16(*(unsigned short *)(buf + 1)) + 3;
-  printf("[encrypt] fd=%d cmd=0x%02X len=%d\n", fd, cmd_before, pkt_len);
-  fflush(stdout);
   return pkt_len;
 }
 

@@ -966,7 +966,6 @@ async fn flush_wdata_to_socket(fd: i32, manager: &SessionManager) {
         (socket_arc, wdata)
     };
 
-    tracing::info!("[session] fd={} flushing {} bytes to socket", fd, wdata.len());
     let mut socket = socket_arc.lock().await;
     if let Err(e) = socket.write_all(&wdata).await {
         tracing::error!("[session] fd={} flush write error: {}", fd, e);
@@ -1080,7 +1079,6 @@ async fn session_io_task(fd: i32) {
 
         match event {
             Event::WriteReady => {
-                tracing::debug!("[session] fd={} WriteReady event", fd);
                 flush_wdata_to_socket(fd, manager).await;
             }
             Event::Read(Ok(0)) => {
