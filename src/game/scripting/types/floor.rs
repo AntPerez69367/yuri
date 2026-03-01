@@ -185,6 +185,15 @@ impl UserData for FloorListObject {
                     }
                     Ok(mlua::Value::Table(tbl))
                 }
+                "delete" => {
+                    let ptr = this.ptr;
+                    return Ok(mlua::Value::Function(lua.create_function(
+                        move |_, _: mlua::MultiValue| {
+                            unsafe { crate::game::scripting::ffi::sl_fl_delete(ptr); }
+                            Ok(())
+                        }
+                    )?));
+                }
                 _ => {
                     let db = unsafe {
                         crate::ffi::item_db::rust_itemdb_search(fl_ref.data.id)
