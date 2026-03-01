@@ -206,12 +206,12 @@ int sl_g_setmap(int m, const char *mapfile, const char *title,
                 int bind, int reqlvl, int reqvita, int reqmana) {
     unsigned short buff;
     unsigned int pos = 0;
-    int i, blockcount;
+    int i, old_blockcount;
     FILE *fp;
     if (!mapfile) return -1;
     fp = fopen(mapfile, "rb");
     if (!fp) { printf("MAP_ERR: Map file not found (%s).\n", mapfile); return -1; }
-    blockcount = map[m].bxs * map[m].bys;
+    old_blockcount = map[m].bxs * map[m].bys;
     if (title) strcpy(map[m].title, title);
     map[m].bgm = bgm; map[m].bgmtype = bgmtype;
     map[m].pvp = pvp; map[m].spell = spell;
@@ -237,12 +237,18 @@ int sl_g_setmap(int m, const char *mapfile, const char *title,
     map[m].bxs = (map[m].xs + BLOCK_SIZE - 1) / BLOCK_SIZE;
     map[m].bys = (map[m].ys + BLOCK_SIZE - 1) / BLOCK_SIZE;
     if (map_isloaded(m)) {
+        int new_blockcount = map[m].bxs * map[m].bys;
         FREE(map[m].warp);
-        CALLOC(map[m].warp,       struct warp_list *,  map[m].bxs * map[m].bys);
-        REALLOC(map[m].block,     struct block_list *, map[m].bxs * map[m].bys);
-        REALLOC(map[m].block_mob, struct block_list *, map[m].bxs * map[m].bys);
-        if (map[m].bxs * map[m].bys > blockcount) {
-            for (i = blockcount; i < map[m].bxs * map[m].bys; i++) {
+        CALLOC(map[m].warp,       struct warp_list *,  new_blockcount);
+        if (old_blockcount > new_blockcount) {
+            for (i = new_blockcount; i < old_blockcount; i++) {
+                map[m].block[i] = NULL; map[m].block_mob[i] = NULL;
+            }
+        }
+        REALLOC(map[m].block,     struct block_list *, new_blockcount);
+        REALLOC(map[m].block_mob, struct block_list *, new_blockcount);
+        if (new_blockcount > old_blockcount) {
+            for (i = old_blockcount; i < new_blockcount; i++) {
                 map[m].block[i] = NULL; map[m].block_mob[i] = NULL;
             }
         }
@@ -252,11 +258,17 @@ int sl_g_setmap(int m, const char *mapfile, const char *title,
         CALLOC(map[m].block_mob,  struct block_list *, map[m].bxs * map[m].bys);
         CALLOC(map[m].registry,   struct global_reg,   1000);
     }
-    while (!feof(fp)) {
-        fread(&buff, 2, 1, fp); map[m].tile[pos] = SWAP16(buff);
-        fread(&buff, 2, 1, fp); map[m].pass[pos] = SWAP16(buff);
-        fread(&buff, 2, 1, fp); map[m].obj[pos]  = SWAP16(buff);
-        if (++pos >= (unsigned int)(map[m].xs * map[m].ys)) break;
+    {
+        size_t total = (size_t)map[m].xs * map[m].ys;
+        while (pos < total) {
+            if (fread(&buff, 2, 1, fp) != 1) break;
+            map[m].tile[pos] = SWAP16(buff);
+            if (fread(&buff, 2, 1, fp) != 1) break;
+            map[m].pass[pos] = SWAP16(buff);
+            if (fread(&buff, 2, 1, fp) != 1) break;
+            map[m].obj[pos]  = SWAP16(buff);
+            pos++;
+        }
     }
     fclose(fp);
     map_loadregistry(m);
