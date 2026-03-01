@@ -53,26 +53,36 @@ pub fn make_cell_query_fn(lua: &mlua::Lua, variant: &str) -> mlua::Result<mlua::
 /// Create a `getObjectsInArea` / `getAliveObjectsInArea` / `getObjectsInSameMap` /
 /// `getAliveObjectsInSameMap` Lua method. Unlike `make_cell_query_fn`, these use
 /// the entity's own position (bl->m, bl->x, bl->y) rather than explicit coords.
-/// The `self_ptr` is the raw entity pointer captured at __index lookup time.
+/// The entity's stable numeric ID is captured at __index lookup time and re-resolved
+/// to a live pointer via `map_id2bl` on each invocation, so the closure never holds
+/// a dangling pointer if the C entity is freed between calls.
 /// Mirrors `bll_getobjects_area` / `bll_getaliveobjects_area` from scripting.c.
 pub fn make_area_query_fn(lua: &mlua::Lua, variant: &str, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
     let variant = variant.to_string();
+    // Extract the stable BL id now; the raw pointer may dangle after the entity is freed.
+    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
     lua.create_function(
         move |lua, (_self, bl_type): (mlua::Value, c_int)| {
             const MAX: usize = 512;
+            // Re-resolve the entity pointer on every call so we never use a dangling ptr.
+            let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+            if bl_ptr.is_null() {
+                return Ok(lua.create_table()?);
+            }
             let mut ptrs = vec![std::ptr::null_mut::<c_void>(); MAX];
-            let count = unsafe {
+            let raw_count = unsafe {
                 match variant.as_str() {
                     "getAliveObjectsInArea" =>
-                        sffi::sl_g_getaliveobjectsarea(self_ptr, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
+                        sffi::sl_g_getaliveobjectsarea(bl_ptr, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
                     "getObjectsInSameMap" =>
-                        sffi::sl_g_getobjectssamemap(self_ptr, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
+                        sffi::sl_g_getobjectssamemap(bl_ptr, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
                     "getAliveObjectsInSameMap" =>
-                        sffi::sl_g_getaliveobjectssamemap(self_ptr, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
+                        sffi::sl_g_getaliveobjectssamemap(bl_ptr, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
                     _ =>
-                        sffi::sl_g_getobjectsarea(self_ptr, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
+                        sffi::sl_g_getobjectsarea(bl_ptr, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
                 }
-            } as usize;
+            };
+            let count = (raw_count.max(0) as usize).min(MAX);
             let tbl = lua.create_table()?;
             for (i, &bl) in ptrs[..count].iter().enumerate() {
                 let val = unsafe {
@@ -186,9 +196,13 @@ pub fn make_msg_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua:
             _ => String::new(),
         };
         let target = a.get(3).map(|v| val_to_int(v)).unwrap_or(-1);
-        if let Ok(cs) = std::ffi::CString::new(msg.as_bytes()) {
-            unsafe { sffi::sl_g_msg(self_ptr, color, cs.as_ptr(), target); }
-        }
+        let cs = std::ffi::CString::new(msg.as_bytes()).map_err(|e| {
+            mlua::Error::RuntimeError(format!(
+                "msg: string contains interior NUL at byte {}",
+                e.nul_position()
+            ))
+        })?;
+        unsafe { sffi::sl_g_msg(self_ptr, color, cs.as_ptr(), target); }
         Ok(())
     }).map(mlua::Value::Function)
 }
@@ -285,9 +299,13 @@ pub fn make_sendparcel_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Resul
             _ => String::new(),
         };
         let npcflag  = a.get(7).map(|v| val_to_int(v)).unwrap_or(0);
-        if let Ok(cs) = std::ffi::CString::new(engrave.as_bytes()) {
-            unsafe { sffi::sl_g_sendparcel(self_ptr, receiver, sender, item, amount, owner, cs.as_ptr(), npcflag); }
-        }
+        let cs = std::ffi::CString::new(engrave.as_bytes()).map_err(|e| {
+            mlua::Error::RuntimeError(format!(
+                "sendParcel: engrave string contains interior NUL at byte {}",
+                e.nul_position()
+            ))
+        })?;
+        unsafe { sffi::sl_g_sendparcel(self_ptr, receiver, sender, item, amount, owner, cs.as_ptr(), npcflag); }
         Ok(())
     }).map(mlua::Value::Function)
 }
@@ -319,6 +337,10 @@ pub unsafe fn map_field(
     m: c_int,
     key: &str,
 ) -> Option<mlua::Result<mlua::Value>> {
+    // Reject negative indices and values that wrap when cast to u16 (e.g. -1 → 65535).
+    if !(0..=u16::MAX as c_int).contains(&m) {
+        return Some(Ok(mlua::Value::Nil));
+    }
     let mp: *mut MapData = get_map_ptr(m as u16);
 
     // Quick exit for unknown keys before touching the (possibly null) pointer.
