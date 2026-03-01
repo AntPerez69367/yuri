@@ -47,7 +47,7 @@ int sl_throw(struct block_list *bl, va_list ap) {
 
 /* sl_updatepeople is provided as a Rust #[no_mangle] symbol in ffi/scripting.rs */
 
-int sl_doscript_blargs(char *root, const char *method, int nargs, ...) {
+int sl_doscript_blargs(const char *root, const char *method, int nargs, ...) {
     struct block_list *args[16] = {0};
     va_list ap; va_start(ap, nargs);
     for (int i = 0; i < nargs && i < 16; i++)
@@ -56,7 +56,7 @@ int sl_doscript_blargs(char *root, const char *method, int nargs, ...) {
     return rust_sl_doscript_blargs_vec(root, method, nargs, args);
 }
 
-int sl_doscript_strings(char *root, const char *method, int nargs, ...) {
+int sl_doscript_strings(const char *root, const char *method, int nargs, ...) {
     const char *args[16] = {0};
     va_list ap; va_start(ap, nargs);
     for (int i = 0; i < nargs && i < 16; i++)

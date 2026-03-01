@@ -38,8 +38,8 @@ static inline int sl_reload(lua_State *L) {
     (void)L; return rust_sl_reload();
 }
 
-extern int   sl_doscript_blargs(char *root, const char *method, int nargs, ...);
-extern int   sl_doscript_strings(char *root, const char *method, int nargs, ...);
+extern int   sl_doscript_blargs(const char *root, const char *method, int nargs, ...);
+extern int   sl_doscript_strings(const char *root, const char *method, int nargs, ...);
 
 #define sl_doscript_stackargs(r,m,n)   rust_sl_doscript_stackargs(r,m,n)
 extern int   sl_updatepeople(struct block_list *bl, void *ap);
