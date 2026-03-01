@@ -9,6 +9,7 @@ pub mod types;
 use mlua::Lua;
 use std::ffi::{CStr, CString, c_char, c_int, c_uint};
 use std::os::raw::c_void;
+use std::sync::{Arc, atomic::{AtomicBool}};
 
 use crate::database::map_db::BlockList;
 use types::floor::FloorListObject;
@@ -87,7 +88,10 @@ macro_rules! ctor {
 fn register_types(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
     g.set("PC",       ctor!(lua, PcObject))?;
-    g.set("MOB",      ctor!(lua, MobObject))?;
+    g.set("MOB", lua.create_function(|_, v: mlua::Value| Ok(MobObject {
+        ptr: lua_val_to_ptr(v),
+        deleted: Arc::new(AtomicBool::new(false)),
+    }))?)?;
     g.set("NPC",      ctor!(lua, NpcObject))?;
 
     // Player — callable namespace table for PC scripts.
@@ -122,7 +126,7 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
             _ => std::ptr::null_mut(),
         };
         if ptr.is_null() { return Ok(mlua::Value::Nil); }
-        Ok(mlua::Value::UserData(lua.create_userdata(MobObject { ptr })?))
+        Ok(mlua::Value::UserData(lua.create_userdata(MobObject { ptr, deleted: Arc::new(AtomicBool::new(false)) })?))
     })?)?;
     mob_tbl.set_metatable(Some(mob_mt));
     g.set("Mob", mob_tbl)?;
@@ -257,7 +261,7 @@ pub(crate) unsafe fn bl_to_lua(lua: &Lua, bl: *mut c_void) -> mlua::Result<mlua:
     let bl_type = (*(bl as *const BlockList)).bl_type as c_int;
     match bl_type {
         ffi::BL_PC   => lua.pack(PcObject       { ptr: bl }),
-        ffi::BL_MOB  => lua.pack(MobObject      { ptr: bl }),
+        ffi::BL_MOB  => lua.pack(MobObject      { ptr: bl, deleted: Arc::new(AtomicBool::new(false)) }),
         ffi::BL_NPC  => lua.pack(NpcObject      { ptr: bl }),
         ffi::BL_ITEM => lua.pack(FloorListObject::new(bl)),
         other => {

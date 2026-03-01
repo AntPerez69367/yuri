@@ -1,6 +1,7 @@
 use mlua::{MetaMethod, UserData, UserDataMethods};
 use std::ffi::{c_char, c_float, c_int, c_uint, CString};
 use std::os::raw::c_void;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use crate::database::map_db::{BlockList, MapData};
 use crate::ffi::map_db::get_map_ptr;
@@ -18,6 +19,9 @@ use crate::game::scripting::types::shared;
 
 pub struct MobObject {
     pub ptr: *mut c_void,
+    /// Set to `true` by the `delete` Lua method after the C object is freed.
+    /// Future `__index` / `__newindex` calls check this flag and return early.
+    pub deleted: Arc<AtomicBool>,
 }
 // SAFETY: MobObject.ptr points to a MobSpawnData owned by the single-threaded Lua
 // scripting runtime. All Lua callbacks are invoked on the same game-server thread,
@@ -95,7 +99,7 @@ impl UserData for MobObject {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         // ── __index ─────────────────────────────────────────────────────────
         methods.add_meta_method(MetaMethod::Index, |lua, this, key: String| {
-            if this.ptr.is_null() {
+            if this.ptr.is_null() || this.deleted.load(Ordering::Acquire) {
                 return Ok(mlua::Value::Nil);
             }
             let mob = unsafe { &*(this.ptr as *const MobSpawnData) };
@@ -540,12 +544,14 @@ impl UserData for MobObject {
                 }
                 // delete() — remove mob from world and free its memory.
                 "delete" => {
+                    let deleted_flag = Arc::clone(&this.deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
                             if ptr.is_null() {
                                 return Ok(());
                             }
                             unsafe { sffi::sl_g_delete_bl(ptr); }
+                            deleted_flag.store(true, Ordering::Release);
                             Ok(())
                         }
                     )?));
@@ -775,7 +781,7 @@ impl UserData for MobObject {
                                     let id = unsafe { *spawned.add(i) };
                                     let bl = unsafe { sffi::map_id2bl(id) };
                                     if !bl.is_null() {
-                                        tbl.set(i + 1, lua.create_userdata(crate::game::scripting::types::mob::MobObject { ptr: bl })?)?;
+                                        tbl.set(i + 1, lua.create_userdata(crate::game::scripting::types::mob::MobObject { ptr: bl, deleted: Arc::new(AtomicBool::new(false)) })?)?;
                                     }
                                 }
                                 Ok(())
@@ -793,6 +799,9 @@ impl UserData for MobObject {
                             const MAX: usize = 4096;
                             let mut ptrs: Vec<*mut c_void> = vec![std::ptr::null_mut(); MAX];
                             let count = unsafe { sffi::sl_g_getusers(ptrs.as_mut_ptr(), MAX as c_int) } as usize;
+                            if count >= MAX {
+                                tracing::warn!("[scripting] getUsers: result capped at {MAX}; some players may be missing");
+                            }
                             let tbl = lua.create_table()?;
                             for (i, &bl) in ptrs[..count].iter().enumerate() {
                                 let val = unsafe {
@@ -822,7 +831,7 @@ impl UserData for MobObject {
         methods.add_meta_method(
             MetaMethod::NewIndex,
             |_, this, (key, val): (String, mlua::Value)| {
-                if this.ptr.is_null() {
+                if this.ptr.is_null() || this.deleted.load(Ordering::Acquire) {
                     return Ok(());
                 }
                 let mob = unsafe { &mut *(this.ptr as *mut MobSpawnData) };

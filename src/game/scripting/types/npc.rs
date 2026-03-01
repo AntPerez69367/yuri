@@ -1,5 +1,6 @@
 use std::ffi::{c_int, c_uint, CString};
 use std::os::raw::c_void;
+use std::sync::{Arc, atomic::AtomicBool};
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
 use crate::database::map_db::{BlockList, MapData};
@@ -279,7 +280,7 @@ impl UserData for NpcObject {
                                 let id = unsafe { *spawned.add(i) };
                                 let bl = unsafe { sffi::map_id2bl(id) };
                                 if !bl.is_null() {
-                                    tbl.set(i + 1, lua.create_userdata(MobObject { ptr: bl })?)?;
+                                    tbl.set(i + 1, lua.create_userdata(MobObject { ptr: bl, deleted: Arc::new(AtomicBool::new(false)) })?)?;
                                 }
                             }
                             unsafe { libc::free(spawned as *mut c_void) };
