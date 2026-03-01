@@ -52,7 +52,8 @@ extern int   sl_updatepeople(struct block_list *bl, void *ap);
 #define sl_resumesell(id, sd)          rust_sl_resumesell(id, sd)
 #define sl_async_freeco(u)             rust_sl_async_freeco(u)
 #define sl_doscript_simple(root,method,bl) sl_doscript_blargs(root, method, 1, bl)
-#define sl_runfunc(r,bl)               /* no-op until Phase 3 */
+#pragma message("sl_runfunc is a no-op until Phase 3 — search scripting.h to track sl_runfunc call sites")
+#define sl_runfunc(r,bl)               ((void)0)
 #define sl_exec(u,c)                   rust_sl_exec(u,c)
 
 /* pcl_* / mobl_* / npcl_* / fll_* declarations removed: scripting.c is now Rust */
