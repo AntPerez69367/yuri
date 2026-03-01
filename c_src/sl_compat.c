@@ -116,9 +116,11 @@ int sl_g_setwarps(int mm, int mx, int my, int tm_m, int tx, int ty) {
 /* --- Weather --- */
 int sl_g_getweather(unsigned char region, unsigned char indoor) {
     int x;
-    for (x = 0; x < 65535; x++)
+    for (x = 0; x < 65535; x++) {
+        if (!map_isloaded(x)) continue;
         if (map[x].region == region && map[x].indoor == indoor)
             return map[x].weather;
+    }
     return 0;
 }
 
@@ -181,6 +183,7 @@ int sl_g_savemap(int m, const char *path) {
     short val;
     int x, y;
     if (!path) return 0;
+    if (!map_isloaded(m)) return 0;
     fp = fopen(path, "wb");
     if (!fp) return 0;
     val = SWAP16(map[m].xs); fwrite(&val, 2, 1, fp);
@@ -811,11 +814,12 @@ void sl_mob_setduration(MOB *mob, const char *name, int time, unsigned int caste
     for (x = 0; x < MAX_MAGIC_TIMERS; x++) {
         mid = mob->da[x].id;
         if (mid == id && time <= 0 && mob->da[x].caster_id == caster_id && alreadycast == 1) {
+            unsigned int saved_caster_id = mob->da[x].caster_id;
             mob->da[x].duration = 0; mob->da[x].id = 0; mob->da[x].caster_id = 0;
             map_foreachinarea(clif_sendanimation, mob->bl.m, mob->bl.x, mob->bl.y,
                               AREA, BL_PC, mob->da[x].animation, &mob->bl, -1);
             mob->da[x].animation = 0;
-            if (mob->da[x].caster_id != mob->bl.id) bl = map_id2bl(mob->da[x].caster_id);
+            if (saved_caster_id != mob->bl.id) bl = map_id2bl(saved_caster_id);
             if (bl) sl_doscript_blargs(magicdb_yname(mid), "uncast", 2, &mob->bl, bl);
             else    sl_doscript_blargs(magicdb_yname(mid), "uncast", 1, &mob->bl);
             return;
