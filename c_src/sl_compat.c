@@ -212,7 +212,7 @@ int sl_g_setmap(int m, const char *mapfile, const char *title,
     fp = fopen(mapfile, "rb");
     if (!fp) { printf("MAP_ERR: Map file not found (%s).\n", mapfile); return -1; }
     old_blockcount = map[m].bxs * map[m].bys;
-    if (title) strcpy(map[m].title, title);
+    if (title) { strncpy(map[m].title, title, sizeof(map[m].title) - 1); map[m].title[sizeof(map[m].title) - 1] = '\0'; }
     map[m].bgm = bgm; map[m].bgmtype = bgmtype;
     map[m].pvp = pvp; map[m].spell = spell;
     map[m].light = light; map[m].weather = weather;
@@ -1654,8 +1654,10 @@ void sl_pc_addlegend(void *sd, const char *text, const char *name, int icon, int
     for (int x = 0; x < MAX_LEGENDS; x++) {
         if (strcasecmp(user->status.legends[x].name, "") == 0 &&
             (x + 1 >= MAX_LEGENDS || strcasecmp(user->status.legends[x + 1].name, "") == 0)) {
-            strcpy(user->status.legends[x].text, text ? text : "");
-            strcpy(user->status.legends[x].name, name ? name : "");
+            strncpy(user->status.legends[x].text, text ? text : "", sizeof(user->status.legends[x].text) - 1);
+            user->status.legends[x].text[sizeof(user->status.legends[x].text) - 1] = '\0';
+            strncpy(user->status.legends[x].name, name ? name : "", sizeof(user->status.legends[x].name) - 1);
+            user->status.legends[x].name[sizeof(user->status.legends[x].name) - 1] = '\0';
             user->status.legends[x].icon   = icon;
             user->status.legends[x].color  = color;
             user->status.legends[x].tchaid = tchaid;
