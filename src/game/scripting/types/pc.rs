@@ -512,6 +512,112 @@ extern "C" {
     fn sl_pc_haslegend(sd: *mut c_void, name: *const c_char) -> c_int;
     fn sl_pc_removelegendbyname(sd: *mut c_void, name: *const c_char);
     fn sl_pc_removelegendbycolor(sd: *mut c_void, color: c_int);
+    // Task 4: new attribute getters/setters
+    fn sl_pc_vregenoverflow(sd: *mut c_void) -> c_int;
+    fn sl_pc_set_vregenoverflow(sd: *mut c_void, v: c_int);
+    fn sl_pc_mregenoverflow(sd: *mut c_void) -> c_int;
+    fn sl_pc_set_mregenoverflow(sd: *mut c_void, v: c_int);
+    fn sl_pc_group_count(sd: *mut c_void) -> c_int;
+    fn sl_pc_set_group_count(sd: *mut c_void, v: c_int);
+    fn sl_pc_group_on(sd: *mut c_void) -> c_int;
+    fn sl_pc_set_group_on(sd: *mut c_void, v: c_int);
+    fn sl_pc_group_leader(sd: *mut c_void) -> c_int;
+    fn sl_pc_set_group_leader(sd: *mut c_void, v: c_int);
+    // Non-dialog method helpers — Task 8
+    fn sl_pc_additem(sd: *mut c_void, id: c_uint, amount: c_uint, dura: c_int, owner: c_uint, engrave: *const c_char);
+    fn sl_pc_getinventoryitem(sd: *mut c_void, slot: c_int) -> *mut c_void;
+    fn sl_pc_getequippeditem_sd(sd: *mut c_void, slot: c_int) -> *mut c_void;
+    fn sl_pc_removeitem(sd: *mut c_void, id: c_uint, amount: c_uint, typ: c_int, owner: c_uint, engrave: *const c_char);
+    fn sl_pc_removeitemdura(sd: *mut c_void, id: c_uint, amount: c_uint, typ: c_int);
+    fn sl_pc_hasitemdura(sd: *mut c_void, id: c_uint, amount: c_uint) -> c_int;
+    fn sl_pc_checkbankitems(sd: *mut c_void, slot: c_int) -> c_int;
+    fn sl_pc_checkbankamounts(sd: *mut c_void, slot: c_int) -> c_int;
+    fn sl_pc_checkbankowners(sd: *mut c_void, slot: c_int) -> c_int;
+    fn sl_pc_checkbankengraves(sd: *mut c_void, slot: c_int) -> *const c_char;
+    fn sl_pc_bankdeposit(sd: *mut c_void, item: c_uint, amount: c_uint, owner: c_uint, engrave: *const c_char);
+    fn sl_pc_bankwithdraw(sd: *mut c_void, item: c_uint, amount: c_uint, owner: c_uint, engrave: *const c_char);
+    fn sl_pc_bankcheckamount(sd: *mut c_void, item: c_uint, amount: c_uint, owner: c_uint, engrave: *const c_char) -> c_int;
+    fn sl_pc_getclanitems(sd: *mut c_void, slot: c_int) -> c_int;
+    fn sl_pc_getclanamounts(sd: *mut c_void, slot: c_int) -> c_int;
+    fn sl_pc_clanbankdeposit(sd: *mut c_void, item: c_int, amount: c_int);
+    fn sl_pc_clanbankwithdraw(sd: *mut c_void, item: c_int, amount: c_int);
+    fn sl_pc_checkclankitemamounts(sd: *mut c_void, item: c_int, amount: c_int) -> c_int;
+    fn sl_pc_getalldurations(sd: *mut c_void, out: *mut *mut c_char, max: c_int) -> c_int;
+    fn sl_pc_getspells(sd: *mut c_void, out: *mut c_int, max: c_int) -> c_int;
+    fn sl_pc_getspellnames(sd: *mut c_void, out: *mut *mut c_char, max: c_int) -> c_int;
+    fn sl_pc_getunknownspells(sd: *mut c_void, out: *mut c_int, max: c_int) -> c_int;
+    fn sl_pc_getlegend(sd: *mut c_void, name: *const c_char) -> *const c_char;
+    fn sl_pc_givexp(sd: *mut c_void, amount: c_int);
+    fn sl_pc_updatestate(sd: *mut c_void);
+    fn sl_pc_addmagic(sd: *mut c_void, amount: c_int);
+    fn sl_pc_addmanaextend(sd: *mut c_void, amount: c_int);
+    fn sl_pc_settimevalues(sd: *mut c_void);
+    fn sl_pc_setpk(sd: *mut c_void, id: c_int);
+    fn sl_pc_activespells(sd: *mut c_void, name: *const c_char) -> c_int;
+    fn sl_pc_getequippeddura(sd: *mut c_void, id: c_int, slot: c_int) -> c_int;
+    fn sl_pc_addhealth_extend(sd: *mut c_void, dmg: c_int, sleep: c_int, deduct: c_int, ac: c_int, ds: c_int, print: c_int);
+    fn sl_pc_removehealth_extend(sd: *mut c_void, dmg: c_int, sleep: c_int, deduct: c_int, ac: c_int, ds: c_int, print: c_int);
+    fn sl_pc_addhealth2(sd: *mut c_void, amount: c_int, typ: c_int);
+    fn sl_pc_removehealth_nodmgnum(sd: *mut c_void, dmg: c_int, typ: c_int);
+    fn sl_pc_addgold(sd: *mut c_void, amount: c_int);
+    fn sl_pc_removegold(sd: *mut c_void, amount: c_int);
+    fn sl_pc_logbuysell(sd: *mut c_void, item: c_int, amount: c_int, gold: c_int, flag: c_int);
+    fn sl_pc_calcthrow(sd: *mut c_void);
+    fn sl_pc_calcrangeddamage(sd: *mut c_void, bl: *mut c_void) -> c_int;
+    fn sl_pc_calcrangedhit(sd: *mut c_void, bl: *mut c_void) -> c_int;
+    fn sl_pc_gmmsg(sd: *mut c_void, msg: *const c_char);
+    fn sl_pc_broadcast_sd(sd: *mut c_void, msg: *const c_char, m: c_int);
+    fn sl_pc_killrank(sd: *mut c_void, mob_id: c_int) -> c_int;
+    fn sl_pc_getparcel(sd: *mut c_void) -> *mut c_void;
+    fn sl_pc_getparcellist(sd: *mut c_void, out: *mut *mut c_void, max: c_int) -> c_int;
+    fn sl_pc_removeparcel(sd: *mut c_void, sender: c_int, item: c_int, amount: c_int, pos: c_int, owner: c_int, engrave: *const c_char, npcflag: c_int);
+    fn sl_pc_expireitem(sd: *mut c_void);
+    fn sl_pc_addguide(sd: *mut c_void, guide: *const c_char);
+    fn sl_pc_delguide(sd: *mut c_void, guide: *const c_char);
+    fn sl_pc_getcreationitems(sd: *mut c_void, len: c_int, out: *mut c_int) -> c_int;
+    fn sl_pc_getcreationamounts(sd: *mut c_void, len: c_int, item_id: c_int) -> c_int;
+    // Coref accessor — Task 10
+    fn sl_user_set_coref(sd: *mut c_void, v: c_uint);
+}
+
+// ─── Task 10: async yield helpers ────────────────────────────────────────────
+
+fn lua_table_to_cstrings(tbl: &mlua::Table) -> mlua::Result<Vec<CString>> {
+    let mut out = Vec::new();
+    let len = tbl.raw_len();
+    for i in 1..=len {
+        let s: String = tbl.raw_get(i)?;
+        out.push(CString::new(s.as_bytes()).map_err(mlua::Error::external)?);
+    }
+    Ok(out)
+}
+
+fn lua_table_to_ints(tbl: &mlua::Table) -> mlua::Result<Vec<c_int>> {
+    let mut out = Vec::new();
+    let len = tbl.raw_len();
+    for i in 1..=len {
+        let v: i64 = tbl.raw_get(i)?;
+        out.push(v as c_int);
+    }
+    Ok(out)
+}
+
+fn cstring_ptrs(v: &[CString]) -> Vec<*const c_char> {
+    v.iter().map(|s| s.as_ptr()).collect()
+}
+
+/// Store the current Lua coroutine as the player's coref and yield.
+/// Must be called only from within a running Lua coroutine.
+///
+/// # Safety
+/// Accesses the raw lua_State* via sl_gstate. Valid only after sl_init().
+unsafe fn setup_coref_and_yield(sd: *mut c_void) -> c_int {
+    use mlua::ffi as lua_ffi;
+    let l = crate::game::scripting::sl_gstate as *mut lua_ffi::lua_State;
+    lua_ffi::lua_pushthread(l);
+    let coref = lua_ffi::luaL_ref(l, lua_ffi::LUA_REGISTRYINDEX);
+    sl_user_set_coref(sd, coref as c_uint);
+    lua_ffi::lua_yield(l, 0)
 }
 
 impl UserData for PcObject {
@@ -1531,9 +1637,457 @@ impl UserData for PcObject {
             }
             Ok(())
         });
+        methods.add_method("removeLegendbyName", |_, this, name: String| {
+            if let Ok(cs) = CString::new(name.as_bytes()) {
+                unsafe { sl_pc_removelegendbyname(this.ptr, cs.as_ptr()) };
+            }
+            Ok(())
+        });
         methods.add_method("removeLegendByColor", |_, this, color: c_int| {
             unsafe { sl_pc_removelegendbycolor(this.ptr, color) };
             Ok(())
         });
+        methods.add_method("removeLegendbyColor", |_, this, color: c_int| {
+            unsafe { sl_pc_removelegendbycolor(this.ptr, color) };
+            Ok(())
+        });
+
+        // ── Inventory ────────────────────────────────────────────────────────────
+        methods.add_method("addItem", |_, this, (id, amount, dura, owner, engrave): (c_int, c_int, c_int, c_int, String)| {
+            if let Ok(cs) = CString::new(engrave.as_bytes()) {
+                unsafe { sl_pc_additem(this.ptr, id as c_uint, amount as c_uint, dura, owner as c_uint, cs.as_ptr()) };
+            }
+            Ok(())
+        });
+        methods.add_method("getInventoryItem", |lua, this, slot: c_int| {
+            if slot < 0 || slot >= 52 { return Ok(mlua::Value::Nil); }
+            let ptr = unsafe { sl_pc_getinventoryitem(this.ptr, slot) };
+            if ptr.is_null() { return Ok(mlua::Value::Nil); }
+            Ok(mlua::Value::UserData(lua.create_userdata(
+                crate::game::scripting::types::item::BItemObject { ptr }
+            )?))
+        });
+        methods.add_method("getEquippedItem", |lua, this, slot: c_int| {
+            if slot < 0 || slot >= 15 { return Ok(mlua::Value::Nil); }
+            let ptr = unsafe { sl_pc_getequippeditem_sd(this.ptr, slot) };
+            if ptr.is_null() { return Ok(mlua::Value::Nil); }
+            Ok(mlua::Value::UserData(lua.create_userdata(
+                crate::game::scripting::types::item::BItemObject { ptr }
+            )?))
+        });
+        methods.add_method("removeItem", |_, this, (id, amount, typ): (c_int, c_int, c_int)| {
+            unsafe { sl_pc_removeitem(this.ptr, id as c_uint, amount as c_uint, typ, 0, std::ptr::null()) }; Ok(())
+        });
+        methods.add_method("removeItemDura", |_, this, (id, typ): (c_int, c_int)| {
+            unsafe { sl_pc_removeitemdura(this.ptr, id as c_uint, 1, typ) }; Ok(())
+        });
+        methods.add_method("hasItemDura", |_, this, (id, amount): (c_int, c_int)| {
+            Ok(unsafe { sl_pc_hasitemdura(this.ptr, id as c_uint, amount as c_uint) } != 0)
+        });
+
+        // ── Bank ─────────────────────────────────────────────────────────────────
+        methods.add_method("checkBankItems", |_, this, slot: c_int| {
+            if slot < 0 || slot >= 255 { return Ok(0i32); }
+            Ok(unsafe { sl_pc_checkbankitems(this.ptr, slot) })
+        });
+        methods.add_method("checkBankAmounts", |_, this, slot: c_int| {
+            if slot < 0 || slot >= 255 { return Ok(0i32); }
+            Ok(unsafe { sl_pc_checkbankamounts(this.ptr, slot) })
+        });
+        methods.add_method("checkBankOwners", |_, this, slot: c_int| {
+            if slot < 0 || slot >= 255 { return Ok(0i32); }
+            Ok(unsafe { sl_pc_checkbankowners(this.ptr, slot) })
+        });
+        methods.add_method("checkBankEngraves", |lua, this, slot: c_int| {
+            if slot < 0 || slot >= 255 { return Ok(mlua::Value::Nil); }
+            unsafe { cstr_to_lua(lua, sl_pc_checkbankengraves(this.ptr, slot)) }
+        });
+        methods.add_method("bankDeposit", |_, this, (item, amount, owner, engrave): (c_int, c_int, c_int, String)| {
+            if let Ok(cs) = CString::new(engrave.as_bytes()) {
+                unsafe { sl_pc_bankdeposit(this.ptr, item as c_uint, amount as c_uint, owner as c_uint, cs.as_ptr()) };
+            }
+            Ok(())
+        });
+        methods.add_method("bankWithdraw", |_, this, (item, amount, owner, engrave): (c_int, c_int, c_int, String)| {
+            if let Ok(cs) = CString::new(engrave.as_bytes()) {
+                unsafe { sl_pc_bankwithdraw(this.ptr, item as c_uint, amount as c_uint, owner as c_uint, cs.as_ptr()) };
+            }
+            Ok(())
+        });
+        methods.add_method("bankCheckAmount", |_, this, (item, amount, owner, engrave): (c_int, c_int, c_int, String)| {
+            let cs = CString::new(engrave.as_bytes()).ok();
+            Ok(cs.map_or(0, |c| unsafe { sl_pc_bankcheckamount(this.ptr, item as c_uint, amount as c_uint, owner as c_uint, c.as_ptr()) }))
+        });
+
+        // ── Clan bank ────────────────────────────────────────────────────────────
+        methods.add_method("getClanItems",         |_, this, slot: c_int| Ok(unsafe { sl_pc_getclanitems(this.ptr, slot) }));
+        methods.add_method("getClanAmounts",       |_, this, slot: c_int| Ok(unsafe { sl_pc_getclanamounts(this.ptr, slot) }));
+        methods.add_method("clanBankDeposit",      |_, this, (item, amount): (c_int, c_int)| { unsafe { sl_pc_clanbankdeposit(this.ptr, item, amount) }; Ok(()) });
+        methods.add_method("clanBankWithdraw",     |_, this, (item, amount): (c_int, c_int)| { unsafe { sl_pc_clanbankwithdraw(this.ptr, item, amount) }; Ok(()) });
+        methods.add_method("checkClanItemAmounts", |_, this, (item, amount): (c_int, c_int)| Ok(unsafe { sl_pc_checkclankitemamounts(this.ptr, item, amount) }));
+
+        // ── Spell lists ──────────────────────────────────────────────────────────
+        methods.add_method("getAllDurations", |lua, this, ()| {
+            const MAX: usize = 200;
+            let mut ptrs: Vec<*mut c_char> = vec![std::ptr::null_mut(); MAX];
+            let count = unsafe { sl_pc_getalldurations(this.ptr, ptrs.as_mut_ptr(), MAX as c_int) } as usize;
+            let tbl = lua.create_table()?;
+            for (i, &p) in ptrs[..count].iter().enumerate() {
+                if !p.is_null() {
+                    let s = unsafe { CStr::from_ptr(p).to_str().unwrap_or("") };
+                    tbl.raw_set(i + 1, s)?;
+                }
+            }
+            Ok(tbl)
+        });
+        methods.add_method("getSpells", |lua, this, ()| {
+            const MAX: usize = 52;
+            let mut ids: Vec<c_int> = vec![0; MAX];
+            let count = unsafe { sl_pc_getspells(this.ptr, ids.as_mut_ptr(), MAX as c_int) } as usize;
+            let tbl = lua.create_table()?;
+            for (i, &id) in ids[..count].iter().enumerate() { tbl.raw_set(i + 1, id as i64)?; }
+            Ok(tbl)
+        });
+        methods.add_method("getSpellName", |lua, this, ()| {
+            const MAX: usize = 52;
+            let mut ptrs: Vec<*mut c_char> = vec![std::ptr::null_mut(); MAX];
+            let count = unsafe { sl_pc_getspellnames(this.ptr, ptrs.as_mut_ptr(), MAX as c_int) } as usize;
+            let tbl = lua.create_table()?;
+            for (i, &p) in ptrs[..count].iter().enumerate() {
+                if !p.is_null() {
+                    let s = unsafe { CStr::from_ptr(p).to_str().unwrap_or("") };
+                    tbl.raw_set(i + 1, s)?;
+                }
+            }
+            Ok(tbl)
+        });
+        methods.add_method("getUnknownSpells", |lua, this, ()| {
+            const MAX: usize = 52;
+            let mut ids: Vec<c_int> = vec![0; MAX];
+            let count = unsafe { sl_pc_getunknownspells(this.ptr, ids.as_mut_ptr(), MAX as c_int) } as usize;
+            let tbl = lua.create_table()?;
+            for (i, &id) in ids[..count].iter().enumerate() { tbl.raw_set(i + 1, id as i64)?; }
+            Ok(tbl)
+        });
+
+        // ── Legends ──────────────────────────────────────────────────────────────
+        methods.add_method("getLegend", |lua, this, name: String| {
+            let cs = CString::new(name.as_bytes()).ok();
+            let p = cs.map_or(std::ptr::null(), |c| unsafe { sl_pc_getlegend(this.ptr, c.as_ptr()) });
+            unsafe { cstr_to_lua(lua, p) }
+        });
+
+        // ── Combat ───────────────────────────────────────────────────────────────
+        methods.add_method("giveXP",        |_, this, amount: c_int| { unsafe { sl_pc_givexp(this.ptr, amount) }; Ok(()) });
+        methods.add_method("updateState",   |_, this, ()| { unsafe { sl_pc_updatestate(this.ptr) }; Ok(()) });
+        methods.add_method("addMagic",      |_, this, amount: c_int| { unsafe { sl_pc_addmagic(this.ptr, amount) }; Ok(()) });
+        methods.add_method("addManaExtend", |_, this, amount: c_int| { unsafe { sl_pc_addmanaextend(this.ptr, amount) }; Ok(()) });
+        methods.add_method("setTimeValues", |_, this, ()| { unsafe { sl_pc_settimevalues(this.ptr) }; Ok(()) });
+        methods.add_method("setPK",         |_, this, id: c_int| { unsafe { sl_pc_setpk(this.ptr, id) }; Ok(()) });
+        methods.add_method("activeSpells",  |_, this, name: String| {
+            let cs = CString::new(name.as_bytes()).ok();
+            Ok(cs.map_or(0, |c| unsafe { sl_pc_activespells(this.ptr, c.as_ptr()) }) != 0)
+        });
+        methods.add_method("getEquippedDura", |_, this, (id, slot): (c_int, c_int)| {
+            Ok(unsafe { sl_pc_getequippeddura(this.ptr, id, slot) })
+        });
+        methods.add_method("addHealthExtend", |_, this, (dmg, sleep, deduct, ac, ds, print): (c_int, c_int, c_int, c_int, c_int, c_int)| {
+            unsafe { sl_pc_addhealth_extend(this.ptr, dmg, sleep, deduct, ac, ds, print) }; Ok(())
+        });
+        methods.add_method("removeHealthExtend", |_, this, (dmg, sleep, deduct, ac, ds, print): (c_int, c_int, c_int, c_int, c_int, c_int)| {
+            unsafe { sl_pc_removehealth_extend(this.ptr, dmg, sleep, deduct, ac, ds, print) }; Ok(())
+        });
+        methods.add_method("addHealth2", |_, this, (amount, typ): (c_int, c_int)| {
+            unsafe { sl_pc_addhealth2(this.ptr, amount, typ) }; Ok(())
+        });
+        methods.add_method("removeHealthWithoutDamageNumbers", |_, this, (dmg, typ): (c_int, c_int)| {
+            unsafe { sl_pc_removehealth_nodmgnum(this.ptr, dmg, typ) }; Ok(())
+        });
+
+        // ── Economy ──────────────────────────────────────────────────────────────
+        methods.add_method("addGold",    |_, this, amount: c_int| { unsafe { sl_pc_addgold(this.ptr, amount) }; Ok(()) });
+        methods.add_method("removeGold", |_, this, amount: c_int| { unsafe { sl_pc_removegold(this.ptr, amount) }; Ok(()) });
+        methods.add_method("logBuySell", |_, this, (item, amount, gold, flag): (c_int, c_int, c_int, c_int)| {
+            unsafe { sl_pc_logbuysell(this.ptr, item, amount, gold, flag) }; Ok(())
+        });
+
+        // ── Ranged ───────────────────────────────────────────────────────────────
+        methods.add_method("calcThrow", |_, this, ()| { unsafe { sl_pc_calcthrow(this.ptr) }; Ok(()) });
+        methods.add_method("calcRangedDamage", |_, this, bl: mlua::AnyUserData| {
+            let bl_ptr = extract_bl_ptr(&bl);
+            Ok(unsafe { sl_pc_calcrangeddamage(this.ptr, bl_ptr) })
+        });
+        methods.add_method("calcRangedHit", |_, this, bl: mlua::AnyUserData| {
+            let bl_ptr = extract_bl_ptr(&bl);
+            Ok(unsafe { sl_pc_calcrangedhit(this.ptr, bl_ptr) })
+        });
+
+        // ── Misc ─────────────────────────────────────────────────────────────────
+        methods.add_method("gmMsg", |_, this, msg: String| {
+            if let Ok(cs) = CString::new(msg.as_bytes()) {
+                unsafe { sl_pc_gmmsg(this.ptr, cs.as_ptr()) };
+            }
+            Ok(())
+        });
+        methods.add_method("broadcast", |_, this, (msg, m): (String, c_int)| {
+            if let Ok(cs) = CString::new(msg.as_bytes()) {
+                unsafe { sl_pc_broadcast_sd(this.ptr, cs.as_ptr(), m) };
+            }
+            Ok(())
+        });
+        methods.add_method("killRank", |_, this, mob_id: c_int| Ok(unsafe { sl_pc_killrank(this.ptr, mob_id) }));
+        methods.add_method("getParcel", |lua, this, ()| {
+            let ptr = unsafe { sl_pc_getparcel(this.ptr) };
+            if ptr.is_null() { return Ok(mlua::Value::Nil); }
+            Ok(mlua::Value::UserData(lua.create_userdata(
+                crate::game::scripting::types::item::ParcelObject { ptr }
+            )?))
+        });
+        methods.add_method("getParcelList", |lua, this, ()| {
+            const MAX: usize = 64;
+            let mut ptrs: Vec<*mut c_void> = vec![std::ptr::null_mut(); MAX];
+            let count = unsafe { sl_pc_getparcellist(this.ptr, ptrs.as_mut_ptr(), MAX as c_int) } as usize;
+            let tbl = lua.create_table()?;
+            for (i, &p) in ptrs[..count].iter().enumerate() {
+                if !p.is_null() {
+                    tbl.raw_set(i + 1, lua.create_userdata(
+                        crate::game::scripting::types::item::ParcelObject { ptr: p }
+                    )?)?;
+                }
+            }
+            Ok(tbl)
+        });
+        methods.add_method("removeParcel", |_, this, (sender, item, amount, pos, owner, engrave, npcflag): (c_int, c_int, c_int, c_int, c_int, String, c_int)| {
+            if let Ok(cs) = CString::new(engrave.as_bytes()) {
+                unsafe { sl_pc_removeparcel(this.ptr, sender, item, amount, pos, owner, cs.as_ptr(), npcflag) };
+            }
+            Ok(())
+        });
+        methods.add_method("expireItem", |_, this, ()| { unsafe { sl_pc_expireitem(this.ptr) }; Ok(()) });
+        methods.add_method("addGuide", |_, this, guide: String| {
+            if let Ok(cs) = CString::new(guide.as_bytes()) { unsafe { sl_pc_addguide(this.ptr, cs.as_ptr()) }; }
+            Ok(())
+        });
+        methods.add_method("delGuide", |_, this, guide: String| {
+            if let Ok(cs) = CString::new(guide.as_bytes()) { unsafe { sl_pc_delguide(this.ptr, cs.as_ptr()) }; }
+            Ok(())
+        });
+        methods.add_method("mapSelection", |_, _this, _: mlua::MultiValue| Ok(mlua::Value::Nil));
+        methods.add_method("getCreationItems", |lua, this, len: c_int| {
+            let max = (len.max(0) as usize).min(52);
+            let mut out: Vec<c_int> = vec![0; max.max(1)];
+            let count = unsafe { sl_pc_getcreationitems(this.ptr, len, out.as_mut_ptr()) } as usize;
+            let tbl = lua.create_table()?;
+            for (i, &v) in out[..count.min(max)].iter().enumerate() { tbl.raw_set(i + 1, v as i64)?; }
+            Ok(tbl)
+        });
+        methods.add_method("getCreationAmounts", |_, this, (len, item_id): (c_int, c_int)| {
+            Ok(unsafe { sl_pc_getcreationamounts(this.ptr, len, item_id) })
+        });
+
+        // ── Async dialog methods — Task 10 ───────────────────────────────────
+        methods.add_method("input", |_, this, msg: String| {
+            let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            unsafe {
+                sffi::sl_pc_input_send(this.ptr, cs.as_ptr());
+                setup_coref_and_yield(this.ptr);
+            }
+            Ok(mlua::Value::Nil)
+        });
+
+        methods.add_method("dialog", |_, this, (msg, gfx_tbl): (String, mlua::Table)| {
+            let gfx = lua_table_to_ints(&gfx_tbl)?;
+            let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            unsafe {
+                sffi::sl_pc_dialog_send(this.ptr, cs.as_ptr(), gfx.as_ptr(), gfx.len() as c_int);
+                setup_coref_and_yield(this.ptr);
+            }
+            Ok(mlua::Value::Nil)
+        });
+
+        methods.add_method("dialogSeq", |_, this, (entries_tbl, can_continue): (mlua::Table, bool)| {
+            let strs = lua_table_to_cstrings(&entries_tbl)?;
+            let ptrs = cstring_ptrs(&strs);
+            unsafe {
+                sffi::sl_pc_dialogseq_send(this.ptr, ptrs.as_ptr(), ptrs.len() as c_int, can_continue as c_int);
+                setup_coref_and_yield(this.ptr);
+            }
+            Ok(mlua::Value::Nil)
+        });
+
+        methods.add_method("menu", |_, this, (msg, opts_tbl): (String, mlua::Table)| {
+            let strs = lua_table_to_cstrings(&opts_tbl)?;
+            let ptrs = cstring_ptrs(&strs);
+            let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            unsafe {
+                sffi::sl_pc_menu_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int);
+                setup_coref_and_yield(this.ptr);
+            }
+            Ok(mlua::Value::Nil)
+        });
+
+        methods.add_method("menuSeq", |_, this, (msg, opts_tbl): (String, mlua::Table)| {
+            let strs = lua_table_to_cstrings(&opts_tbl)?;
+            let ptrs = cstring_ptrs(&strs);
+            let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            unsafe {
+                sffi::sl_pc_menuseq_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int);
+                setup_coref_and_yield(this.ptr);
+            }
+            Ok(mlua::Value::Nil)
+        });
+
+        methods.add_method("menuString", |_, this, (msg, opts_tbl): (String, mlua::Table)| {
+            let strs = lua_table_to_cstrings(&opts_tbl)?;
+            let ptrs = cstring_ptrs(&strs);
+            let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            unsafe {
+                sffi::sl_pc_menustring_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int);
+                setup_coref_and_yield(this.ptr);
+            }
+            Ok(mlua::Value::Nil)
+        });
+
+        methods.add_method("menuString2", |_, this, (msg, opts_tbl): (String, mlua::Table)| {
+            let strs = lua_table_to_cstrings(&opts_tbl)?;
+            let ptrs = cstring_ptrs(&strs);
+            let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            unsafe {
+                sffi::sl_pc_menustring2_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int);
+                setup_coref_and_yield(this.ptr);
+            }
+            Ok(mlua::Value::Nil)
+        });
+
+        methods.add_method("buy", |_, this, (msg, items_tbl, values_tbl, dn_tbl, bt_tbl):
+            (String, mlua::Table, mlua::Table, mlua::Table, mlua::Table)| {
+            let items  = lua_table_to_ints(&items_tbl)?;
+            let values = lua_table_to_ints(&values_tbl)?;
+            let dn     = lua_table_to_cstrings(&dn_tbl)?;
+            let bt     = lua_table_to_cstrings(&bt_tbl)?;
+            let dn_p   = cstring_ptrs(&dn);
+            let bt_p   = cstring_ptrs(&bt);
+            let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            unsafe {
+                sffi::sl_pc_buy_send(this.ptr, cs.as_ptr(),
+                    items.as_ptr(), values.as_ptr(),
+                    dn_p.as_ptr(), bt_p.as_ptr(), items.len() as c_int);
+                setup_coref_and_yield(this.ptr);
+            }
+            Ok(mlua::Value::Nil)
+        });
+
+        methods.add_method("buyDialog", |_, this, (msg, items_tbl): (String, mlua::Table)| {
+            let items = lua_table_to_ints(&items_tbl)?;
+            let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            unsafe {
+                sffi::sl_pc_buydialog_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as c_int);
+                setup_coref_and_yield(this.ptr);
+            }
+            Ok(mlua::Value::Nil)
+        });
+
+        methods.add_method("buyExtend", |_, this, (msg, items_tbl, prices_tbl, max_tbl):
+            (String, mlua::Table, mlua::Table, mlua::Table)| {
+            let items  = lua_table_to_ints(&items_tbl)?;
+            let prices = lua_table_to_ints(&prices_tbl)?;
+            let maxs   = lua_table_to_ints(&max_tbl)?;
+            let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            unsafe {
+                sffi::sl_pc_buyextend_send(this.ptr, cs.as_ptr(),
+                    items.as_ptr(), prices.as_ptr(), maxs.as_ptr(), items.len() as c_int);
+                setup_coref_and_yield(this.ptr);
+            }
+            Ok(mlua::Value::Nil)
+        });
+
+        methods.add_method("sell", |_, this, (msg, items_tbl): (String, mlua::Table)| {
+            let items = lua_table_to_ints(&items_tbl)?;
+            let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            unsafe {
+                sffi::sl_pc_sell_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as c_int);
+                setup_coref_and_yield(this.ptr);
+            }
+            Ok(mlua::Value::Nil)
+        });
+
+        methods.add_method("sell2", |_, this, (msg, items_tbl): (String, mlua::Table)| {
+            let items = lua_table_to_ints(&items_tbl)?;
+            let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            unsafe {
+                sffi::sl_pc_sell2_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as c_int);
+                setup_coref_and_yield(this.ptr);
+            }
+            Ok(mlua::Value::Nil)
+        });
+
+        methods.add_method("sellExtend", |_, this, (msg, items_tbl): (String, mlua::Table)| {
+            let items = lua_table_to_ints(&items_tbl)?;
+            let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            unsafe {
+                sffi::sl_pc_sellextend_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as c_int);
+                setup_coref_and_yield(this.ptr);
+            }
+            Ok(mlua::Value::Nil)
+        });
+
+        methods.add_method("showBank", |_, this, msg: String| {
+            let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            unsafe { sffi::sl_pc_showbank_send(this.ptr, cs.as_ptr()); setup_coref_and_yield(this.ptr); }
+            Ok(mlua::Value::Nil)
+        });
+        methods.add_method("showBankAdd", |_, this, ()| {
+            unsafe { sffi::sl_pc_showbankadd_send(this.ptr); setup_coref_and_yield(this.ptr); }
+            Ok(mlua::Value::Nil)
+        });
+        methods.add_method("bankAddMoney", |_, this, ()| {
+            unsafe { sffi::sl_pc_bankaddmoney_send(this.ptr); setup_coref_and_yield(this.ptr); }
+            Ok(mlua::Value::Nil)
+        });
+        methods.add_method("bankWithdrawMoney", |_, this, ()| {
+            unsafe { sffi::sl_pc_bankwithdrawmoney_send(this.ptr); setup_coref_and_yield(this.ptr); }
+            Ok(mlua::Value::Nil)
+        });
+        methods.add_method("clanShowBank", |_, this, msg: String| {
+            let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            unsafe { sffi::sl_pc_clanshowbank_send(this.ptr, cs.as_ptr()); setup_coref_and_yield(this.ptr); }
+            Ok(mlua::Value::Nil)
+        });
+        methods.add_method("clanShowBankAdd", |_, this, ()| {
+            unsafe { sffi::sl_pc_clanshowbankadd_send(this.ptr); setup_coref_and_yield(this.ptr); }
+            Ok(mlua::Value::Nil)
+        });
+        methods.add_method("clanBankAddMoney", |_, this, ()| {
+            unsafe { sffi::sl_pc_clanbankaddmoney_send(this.ptr); setup_coref_and_yield(this.ptr); }
+            Ok(mlua::Value::Nil)
+        });
+        methods.add_method("clanBankWithdrawMoney", |_, this, ()| {
+            unsafe { sffi::sl_pc_clanbankwithdrawmoney_send(this.ptr); setup_coref_and_yield(this.ptr); }
+            Ok(mlua::Value::Nil)
+        });
+        methods.add_method("clanViewBank", |_, this, ()| {
+            unsafe { sffi::sl_pc_clanviewbank_send(this.ptr); setup_coref_and_yield(this.ptr); }
+            Ok(mlua::Value::Nil)
+        });
+        methods.add_method("repairExtend", |_, this, ()| {
+            unsafe { sffi::sl_pc_repairextend_send(this.ptr); setup_coref_and_yield(this.ptr); }
+            Ok(mlua::Value::Nil)
+        });
+        methods.add_method("repairAll", |_, this, npc_bl: mlua::AnyUserData| {
+            let npc_ptr = if let Ok(npc) = npc_bl.borrow::<crate::game::scripting::types::npc::NpcObject>() {
+                npc.ptr
+            } else {
+                std::ptr::null_mut()
+            };
+            unsafe { sffi::sl_pc_repairall_send(this.ptr, npc_ptr); setup_coref_and_yield(this.ptr); }
+            Ok(mlua::Value::Nil)
+        });
     }
+}
+
+fn extract_bl_ptr(ud: &mlua::AnyUserData) -> *mut c_void {
+    if let Ok(pc) = ud.borrow::<PcObject>() { return pc.ptr; }
+    if let Ok(mob) = ud.borrow::<crate::game::scripting::types::mob::MobObject>() { return mob.ptr; }
+    if let Ok(npc) = ud.borrow::<crate::game::scripting::types::npc::NpcObject>() { return npc.ptr; }
+    std::ptr::null_mut()
 }
