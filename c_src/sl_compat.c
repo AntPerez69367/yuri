@@ -375,13 +375,16 @@ int sl_g_getofflineid(const char *name) {
 
 /* --- MapModifiers --- */
 int sl_g_addmapmodifier(unsigned int mapid, const char *modifier, int value) {
-    char esc[255];
-    Sql_EscapeStringLen(sql_handle, esc, modifier, strlen(modifier));
+    size_t modlen = modifier ? strlen(modifier) : 0;
+    char *esc = (char *)malloc(2 * modlen + 1);
+    if (!esc) return 0;
+    Sql_EscapeStringLen(sql_handle, esc, modifier ? modifier : "", modlen);
     if (SQL_ERROR == Sql_Query(sql_handle,
         "INSERT INTO `MapModifiers` (`ModMapId`,`ModModifier`,`ModValue`) "
         "VALUES('%u','%s','%d')", mapid, esc, value)) {
-        Sql_ShowDebug(sql_handle); return 0;
+        Sql_ShowDebug(sql_handle); free(esc); return 0;
     }
+    free(esc);
     return 1;
 }
 
@@ -2074,10 +2077,12 @@ void sl_g_sendparcel(void *bl_ptr, int receiver, int sender,
     int pos    = -1;
     int newest = -1;
     int x;
-    char escape[255];
+    size_t engrave_len = engrave ? strlen(engrave) : 0;
+    char *escape = (char *)malloc(engrave_len * 2 + 1);
+    if (!escape) return;
 
     SqlStmt *stmt = SqlStmt_Malloc(sql_handle);
-    if (!stmt) { Sql_ShowDebug(sql_handle); return; }
+    if (!stmt) { Sql_ShowDebug(sql_handle); free(escape); return; }
 
     if (SQL_ERROR == SqlStmt_Prepare(stmt,
             "SELECT `ParPosition` FROM `Parcels` WHERE `ParChaIdDestination` = '%u'",
@@ -2086,6 +2091,7 @@ void sl_g_sendparcel(void *bl_ptr, int receiver, int sender,
         SQL_ERROR == SqlStmt_BindColumn(stmt, 0, SQLDT_INT, &pos, 0, NULL, NULL)) {
         SqlStmt_ShowDebug(stmt);
         SqlStmt_Free(stmt);
+        free(escape);
         return;
     }
 
@@ -2111,6 +2117,7 @@ void sl_g_sendparcel(void *bl_ptr, int receiver, int sender,
             (unsigned int)itemdb_dura((unsigned int)item))) {
         Sql_ShowDebug(sql_handle);
     }
+    free(escape);
 }
 
 /* throwBlock — send throw animation from bl's position to (x,y).
