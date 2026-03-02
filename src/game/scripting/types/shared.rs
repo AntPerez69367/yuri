@@ -59,6 +59,9 @@ pub fn make_cell_query_fn(lua: &mlua::Lua, variant: &str) -> mlua::Result<mlua::
 /// a dangling pointer if the C entity is freed between calls.
 /// Mirrors `bll_getobjects_area` / `bll_getaliveobjects_area` from scripting.c.
 pub fn make_area_query_fn(lua: &mlua::Lua, variant: &str, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+    if self_ptr.is_null() {
+        return Err(mlua::Error::external("null self_ptr in make_area_query_fn"));
+    }
     let variant = variant.to_string();
     // Extract the stable BL id now; the raw pointer may dangle after the entity is freed.
     let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
@@ -160,8 +163,19 @@ fn val_to_item_id(v: &mlua::Value) -> c_int {
     }
 }
 
+/// Safely extract the stable BL entity id from a raw pointer at factory-creation time.
+/// Returns `None` if `ptr` is null, avoiding unsafe dereference of a null pointer.
+fn extract_entity_id(ptr: *mut c_void) -> Option<c_uint> {
+    if ptr.is_null() {
+        return None;
+    }
+    Some(unsafe { (*(ptr as *mut BlockList)).id })
+}
+
 pub fn make_sendanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
-    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
+    let Some(entity_id) = extract_entity_id(self_ptr) else {
+        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
+    };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let anim  = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -174,7 +188,9 @@ pub fn make_sendanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Re
 }
 
 pub fn make_playsound_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
-    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
+    let Some(entity_id) = extract_entity_id(self_ptr) else {
+        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
+    };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let sound = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -186,7 +202,9 @@ pub fn make_playsound_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result
 }
 
 pub fn make_sendaction_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
-    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
+    let Some(entity_id) = extract_entity_id(self_ptr) else {
+        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
+    };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let action = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -199,7 +217,9 @@ pub fn make_sendaction_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Resul
 }
 
 pub fn make_msg_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
-    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
+    let Some(entity_id) = extract_entity_id(self_ptr) else {
+        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
+    };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let color  = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -222,7 +242,9 @@ pub fn make_msg_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua:
 }
 
 pub fn make_dropitem_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
-    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
+    let Some(entity_id) = extract_entity_id(self_ptr) else {
+        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
+    };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let item   = a.get(1).map(|v| val_to_item_id(v)).unwrap_or(0);
@@ -236,7 +258,9 @@ pub fn make_dropitem_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<
 }
 
 pub fn make_dropitemxy_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
-    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
+    let Some(entity_id) = extract_entity_id(self_ptr) else {
+        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
+    };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let item   = a.get(1).map(|v| val_to_item_id(v)).unwrap_or(0);
@@ -253,7 +277,9 @@ pub fn make_dropitemxy_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Resul
 }
 
 pub fn make_objectcanmove_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
-    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
+    let Some(entity_id) = extract_entity_id(self_ptr) else {
+        return lua.create_function(|_, _: mlua::MultiValue| Ok(false)).map(mlua::Value::Function);
+    };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let x    = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -266,7 +292,9 @@ pub fn make_objectcanmove_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Re
 }
 
 pub fn make_objectcanmovefrom_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
-    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
+    let Some(entity_id) = extract_entity_id(self_ptr) else {
+        return lua.create_function(|_, _: mlua::MultiValue| Ok(false)).map(mlua::Value::Function);
+    };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let x    = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -279,7 +307,9 @@ pub fn make_objectcanmovefrom_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua
 }
 
 pub fn make_repeatanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
-    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
+    let Some(entity_id) = extract_entity_id(self_ptr) else {
+        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
+    };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let anim     = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -292,7 +322,9 @@ pub fn make_repeatanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::
 }
 
 pub fn make_selfanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
-    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
+    let Some(entity_id) = extract_entity_id(self_ptr) else {
+        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
+    };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let target = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -306,7 +338,9 @@ pub fn make_selfanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Re
 }
 
 pub fn make_selfanimationxy_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
-    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
+    let Some(entity_id) = extract_entity_id(self_ptr) else {
+        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
+    };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let target = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -322,7 +356,9 @@ pub fn make_selfanimationxy_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::
 }
 
 pub fn make_sendparcel_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
-    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
+    let Some(entity_id) = extract_entity_id(self_ptr) else {
+        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
+    };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let receiver = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -349,7 +385,9 @@ pub fn make_sendparcel_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Resul
 }
 
 pub fn make_throwblock_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
-    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
+    let Some(entity_id) = extract_entity_id(self_ptr) else {
+        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
+    };
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let x      = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -443,6 +481,9 @@ pub unsafe fn map_field(
 /// # Safety
 /// Dereferences `gfx`.
 pub unsafe fn gfx_read(lua: &mlua::Lua, gfx: *const GfxViewer, key: &str) -> Option<mlua::Result<mlua::Value>> {
+    if gfx.is_null() {
+        return None;
+    }
     macro_rules! int {
         ($e:expr) => { Some(Ok(mlua::Value::Integer($e as i64))) };
     }
@@ -490,6 +531,9 @@ pub unsafe fn gfx_read(lua: &mlua::Lua, gfx: *const GfxViewer, key: &str) -> Opt
 /// # Safety
 /// Dereferences `gfx`.
 pub unsafe fn gfx_write(gfx: *mut GfxViewer, key: &str, val: c_int, str_val: Option<&[u8]>) -> bool {
+    if gfx.is_null() {
+        return false;
+    }
     match key {
         "gfxWeap"      => { (*gfx).weapon      = val as u16; true }
         "gfxWeapC"     => { (*gfx).cweapon     = val as u8;  true }
