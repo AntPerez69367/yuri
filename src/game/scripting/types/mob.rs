@@ -672,7 +672,7 @@ impl UserData for MobObject {
                 "owner" => int!(mob.owner),
                 "sleep" => Ok(mlua::Value::Number(mob.sleep as f64)),
                 "target" => int!(mob.target),
-                "confusedTarget" => int!(mob.confused_target),
+                "confusedTarget" | "confuseTarget" => int!(mob.confused_target),
                 "deduction" => Ok(mlua::Value::Number(mob.deduction as f64)),
                 "damage" => Ok(mlua::Value::Number(mob.damage as f64)),
                 "crit" => int!(mob.crit),
