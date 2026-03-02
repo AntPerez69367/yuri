@@ -4338,7 +4338,7 @@ pub unsafe extern "C" fn rust_pc_warp(
     let oldmap = (*sd).bl.m as c_int;
 
     if m < 0 { m = 0; }
-    if m > MAX_MAP_PER_SERVER { m = MAX_MAP_PER_SERVER; }
+    if m >= MAX_MAP_PER_SERVER { m = MAX_MAP_PER_SERVER - 1; }
 
     // If the target map is not loaded on this server, hand off to the right server.
     if !map_is_loaded(m as u16) {
