@@ -116,7 +116,7 @@ impl UserData for RegObject {
                 return Err(mlua::Error::external("RegObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            let val = unsafe { sffi::pc_readglobalreg(this.ptr, ckey.as_ptr()) };
+            let val = unsafe { sffi::rust_pc_readglobalreg(this.ptr, ckey.as_ptr()) };
             Ok(val)
         });
         methods.add_meta_method(MetaMethod::NewIndex, |_, this, (key, val): (String, mlua::Value)| {
@@ -124,7 +124,7 @@ impl UserData for RegObject {
                 return Err(mlua::Error::external("RegObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            unsafe { sffi::pc_setglobalreg(this.ptr, ckey.as_ptr(), val_to_ulong(&val)?); }
+            unsafe { sffi::rust_pc_setglobalreg(this.ptr, ckey.as_ptr(), val_to_ulong(&val)?); }
             Ok(())
         });
     }
@@ -140,7 +140,7 @@ impl UserData for RegStringObject {
                 return Err(mlua::Error::external("RegStringObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            let raw = unsafe { sffi::pc_readglobalregstring(this.ptr, ckey.as_ptr()) };
+            let raw = unsafe { sffi::rust_pc_readglobalregstring(this.ptr, ckey.as_ptr()) };
             let s = if raw.is_null() {
                 String::new()
             } else {
@@ -161,7 +161,7 @@ impl UserData for RegStringObject {
             };
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
             let cval = CString::new(sval).map_err(mlua::Error::external)?;
-            unsafe { sffi::pc_setglobalregstring(this.ptr, ckey.as_ptr(), cval.as_ptr()); }
+            unsafe { sffi::rust_pc_setglobalregstring(this.ptr, ckey.as_ptr(), cval.as_ptr()); }
             Ok(())
         });
     }
@@ -267,7 +267,7 @@ impl UserData for QuestRegObject {
                 return Err(mlua::Error::external("QuestRegObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            let val = unsafe { sffi::pc_readquestreg(this.ptr, ckey.as_ptr()) };
+            let val = unsafe { sffi::rust_pc_readquestreg(this.ptr, ckey.as_ptr()) };
             Ok(val)
         });
         methods.add_meta_method(MetaMethod::NewIndex, |_, this, (key, val): (String, mlua::Value)| {
@@ -275,7 +275,7 @@ impl UserData for QuestRegObject {
                 return Err(mlua::Error::external("QuestRegObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            unsafe { sffi::pc_setquestreg(this.ptr, ckey.as_ptr(), val_to_int(&val)?); }
+            unsafe { sffi::rust_pc_setquestreg(this.ptr, ckey.as_ptr(), val_to_int(&val)?); }
             Ok(())
         });
     }

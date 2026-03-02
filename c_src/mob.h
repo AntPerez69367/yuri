@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdio.h>
+
 #include "map_server.h"
 
 enum { MOB_ALIVE, MOB_DEAD, MOB_PARA, MOB_BLIND, MOB_HIT, MOB_ESCAPE };
@@ -61,13 +63,39 @@ static inline int mob_calcstat(MOB* m)                  { return rust_mob_calcst
 
 // ─── C helpers that stay in mob.c ────────────────────────────────────────────
 int mobdb_init(void);
-int mob_find_target(struct block_list*, va_list);
-int mob_attack(MOB*, int);
-int mob_calc_critical(MOB*, USER*);
-int mob_move(struct block_list*, va_list);
-int mobdb_dropitem(unsigned int, unsigned int, int, int, int, int, int, int,
-                   int, USER*);
 void mob_free_helper(MOB*);
+
+// ─── USER-dependent mob functions — implemented in Rust (src/game/mob.rs) ────
+int rust_mob_addtocurrent(struct block_list*, ...);
+int rust_mob_dropitem(unsigned int, unsigned int, int, int, int, int, int, int,
+                      int, USER*);
+int rust_mob_find_target(struct block_list*, ...);
+int rust_mob_attack(MOB*, int);
+int rust_mob_calc_critical(MOB*, USER*);
+int rust_mob_move(struct block_list*, ...);
+
+static inline int mob_addtocurrent(struct block_list* bl, ...) {
+  fprintf(stderr, "[mob] mob_addtocurrent called from C wrapper (bl=%p); "
+          "use rust_mob_addtocurrent via map_foreachincell instead\n", (void*)bl);
+  abort();
+}
+static inline int mob_find_target(struct block_list* bl, ...) {
+  fprintf(stderr, "[mob] mob_find_target called from C wrapper (bl=%p); "
+          "use rust_mob_find_target via map_foreachincell instead\n", (void*)bl);
+  abort();
+}
+static inline int mob_move(struct block_list* bl, ...) {
+  fprintf(stderr, "[mob] mob_move called from C wrapper (bl=%p); "
+          "use rust_move_mob/rust_mob_move via map_foreachincell instead\n", (void*)bl);
+  abort();
+}
+static inline int mob_attack(MOB* m, int id)             { return rust_mob_attack(m, id); }
+static inline int mob_calc_critical(MOB* m, USER* sd)    { return rust_mob_calc_critical(m, sd); }
+static inline int mobdb_dropitem(unsigned int blockid, unsigned int id, int amount,
+                                 int dura, int protected_, int owner,
+                                 int m, int x, int y, USER* sd) {
+  return rust_mob_dropitem(blockid, id, amount, dura, protected_, owner, m, x, y, sd);
+}
 
 // ─── mob_respawn_nousers — inline wrapper (no public Rust FFI needed) ─────────
 // Called only from mob game logic; Rust exposes it via rust_mob_respawn_getstats chain.
