@@ -6848,9 +6848,9 @@ int mobl_checkmove(lua_State *state, void *self) {
     }
   }
 
-  map_foreachincell(mob_move, m, dx, dy, BL_MOB, mob);
-  map_foreachincell(mob_move, m, dx, dy, BL_PC, mob);
-  map_foreachincell(mob_move, m, dx, dy, BL_NPC, mob);
+  map_foreachincell(rust_mob_move, m, dx, dy, BL_MOB, mob);
+  map_foreachincell(rust_mob_move, m, dx, dy, BL_PC, mob);
+  map_foreachincell(rust_mob_move, m, dx, dy, BL_NPC, mob);
 
   if (clif_object_canmove(m, dx, dy, direction)) {
     lua_pushboolean(state, 0);

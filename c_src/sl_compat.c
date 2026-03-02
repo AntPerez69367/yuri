@@ -801,9 +801,9 @@ int sl_mob_checkmove(MOB *mob) {
     if (dy >= map[m].ys) dy = map[m].ys - 1;
     for (i = map[m].warp[dx/BLOCK_SIZE + (dy/BLOCK_SIZE)*map[m].bxs]; i; i = i->next)
         if (i->x == dx && i->y == dy) return 0;
-    map_foreachincell(mob_move, m, dx, dy, BL_MOB, mob);
-    map_foreachincell(mob_move, m, dx, dy, BL_PC, mob);
-    map_foreachincell(mob_move, m, dx, dy, BL_NPC, mob);
+    map_foreachincell(rust_mob_move, m, dx, dy, BL_MOB, mob);
+    map_foreachincell(rust_mob_move, m, dx, dy, BL_PC, mob);
+    map_foreachincell(rust_mob_move, m, dx, dy, BL_NPC, mob);
     if (clif_object_canmove(m, dx, dy, direction)) return 0;
     if (clif_object_canmove_from(m, mob->bl.x, mob->bl.y, direction)) return 0;
     if (map_canmove(m, dx, dy) == 1 || mob->canmove == 1) return 0;
