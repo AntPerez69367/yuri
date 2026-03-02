@@ -96,7 +96,7 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     // The old C constructor called map_id2npc(id) which resolves the integer ID
     // to a real pointer; storing the raw integer as a pointer would cause a
     // misaligned-pointer panic when Rust later tries to dereference it.
-    g.set("NPC", lua.create_function(|_, v: mlua::Value| {
+    g.set("NPC", lua.create_function(|lua, v: mlua::Value| -> mlua::Result<mlua::Value> {
         let ptr = match v {
             mlua::Value::Integer(i) if i >= 0 && i <= c_uint::MAX as i64 => {
                 unsafe { ffi::map_id2bl(i as c_uint) }
@@ -106,7 +106,8 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
             }
             _ => std::ptr::null_mut(),
         };
-        Ok(NpcObject { ptr })
+        if ptr.is_null() { return Ok(mlua::Value::Nil); }
+        Ok(mlua::Value::UserData(lua.create_userdata(NpcObject { ptr })?))
     })?)?;
 
     // Player — callable namespace table for PC scripts.
