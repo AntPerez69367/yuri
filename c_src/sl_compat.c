@@ -105,6 +105,7 @@ int sl_g_getwarp(int m, int x, int y) {
 int sl_g_setwarps(int mm, int mx, int my, int tm_m, int tx, int ty) {
     struct warp_list *war;
     if (!map_isloaded(mm) || !map_isloaded(tm_m)) return 0;
+    if (mx < 0 || my < 0 || mx >= map[mm].xs || my >= map[mm].ys) return 0;
     CALLOC(war, struct warp_list, 1);
     war->x = mx; war->y = my; war->tm = tm_m; war->tx = tx; war->ty = ty;
     war->next = map[mm].warp[(mx/BLOCK_SIZE) + (my/BLOCK_SIZE)*map[mm].bxs];
@@ -392,13 +393,16 @@ int sl_g_addmapmodifier(unsigned int mapid, const char *modifier, int value) {
 }
 
 int sl_g_removemapmodifier(unsigned int mapid, const char *modifier) {
-    char esc[255];
-    Sql_EscapeStringLen(sql_handle, esc, modifier, strlen(modifier));
+    size_t len = modifier ? strlen(modifier) : 0;
+    char *esc = (char *)malloc(2 * len + 1);
+    if (!esc) return 0;
+    Sql_EscapeStringLen(sql_handle, esc, modifier ? modifier : "", len);
     if (SQL_ERROR == Sql_Query(sql_handle,
         "DELETE FROM `MapModifiers` WHERE `ModMapId`='%u' AND `ModModifier`='%s'",
         mapid, esc)) {
-        Sql_ShowDebug(sql_handle); return 0;
+        Sql_ShowDebug(sql_handle); free(esc); return 0;
     }
+    free(esc);
     return 1;
 }
 
@@ -2270,28 +2274,28 @@ int sl_pc_hasitemdura(void *sd_ptr, unsigned int id, unsigned int amount) {
 /* checkBankItemId — return item_id at bank slot, 0 if empty. */
 int sl_pc_checkbankitems(void *sd_ptr, int slot) {
     USER *sd = (USER *)sd_ptr;
-    if (!sd) return 0;
+    if (!sd || slot < 0 || slot >= MAX_BANK_SLOTS) return 0;
     return (int)sd->status.banks[slot].item_id;
 }
 
 /* checkBankAmount — return amount at bank slot. */
 int sl_pc_checkbankamounts(void *sd_ptr, int slot) {
     USER *sd = (USER *)sd_ptr;
-    if (!sd) return 0;
+    if (!sd || slot < 0 || slot >= MAX_BANK_SLOTS) return 0;
     return (int)sd->status.banks[slot].amount;
 }
 
 /* checkBankOwner — return owner char-id at bank slot. */
 int sl_pc_checkbankowners(void *sd_ptr, int slot) {
     USER *sd = (USER *)sd_ptr;
-    if (!sd) return 0;
+    if (!sd || slot < 0 || slot >= MAX_BANK_SLOTS) return 0;
     return (int)sd->status.banks[slot].owner;
 }
 
 /* checkBankEngrave — return engrave string at bank slot. */
 const char *sl_pc_checkbankengraves(void *sd_ptr, int slot) {
     USER *sd = (USER *)sd_ptr;
-    if (!sd) return "";
+    if (!sd || slot < 0 || slot >= MAX_BANK_SLOTS) return "";
     return sd->status.banks[slot].real_name;
 }
 
@@ -2792,7 +2796,7 @@ int sl_pc_getcreationitems(void *sd_ptr, int len, unsigned int *out) {
     USER *sd = (USER *)sd_ptr;
     if (!sd || !out) return 0;
     int curitem = RFIFOB(sd->fd, len) - 1;
-    if (curitem >= 0 && sd->status.inventory[curitem].id) {
+    if (curitem >= 0 && curitem < sd->status.maxinv && sd->status.inventory[curitem].id) {
         *out = sd->status.inventory[curitem].id;
         return 1;
     }
