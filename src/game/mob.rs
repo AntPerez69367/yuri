@@ -2319,7 +2319,14 @@ pub unsafe fn mobspawn_onetime(
     replace: c_uint,
     owner: c_uint,
 ) -> *mut c_uint {
+    const MAX_ONETIME_SPAWNS: c_int = 1024;
+    if times <= 0 || times > MAX_ONETIME_SPAWNS {
+        return std::ptr::null_mut();
+    }
     let spawnedmobs = libc::calloc(times as usize, std::mem::size_of::<c_uint>()) as *mut c_uint;
+    if spawnedmobs.is_null() {
+        return std::ptr::null_mut();
+    }
     for z in 0..times {
         let db = libc::calloc(1, std::mem::size_of::<MobSpawnData>()) as *mut MobSpawnData;
         if db.is_null() {
