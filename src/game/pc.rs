@@ -1070,17 +1070,17 @@ pub unsafe extern "C" fn rust_pc_starttimer(sd: *mut MapSessionData) -> c_int {
 #[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn rust_pc_stoptimer(sd: *mut MapSessionData) -> c_int {
-    if (*sd).timer != 0         { timer_remove((*sd).timer); }
-    if (*sd).healingtimer != 0  { timer_remove((*sd).healingtimer); }
-    if (*sd).pongtimer != 0     { timer_remove((*sd).pongtimer); }
-    if (*sd).afktimer != 0      { timer_remove((*sd).afktimer); }
-    if (*sd).duratimer != 0     { timer_remove((*sd).duratimer); }
-    if (*sd).savetimer != 0     { timer_remove((*sd).savetimer); }
-    if (*sd).secondduratimer != 0 { timer_remove((*sd).secondduratimer); }
-    if (*sd).thirdduratimer != 0  { timer_remove((*sd).thirdduratimer); }
-    if (*sd).fourthduratimer != 0 { timer_remove((*sd).fourthduratimer); }
-    if (*sd).fifthduratimer != 0  { timer_remove((*sd).fifthduratimer); }
-    if (*sd).scripttimer != 0   { timer_remove((*sd).scripttimer); }
+    if (*sd).timer != 0         { timer_remove((*sd).timer);         (*sd).timer = 0; }
+    if (*sd).healingtimer != 0  { timer_remove((*sd).healingtimer);  (*sd).healingtimer = 0; }
+    if (*sd).pongtimer != 0     { timer_remove((*sd).pongtimer);     (*sd).pongtimer = 0; }
+    if (*sd).afktimer != 0      { timer_remove((*sd).afktimer);      (*sd).afktimer = 0; }
+    if (*sd).duratimer != 0     { timer_remove((*sd).duratimer);     (*sd).duratimer = 0; }
+    if (*sd).savetimer != 0     { timer_remove((*sd).savetimer);     (*sd).savetimer = 0; }
+    if (*sd).secondduratimer != 0 { timer_remove((*sd).secondduratimer); (*sd).secondduratimer = 0; }
+    if (*sd).thirdduratimer != 0  { timer_remove((*sd).thirdduratimer);  (*sd).thirdduratimer = 0; }
+    if (*sd).fourthduratimer != 0 { timer_remove((*sd).fourthduratimer); (*sd).fourthduratimer = 0; }
+    if (*sd).fifthduratimer != 0  { timer_remove((*sd).fifthduratimer);  (*sd).fifthduratimer = 0; }
+    if (*sd).scripttimer != 0   { timer_remove((*sd).scripttimer);   (*sd).scripttimer = 0; }
     0
 }
 
