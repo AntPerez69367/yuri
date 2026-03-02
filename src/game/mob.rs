@@ -1497,10 +1497,15 @@ unsafe fn broadcast_move(
 #[cfg(not(test))]
 unsafe fn check_mob_collision(moving_mob: *mut MobSpawnData, m: c_int, x: c_int, y: c_int) {
     if (*moving_mob).canmove == 1 { return; }
+    if x < 0 || y < 0 { return; }
     let slot = ffi_get_map_ptr(m as c_ushort);
     if slot.is_null() { return; }
     let bxs = (*slot).bxs as usize;
-    let pos = (x as usize / BLOCK_SIZE) + (y as usize / BLOCK_SIZE) * bxs;
+    let bys = (*slot).bys as usize;
+    let bx = x as usize / BLOCK_SIZE;
+    let by = y as usize / BLOCK_SIZE;
+    if bx >= bxs || by >= bys { return; }
+    let pos = bx + by * bxs;
     let mut bl = *(*slot).block_mob.add(pos);
     while !bl.is_null() {
         if (*bl).x as c_int == x && (*bl).y as c_int == y {
@@ -1520,11 +1525,16 @@ unsafe fn check_mob_collision(moving_mob: *mut MobSpawnData, m: c_int, x: c_int,
 unsafe fn check_pc_collision(moving_mob: *mut MobSpawnData, m: c_int, x: c_int, y: c_int) {
     use crate::game::pc::{MapSessionData, PC_DIE};
     if (*moving_mob).canmove == 1 { return; }
+    if x < 0 || y < 0 { return; }
     let slot = ffi_get_map_ptr(m as c_ushort);
     if slot.is_null() { return; }
     let show_ghosts = (*slot).show_ghosts;
     let bxs = (*slot).bxs as usize;
-    let pos = (x as usize / BLOCK_SIZE) + (y as usize / BLOCK_SIZE) * bxs;
+    let bys = (*slot).bys as usize;
+    let bx = x as usize / BLOCK_SIZE;
+    let by = y as usize / BLOCK_SIZE;
+    if bx >= bxs || by >= bys { return; }
+    let pos = bx + by * bxs;
     let mut bl = *(*slot).block.add(pos);
     while !bl.is_null() {
         if (*bl).bl_type == BL_PC as u8 && (*bl).x as c_int == x && (*bl).y as c_int == y {
@@ -1742,6 +1752,9 @@ pub unsafe fn moveghost_mob(mob: *mut MobSpawnData) -> c_int {
 pub unsafe fn mob_move2(mob: *mut MobSpawnData, x: c_int, y: c_int, side: c_int) -> c_int {
     if (*mob).canmove != 0 {
         return 1;
+    }
+    if x < 0 || y < 0 {
+        return 0;
     }
     let m = (*mob).bl.m as c_int;
     (*mob).side = side;
