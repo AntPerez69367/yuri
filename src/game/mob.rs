@@ -185,7 +185,8 @@ extern "C" {
     // map entity lookup
     pub fn map_id2bl(id: c_uint) -> *mut BlockList;
     pub fn map_id2mob(id: c_uint) -> *mut MobSpawnData;
-    pub fn map_id2sd(id: c_uint) -> *mut std::ffi::c_void;   // USER* — opaque
+    #[link_name = "map_id2sd"]
+    pub fn map_id2sd_mob(id: c_uint) -> *mut MapSessionData;
     pub fn map_addiddb(bl: *mut BlockList);
     pub fn map_deliddb(bl: *mut BlockList);
     pub fn map_addblock(bl: *mut BlockList) -> c_int;
@@ -195,15 +196,30 @@ extern "C" {
     pub fn map_canmove(m: c_int, x: c_int, y: c_int) -> c_int;
     pub fn map_foreachinarea(
         f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
-        m: c_int, x: c_int, y: c_int, range: c_int, bl_type: c_int, ...
+        m: c_int,
+        x: c_int,
+        y: c_int,
+        range: c_int,
+        bl_type: c_int,
+        ...
     ) -> c_int;
     pub fn map_foreachincell(
         f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
-        m: c_int, x: c_int, y: c_int, bl_type: c_int, ...
+        m: c_int,
+        x: c_int,
+        y: c_int,
+        bl_type: c_int,
+        ...
     ) -> c_int;
     pub fn map_foreachinblock(
         f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
-        m: c_int, x0: c_int, y0: c_int, x1: c_int, y1: c_int, bl_type: c_int, ...
+        m: c_int,
+        x0: c_int,
+        y0: c_int,
+        x1: c_int,
+        y1: c_int,
+        bl_type: c_int,
+        ...
     ) -> c_int;
 
     // clif_* network helpers
@@ -219,10 +235,22 @@ extern "C" {
     pub fn clif_sendmob_side(mob: *mut MobSpawnData);
     pub fn clif_object_canmove(m: c_int, x: c_int, y: c_int, dir: c_int) -> c_int;
     pub fn clif_object_canmove_from(m: c_int, x: c_int, y: c_int, dir: c_int) -> c_int;
+    pub fn clif_send_pc_health(sd: *mut MapSessionData, damage: c_int, critical: c_int) -> c_int;
+    pub fn clif_send_mob_health(mob: *mut MobSpawnData, damage: c_int, critical: c_int) -> c_int;
+    #[link_name = "clif_sendstatus"]
+    pub fn clif_sendstatus_mob(sd: *mut MapSessionData, flags: c_int) -> c_int;
+
+    // groups[][MAX_GROUP_MEMBERS] global array (from map_parse.c)
+    // Flat 2-D: groups[256][256]. Access as groups[groupid * 256 + slot].
+    #[link_name = "groups"]
+    pub static groups_mob: [c_uint; 65536];
 
     // scripting
     pub fn sl_doscript_blargs(
-        yname: *const c_char, event: *const c_char, nargs: c_int, ...
+        yname: *const c_char,
+        event: *const c_char,
+        nargs: c_int,
+        ...
     ) -> c_int;
 
     // magic db lookup — static inline in C, redirect to actual Rust symbols
@@ -237,22 +265,9 @@ extern "C" {
     #[link_name = "rust_mobdb_search"]
     pub fn mobdb_search(id: c_uint) -> *mut MobDbData;
 
-    // C helper callbacks that stay in mob.c (USER-dependent or floor-item logic)
-    pub fn mob_find_target(bl: *mut BlockList, ...) -> c_int;
-    pub fn mob_move(bl: *mut BlockList, ...) -> c_int;
-    pub fn mob_attack(mob: *mut MobSpawnData, id: c_int) -> c_int;
-    pub fn mobdb_dropitem(
-        blockid: c_uint, id: c_uint, amount: c_int,
-        dura: c_int, protected_: c_int, owner: c_int,
-        m: c_int, x: c_int, y: c_int,
-        sd: *mut std::ffi::c_void,   // USER*
-    ) -> c_int;
-
-    // mob_free_helper: single-line C wrapper for FREE() macro
-    pub fn mob_free_helper(mob: *mut MobSpawnData);
-
-    // rnd / tick / time
-    pub fn rnd(n: c_int) -> c_int;
+    // rnd is a C macro (#define rnd(x) ((int)(randomMT() & 0xFFFFFF) % (x))).
+    // Call randomMT() directly and apply the same mask/modulus in Rust.
+    pub fn randomMT() -> c_uint;
     pub fn gettick() -> c_uint;
     static cur_time: c_int;
     static serverid: c_int;
@@ -809,38 +824,67 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
             }
         }
         MOB_ALIVE => {
-            let data = if (*mob).data.is_null() { return; } else { &*(*mob).data };
+            let data = if (*mob).data.is_null() {
+                return;
+            } else {
+                &*(*mob).data
+            };
             if ((*mob).time_ >= data.movetime && (*mob).time_ >= (*mob).newmove as c_int)
                 || ((*mob).newmove > 0 && (*mob).time_ >= (*mob).newmove as c_int)
             {
-                if data.r#type >= 2 { return; }
+                if data.r#type >= 2 {
+                    return;
+                }
                 if data.r#type == 1 && (*mob).target == 0 {
-                    map_foreachinarea(mob_find_target,
-                        (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
-                        AREA, BL_PC, mob as *mut _);
+                    map_foreachinarea(
+                        rust_mob_find_target,
+                        (*mob).bl.m as c_int,
+                        (*mob).bl.x as c_int,
+                        (*mob).bl.y as c_int,
+                        AREA,
+                        BL_PC,
+                        mob as *mut _,
+                    );
                 }
                 let bl = mob_resolve_target(mob);
+                let pre_x = (*mob).bl.x;
+                let pre_y = (*mob).bl.y;
                 (*mob).time_ = 0;
                 dispatch_ai(mob, bl, c"move".as_ptr());
+                // If the mob didn't actually move but Lua left newmove faster
+                // than the base speed (e.g. return-to-start mode while blocked),
+                // reset newmove so the mob doesn't rapid-fire move attempts.
+                if (*mob).bl.x == pre_x && (*mob).bl.y == pre_y
+                    && !(*mob).data.is_null()
+                    && (*mob).newmove < (*(*mob).data).movetime as c_uint
+                {
+                    (*mob).newmove = (*(*mob).data).movetime as c_uint;
+                }
             }
         }
         MOB_HIT => {
-            let data = if (*mob).data.is_null() { return; } else { &*(*mob).data };
+            let data = if (*mob).data.is_null() {
+                return;
+            } else {
+                &*(*mob).data
+            };
             if ((*mob).time_ >= data.atktime && (*mob).time_ >= (*mob).newatk as c_int)
                 || ((*mob).newatk > 0 && (*mob).time_ >= (*mob).newatk as c_int)
             {
-                if data.r#type >= 2 { return; }
+                if data.r#type >= 2 {
+                    return;
+                }
                 let bl = mob_resolve_target(mob);
                 if bl.is_null() {
-                    (*mob).target   = 0;
+                    (*mob).target = 0;
                     (*mob).attacker = 0;
-                    (*mob).state    = MOB_ALIVE;
+                    (*mob).state = MOB_ALIVE;
                     return;
                 }
                 if (*bl).m != (*mob).bl.m {
-                    (*mob).target   = 0;
+                    (*mob).target = 0;
                     (*mob).attacker = 0;
-                    (*mob).state    = MOB_ALIVE;
+                    (*mob).state = MOB_ALIVE;
                     return;
                 }
                 (*mob).time_ = 0;
@@ -848,15 +892,27 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
             }
         }
         MOB_ESCAPE => {
-            let data = if (*mob).data.is_null() { return; } else { &*(*mob).data };
+            let data = if (*mob).data.is_null() {
+                return;
+            } else {
+                &*(*mob).data
+            };
             if ((*mob).time_ >= data.movetime && (*mob).time_ >= (*mob).newmove as c_int)
                 || ((*mob).newmove > 0 && (*mob).time_ >= (*mob).newmove as c_int)
             {
-                if data.r#type >= 2 { return; }
+                if data.r#type >= 2 {
+                    return;
+                }
                 if data.r#type == 1 && (*mob).target == 0 {
-                    map_foreachinarea(mob_find_target,
-                        (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
-                        AREA, BL_PC, mob as *mut _);
+                    map_foreachinarea(
+                        rust_mob_find_target,
+                        (*mob).bl.m as c_int,
+                        (*mob).bl.x as c_int,
+                        (*mob).bl.y as c_int,
+                        AREA,
+                        BL_PC,
+                        mob as *mut _,
+                    );
                 }
                 let bl = mob_resolve_target(mob);
                 (*mob).time_ = 0;
@@ -872,19 +928,27 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
 unsafe fn mob_resolve_target(mob: *mut MobSpawnData) -> *mut BlockList {
     let bl = map_id2bl((*mob).target);
     if bl.is_null() {
-        (*mob).target   = 0;
+        (*mob).target = 0;
         (*mob).attacker = 0;
         return std::ptr::null_mut();
     }
     if (*bl).m != (*mob).bl.m {
-        (*mob).target   = 0;
+        (*mob).target = 0;
         (*mob).attacker = 0;
         return std::ptr::null_mut();
     }
     if (*bl).bl_type as c_int == BL_MOB {
         let tmob = bl as *mut MobSpawnData;
         if (*tmob).state == MOB_DEAD {
-            (*mob).target   = 0;
+            (*mob).target = 0;
+            (*mob).attacker = 0;
+            return std::ptr::null_mut();
+        }
+    } else if (*bl).bl_type == BL_PC as u8 {
+        use crate::game::pc::{MapSessionData, PC_DIE};
+        let sd = bl as *mut MapSessionData;
+        if (*sd).status.state == PC_DIE as i8 {
+            (*mob).target = 0;
             (*mob).attacker = 0;
             return std::ptr::null_mut();
         }
@@ -1057,64 +1121,195 @@ unsafe fn viewport_delta(
 
 /// Shared post-move broadcast used by move_mob variants.
 #[cfg(not(test))]
-unsafe fn broadcast_move(mob: *mut MobSpawnData, x0: c_int, y0: c_int, x1: c_int, y1: c_int, nothingnew: bool) {
+unsafe fn broadcast_move(
+    mob: *mut MobSpawnData,
+    x0: c_int,
+    y0: c_int,
+    x1: c_int,
+    y1: c_int,
+    nothingnew: bool,
+) {
     let m = (*mob).bl.m as c_int;
     let mut subt = [0i32; 1];
     if !nothingnew {
         if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
-            map_foreachinblock(clif_cmoblook_sub,
-                m, x0, y0, x0 + x1 - 1, y0 + y1 - 1,
-                BL_PC, LOOK_SEND, mob as *mut _);
+            map_foreachinblock(
+                clif_cmoblook_sub,
+                m,
+                x0,
+                y0,
+                x0 + x1 - 1,
+                y0 + y1 - 1,
+                BL_PC,
+                LOOK_SEND,
+                mob as *mut _,
+            );
         } else {
-            map_foreachinblock(clif_mob_look_start_func,
-                m, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC, mob as *mut _);
-            map_foreachinblock(clif_object_look_sub,
-                m, x0, y0, x0 + x1 - 1, y0 + y1 - 1,
-                BL_PC, LOOK_SEND, &raw mut (*mob).bl);
-            map_foreachinblock(clif_mob_look_close_func,
-                m, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC, mob as *mut _);
+            map_foreachinblock(
+                clif_mob_look_start_func,
+                m,
+                x0,
+                y0,
+                x0 + x1 - 1,
+                y0 + y1 - 1,
+                BL_PC,
+                mob as *mut _,
+            );
+            map_foreachinblock(
+                clif_object_look_sub,
+                m,
+                x0,
+                y0,
+                x0 + x1 - 1,
+                y0 + y1 - 1,
+                BL_PC,
+                LOOK_SEND,
+                &raw mut (*mob).bl,
+            );
+            map_foreachinblock(
+                clif_mob_look_close_func,
+                m,
+                x0,
+                y0,
+                x0 + x1 - 1,
+                y0 + y1 - 1,
+                BL_PC,
+                mob as *mut _,
+            );
         }
     }
-    map_foreachincell(mob_trap_look_ffi,
-        m, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
-        BL_NPC, mob as *mut _, 0i32, subt.as_mut_ptr());
-    map_foreachinarea(clif_mob_move,
-        m, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
-        AREA, BL_PC, LOOK_SEND, mob as *mut _);
+    map_foreachincell(
+        mob_trap_look_ffi,
+        m,
+        (*mob).bl.x as c_int,
+        (*mob).bl.y as c_int,
+        BL_NPC,
+        mob as *mut _,
+        0i32,
+        subt.as_mut_ptr(),
+    );
+    map_foreachinarea(
+        clif_mob_move,
+        m,
+        (*mob).bl.x as c_int,
+        (*mob).bl.y as c_int,
+        AREA,
+        BL_PC,
+        LOOK_SEND,
+        mob as *mut _,
+    );
+}
+
+#[cfg(not(test))]
+unsafe fn check_mob_collision(moving_mob: *mut MobSpawnData, m: c_int, x: c_int, y: c_int) {
+    if (*moving_mob).canmove == 1 { return; }
+    let slot = ffi_get_map_ptr(m as c_ushort);
+    if slot.is_null() { return; }
+    let bxs = (*slot).bxs as usize;
+    let pos = (x as usize / BLOCK_SIZE) + (y as usize / BLOCK_SIZE) * bxs;
+    let mut bl = *(*slot).block_mob.add(pos);
+    while !bl.is_null() {
+        if (*bl).x as c_int == x && (*bl).y as c_int == y {
+            let m2 = bl as *mut MobSpawnData;
+            if (*m2).state != MOB_DEAD && bl != &raw mut (*moving_mob).bl {
+                (*moving_mob).canmove = 1;
+                return;
+            }
+        }
+        bl = (*bl).next;
+    }
+}
+
+/// Direct Rust PC-collision check — replaces the broken BL_PC foreachincell call.
+/// Sets `moving_mob.canmove = 1` if a physical, non-GM, non-dead player occupies `(x, y)`.
+#[cfg(not(test))]
+unsafe fn check_pc_collision(moving_mob: *mut MobSpawnData, m: c_int, x: c_int, y: c_int) {
+    use crate::game::pc::{MapSessionData, PC_DIE};
+    if (*moving_mob).canmove == 1 { return; }
+    let slot = ffi_get_map_ptr(m as c_ushort);
+    if slot.is_null() { return; }
+    let show_ghosts = (*slot).show_ghosts;
+    let bxs = (*slot).bxs as usize;
+    let pos = (x as usize / BLOCK_SIZE) + (y as usize / BLOCK_SIZE) * bxs;
+    let mut bl = *(*slot).block.add(pos);
+    while !bl.is_null() {
+        if (*bl).bl_type == BL_PC as u8 && (*bl).x as c_int == x && (*bl).y as c_int == y {
+            let sd = bl as *mut MapSessionData;
+            let state   = (*sd).status.state;
+            let gm_lvl  = (*sd).status.gm_level;
+            let passable = (show_ghosts != 0 && state == PC_DIE as i8)
+                || state == -1
+                || gm_lvl >= 50;
+            if !passable {
+                (*moving_mob).canmove = 1;
+                return;
+            }
+        }
+        bl = (*bl).next;
+    }
 }
 
 #[cfg(not(test))]
 pub unsafe fn move_mob(mob: *mut MobSpawnData) -> c_int {
-    let m       = (*mob).bl.m as c_int;
-    let backx   = (*mob).bl.x as c_int;
-    let backy   = (*mob).bl.y as c_int;
+    let m = (*mob).bl.m as c_int;
+    let backx = (*mob).bl.x as c_int;
+    let backy = (*mob).bl.y as c_int;
     let slot = ffi_get_map_ptr((*mob).bl.m);
-    if slot.is_null() { return 0; }
+    if slot.is_null() {
+        return 0;
+    }
 
     let (x0, y0, x1, y1, mut dx, mut dy, nothingnew) = viewport_delta(mob, slot);
 
-    let xs   = (*slot).xs as c_int;
-    let ys   = (*slot).ys as c_int;
+    let xs = (*slot).xs as c_int;
+    let ys = (*slot).ys as c_int;
 
-    if dx >= xs { dx = xs - 1; }
-    if dy >= ys { dy = ys - 1; }
+    if dx >= xs {
+        dx = xs - 1;
+    }
+    if dy >= ys {
+        dy = ys - 1;
+    }
 
-    if warp_at(slot, dx, dy) { return 0; }
+    if warp_at(slot, dx, dy) {
+        return 0;
+    }
 
-    map_foreachincell(mob_move, m, dx, dy, BL_MOB, mob as *mut _);
-    map_foreachincell(mob_move, m, dx, dy, BL_PC,  mob as *mut _);
-    map_foreachincell(mob_move, m, dx, dy, BL_NPC, mob as *mut _);
+    check_mob_collision(mob, m, dx, dy);
+    check_pc_collision(mob, m, dx, dy);
+    map_foreachincell(rust_mob_move, m, dx, dy, BL_NPC, mob as *mut _);
 
-    if clif_object_canmove(m, dx, dy, (*mob).side) != 0 { (*mob).canmove = 0; return 0; }
-    if clif_object_canmove_from(m, backx, backy, (*mob).side) != 0 { (*mob).canmove = 0; return 0; }
-    if map_canmove(m, dx, dy) == 1 || (*mob).canmove == 1 { (*mob).canmove = 0; return 0; }
+    if clif_object_canmove(m, dx, dy, (*mob).side) != 0 {
+        (*mob).canmove = 0;
+        return 0;
+    }
+    if clif_object_canmove_from(m, backx, backy, (*mob).side) != 0 {
+        (*mob).canmove = 0;
+        return 0;
+    }
+    if map_canmove(m, dx, dy) == 1 || (*mob).canmove == 1 {
+        (*mob).canmove = 0;
+        return 0;
+    }
 
     // clamp after collision checks
-    let dx = if dx >= xs { backx } else if dx < 0 { backx } else { dx };
-    let dy = if dy >= ys { backy } else if dy < 0 { backy } else { dy };
+    let dx = if dx >= xs {
+        backx
+    } else if dx < 0 {
+        backx
+    } else {
+        dx
+    };
+    let dy = if dy >= ys {
+        backy
+    } else if dy < 0 {
+        backy
+    } else {
+        dy
+    };
 
     if dx != backx || dy != backy {
-        (*mob).bx  = backx as c_ushort;
+        (*mob).bx = backx as c_ushort;
         (*mob).by_ = backy as c_ushort;
         map_moveblock(&mut (*mob).bl, dx, dy);
         broadcast_move(mob, x0, y0, x1, y1, nothingnew);
@@ -1125,28 +1320,54 @@ pub unsafe fn move_mob(mob: *mut MobSpawnData) -> c_int {
 
 #[cfg(not(test))]
 pub unsafe fn move_mob_ignore_object(mob: *mut MobSpawnData) -> c_int {
-    let m       = (*mob).bl.m as c_int;
-    let backx   = (*mob).bl.x as c_int;
-    let backy   = (*mob).bl.y as c_int;
+    let m = (*mob).bl.m as c_int;
+    let backx = (*mob).bl.x as c_int;
+    let backy = (*mob).bl.y as c_int;
     let slot = ffi_get_map_ptr((*mob).bl.m);
-    if slot.is_null() { return 0; }
+    if slot.is_null() {
+        return 0;
+    }
 
     let (x0, y0, x1, y1, mut dx, mut dy, nothingnew) = viewport_delta(mob, slot);
-    let xs   = (*slot).xs as c_int;
-    let ys   = (*slot).ys as c_int;
-    if dx >= xs { dx = xs - 1; }
-    if dy >= ys { dy = ys - 1; }
-    if warp_at(slot, dx, dy) { return 0; }
+    let xs = (*slot).xs as c_int;
+    let ys = (*slot).ys as c_int;
+    if dx >= xs {
+        dx = xs - 1;
+    }
+    if dy >= ys {
+        dy = ys - 1;
+    }
+    if warp_at(slot, dx, dy) {
+        return 0;
+    }
 
     // No collision callbacks — ignore objects
-    if clif_object_canmove(m, dx, dy, (*mob).side) != 0 { (*mob).canmove = 0; return 0; }
-    if clif_object_canmove_from(m, backx, backy, (*mob).side) != 0 { (*mob).canmove = 0; return 0; }
+    if clif_object_canmove(m, dx, dy, (*mob).side) != 0 {
+        (*mob).canmove = 0;
+        return 0;
+    }
+    if clif_object_canmove_from(m, backx, backy, (*mob).side) != 0 {
+        (*mob).canmove = 0;
+        return 0;
+    }
 
-    let dx = if dx >= xs { backx } else if dx < 0 { backx } else { dx };
-    let dy = if dy >= ys { backy } else if dy < 0 { backy } else { dy };
+    let dx = if dx >= xs {
+        backx
+    } else if dx < 0 {
+        backx
+    } else {
+        dx
+    };
+    let dy = if dy >= ys {
+        backy
+    } else if dy < 0 {
+        backy
+    } else {
+        dy
+    };
 
     if dx != backx || dy != backy {
-        (*mob).bx  = backx as c_ushort;
+        (*mob).bx = backx as c_ushort;
         (*mob).by_ = backy as c_ushort;
         map_moveblock(&mut (*mob).bl, dx, dy);
         broadcast_move(mob, x0, y0, x1, y1, nothingnew);
@@ -1157,35 +1378,64 @@ pub unsafe fn move_mob_ignore_object(mob: *mut MobSpawnData) -> c_int {
 
 #[cfg(not(test))]
 pub unsafe fn moveghost_mob(mob: *mut MobSpawnData) -> c_int {
-    let m       = (*mob).bl.m as c_int;
-    let backx   = (*mob).bl.x as c_int;
-    let backy   = (*mob).bl.y as c_int;
+    let m = (*mob).bl.m as c_int;
+    let backx = (*mob).bl.x as c_int;
+    let backy = (*mob).bl.y as c_int;
     let slot = ffi_get_map_ptr((*mob).bl.m);
-    if slot.is_null() { return 0; }
+    if slot.is_null() {
+        return 0;
+    }
 
     let (x0, y0, x1, y1, mut dx, mut dy, nothingnew) = viewport_delta(mob, slot);
-    let xs   = (*slot).xs as c_int;
-    let ys   = (*slot).ys as c_int;
-    if dx >= xs { dx = xs - 1; }
-    if dy >= ys { dy = ys - 1; }
-    if warp_at(slot, dx, dy) { return 0; }
+    let xs = (*slot).xs as c_int;
+    let ys = (*slot).ys as c_int;
+    if dx >= xs {
+        dx = xs - 1;
+    }
+    if dy >= ys {
+        dy = ys - 1;
+    }
+    if warp_at(slot, dx, dy) {
+        return 0;
+    }
 
-    map_foreachincell(mob_move, m, dx, dy, BL_MOB, mob as *mut _);
-    map_foreachincell(mob_move, m, dx, dy, BL_PC,  mob as *mut _);
-    map_foreachincell(mob_move, m, dx, dy, BL_NPC, mob as *mut _);
+    check_mob_collision(mob, m, dx, dy);
+    check_pc_collision(mob, m, dx, dy);
+    map_foreachincell(rust_mob_move, m, dx, dy, BL_NPC, mob as *mut _);
 
     // Collision checks only apply when mob has no target
     if (*mob).target == 0 {
-        if clif_object_canmove(m, dx, dy, (*mob).side) != 0 { (*mob).canmove = 0; return 0; }
-        if clif_object_canmove_from(m, backx, backy, (*mob).side) != 0 { (*mob).canmove = 0; return 0; }
-        if map_canmove(m, dx, dy) == 1 || (*mob).canmove == 1 { (*mob).canmove = 0; return 0; }
+        if clif_object_canmove(m, dx, dy, (*mob).side) != 0 {
+            (*mob).canmove = 0;
+            return 0;
+        }
+        if clif_object_canmove_from(m, backx, backy, (*mob).side) != 0 {
+            (*mob).canmove = 0;
+            return 0;
+        }
+        if map_canmove(m, dx, dy) == 1 || (*mob).canmove == 1 {
+            (*mob).canmove = 0;
+            return 0;
+        }
     }
 
-    let dx = if dx >= xs { backx } else if dx < 0 { backx } else { dx };
-    let dy = if dy >= ys { backy } else if dy < 0 { backy } else { dy };
+    let dx = if dx >= xs {
+        backx
+    } else if dx < 0 {
+        backx
+    } else {
+        dx
+    };
+    let dy = if dy >= ys {
+        backy
+    } else if dy < 0 {
+        backy
+    } else {
+        dy
+    };
 
     if dx != backx || dy != backy {
-        (*mob).bx  = backx as c_ushort;
+        (*mob).bx = backx as c_ushort;
         (*mob).by_ = backy as c_ushort;
         map_moveblock(&mut (*mob).bl, dx, dy);
         broadcast_move(mob, x0, y0, x1, y1, nothingnew);
@@ -1196,19 +1446,28 @@ pub unsafe fn moveghost_mob(mob: *mut MobSpawnData) -> c_int {
 
 #[cfg(not(test))]
 pub unsafe fn mob_move2(mob: *mut MobSpawnData, x: c_int, y: c_int, side: c_int) -> c_int {
-    if (*mob).canmove != 0 { return 1; }
+    if (*mob).canmove != 0 {
+        return 1;
+    }
     let m = (*mob).bl.m as c_int;
     (*mob).side = side;
-    map_foreachincell(mob_move, m, x, y, BL_MOB, mob as *mut _);
-    map_foreachincell(mob_move, m, x, y, BL_PC,  mob as *mut _);
+    check_mob_collision(mob, m, x, y);
+    check_pc_collision(mob, m, x, y);
     let cm = (*mob).canmove;
     if map_canmove(m, x, y) == 0 && cm == 0 {
-        (*mob).bx    = (*mob).bl.x;
-        (*mob).by_   = (*mob).bl.y;
+        (*mob).bx = (*mob).bl.x;
+        (*mob).by_ = (*mob).bl.y;
         map_moveblock(&mut (*mob).bl, x, y);
-        map_foreachinarea(clif_mob_move,
-            m, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
-            AREA, BL_PC, LOOK_SEND, mob as *mut _);
+        map_foreachinarea(
+            clif_mob_move,
+            m,
+            (*mob).bl.x as c_int,
+            (*mob).bl.y as c_int,
+            AREA,
+            BL_PC,
+            LOOK_SEND,
+            mob as *mut _,
+        );
         (*mob).canmove = 1;
     } else {
         (*mob).canmove = 0;
@@ -1281,31 +1540,435 @@ pub unsafe fn mob_setglobalreg(mob: *mut MobSpawnData, reg: *const c_char, val: 
 /// va_list callback: sets def[0]=1 on first hit (used as a foreachincell "any-present" test).
 pub unsafe extern "C" fn mob_thing_yeah(_bl: *mut BlockList, mut ap: ...) -> c_int {
     let def = ap.arg::<*mut c_int>();
-    if !def.is_null() { *def = 1; }
+    if !def.is_null() {
+        *def = 1;
+    }
+    0
+}
+
+/// va_list callback: merge item `fl2` into an existing floor-item `fl` if IDs match.
+/// Args: `int* def`, `int id` (unused), `FLOORITEM* fl2`, `USER* sd` (unused).
+/// Mirrors `mob_addtocurrent` from `c_src/mob.c`.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn rust_mob_addtocurrent(bl: *mut BlockList, mut ap: ...) -> c_int {
+    use crate::game::scripting::types::floor::FloorItemData;
+    if bl.is_null() {
+        return 0;
+    }
+    let fl = bl as *mut FloorItemData;
+    let def = ap.arg::<*mut c_int>();
+    let _id = ap.arg::<c_int>();
+    let fl2 = ap.arg::<*mut FloorItemData>();
+    let _sd = ap.arg::<*mut MapSessionData>();
+    if def.is_null() || fl2.is_null() {
+        return 0;
+    }
+    if *def != 0 {
+        return 0;
+    }
+    if (*fl).data.id == (*fl2).data.id {
+        (*fl).data.amount += (*fl2).data.amount;
+        *def = 1;
+    }
+    0
+}
+
+/// Drop an item onto the ground at (m, x, y).
+/// Reads `attacker->group_count` and `groups[]` to populate floor-item looters.
+/// Mirrors `mobdb_dropitem` from `c_src/mob.c`.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn rust_mob_dropitem(
+    blockid: c_uint,
+    id: c_uint,
+    amount: c_int,
+    dura: c_int,
+    protected_: c_int,
+    owner: c_int,
+    m: c_int,
+    x: c_int,
+    y: c_int,
+    sd: *mut MapSessionData,
+) -> c_int {
+    use crate::game::pc::MAX_GROUP_MEMBERS;
+    use crate::game::scripting::types::floor::FloorItemData;
+    let mob: *mut MobSpawnData =
+        if blockid >= MOB_START_NUM as c_uint && blockid < FLOORITEM_START_NUM as c_uint {
+            map_id2mob(blockid)
+        } else {
+            std::ptr::null_mut()
+        };
+
+    let mut def: c_int = 0;
+    let fl = libc::calloc(1, std::mem::size_of::<FloorItemData>()) as *mut FloorItemData;
+    if fl.is_null() {
+        return 0;
+    }
+    (*fl).bl.m = m as u16;
+    (*fl).bl.x = x as u16;
+    (*fl).bl.y = y as u16;
+    (*fl).data.id = id;
+    (*fl).data.amount = amount;
+    (*fl).data.dura = dura;
+    (*fl).data.protected = protected_ as c_uint;
+    (*fl).data.owner = owner as c_uint;
+
+    map_foreachincell(
+        rust_mob_addtocurrent,
+        m,
+        x,
+        y,
+        BL_ITEM,
+        &raw mut def as *mut c_int,
+        id as c_int,
+        fl,
+        sd,
+    );
+
+    (*fl).timer = libc::time(std::ptr::null_mut()) as c_uint;
+    libc::memset(
+        (*fl).looters.as_mut_ptr() as *mut libc::c_void,
+        0,
+        std::mem::size_of::<c_uint>() * MAX_GROUP_MEMBERS,
+    );
+
+    if !mob.is_null() {
+        let attacker = map_id2sd_mob((*mob).attacker);
+        if !attacker.is_null() {
+            if (*attacker).group_count > 0 {
+                let safe_count = if (*attacker).group_count < MAX_GROUP_MEMBERS as c_int {
+                    (*attacker).group_count as usize
+                } else {
+                    MAX_GROUP_MEMBERS
+                };
+                let gid = (*attacker).groupid as usize;
+                for z in 0..safe_count {
+                    (*fl).looters[z] = groups_mob[gid * MAX_GROUP_MEMBERS + z];
+                }
+            } else {
+                (*fl).looters[0] = (*attacker).bl.id;
+            }
+        }
+    }
+
+    if def == 0 {
+        map_additem(&raw mut (*fl).bl);
+        map_foreachinarea(
+            clif_object_look_sub2,
+            m,
+            x,
+            y,
+            AREA,
+            BL_PC,
+            LOOK_SEND as c_int,
+            &raw mut (*fl).bl,
+        );
+    } else {
+        libc::free(fl as *mut libc::c_void);
+    }
     0
 }
 
 #[cfg(not(test))]
 pub unsafe fn mobdb_drops(mob: *mut MobSpawnData, sd: *mut std::ffi::c_void) -> c_int {
     // sd->bl is the first field — cast gives the block_list* for sl_doscript_blargs
-    sl_doscript_blargs(c"mobDrops".as_ptr(), std::ptr::null(), 2,
-        sd as *mut BlockList, &raw mut (*mob).bl);
+    sl_doscript_blargs(
+        c"mobDrops".as_ptr(),
+        std::ptr::null(),
+        2,
+        sd as *mut BlockList,
+        &raw mut (*mob).bl,
+    );
+    let sd_typed = sd as *mut MapSessionData;
     for i in 0..MAX_INVENTORY {
         let slot = &(*mob).inventory[i];
         if slot.id != 0 && slot.amount >= 1 {
-            mobdb_dropitem(
-                (*mob).bl.id, slot.id, slot.amount, slot.dura,
-                slot.protected as c_int, slot.owner as c_int,
-                (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
-                sd,
+            rust_mob_dropitem(
+                (*mob).bl.id,
+                slot.id as c_uint,
+                slot.amount,
+                slot.dura,
+                slot.protected as c_int,
+                slot.owner as c_int,
+                (*mob).bl.m as c_int,
+                (*mob).bl.x as c_int,
+                (*mob).bl.y as c_int,
+                sd_typed,
             );
-            (*mob).inventory[i].id       = 0;
-            (*mob).inventory[i].amount   = 0;
-            (*mob).inventory[i].owner    = 0;
-            (*mob).inventory[i].dura     = 0;
+            (*mob).inventory[i].id = 0;
+            (*mob).inventory[i].amount = 0;
+            (*mob).inventory[i].owner = 0;
+            (*mob).inventory[i].dura = 0;
             (*mob).inventory[i].protected = 0;
         }
     }
+    0
+}
+
+// ─── USER-dependent mob functions (ported from c_src/mob.c) ──────────────────
+
+/// va_list callback: selects a PC as this mob's target.
+/// Args (via va_list): `MOB* mob`.
+/// Reads `sd->status.dura_aether` to check sneak/cloak/hide, then conditionally
+/// updates `mob->target` based on `sd->status.gm_level` and a random roll.
+/// Mirrors `mob_find_target` from `c_src/mob.c`.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn rust_mob_find_target(bl: *mut BlockList, mut ap: ...) -> c_int {
+    use crate::game::pc::PC_DIE;
+    if bl.is_null() {
+        return 0;
+    }
+    let mob = ap.arg::<*mut MobSpawnData>();
+    if mob.is_null() {
+        return 0;
+    }
+    let sd = bl as *mut MapSessionData;
+    let seeinvis = if (*mob).data.is_null() {
+        0i8
+    } else {
+        (*(*mob).data).seeinvis
+    };
+    let mut invis: u8 = 0;
+    for i in 0..MAX_MAGIC_TIMERS {
+        if (*sd).status.dura_aether[i].duration > 0 {
+            let name = magicdb_name((*sd).status.dura_aether[i].id as c_int);
+            if !name.is_null() {
+                if libc::strcasecmp(name, c"sneak".as_ptr()) == 0 {
+                    invis = 1;
+                }
+                if libc::strcasecmp(name, c"cloak".as_ptr()) == 0 {
+                    invis = 2;
+                }
+                if libc::strcasecmp(name, c"hide".as_ptr()) == 0 {
+                    invis = 3;
+                }
+            }
+        }
+    }
+    match invis {
+        1 => {
+            if seeinvis != 1 && seeinvis != 3 && seeinvis != 5 {
+                return 0;
+            }
+        }
+        2 => {
+            if seeinvis != 2 && seeinvis != 3 && seeinvis != 5 {
+                return 0;
+            }
+        }
+        3 => {
+            if seeinvis != 4 && seeinvis != 5 {
+                return 0;
+            }
+        }
+        _ => {}
+    }
+    if (*sd).status.state == PC_DIE as i8 {
+        return 0;
+    }
+    if (*mob).confused != 0 && (*mob).confused_target == (*sd).bl.id {
+        return 0;
+    }
+    if (*mob).target != 0 {
+        let num = (randomMT() & 0xFFFFFF) % 1000;
+        if num <= 499 && (*sd).status.gm_level < 50 {
+            (*mob).target = (*sd).status.id;
+        }
+    } else if (*sd).status.gm_level < 50 {
+        (*mob).target = (*sd).status.id;
+    }
+    0
+}
+
+/// Mob attacks a player (or another mob) by ID.
+/// Reads `sd->uFlags` and `sd->optFlags` to check immortal/stealth before attacking.
+/// Calls scripting hooks `hitCritChance` and `swingDamage`, then sends network damage.
+/// Mirrors `mob_attack` from `c_src/mob.c`.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn rust_mob_attack(mob: *mut MobSpawnData, id: c_int) -> c_int {
+    use crate::game::pc::{OPT_FLAG_STEALTH, SFLAG_HPMP, U_FLAG_IMMORTAL};
+    if id < 0 {
+        return 0;
+    }
+    let bl = map_id2bl(id as c_uint);
+    if bl.is_null() {
+        return 0;
+    }
+    let sd: *mut MapSessionData = if (*bl).bl_type == BL_PC as u8 {
+        bl as *mut MapSessionData
+    } else {
+        std::ptr::null_mut()
+    };
+    let tmob: *mut MobSpawnData = if (*bl).bl_type == BL_MOB as u8 {
+        bl as *mut MobSpawnData
+    } else {
+        std::ptr::null_mut()
+    };
+    if !sd.is_null() {
+        if ((*sd).uFlags & U_FLAG_IMMORTAL != 0) || ((*sd).optFlags & OPT_FLAG_STEALTH != 0) {
+            (*mob).target = 0;
+            (*mob).attacker = 0;
+            return 0;
+        }
+    }
+    if !sd.is_null() {
+        sl_doscript_blargs(
+            c"hitCritChance".as_ptr(),
+            std::ptr::null(),
+            2,
+            &raw mut (*mob).bl,
+            &raw mut (*sd).bl,
+        );
+    } else if !tmob.is_null() {
+        sl_doscript_blargs(
+            c"hitCritChance".as_ptr(),
+            std::ptr::null(),
+            2,
+            &raw mut (*mob).bl,
+            &raw mut (*tmob).bl,
+        );
+    }
+    if (*mob).critchance != 0 {
+        if !sd.is_null() {
+            sl_doscript_blargs(
+                c"swingDamage".as_ptr(),
+                std::ptr::null(),
+                2,
+                &raw mut (*mob).bl,
+                &raw mut (*sd).bl,
+            );
+            for x in 0..MAX_MAGIC_TIMERS {
+                if (*mob).da[x].id > 0 && (*mob).da[x].duration > 0 {
+                    sl_doscript_blargs(
+                        magicdb_yname((*mob).da[x].id as c_int),
+                        c"on_hit_while_cast".as_ptr(),
+                        2,
+                        &raw mut (*mob).bl,
+                        &raw mut (*sd).bl,
+                    );
+                }
+            }
+        } else if !tmob.is_null() {
+            sl_doscript_blargs(
+                c"swingDamage".as_ptr(),
+                std::ptr::null(),
+                2,
+                &raw mut (*mob).bl,
+                &raw mut (*tmob).bl,
+            );
+            for x in 0..MAX_MAGIC_TIMERS {
+                if (*mob).da[x].id > 0 && (*mob).da[x].duration > 0 {
+                    sl_doscript_blargs(
+                        magicdb_yname((*mob).da[x].id as c_int),
+                        c"on_hit_while_cast".as_ptr(),
+                        2,
+                        &raw mut (*mob).bl,
+                        &raw mut (*tmob).bl,
+                    );
+                }
+            }
+        }
+        let dmg = ((*mob).damage + 0.5f32) as c_int;
+        if !sd.is_null() {
+            if (*mob).critchance == 1 {
+                clif_send_pc_health(sd, dmg, 33);
+            } else {
+                clif_send_pc_health(sd, dmg, 255);
+            }
+            clif_sendstatus_mob(sd, SFLAG_HPMP);
+        } else if !tmob.is_null() {
+            if (*mob).critchance == 1 {
+                clif_send_mob_health(tmob, dmg, 33);
+            } else {
+                clif_send_mob_health(tmob, dmg, 255);
+            }
+        }
+    }
+    0
+}
+
+/// Calculate and set `mob->critchance` based on mob stats vs player stats.
+/// Returns 0 (miss), 1 (normal hit), or 2 (critical hit).
+/// Mirrors `mob_calc_critical` from `c_src/mob.c`.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn rust_mob_calc_critical(
+    mob: *mut MobSpawnData,
+    sd: *mut MapSessionData,
+) -> c_int {
+    if mob.is_null() || sd.is_null() {
+        return 0;
+    }
+    let db = (*mob).data;
+    if db.is_null() {
+        return 0;
+    }
+    let equat = ((*db).hit + (*db).level + ((*db).might / 5) + 20)
+        - ((*sd).status.level as c_int + ((*sd).grace / 2));
+    let mut equat = equat - ((*sd).grace / 4) + (*sd).status.level as c_int;
+    let chance = ((randomMT() & 0xFFFFFF) % 100) as c_int;
+    if equat < 5 {
+        equat = 5;
+    }
+    if equat > 95 {
+        equat = 95;
+    }
+    if chance < equat {
+        let crit = equat as f32 * 0.33f32;
+        if (chance as f32) < crit {
+            2
+        } else {
+            1
+        }
+    } else {
+        0
+    }
+}
+
+/// va_list callback: check whether an entity blocks mob movement.
+/// Sets `mob->canmove = 1` if the entity occupies the cell and is not a valid ghost/GM.
+/// Mirrors `mob_move` from `c_src/mob.c`.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn rust_mob_move(bl: *mut BlockList, mut ap: ...) -> c_int {
+    use crate::game::pc::PC_DIE;
+    if bl.is_null() {
+        return 0;
+    }
+    let mob = ap.arg::<*mut MobSpawnData>();
+    if mob.is_null() {
+        return 0;
+    }
+    if (*mob).canmove == 1 {
+        return 0;
+    }
+    if (*bl).bl_type == BL_NPC as u8 {
+        if (*bl).subtype != 0 {
+            return 0;
+        }
+    } else if (*bl).bl_type == BL_MOB as u8 {
+        let m2 = bl as *mut MobSpawnData;
+        if (*m2).state == MOB_DEAD {
+            return 0;
+        }
+    } else if (*bl).bl_type == BL_PC as u8 {
+        let sd = bl as *mut MapSessionData;
+        let show_ghosts = if ffi_map_is_loaded((*mob).bl.m) {
+            (*ffi_get_map_ptr((*mob).bl.m)).show_ghosts
+        } else {
+            0
+        };
+        if (show_ghosts != 0 && (*sd).status.state == PC_DIE as i8)
+            || (*sd).status.state == -1
+            || (*sd).status.gm_level >= 50
+        {
+            return 0;
+        }
+    }
+    (*mob).canmove = 1;
     0
 }
 
@@ -1313,37 +1976,47 @@ pub unsafe fn mobdb_drops(mob: *mut MobSpawnData, sd: *mut std::ffi::c_void) -> 
 
 #[cfg(not(test))]
 pub unsafe fn mobspawn_onetime(
-    id: c_uint, m: c_int, x: c_int, y: c_int,
-    times: c_int, start: c_int, end: c_int,
-    replace: c_uint, owner: c_uint,
+    id: c_uint,
+    m: c_int,
+    x: c_int,
+    y: c_int,
+    times: c_int,
+    start: c_int,
+    end: c_int,
+    replace: c_uint,
+    owner: c_uint,
 ) -> *mut c_uint {
     let spawnedmobs = libc::calloc(times as usize, std::mem::size_of::<c_uint>()) as *mut c_uint;
     for z in 0..times {
         let db = libc::calloc(1, std::mem::size_of::<MobSpawnData>()) as *mut MobSpawnData;
-        if db.is_null() { continue; }
-        if (*db).exp == 0 { (*db).exp = mobdb_experience(id); }
-        (*db).startm   = m as c_ushort;
-        (*db).startx   = x as c_ushort;
-        (*db).starty   = y as c_ushort;
-        (*db).mobid    = id;
-        (*db).start    = start as c_schar;
-        (*db).end      = end as c_schar;
-        (*db).replace  = replace;
-        (*db).state    = MOB_DEAD;
+        if db.is_null() {
+            continue;
+        }
+        if (*db).exp == 0 {
+            (*db).exp = mobdb_experience(id);
+        }
+        (*db).startm = m as c_ushort;
+        (*db).startx = x as c_ushort;
+        (*db).starty = y as c_ushort;
+        (*db).mobid = id;
+        (*db).start = start as c_schar;
+        (*db).end = end as c_schar;
+        (*db).replace = replace;
+        (*db).state = MOB_DEAD;
         (*db).bl.bl_type = BL_MOB as c_uchar;
-        (*db).bl.m     = m as c_ushort;
-        (*db).bl.x     = x as c_ushort;
-        (*db).bl.y     = y as c_ushort;
-        (*db).owner    = owner;
-        (*db).onetime  = 1;
+        (*db).bl.m = m as c_ushort;
+        (*db).bl.x = x as c_ushort;
+        (*db).bl.y = y as c_ushort;
+        (*db).owner = owner;
+        (*db).onetime = 1;
         (*db).spawncheck = 0;
-        (*db).bl.prev  = std::ptr::null_mut();
-        (*db).bl.next  = std::ptr::null_mut();
+        (*db).bl.prev = std::ptr::null_mut();
+        (*db).bl.next = std::ptr::null_mut();
 
         let new_id = mob_get_free_id();
         if new_id == 0 {
             eprintln!("[mob] mobspawn_onetime: no free onetime ID, skipping spawn");
-            mob_free_helper(db);
+            libc::free(db as *mut libc::c_void);
             continue;
         }
         (*db).bl.id = new_id;
