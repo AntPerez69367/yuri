@@ -61,10 +61,6 @@ static inline int mob_handle_sub(MOB* m)                { return rust_mob_handle
 static inline int kill_mob(MOB* m)                      { return rust_kill_mob(m); }
 static inline int mob_calcstat(MOB* m)                  { return rust_mob_calcstat(m); }
 
-// ─── C helpers that stay in mob.c ────────────────────────────────────────────
-int mobdb_init(void);
-void mob_free_helper(MOB*);
-
 // ─── USER-dependent mob functions — implemented in Rust (src/game/mob.rs) ────
 int rust_mob_addtocurrent(struct block_list*, ...);
 int rust_mob_dropitem(unsigned int, unsigned int, int, int, int, int, int, int,
