@@ -5,96 +5,18 @@
 #include "map_server.h"
 #include "mmo.h"
 
-int is_command(USER *, const char *, int);
-int at_command(USER *, const char *, int);
-int command_reload(USER *, char *, lua_State *);
+// Rust implementations (defined in src/game/gm_command.rs)
+int rust_is_command(USER *, const char *, int);
+int rust_at_command(USER *, const char *, int);
+int rust_command_reload(USER *, char *, lua_State *);
 
-int command_url(USER *, char *, lua_State *);
-int command_reloadmob(USER *, char *, lua_State *);
-int command_reloadspawn(USER *, char *, lua_State *);
-int command_debug(USER *, char *, lua_State *);
-int command_item(USER *, char *, lua_State *);
-int command_res(USER *, char *, lua_State *);
-int command_hair(USER *, char *, lua_State *);
-int command_checkdupes(USER *, char *, lua_State *);
-int command_checkwpe(USER *, char *, lua_State *);
-int command_kill(USER *, char *, lua_State *);
-int command_killall(USER *, char *, lua_State *);
-int command_deletespell(USER *, char *, lua_State *);
-int command_xprate(USER *, char *, lua_State *);
-int command_heal(USER *, char *, lua_State *);
-int command_level(USER *, char *, lua_State *);
-int command_randomspawn(USER *, char *, lua_State *);
-int command_drate(USER *, char *, lua_State *);
-int command_spell(USER *, char *, lua_State *);
-int command_val(USER *, char *, lua_State *);
-int command_disguise(USER *, char *, lua_State *);
-int command_warp(USER *, char *, lua_State *);
-int command_makegm(USER *, char *, lua_State *);
-int command_givespell(USER *, char *, lua_State *);
-int command_side(USER *, char *, lua_State *);
-int command_state(USER *, char *, lua_State *);
-int command_armorcolor(USER *, char *, lua_State *);
-int command_makegm(USER *, char *, lua_State *);
-int command_who(USER *, char *, lua_State *);
-int command_legend(USER *, char *, lua_State *);
-int command_luareload(USER *, char *, lua_State *);
-int command_magicreload(USER *, char *, lua_State *);
-int command_lua(USER *, char *, lua_State *);
-int command_speed(USER *, char *, lua_State *);
-int command_reloaditem(USER *, char *, lua_State *);
-int command_reloadcreations(USER *, char *, lua_State *);
-int command_pvp(USER *, char *, lua_State *);
-int command_spellwork(USER *, char *, lua_State *);
-int command_broadcast(USER *, char *, lua_State *);
-int command_luasize(USER *, char *, lua_State *);
-int command_luafix(USER *, char *, lua_State *);
-int command_respawn(USER *, char *, lua_State *);
-int command_kc(USER *, char *, lua_State *);
-int command_ban(USER *, char *, lua_State *);
-int command_unban(USER *, char *, lua_State *);
-int command_blockcount(USER *, char *, lua_State *);
-int command_stealth(USER *, char *, lua_State *);
-int command_ghosts(USER *, char *, lua_State *);
-int command_unphysical(USER *, char *, lua_State *);
-int command_immortality(USER *, char *, lua_State *);
-int command_silence(USER *, char *, lua_State *);
-int command_shutdowncancel(USER *, char *, lua_State *);
-int command_shutdown(USER *, char *, lua_State *);
-int command_weap(USER *, char *, lua_State *);
-int command_armor(USER *, char *, lua_State *);
-int command_shield(USER *, char *, lua_State *);
-int command_crown(USER *, char *, lua_State *);
-int command_mantle(USER *, char *, lua_State *);
-int command_necklace(USER *, char *, lua_State *);
-int command_boots(USER *, char *, lua_State *);
-int command_faceacc(USER *, char *, lua_State *);
-int command_helm(USER *, char *, lua_State *);
-int command_gfxtoggle(USER *, char *, lua_State *);
-int command_weather(USER *, char *, lua_State *);
-int command_light(USER *, char *, lua_State *);
-int command_gm(USER *, char *, lua_State *);
-int command_report(USER *, char *, lua_State *);
-int command_cinv(USER *, char *, lua_State *);
-int command_cfloor(USER *, char *, lua_State *);
-int command_cspells(USER *, char *, lua_State *);
-int command_job(USER *, char *, lua_State *);
-int command_music(USER *, char *, lua_State *);
-int command_musicn(USER *, char *, lua_State *);
-int command_musicp(USER *, char *, lua_State *);
-int command_musicq(USER *, char *, lua_State *);
-int command_sound(USER *, char *, lua_State *);
-int command_nsound(USER *, char *, lua_State *);
-int command_psound(USER *, char *, lua_State *);
-int command_soundq(USER *, char *, lua_State *);
-int command_nspell(USER *, char *, lua_State *);
-int command_pspell(USER *, char *, lua_State *);
-int command_spellq(USER *, char *, lua_State *);
-int command_reloadboard(USER *, char *, lua_State *);
-int command_reloadclan(USER *, char *, lua_State *);
-int command_transfer(USER *, char *, lua_State *);
-int command_reloadnpc(USER *, char *, lua_State *);
-int command_reloadmaps(USER *, char *, lua_State *);
-int command_reloadclass(USER *, char *, lua_State *);
-int command_reloadlevels(USER *, char *, lua_State *);
-int command_reloadwarps(USER *, char *, lua_State *);
+// Inline wrappers — redirect C callers to Rust without changing call sites.
+static inline int is_command(USER *sd, const char *p, int len) {
+    return rust_is_command(sd, p, len);
+}
+static inline int at_command(USER *sd, const char *p, int len) {
+    return rust_at_command(sd, p, len);
+}
+static inline int command_reload(USER *sd, char *line, lua_State *state) {
+    return rust_command_reload(sd, line, state);
+}
