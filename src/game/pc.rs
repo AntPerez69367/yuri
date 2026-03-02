@@ -1709,8 +1709,10 @@ pub unsafe extern "C" fn rust_pc_requestmp(sd: *mut MapSessionData) -> c_int {
     (*sd).flags = 0;
 
     // Check for new mail
+    let mut escaped_name = [0i8; 255];
+    Sql_EscapeString(sql_handle, escaped_name.as_mut_ptr(), (*sd).status.name.as_ptr());
     let query_mail = c"SELECT `MalNew` FROM `Mail` WHERE `MalNew` = 1 AND `MalChaNameDestination` = '%s'";
-    if SQL_ERROR == Sql_Query(sql_handle, query_mail.as_ptr(), (*sd).status.name.as_ptr()) {
+    if SQL_ERROR == Sql_Query(sql_handle, query_mail.as_ptr(), escaped_name.as_ptr()) {
         Sql_ShowDebug_(sql_handle, c"pc.rs".as_ptr(), line!() as c_ulong);
         return 0;
     }
