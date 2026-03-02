@@ -59,7 +59,7 @@ add_library(map_game STATIC
     c_src/mob.c
     c_src/npc.c
     c_src/pc.c
-    c_src/scripting.c
+    c_src/sl_compat.c
 )
 target_link_libraries(map_game ${YURI_LINK_GROUP} ZLIB::ZLIB PkgConfig::LUAJIT m dl pthread)
 

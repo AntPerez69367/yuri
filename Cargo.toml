@@ -19,6 +19,7 @@ bcrypt = "0.18"
 chrono = "0.4.44"
 bytemuck = { version = "1", features = ["derive"] }
 libc = "0.2.182"
+mlua = { version = "0.10", features = ["luajit"] }
 
 serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9.34-deprecated"
