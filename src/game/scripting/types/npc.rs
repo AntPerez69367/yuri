@@ -14,6 +14,9 @@ use crate::game::scripting::types::shared;
 use crate::servers::char::charstatus::MAX_EQUIP;
 
 pub struct NpcObject { pub ptr: *mut c_void }
+// SAFETY: NpcObject is used exclusively within a single-threaded Lua runtime.
+// All Lua closures that touch `ptr` are invoked on one thread; no concurrent
+// access to the underlying NpcData is possible.
 unsafe impl Send for NpcObject {}
 
 // ---------------------------------------------------------------------------
@@ -22,6 +25,7 @@ unsafe impl Send for NpcObject {}
 
 unsafe fn npc_map(nd: *const NpcData) -> *mut MapData {
     if nd.is_null() { return std::ptr::null_mut(); }
+    if (nd as usize) % std::mem::align_of::<NpcData>() != 0 { return std::ptr::null_mut(); }
     get_map_ptr((*nd).bl.m)
 }
 
@@ -130,8 +134,13 @@ impl UserData for NpcObject {
                                 }
                                 _ => String::new(),
                             };
-                            if let Ok(cs) = CString::new(msg.as_bytes()) {
-                                unsafe { sffi::sl_g_talk(ptr, talk_type, cs.as_ptr()); }
+                            match CString::new(msg.as_bytes()) {
+                                Ok(cs) => unsafe { sffi::sl_g_talk(ptr, talk_type, cs.as_ptr()); },
+                                Err(e) => tracing::debug!(
+                                    "[scripting] NpcObject::talk: msg contains embedded null \
+                                     (ptr={:?}, talk_type={}, err={})",
+                                    ptr, talk_type, e
+                                ),
                             }
                             Ok(())
                         }
@@ -272,18 +281,22 @@ impl UserData for NpcObject {
                             }
                             let tbl = lua.create_table()?;
                             if amount <= 0 { return Ok(mlua::Value::Table(tbl)); }
-                            let spawned = unsafe {
+                            let spawned_raw = unsafe {
                                 sffi::rust_mobspawn_onetime(mob_id, m, x, y, amount, 0, 0, 0, owner)
                             };
-                            if spawned.is_null() { return Ok(mlua::Value::Table(tbl)); }
-                            for i in 0..amount as usize {
-                                let id = unsafe { *spawned.add(i) };
+                            if spawned_raw.is_null() { return Ok(mlua::Value::Table(tbl)); }
+                            // Collect the spawned IDs before any fallible Lua operations so
+                            // the C buffer is always freed, even if tbl.set returns an error.
+                            let ids: Vec<_> = (0..amount as usize)
+                                .map(|i| unsafe { *spawned_raw.add(i) })
+                                .collect();
+                            unsafe { libc::free(spawned_raw as *mut c_void) };
+                            for (i, id) in ids.into_iter().enumerate() {
                                 let bl = unsafe { sffi::map_id2bl(id) };
                                 if !bl.is_null() {
                                     tbl.set(i + 1, lua.create_userdata(MobObject { ptr: bl, deleted: Arc::new(AtomicBool::new(false)) })?)?;
                                 }
                             }
-                            unsafe { libc::free(spawned as *mut c_void) };
                             Ok(mlua::Value::Table(tbl))
                         }
                     )?));
