@@ -1958,8 +1958,13 @@ pub unsafe extern "C" fn rust_mob_dropitem(
                     MAX_GROUP_MEMBERS
                 };
                 let gid = (*attacker).groupid as usize;
-                for z in 0..safe_count {
-                    (*fl).looters[z] = groups_mob[gid * MAX_GROUP_MEMBERS + z];
+                if gid < 256 {
+                    for z in 0..safe_count {
+                        let idx = gid * MAX_GROUP_MEMBERS + z;
+                        if idx < groups_mob.len() {
+                            (*fl).looters[z] = groups_mob[idx];
+                        }
+                    }
                 }
             } else {
                 (*fl).looters[0] = (*attacker).bl.id;
