@@ -1548,14 +1548,14 @@ impl UserData for PcObject {
         methods.add_method(
             "flushDuration",
             |_, this, (level, min_id, max_id): (c_int, Option<c_int>, Option<c_int>)| {
-                unsafe { sl_pc_flushduration(this.ptr, level, min_id.unwrap_or(0), max_id.unwrap_or(0)) };
+                unsafe { sl_pc_flushduration(this.ptr, level, min_id.unwrap_or(0), max_id.unwrap_or(c_int::MAX)) };
                 Ok(())
             },
         );
         methods.add_method(
             "flushDurationNoUncast",
             |_, this, (level, min_id, max_id): (c_int, Option<c_int>, Option<c_int>)| {
-                unsafe { sl_pc_flushdurationnouncast(this.ptr, level, min_id.unwrap_or(0), max_id.unwrap_or(0)) };
+                unsafe { sl_pc_flushdurationnouncast(this.ptr, level, min_id.unwrap_or(0), max_id.unwrap_or(c_int::MAX)) };
                 Ok(())
             },
         );
