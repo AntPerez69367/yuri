@@ -127,8 +127,14 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     let mob_mt  = lua.create_table()?;
     mob_mt.set("__call", lua.create_function(|lua, (_tbl, v): (mlua::Value, mlua::Value)| -> mlua::Result<mlua::Value> {
         let ptr = match v {
-            mlua::Value::Integer(id) => unsafe { ffi::map_id2mob(id as c_uint) },
-            mlua::Value::Number(f)   => unsafe { ffi::map_id2mob(f as c_uint) },
+            mlua::Value::Integer(id) => {
+                if id < 0 || id > c_uint::MAX as i64 { return Ok(mlua::Value::Nil); }
+                unsafe { ffi::map_id2mob(id as c_uint) }
+            }
+            mlua::Value::Number(f) => {
+                if !f.is_finite() || f < 0.0 || f > c_uint::MAX as f64 { return Ok(mlua::Value::Nil); }
+                unsafe { ffi::map_id2mob(f as c_uint) }
+            }
             _ => std::ptr::null_mut(),
         };
         if ptr.is_null() { return Ok(mlua::Value::Nil); }
@@ -146,12 +152,14 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     // ITEM/RECIPE/FL need custom ctors that perform DB/id-db lookups.
     g.set("ITEM", lua.create_function(|lua, v: mlua::Value| -> mlua::Result<mlua::Value> {
         let ptr: *mut c_void = match v {
-            mlua::Value::Integer(id) => unsafe {
-                crate::ffi::item_db::rust_itemdb_search(id as c_uint) as *mut c_void
-            },
-            mlua::Value::Number(f) => unsafe {
-                crate::ffi::item_db::rust_itemdb_search(f as c_uint) as *mut c_void
-            },
+            mlua::Value::Integer(id) => {
+                if id < 0 || id > c_uint::MAX as i64 { return Ok(mlua::Value::Nil); }
+                unsafe { crate::ffi::item_db::rust_itemdb_search(id as c_uint) as *mut c_void }
+            }
+            mlua::Value::Number(f) => {
+                if !f.is_finite() || f < 0.0 || f > c_uint::MAX as f64 { return Ok(mlua::Value::Nil); }
+                unsafe { crate::ffi::item_db::rust_itemdb_search(f as c_uint) as *mut c_void }
+            }
             mlua::Value::String(ref s) => {
                 let text = s.to_str()?;
                 let cs = CString::new(text.as_bytes()).map_err(mlua::Error::external)?;
@@ -167,12 +175,14 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     g.set("PARCEL",   ctor!(lua, ParcelObject))?;
     g.set("RECIPE", lua.create_function(|lua, v: mlua::Value| -> mlua::Result<mlua::Value> {
         let ptr: *mut c_void = match v {
-            mlua::Value::Integer(id) => unsafe {
-                crate::ffi::recipe_db::rust_recipedb_search(id as c_uint) as *mut c_void
-            },
-            mlua::Value::Number(f) => unsafe {
-                crate::ffi::recipe_db::rust_recipedb_search(f as c_uint) as *mut c_void
-            },
+            mlua::Value::Integer(id) => {
+                if id < 0 || id > c_uint::MAX as i64 { return Ok(mlua::Value::Nil); }
+                unsafe { crate::ffi::recipe_db::rust_recipedb_search(id as c_uint) as *mut c_void }
+            }
+            mlua::Value::Number(f) => {
+                if !f.is_finite() || f < 0.0 || f > c_uint::MAX as f64 { return Ok(mlua::Value::Nil); }
+                unsafe { crate::ffi::recipe_db::rust_recipedb_search(f as c_uint) as *mut c_void }
+            }
             mlua::Value::String(ref s) => {
                 let text = s.to_str()?;
                 let cs = CString::new(text.as_bytes()).map_err(mlua::Error::external)?;
