@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdio.h>
+
 #include "map_server.h"
 
 enum { MOB_ALIVE, MOB_DEAD, MOB_PARA, MOB_BLIND, MOB_HIT, MOB_ESCAPE };
@@ -73,14 +75,19 @@ int rust_mob_calc_critical(MOB*, USER*);
 int rust_mob_move(struct block_list*, ...);
 
 static inline int mob_addtocurrent(struct block_list* bl, ...) {
-  /* forwarding varargs not possible in C; direct call only via map_foreachincell */
-  (void)bl; return 0;
+  fprintf(stderr, "[mob] mob_addtocurrent called from C wrapper (bl=%p); "
+          "use rust_mob_addtocurrent via map_foreachincell instead\n", (void*)bl);
+  abort();
 }
 static inline int mob_find_target(struct block_list* bl, ...) {
-  (void)bl; return 0;
+  fprintf(stderr, "[mob] mob_find_target called from C wrapper (bl=%p); "
+          "use rust_mob_find_target via map_foreachincell instead\n", (void*)bl);
+  abort();
 }
 static inline int mob_move(struct block_list* bl, ...) {
-  (void)bl; return 0;
+  fprintf(stderr, "[mob] mob_move called from C wrapper (bl=%p); "
+          "use rust_move_mob/rust_mob_move via map_foreachincell instead\n", (void*)bl);
+  abort();
 }
 static inline int mob_attack(MOB* m, int id)             { return rust_mob_attack(m, id); }
 static inline int mob_calc_critical(MOB* m, USER* sd)    { return rust_mob_calc_critical(m, sd); }
