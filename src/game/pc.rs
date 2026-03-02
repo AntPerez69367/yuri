@@ -3191,6 +3191,14 @@ pub unsafe extern "C" fn rust_pc_delitem(
     if id < 0 || id >= maxinv { return 0; }
     let inv = &mut (*sd).status.inventory[id as usize];
     if inv.id == 0 { return 0; }
+    if amount <= 0 { return 0; }
+
+    if amount >= inv.amount {
+        inv.amount = 0;
+        libc::memset(inv as *mut Item as *mut libc::c_void, 0, std::mem::size_of::<Item>());
+        clif_senddelitem(sd, id, type_);
+        return 0;
+    }
 
     inv.amount -= amount;
 
