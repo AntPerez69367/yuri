@@ -82,13 +82,22 @@ fn val_to_ulong(v: &mlua::Value) -> Result<c_ulong, mlua::Error> {
                     f
                 )));
             }
-            if *f < 0.0 || *f > c_ulong::MAX as f64 {
+            let t = f.trunc();
+            if t < 0.0 {
                 return Err(mlua::Error::external(format!(
-                    "float value {} out of range for c_ulong",
+                    "float value {} is negative; expected non-negative integer for registry",
                     f
                 )));
             }
-            Ok(*f as c_ulong)
+            // Use u128 intermediate to avoid f64 precision loss at the high end of c_ulong range.
+            let bits = t as u128;
+            if bits > c_ulong::MAX as u128 {
+                return Err(mlua::Error::external(format!(
+                    "float value {} overflows c_ulong",
+                    f
+                )));
+            }
+            Ok(bits as c_ulong)
         }
         other => Err(mlua::Error::external(format!(
             "expected integer for registry value, got {}",
@@ -144,7 +153,7 @@ impl UserData for RegStringObject {
                 return Err(mlua::Error::external("RegStringObject: ptr is null"));
             }
             let sval = match &val {
-                mlua::Value::String(s) => s.to_str().map(|s| s.to_owned()).unwrap_or_default(),
+                mlua::Value::String(s) => s.to_string_lossy(),
                 other => return Err(mlua::Error::external(format!(
                     "expected string for registry value, got {}",
                     other.type_name()
