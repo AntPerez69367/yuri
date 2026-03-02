@@ -134,7 +134,7 @@ static inline int pc_isinvenitemspace(USER *sd, int num, int id, int owner, char
 /* ── floor-item helpers ────────────────────────────────────────────────────── */
 int rust_pc_dropitemfull(USER *sd, struct item *fl2);
 int rust_pc_addtocurrent2(struct block_list *bl, ...);
-int rust_pc_addtocurrent(struct block_list *bl, ...);
+int rust_pc_addtocurrent(struct block_list *bl, va_list ap);
 int rust_pc_npc_drop(struct block_list *bl, ...);
 
 static inline int pc_dropitemfull(USER *sd, struct item *fl2)          { return rust_pc_dropitemfull(sd, fl2); }
@@ -150,7 +150,7 @@ int rust_pc_useitem(USER *sd, int id);
 int rust_pc_getitemmap(USER *sd, int id);
 int rust_pc_getitemsaround(USER *sd);
 int rust_pc_handle_item(int a, int b);
-int rust_pc_handle_item_sub(struct block_list *bl, ...);
+int rust_pc_handle_item_sub(struct block_list *bl, va_list ap);
 int rust_pc_runfloor_sub(USER *sd);
 
 static inline int pc_additem(USER *sd, struct item *fl)        { return rust_pc_additem(sd, fl); }
