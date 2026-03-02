@@ -5,6 +5,7 @@
 use mlua::{MetaMethod, UserData, UserDataMethods};
 use std::ffi::{c_char, CStr, CString};
 use std::os::raw::{c_float, c_int, c_uint, c_void};
+use std::sync::atomic::Ordering;
 
 use crate::database::map_db::BlockList;
 use crate::game::scripting::ffi as sffi;
@@ -1407,6 +1408,9 @@ impl UserData for PcObject {
                 mlua::Value::Number(n) => n as c_int,
                 mlua::Value::UserData(ud) => {
                     if let Ok(mob) = ud.borrow::<MobObject>() {
+                        if mob.ptr.is_null() || mob.deleted.load(Ordering::Acquire) {
+                            return Ok(());
+                        }
                         let mob_data = unsafe {
                             &*(mob.ptr as *const crate::game::mob::MobSpawnData)
                         };
