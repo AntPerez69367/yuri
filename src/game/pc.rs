@@ -1563,12 +1563,16 @@ pub unsafe extern "C" fn rust_pc_scripttimer(id: c_int, _none: c_int) -> c_int {
     }
 
     if (*sd).groupbars != 0 && (*sd).group_count > 1 {
-        for x in 0..(*sd).group_count as usize {
-            let tsd = map_id2sd_pc(groups[(*sd).groupid as usize * 256 + x]);
-            if tsd.is_null() { continue; }
-            if (*tsd).bl.m == (*sd).bl.m {
-                clif_send_groupbars(sd, tsd);
-                clif_grouphealth_update(sd);
+        let base = (*sd).groupid as usize * 256;
+        if base < groups.len() {
+            for x in 0..(*sd).group_count as usize {
+                if base + x >= groups.len() { break; }
+                let tsd = map_id2sd_pc(groups[base + x]);
+                if tsd.is_null() { continue; }
+                if (*tsd).bl.m == (*sd).bl.m {
+                    clif_send_groupbars(sd, tsd);
+                    clif_grouphealth_update(sd);
+                }
             }
         }
     }
