@@ -19,17 +19,17 @@ extern "C" {
 
     // --- Phase 2: registry types ---
 
-    // Player (USER*) integer registries
-    pub fn pc_readglobalreg(sd: *mut c_void, attrname: *const c_char) -> c_int;
-    pub fn pc_setglobalreg(sd: *mut c_void, attrname: *const c_char, val: c_ulong) -> c_int;
+    // Player (USER*) integer registries — call rust_pc_* directly (pc.c removed from build)
+    pub fn rust_pc_readglobalreg(sd: *mut c_void, attrname: *const c_char) -> c_int;
+    pub fn rust_pc_setglobalreg(sd: *mut c_void, attrname: *const c_char, val: c_ulong) -> c_int;
     pub fn pc_readnpcintreg(sd: *mut c_void, attrname: *const c_char) -> c_int;
     pub fn pc_setnpcintreg(sd: *mut c_void, attrname: *const c_char, val: c_int) -> c_int;
-    pub fn pc_readquestreg(sd: *mut c_void, attrname: *const c_char) -> c_int;
-    pub fn pc_setquestreg(sd: *mut c_void, attrname: *const c_char, val: c_int) -> c_int;
+    pub fn rust_pc_readquestreg(sd: *mut c_void, attrname: *const c_char) -> c_int;
+    pub fn rust_pc_setquestreg(sd: *mut c_void, attrname: *const c_char, val: c_int) -> c_int;
 
-    // Player string registry
-    pub fn pc_readglobalregstring(sd: *mut c_void, attrname: *const c_char) -> *const c_char;
-    pub fn pc_setglobalregstring(sd: *mut c_void, attrname: *const c_char, val: *const c_char) -> c_int;
+    // Player string registry — call rust_pc_* directly (pc.c removed from build)
+    pub fn rust_pc_readglobalregstring(sd: *mut c_void, attrname: *const c_char) -> *const c_char;
+    pub fn rust_pc_setglobalregstring(sd: *mut c_void, attrname: *const c_char, val: *const c_char) -> c_int;
 
     // NPC integer registry (via static-inline wrapper in npc.h → npc_*_ffi symbols)
     pub fn npc_readglobalreg_ffi(nd: *mut c_void, attrname: *const c_char) -> c_int;
@@ -45,7 +45,7 @@ extern "C" {
 
     // Map-indexed registries (direct map slot, not from USER*)
     pub fn map_readglobalreg(m: c_int, attrname: *const c_char) -> c_int;
-    pub fn map_setglobalreg(m: c_int, attrname: *const c_char, val: c_int);
+    pub fn map_setglobalreg(m: c_int, attrname: *const c_char, val: c_int) -> c_int;
 
     // Game-global registries (no self pointer)
     pub fn map_readglobalgamereg(attrname: *const c_char) -> c_int;
@@ -65,7 +65,7 @@ extern "C" {
     pub fn clif_gmbroadcast(msg: *const c_char, m: c_int) -> c_int;
 
     // Map helpers
-    pub fn map_changepostcolor(board: c_int, post: c_int, color: c_int);
+    pub fn map_changepostcolor(board: c_int, post: c_int, color: c_int) -> c_int;
     /// Returns a pointer into the C map[] id-database for floor items.
     pub fn map_id2fl(id: c_uint) -> *mut c_void;
 

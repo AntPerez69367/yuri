@@ -20,6 +20,14 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     g.set("BL_ALL",  sffi::BL_ALL  as i64)?;
 
     // -----------------------------------------------------------------------
+    // MOB state constants — used by AI scripts (mob.state comparisons)
+    // -----------------------------------------------------------------------
+    g.set("MOB_ALIVE",  0i64)?;
+    g.set("MOB_DEAD",   1i64)?;
+    g.set("MOB_HIT",    4i64)?;
+    g.set("MOB_ESCAPE", 5i64)?;
+
+    // -----------------------------------------------------------------------
     // Async coroutines — Phase 5 stubs
     // -----------------------------------------------------------------------
     g.set("_async", lua.create_function(|_, _: mlua::MultiValue| {
@@ -195,13 +203,13 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("getPass", lua.create_function(|_, (m, x, y): (i32, i32, i32)| {
-        if m < 0 { return Ok(1i64); }
+        if m < 0 { return Ok(Value::Nil); }
         let mp = unsafe { get_map_ptr(m as u16) };
-        if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
+        if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(Value::Nil); }
         let md = unsafe { &*mp };
-        if x < 0 || y < 0 || x >= md.xs as i32 || y >= md.ys as i32 { return Ok(1i64); }
+        if x < 0 || y < 0 || x >= md.xs as i32 || y >= md.ys as i32 { return Ok(Value::Nil); }
         let idx = (x + y * md.xs as i32) as usize;
-        Ok(unsafe { *md.pass.add(idx) as i64 })
+        Ok(Value::Integer(unsafe { *md.pass.add(idx) as i64 }))
     })?)?;
 
     // -----------------------------------------------------------------------

@@ -35,7 +35,7 @@ unsafe impl Send for MobObject {}
 // C functions not yet in game/mob.rs extern block
 // ---------------------------------------------------------------------------
 extern "C" {
-    fn mob_attack(mob: *mut MobSpawnData, id: c_int) -> c_int;
+    fn rust_mob_attack(mob: *mut MobSpawnData, id: c_int) -> c_int;
     fn clif_send_mob_healthscript(mob: *mut c_void, damage: c_int, critical: c_int);
     fn rust_magicdb_id(s: *const c_char) -> c_int;
 
@@ -158,7 +158,7 @@ impl UserData for MobObject {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(0i32);
                             }
-                            Ok(unsafe { mob_attack(ptr as *mut MobSpawnData, id) })
+                            Ok(unsafe { rust_mob_attack(ptr as *mut MobSpawnData, id) })
                         },
                     )?))
                 }
@@ -672,7 +672,7 @@ impl UserData for MobObject {
                 "owner" => int!(mob.owner),
                 "sleep" => Ok(mlua::Value::Number(mob.sleep as f64)),
                 "target" => int!(mob.target),
-                "confuseTarget" => int!(mob.confused_target),
+                "confusedTarget" => int!(mob.confused_target),
                 "deduction" => Ok(mlua::Value::Number(mob.deduction as f64)),
                 "damage" => Ok(mlua::Value::Number(mob.damage as f64)),
                 "crit" => int!(mob.crit),
