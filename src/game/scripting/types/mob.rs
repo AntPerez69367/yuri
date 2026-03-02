@@ -105,6 +105,7 @@ impl UserData for MobObject {
             let mob = unsafe { &*(this.ptr as *const MobSpawnData) };
             let bl = &mob.bl;
             let ptr = this.ptr;
+            let deleted = Arc::clone(&this.deleted);
 
             macro_rules! int {
                 ($e:expr) => {
@@ -151,9 +152,10 @@ impl UserData for MobObject {
             // ── named methods ────────────────────────────────────────────────
             match key.as_str() {
                 "attack" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, id): (mlua::Value, c_int)| {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(0i32);
                             }
                             Ok(unsafe { mob_attack(ptr as *mut MobSpawnData, id) })
@@ -161,9 +163,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "addHealth" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, damage): (mlua::Value, c_int)| {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
                             unsafe {
@@ -174,9 +177,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "removeHealth" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, damage, caster_id): (mlua::Value, c_int, c_uint)| {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
                             unsafe {
@@ -187,9 +191,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "move" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(false);
                             }
                             Ok(unsafe { move_mob(ptr as *mut MobSpawnData) } != 0)
@@ -197,9 +202,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "moveIgnoreObject" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(false);
                             }
                             Ok(unsafe { move_mob_ignore_object(ptr as *mut MobSpawnData) } != 0)
@@ -207,9 +213,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "moveGhost" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(0i32);
                             }
                             Ok(unsafe { moveghost_mob(ptr as *mut MobSpawnData) })
@@ -217,9 +224,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "moveIntent" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, target_id): (mlua::Value, c_uint)| {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(0i32);
                             }
                             let bl = unsafe { map_id2bl_mob(target_id) };
@@ -231,9 +239,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "warp" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, m, x, y): (mlua::Value, c_int, c_int, c_int)| {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
                             unsafe {
@@ -244,9 +253,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "sendHealth" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, dmg, critical): (mlua::Value, c_float, c_int)| {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
                             let damage = if dmg > 0.0 {
@@ -269,6 +279,7 @@ impl UserData for MobObject {
                     )?))
                 }
                 "setDuration" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(
                         lua.create_function(
                             move |_,
@@ -279,7 +290,7 @@ impl UserData for MobObject {
                                 c_uint,
                                 c_int,
                             )| {
-                                if ptr.is_null() {
+                                if ptr.is_null() || df.load(Ordering::Acquire) {
                                     return Ok(());
                                 }
                                 let cs =
@@ -293,9 +304,10 @@ impl UserData for MobObject {
                     ))
                 }
                 "flushDuration" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, dis, minid, maxid): (mlua::Value, c_int, c_int, c_int)| {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
                             unsafe {
@@ -306,9 +318,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "flushDurationNoUncast" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, dis, minid, maxid): (mlua::Value, c_int, c_int, c_int)| {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
                             unsafe {
@@ -319,9 +332,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "hasDuration" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, name): (mlua::Value, String)| -> mlua::Result<bool> {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(false);
                             }
                             let cs =
@@ -334,9 +348,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "hasDurationID" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, name, caster_id): (mlua::Value, String, c_uint)| -> mlua::Result<bool> {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(false);
                             }
                             let cs =
@@ -352,9 +367,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "getDuration" | "durationAmount" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, name): (mlua::Value, String)| -> mlua::Result<c_int> {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(0);
                             }
                             let cs =
@@ -371,9 +387,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "getDurationID" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, name, caster_id): (mlua::Value, String, c_uint)| -> mlua::Result<c_int> {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(0);
                             }
                             let cs =
@@ -393,9 +410,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "checkThreat" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, player_id): (mlua::Value, c_uint)| {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(0i32);
                             }
                             Ok(unsafe { sl_mob_checkthreat(ptr, player_id) })
@@ -403,9 +421,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "callBase" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, script): (mlua::Value, String)| -> mlua::Result<bool> {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(false);
                             }
                             let cs =
@@ -415,9 +434,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "checkMove" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(false);
                             }
                             Ok(unsafe { sl_mob_checkmove(ptr) } != 0)
@@ -425,9 +445,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "setIndDmg" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, player_id, dmg): (mlua::Value, c_uint, c_float)| -> mlua::Result<bool> {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(false);
                             }
                             Ok(unsafe { sl_mob_setinddmg(ptr, player_id, dmg) } != 0)
@@ -435,9 +456,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "setGrpDmg" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, player_id, dmg): (mlua::Value, c_uint, c_float)| -> mlua::Result<bool> {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(false);
                             }
                             Ok(unsafe { sl_mob_setgrpdmg(ptr, player_id, dmg) } != 0)
@@ -445,10 +467,11 @@ impl UserData for MobObject {
                     )?))
                 }
                 "getIndDmg" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |lua, _: mlua::MultiValue| -> mlua::Result<mlua::Value> {
                             let tbl = lua.create_table()?;
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(mlua::Value::Table(tbl));
                             }
                             let mob = unsafe { &*(ptr as *const MobSpawnData) };
@@ -466,10 +489,11 @@ impl UserData for MobObject {
                     )?))
                 }
                 "getGrpDmg" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |lua, _: mlua::MultiValue| -> mlua::Result<mlua::Value> {
                             let tbl = lua.create_table()?;
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(mlua::Value::Table(tbl));
                             }
                             let mob = unsafe { &*(ptr as *const MobSpawnData) };
@@ -487,9 +511,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "getEquippedItem" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |lua, (_, num): (mlua::Value, usize)| -> mlua::Result<mlua::Value> {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(mlua::Value::Nil);
                             }
                             let mob = unsafe { &*(ptr as *const MobSpawnData) };
@@ -508,9 +533,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "calcStat" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
                             unsafe {
@@ -532,9 +558,10 @@ impl UserData for MobObject {
                 }
                 // sendSide() — send a side-update to nearby players.
                 "sendSide" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
                             unsafe { sffi::sl_g_sendside(ptr); }
@@ -558,9 +585,10 @@ impl UserData for MobObject {
                 }
                 // talk(type, msg) — speak in the surrounding area.
                 "talk" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, args: mlua::MultiValue| {
-                            if ptr.is_null() {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
                             let a: Vec<mlua::Value> = args.into_iter().collect();
@@ -724,29 +752,39 @@ impl UserData for MobObject {
                 "selfAnimationXY"   => return shared::make_selfanimationxy_fn(lua, ptr),
                 "sendParcel"        => return shared::make_sendparcel_fn(lua, ptr),
                 "throw"             => return shared::make_throwblock_fn(lua, ptr),
-                "delFromIDDB" => return Ok(mlua::Value::Function(lua.create_function(
-                    move |_, _: mlua::MultiValue| {
-                        if ptr.is_null() {
-                            return Ok(());
+                "delFromIDDB" => {
+                    let df = Arc::clone(&deleted);
+                    return Ok(mlua::Value::Function(lua.create_function(
+                        move |_, _: mlua::MultiValue| {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
+                                return Ok(());
+                            }
+                            unsafe { sffi::sl_g_deliddb(ptr); }
+                            Ok(())
                         }
-                        unsafe { sffi::sl_g_deliddb(ptr); }
-                        Ok(())
-                    }
-                )?)),
-                "addPermanentSpawn" => return Ok(mlua::Value::Function(lua.create_function(
-                    move |_, _: mlua::MultiValue| {
-                        if ptr.is_null() {
-                            return Ok(());
+                    )?));
+                }
+                "addPermanentSpawn" => {
+                    let df = Arc::clone(&deleted);
+                    return Ok(mlua::Value::Function(lua.create_function(
+                        move |_, _: mlua::MultiValue| {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
+                                return Ok(());
+                            }
+                            unsafe { sffi::sl_g_addpermanentspawn(ptr); }
+                            Ok(())
                         }
-                        unsafe { sffi::sl_g_addpermanentspawn(ptr); }
-                        Ok(())
-                    }
-                )?)),
+                    )?));
+                }
                 // spawn(mob_name_or_id, x, y, amount [,m [,owner]])
                 // Mirrors npc:spawn but for a mob's own map context.
                 "spawn" => {
+                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |lua, args: mlua::MultiValue| -> mlua::Result<mlua::Value> {
+                            if ptr.is_null() || df.load(Ordering::Acquire) {
+                                return Ok(mlua::Value::Table(lua.create_table()?));
+                            }
                             let args: Vec<mlua::Value> = args.into_iter().collect();
                             let mob_id: c_uint = match args.get(1) {
                                 Some(mlua::Value::String(s)) => {
