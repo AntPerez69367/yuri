@@ -107,6 +107,9 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
             _ => std::ptr::null_mut(),
         };
         if ptr.is_null() { return Ok(mlua::Value::Nil); }
+        if unsafe { (*(ptr as *const BlockList)).bl_type as c_int } != ffi::BL_NPC {
+            return Ok(mlua::Value::Nil);
+        }
         Ok(mlua::Value::UserData(lua.create_userdata(NpcObject { ptr })?))
     })?)?;
 
