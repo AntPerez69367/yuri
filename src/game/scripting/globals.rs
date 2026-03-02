@@ -1,6 +1,6 @@
 //! Global Lua functions (91 total) — registered in sl_init.
 
-use std::ffi::{CStr, CString, c_int, c_uint, c_uchar};
+use std::ffi::{CStr, CString, c_char, c_int, c_uint, c_uchar};
 use mlua::{Lua, Value};
 
 use crate::ffi::map_db::get_map_ptr;
@@ -105,24 +105,28 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // Map: dimensions, load status, user count
     // -----------------------------------------------------------------------
     g.set("getMapIsLoaded", lua.create_function(|_, m: i32| {
+        if m < 0 { return Ok(false); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() { return Ok(false); }
         Ok(unsafe { !(*mp).registry.is_null() })
     })?)?;
 
     g.set("getMapUsers", lua.create_function(|_, m: i32| {
+        if m < 0 { return Ok(0i64); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
         Ok(unsafe { (*mp).user as i64 })
     })?)?;
 
     g.set("getMapXMax", lua.create_function(|_, m: i32| {
+        if m < 0 { return Ok(0i64); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
         Ok(unsafe { (*mp).xs as i64 - 1 })
     })?)?;
 
     g.set("getMapYMax", lua.create_function(|_, m: i32| {
+        if m < 0 { return Ok(0i64); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
         Ok(unsafe { (*mp).ys as i64 - 1 })
@@ -137,6 +141,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("getObject", lua.create_function(|_, (m, x, y): (i32, i32, i32)| {
+        if m < 0 { return Ok(0i64); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
         let md = unsafe { &*mp };
@@ -146,6 +151,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("setObject", lua.create_function(|_, (m, x, y, val): (i32, i32, i32, i32)| {
+        if m < 0 { return Ok(()); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(()); }
         let md = unsafe { &*mp };
@@ -157,6 +163,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("getTile", lua.create_function(|_, (m, x, y): (i32, i32, i32)| {
+        if m < 0 { return Ok(0i64); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
         let md = unsafe { &*mp };
@@ -166,6 +173,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("setTile", lua.create_function(|_, (m, x, y, val): (i32, i32, i32, i32)| {
+        if m < 0 { return Ok(()); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(()); }
         let md = unsafe { &*mp };
@@ -176,6 +184,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("setPass", lua.create_function(|_, (m, x, y, val): (i32, i32, i32, i32)| {
+        if m < 0 { return Ok(()); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(()); }
         let md = unsafe { &*mp };
@@ -186,6 +195,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("getPass", lua.create_function(|_, (m, x, y): (i32, i32, i32)| {
+        if m < 0 { return Ok(1i64); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
         let md = unsafe { &*mp };
@@ -198,6 +208,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // Map: title, pvp, weather, registry
     // -----------------------------------------------------------------------
     g.set("getMapTitle", lua.create_function(|_, m: i32| {
+        if m < 0 { return Ok(String::new()); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(String::new()); }
         let s = unsafe { CStr::from_ptr((*mp).title.as_ptr()).to_string_lossy().into_owned() };
@@ -205,6 +216,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("setMapTitle", lua.create_function(|_, (m, title): (i32, String)| {
+        if m < 0 { return Ok(()); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(()); }
         let bytes = title.as_bytes();
@@ -218,12 +230,14 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("getMapPvP", lua.create_function(|_, m: i32| {
+        if m < 0 { return Ok(0i64); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
         Ok(unsafe { (*mp).pvp as i64 })
     })?)?;
 
     g.set("setMapPvP", lua.create_function(|_, (m, pvp): (i32, i32)| {
+        if m < 0 { return Ok(()); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(()); }
         unsafe { (*mp).pvp = pvp as c_uchar; }
@@ -231,8 +245,9 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("getWeatherM", lua.create_function(|_, m: i32| {
+        if m < 0 { return Ok(0i64); }
         let mp = unsafe { get_map_ptr(m as u16) };
-        if mp.is_null() { return Ok(0i64); }
+        if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
         Ok(unsafe { (*mp).weather as i64 })
     })?)?;
 
@@ -270,6 +285,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // Map: getMapAttribute / setMapAttribute
     // -----------------------------------------------------------------------
     g.set("getMapAttribute", lua.create_function(|lua, (m, attr): (i32, String)| {
+        if m < 0 { return Ok(Value::Nil); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(Value::Nil); }
         let md = unsafe { &*mp };
@@ -305,6 +321,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("setMapAttribute", lua.create_function(|_, (m, attr, val): (i32, String, Value)| {
+        if m < 0 { return Ok(()); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(()); }
         let md = unsafe { &mut *mp };
@@ -549,7 +566,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // Clan name
     // -----------------------------------------------------------------------
     g.set("getClanName", lua.create_function(|_, clan: i32| {
-        let mut buf = vec![0i8; 65];
+        let mut buf = vec![0 as c_char; 65];
         let found = unsafe { sffi::sl_g_getclanname(clan as c_int, buf.as_mut_ptr(), 65) };
         if found == 0 { return Ok(String::new()); }
         let s = unsafe { CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned() };

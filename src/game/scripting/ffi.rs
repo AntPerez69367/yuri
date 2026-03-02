@@ -118,7 +118,7 @@ extern "C" {
     pub fn sl_g_getclantribute(clan: c_int) -> c_uint;
     pub fn sl_g_setclantribute(clan: c_int, val: c_uint);
     pub fn sl_g_addclantribute(clan: c_int, val: c_uint);
-    pub fn sl_g_getclanname(clan: c_int, buf: *mut i8, buflen: c_int) -> c_int;
+    pub fn sl_g_getclanname(clan: c_int, buf: *mut c_char, buflen: c_int) -> c_int;
     pub fn sl_g_setclanname(clan: c_int, name: *const c_char);
     pub fn sl_g_getclanbankslots(clan: c_int) -> c_int;
     pub fn sl_g_setclanbankslots(clan: c_int, val: c_int);
