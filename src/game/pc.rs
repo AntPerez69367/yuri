@@ -339,12 +339,12 @@ unsafe impl Send for MapSessionData {}
 #[cfg(test)]
 mod layout_tests {
     use super::*;
-    // Uncomment and fill in EXPECTED_SIZE after verifying with:
-    //   printf("%zu\n", sizeof(struct map_sessiondata))
-    // #[test]
-    // fn map_session_data_size() {
-    //     assert_eq!(std::mem::size_of::<MapSessionData>(), EXPECTED_SIZE);
-    // }
+    // Verified with: printf("%zu\n", sizeof(struct map_sessiondata))
+    const EXPECTED_SIZE: usize = 3335344;
+    #[test]
+    fn map_session_data_size() {
+        assert_eq!(std::mem::size_of::<MapSessionData>(), EXPECTED_SIZE);
+    }
 }
 
 // ─── Constants (from c_src/map_server.h and c_src/mmo.h) ──────────────────────
