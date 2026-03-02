@@ -68,8 +68,8 @@ fn val_to_int(v: &mlua::Value) -> c_int {
 
 fn val_to_uint(v: &mlua::Value) -> c_uint {
     match v {
-        mlua::Value::Integer(i) => *i as c_uint,
-        mlua::Value::Number(f)  => *f as c_uint,
+        mlua::Value::Integer(i) => if *i < 0 { 0 } else { (*i).min(c_uint::MAX as i64) as c_uint },
+        mlua::Value::Number(f)  => if *f < 0.0 || f.is_nan() { 0 } else { (*f).min(c_uint::MAX as f64) as c_uint },
         _ => 0,
     }
 }
@@ -312,10 +312,17 @@ impl UserData for FloorListObject {
                 }
                 "looters" => {
                     if let mlua::Value::Table(ref tbl) = val {
+                        let mut read_count = 0;
                         for i in 0..MAX_GROUP_MEMBERS {
                             if let Ok(v) = tbl.raw_get::<c_uint>((i + 1) as i64) {
                                 fl.looters[i] = v;
+                                read_count += 1;
+                            } else {
+                                break;
                             }
+                        }
+                        for i in read_count..MAX_GROUP_MEMBERS {
+                            fl.looters[i] = 0;
                         }
                     }
                 }

@@ -281,7 +281,7 @@ impl UserData for BItemObject {
                 "protected"       => bi.protected       = val_to_uint(&val),
                 "owner"           => bi.owner           = val_to_uint(&val),
                 "time"            => bi.time            = val_to_uint(&val),
-                "repairCheck"     => bi.repair          = val_to_int(&val) as c_char,
+                "repairCheck"     => { let v = val_to_int(&val).clamp(i8::MIN as c_int, i8::MAX as c_int); bi.repair = v as c_char; }
                 "custom"          => bi.custom          = val_to_uint(&val),
                 "customLook"      => bi.custom_look     = val_to_uint(&val),
                 "customLookColor" => bi.custom_look_color = val_to_uint(&val),
