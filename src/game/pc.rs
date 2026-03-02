@@ -2324,7 +2324,7 @@ pub unsafe extern "C" fn rust_pc_setglobalreg(
     let sd = &mut *sd;
     // Find existing slot (scan full array)
     let mut exist: c_int = -1;
-    for i in 0..MAX_GLOBALPLAYERREG {
+    for i in 0..MAX_GLOBALREG {
         if libc::strcasecmp(sd.status.global_reg[i].str.as_ptr(), reg) == 0 {
             exist = i as c_int;
             break;
