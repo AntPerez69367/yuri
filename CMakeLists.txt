@@ -56,9 +56,7 @@ add_library(map_game STATIC
     c_src/creation_db.c
     c_src/map_parse.c
     c_src/map_server.c
-    c_src/mob.c
     c_src/npc.c
-    c_src/pc.c
     c_src/sl_compat.c
 )
 target_link_libraries(map_game ${YURI_LINK_GROUP} ZLIB::ZLIB PkgConfig::LUAJIT m dl pthread)
