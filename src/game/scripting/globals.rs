@@ -5,6 +5,7 @@ use mlua::{Lua, Value};
 
 use crate::ffi::map_db::get_map_ptr;
 use crate::game::scripting::ffi as sffi;
+use crate::game::scripting::types;
 
 /// Register all 91 Lua globals on the given Lua state.
 pub fn register(lua: &Lua) -> mlua::Result<()> {
@@ -28,10 +29,15 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     g.set("MOB_ESCAPE", 5i64)?;
 
     // -----------------------------------------------------------------------
-    // Async coroutines — Phase 5 stubs
+    // Async coroutines
     // -----------------------------------------------------------------------
-    g.set("_async", lua.create_function(|_, _: mlua::MultiValue| {
-        tracing::warn!("[scripting] _async: Phase 5 not yet implemented");
+    g.set("_async", lua.create_function(|lua, (player_ud, func): (mlua::AnyUserData, mlua::Function)| {
+        let sd = player_ud.borrow::<types::pc::PcObject>()?.ptr;
+        unsafe {
+            lua.exec_raw::<()>(func, |L| {
+                crate::game::scripting::async_coro::start_async(sd, L);
+            })?;
+        }
         Ok(())
     })?)?;
     g.set("_asyncDone", lua.create_function(|_, _: mlua::MultiValue| {

@@ -297,6 +297,8 @@ extern "C" {
     fn sl_pc_set_basewill(sd: *mut c_void, v: c_int);
     fn sl_pc_set_basearmor(sd: *mut c_void, v: c_int);
     fn sl_pc_set_novice_chat(sd: *mut c_void, v: c_int);
+    fn sl_pc_set_sleep(sd: *mut c_void, v: c_int);
+    fn sl_pc_set_dialogtype(sd: *mut c_void, v: c_int);
     fn sl_pc_set_subpath_chat(sd: *mut c_void, v: c_int);
     fn sl_pc_set_clan_chat(sd: *mut c_void, v: c_int);
     fn sl_pc_set_tutor(sd: *mut c_void, v: c_int);
@@ -567,6 +569,7 @@ extern "C" {
     fn sl_pc_calcrangeddamage(sd: *mut c_void, bl: *mut c_void) -> c_int;
     fn sl_pc_calcrangedhit(sd: *mut c_void, bl: *mut c_void) -> c_int;
     fn sl_pc_gmmsg(sd: *mut c_void, msg: *const c_char);
+    fn sl_pc_talkself(sd: *mut c_void, color: c_int, msg: *const c_char);
     fn sl_pc_broadcast_sd(sd: *mut c_void, msg: *const c_char, m: c_int);
     fn sl_pc_killrank(sd: *mut c_void, mob_id: c_int) -> c_int;
     fn sl_pc_getparcel(sd: *mut c_void) -> *mut c_void;
@@ -577,16 +580,21 @@ extern "C" {
     fn sl_pc_delguide(sd: *mut c_void, guide: *const c_char);
     fn sl_pc_getcreationitems(sd: *mut c_void, len: c_int, out: *mut c_int) -> c_int;
     fn sl_pc_getcreationamounts(sd: *mut c_void, len: c_int, item_id: c_int) -> c_int;
-    // Coref accessor — Task 10
+    // Coref accessors — Task 10
+    fn sl_user_coref(sd: *mut c_void) -> c_uint;
     fn sl_user_set_coref(sd: *mut c_void, v: c_uint);
 }
 
 // ─── Task 10: async yield helpers ────────────────────────────────────────────
 
 fn lua_table_to_cstrings(tbl: &mlua::Table) -> mlua::Result<Vec<CString>> {
+    lua_table_to_cstrings_from(tbl, 1)
+}
+
+fn lua_table_to_cstrings_from(tbl: &mlua::Table, start: i64) -> mlua::Result<Vec<CString>> {
     let mut out = Vec::new();
-    let len = tbl.raw_len();
-    for i in 1..=len {
+    let len = tbl.raw_len() as i64;
+    for i in start..=len {
         let s: String = tbl.raw_get(i)?;
         out.push(CString::new(s.as_bytes()).map_err(mlua::Error::external)?);
     }
@@ -615,13 +623,18 @@ fn cstring_ptrs(v: &[CString]) -> Vec<*const c_char> {
 unsafe fn setup_coref_and_yield(sd: *mut c_void) -> c_int {
     use mlua::ffi as lua_ffi;
     let l = crate::game::scripting::sl_gstate as *mut lua_ffi::lua_State;
-    lua_ffi::lua_pushthread(l);
-    let coref: c_int = lua_ffi::luaL_ref(l, lua_ffi::LUA_REGISTRYINDEX);
-    // luaL_ref returns LUA_REFNIL (-1) or LUA_NOREF (-2) on failure; do not
-    // cast negative values to c_uint as that wraps to a garbage reference id.
-    let safe_coref: c_uint = if coref < 0 { 0 } else { coref as c_uint };
-    sl_user_set_coref(sd, safe_coref);
-    lua_ffi::lua_yield(l, 0)
+
+    let coref = sl_user_coref(sd);
+    if coref == 0 {
+        return 0;
+    }
+    lua_ffi::lua_rawgeti(l, lua_ffi::LUA_REGISTRYINDEX, coref as lua_ffi::lua_Integer);
+    let co = lua_ffi::lua_tothread(l, -1);
+    lua_ffi::lua_pop(l, 1);
+    if co.is_null() {
+        return 0;
+    }
+    lua_ffi::lua_yield(co, 0)
 }
 
 impl UserData for PcObject {
@@ -964,6 +977,7 @@ impl UserData for PcObject {
                             }
                         }
                     }
+                    eprintln!("[DBG] PcObject unimplemented key={key:?}");
                     tracing::debug!("[scripting] PcObject: unimplemented __index key={key:?}");
                     Ok(mlua::Value::Nil)
                 }
@@ -1096,7 +1110,9 @@ impl UserData for PcObject {
                     "settings" => unsafe { sl_pc_set_settingFlags(sd, v) },
                     "sex" => unsafe { sl_pc_set_sex(sd, v) },
                     "side" => unsafe { sl_pc_set_side(sd, v) },
+                    "dialogType" => unsafe { sl_pc_set_dialogtype(sd, v) },
                     "silence" => unsafe { sl_pc_set_silence(sd, v) },
+                    "sleep" => unsafe { sl_pc_set_sleep(sd, v) },
                     "skinColor" => unsafe { sl_pc_set_skin_color(sd, v) },
                     "snare" => unsafe { sl_pc_set_snare(sd, v) },
                     "speed" => unsafe { sl_pc_set_speed(sd, v) },
@@ -1842,6 +1858,12 @@ impl UserData for PcObject {
         });
 
         // ── Misc ─────────────────────────────────────────────────────────────────
+        methods.add_method("talkSelf", |_, this, (color, msg): (c_int, String)| {
+            if let Ok(cs) = CString::new(msg.as_bytes()) {
+                unsafe { sl_pc_talkself(this.ptr, color, cs.as_ptr()) };
+            }
+            Ok(())
+        });
         methods.add_method("gmMsg", |_, this, msg: String| {
             if let Ok(cs) = CString::new(msg.as_bytes()) {
                 unsafe { sl_pc_gmmsg(this.ptr, cs.as_ptr()) };
@@ -1917,6 +1939,7 @@ impl UserData for PcObject {
         methods.add_method("dialog", |_, this, (msg, gfx_tbl): (String, mlua::Table)| {
             let gfx = lua_table_to_ints(&gfx_tbl)?;
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            eprintln!("[DBG] dialog: msg={:?} gfx={:?}", msg, gfx);
             unsafe {
                 sffi::sl_pc_dialog_send(this.ptr, cs.as_ptr(), gfx.as_ptr(), gfx.len() as c_int);
                 setup_coref_and_yield(this.ptr);
@@ -1924,8 +1947,21 @@ impl UserData for PcObject {
             Ok(mlua::Value::Nil)
         });
 
-        methods.add_method("dialogSeq", |_, this, (entries_tbl, can_continue): (mlua::Table, bool)| {
-            let strs = lua_table_to_cstrings(&entries_tbl)?;
+        methods.add_method("dialogSeq", |lua, this, args: mlua::MultiValue| {
+            let entries_tbl: mlua::Table = args.get(0)
+                .and_then(|v| lua.unpack::<mlua::Table>(v.clone()).ok())
+                .ok_or_else(|| mlua::Error::runtime("dialogSeq: expected table as arg 1"))?;
+            let can_continue = args.get(1)
+                .map(|v| match v {
+                    mlua::Value::Boolean(b) => *b,
+                    mlua::Value::Integer(n) => *n != 0,
+                    mlua::Value::Number(n) => *n != 0.0,
+                    _ => false,
+                })
+                .unwrap_or(false);
+            // Element 1 is the NPC graphic descriptor table {graphic, color}; skip it.
+            // Elements 2..n are the dialog text strings.
+            let strs = lua_table_to_cstrings_from(&entries_tbl, 2)?;
             let ptrs = cstring_ptrs(&strs);
             unsafe {
                 sffi::sl_pc_dialogseq_send(this.ptr, ptrs.as_ptr(), ptrs.len() as c_int, can_continue as c_int);
@@ -1960,8 +1996,12 @@ impl UserData for PcObject {
             let strs = lua_table_to_cstrings(&opts_tbl)?;
             let ptrs = cstring_ptrs(&strs);
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            let strings: Vec<String> = strs.iter()
+                .map(|c| c.to_str().unwrap_or("").to_owned())
+                .collect();
             unsafe {
                 sffi::sl_pc_menustring_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int);
+                crate::game::scripting::async_coro::store_menu_opts(this.ptr, strings);
                 setup_coref_and_yield(this.ptr);
             }
             Ok(mlua::Value::Nil)
@@ -1971,8 +2011,12 @@ impl UserData for PcObject {
             let strs = lua_table_to_cstrings(&opts_tbl)?;
             let ptrs = cstring_ptrs(&strs);
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
+            let strings: Vec<String> = strs.iter()
+                .map(|c| c.to_str().unwrap_or("").to_owned())
+                .collect();
             unsafe {
                 sffi::sl_pc_menustring2_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int);
+                crate::game::scripting::async_coro::store_menu_opts(this.ptr, strings);
                 setup_coref_and_yield(this.ptr);
             }
             Ok(mlua::Value::Nil)

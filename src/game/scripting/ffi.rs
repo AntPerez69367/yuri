@@ -15,6 +15,7 @@ extern "C" {
     // --- Map id/name lookups used by constructors ---
     pub fn map_id2sd(id: c_uint) -> *mut c_void;
     pub fn map_name2sd(name: *const c_char) -> *mut c_void;
+    pub fn map_name2npc(name: *const c_char) -> *mut c_void;
     pub fn map_id2mob(id: c_uint) -> *mut c_void;
 
     // --- Phase 2: registry types ---

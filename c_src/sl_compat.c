@@ -995,6 +995,7 @@ int  sl_pc_dam(void *sd)          { return ((USER*)sd)->dam; }
 int  sl_pc_hit(void *sd)          { return ((USER*)sd)->hit; }
 int  sl_pc_miss(void *sd)         { return ((USER*)sd)->miss; }
 int  sl_pc_sleep(void *sd)        { return ((USER*)sd)->sleep; }
+void sl_pc_set_sleep(void *sd, int v) { ((USER*)sd)->sleep = v; }
 int  sl_pc_attack_speed(void *sd) { return ((USER*)sd)->attack_speed; }
 int  sl_pc_enchanted(void *sd)    { return ((USER*)sd)->enchanted; }
 int  sl_pc_confused(void *sd)     { return ((USER*)sd)->confused; }
@@ -1064,6 +1065,7 @@ int  sl_pc_bindx(void *sd)        { return ((USER*)sd)->bindx; }
 int  sl_pc_bindy(void *sd)        { return ((USER*)sd)->bindy; }
 int  sl_pc_ambushtimer(void *sd)  { return ((USER*)sd)->ambushtimer; }
 int  sl_pc_dialogtype(void *sd)   { return ((USER*)sd)->dialogtype; }
+void sl_pc_set_dialogtype(void *sd, int v) { ((USER*)sd)->dialogtype = v; }
 int  sl_pc_cursed(void *sd)       { return ((USER*)sd)->cursed; }
 int  sl_pc_action(void *sd)       { return ((USER*)sd)->action; }
 int  sl_pc_scripttick(void *sd)   { return ((USER*)sd)->scripttick; }
@@ -1130,7 +1132,13 @@ void sl_pc_set_country(void *sd, int v)     { ((USER*)sd)->status.country = v; }
 void sl_pc_set_clan(void *sd, int v)        { ((USER*)sd)->status.clan = v; }
 void sl_pc_set_gm_level(void *sd, int v)    { ((USER*)sd)->status.gm_level = v; }
 void sl_pc_set_side(void *sd, int v)        { ((USER*)sd)->status.side = v; }
-void sl_pc_set_state(void *sd, int v)       { ((USER*)sd)->status.state = v; }
+void sl_pc_set_state(void *sd, int v)       {
+    fprintf(stderr, "[DBG sl_compat] set_state: %d -> %d (id=%u)\n",
+            ((USER*)sd)->status.state, v, ((USER*)sd)->status.id);
+    ((USER*)sd)->status.state = v;
+    fprintf(stderr, "[DBG sl_compat] set_state after: read back %d\n",
+            ((USER*)sd)->status.state);
+}
 void sl_pc_set_hair(void *sd, int v)        { ((USER*)sd)->status.hair = v; }
 void sl_pc_set_hair_color(void *sd, int v)  { ((USER*)sd)->status.hair_color = v; }
 void sl_pc_set_face_color(void *sd, int v)  { ((USER*)sd)->status.face_color = v; }
@@ -2504,6 +2512,8 @@ void sl_pc_givexp(void *sd_ptr, unsigned int amount) {
 void sl_pc_updatestate(void *sd_ptr) {
     USER *sd = (USER *)sd_ptr;
     if (!sd) return;
+    fprintf(stderr, "[DBG sl_compat] updatestate: id=%u state=%d m=%d x=%d y=%d\n",
+            sd->status.id, sd->status.state, sd->bl.m, sd->bl.x, sd->bl.y);
     map_foreachinarea(clif_updatestate, sd->bl.m, sd->bl.x, sd->bl.y, AREA,
                       BL_PC, sd);
 }
@@ -2686,6 +2696,13 @@ void sl_pc_gmmsg(void *sd_ptr, const char *msg) {
     USER *sd = (USER *)sd_ptr;
     if (!sd || !msg) return;
     clif_sendmsg(sd, 0, msg);
+}
+
+/* talkSelf — send a colored message visible only to the player themselves. */
+void sl_pc_talkself(void *sd_ptr, int color, const char *msg) {
+    USER *sd = (USER *)sd_ptr;
+    if (!sd || !msg) return;
+    clif_sendmsg(sd, color, msg);
 }
 
 /* broadcastSd — broadcast msg to all PCs on map m.
@@ -2871,13 +2888,22 @@ void sl_pc_dialogseq_send(void *sd_ptr, const char **entries, int n, int can_con
                   opts, nopts, 0, can_continue);
 }
 
+/* Build a 1-indexed wrapper array: buf[0]=NULL, buf[1..n]=options[0..n-1].
+ * clif_scriptmenu / clif_scriptmenuseq loop `for (x = 1; x < size + 1; x++)`
+ * so they expect options at indices 1..n, not 0..n-1. */
+#define MENU_1IDX(options, n, buf) \
+    const char *(buf)[(n) + 1]; \
+    (buf)[0] = NULL; \
+    for (int _i = 0; _i < (n); _i++) (buf)[_i + 1] = (options)[_i]
+
 /* menu — mirrors pcl_menu.
  * Sends a menu to the client via the seq-menu packet.
  * clif_scriptmenuseq(sd, npc_id, topic, options[], n, previous, next) */
 void sl_pc_menu_send(void *sd_ptr, const char *msg, const char **options, int n) {
     USER *sd = (USER *)sd_ptr;
     if (!sd) return;
-    clif_scriptmenuseq(sd, sd->last_click, msg, options, n, 0, 0);
+    MENU_1IDX(options, n, buf);
+    clif_scriptmenuseq(sd, sd->last_click, msg, buf, n, 0, 0);
 }
 
 /* menuseq — mirrors pcl_menuseq (same packet as menu, different Lua name).
@@ -2885,7 +2911,8 @@ void sl_pc_menu_send(void *sd_ptr, const char *msg, const char **options, int n)
 void sl_pc_menuseq_send(void *sd_ptr, const char *msg, const char **options, int n) {
     USER *sd = (USER *)sd_ptr;
     if (!sd) return;
-    clif_scriptmenuseq(sd, sd->last_click, msg, options, n, 0, 0);
+    MENU_1IDX(options, n, buf);
+    clif_scriptmenuseq(sd, sd->last_click, msg, buf, n, 0, 0);
 }
 
 /* menustring — uses the non-seq menu packet (clif_scriptmenu).
@@ -2894,7 +2921,11 @@ void sl_pc_menuseq_send(void *sd_ptr, const char *msg, const char **options, int
 void sl_pc_menustring_send(void *sd_ptr, const char *msg, const char **options, int n) {
     USER *sd = (USER *)sd_ptr;
     if (!sd) return;
-    clif_scriptmenu(sd, sd->last_click, (char *)msg, (char **)options, n);
+    MENU_1IDX(options, n, buf);
+    /* clif_scriptmenu (0x2F) was never handled by the client; use
+     * clif_scriptmenuseq (0x30) instead — the client responds via 0x3A/case-0x02,
+     * which reaches resume_menuseq.  previous=0, next=0 for a plain string menu. */
+    clif_scriptmenuseq(sd, sd->last_click, msg, buf, n, 0, 0);
 }
 
 /* menustring2 — no corresponding clif_ function exists in the original codebase.

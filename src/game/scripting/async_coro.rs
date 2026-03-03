@@ -11,8 +11,20 @@
 //! `(L, from, narg, nres) → c_int`; pass `null` for `from` (ignored by JIT).
 
 use mlua::ffi as lua_ffi;
-use std::ffi::{CStr, c_char};
+use std::collections::HashMap;
+use std::ffi::{CStr, CString, c_char};
 use std::os::raw::{c_int, c_uint, c_void};
+use std::sync::Mutex;
+
+// Option strings to return after a menuString yield.  Stored by user pointer
+// before the yield so resume_menu can look them up and push the selected text.
+static MENU_OPTS: Mutex<Option<HashMap<usize, Vec<String>>>> = Mutex::new(None);
+
+pub fn store_menu_opts(user: *mut c_void, opts: Vec<String>) {
+    MENU_OPTS.lock().unwrap()
+        .get_or_insert_with(HashMap::new)
+        .insert(user as usize, opts);
+}
 
 // ─── C accessor stubs ────────────────────────────────────────────────────────
 // sl_compat.c exposes thin wrappers for USER struct fields so Rust avoids
@@ -86,12 +98,31 @@ unsafe fn do_resume(user: *mut c_void, nargs: c_int) {
         };
         lua_ffi::lua_settop(costate, lua_ffi::lua_gettop(costate) - 1);
         free_coref(user);
+        eprintln!("[scripting] coroutine error (status={status}): {msg}");
         tracing::warn!("[scripting] coroutine error (status={status}): {msg}");
     }
     // LUA_YIELD: coroutine is suspended and waiting; keep the registry reference.
 }
 
 // ─── Public API ──────────────────────────────────────────────────────────────
+
+/// Launch a new async coroutine for `user` from a Lua function.
+///
+/// `func` must be on top of `state`'s stack (pushed by exec_raw).
+/// Pops `func` from the stack, frees any prior coroutine, and does the
+/// initial resume. After this returns, the coroutine is either finished
+/// (coref zeroed) or suspended at a yield waiting for a resume_* call.
+pub unsafe fn start_async(user: *mut c_void, state: *mut lua_ffi::lua_State) {
+    free_coref(user);
+
+    let thread = lua_ffi::lua_newthread(state);
+    lua_ffi::lua_pushvalue(state, -2);
+    lua_ffi::lua_xmove(state, thread, 1);
+    let coref = lua_ffi::luaL_ref(state, lua_ffi::LUA_REGISTRYINDEX);
+    lua_ffi::lua_pop(state, 1);
+    sl_user_set_coref(user, coref as c_uint);
+    do_resume(user, 0);
+}
 
 /// Free the coroutine registry reference and zero `USER->coref`.
 /// Mirrors `sl_async_freeco` in scripting.c.
@@ -103,17 +134,50 @@ pub unsafe fn free_coref(user: *mut c_void) {
 }
 
 /// Resume after a menu selection. Mirrors `sl_resumemenu`.
+/// If opts were stored by `store_menu_opts` (menuString), pushes the selected
+/// option string; otherwise pushes the raw selection number (menuSeq uses the
+/// number directly, so its path never calls `store_menu_opts`).
 pub unsafe fn resume_menu(selection: c_uint, user: *mut c_void) {
-    lua_ffi::lua_pushnumber(L(), selection as f64);
+    let state = L();
+    let opts = MENU_OPTS.lock().unwrap()
+        .as_mut()
+        .and_then(|m| m.remove(&(user as usize)));
+    match opts {
+        Some(opts) => {
+            let idx = selection.saturating_sub(1) as usize;
+            let s = opts.get(idx).map(|s| s.as_str()).unwrap_or("");
+            let cs = CString::new(s).unwrap_or_default();
+            lua_ffi::lua_pushstring(state, cs.as_ptr());
+        }
+        None => {
+            lua_ffi::lua_pushnumber(state, selection as f64);
+        }
+    }
     do_resume(user, 1);
 }
 
 /// Resume after a sequential menu response. Mirrors `sl_resumemenuseq`.
 /// `selection == 1` → quit; `selection == 2` → chosen.
+/// If `store_menu_opts` was called (menuString path), pushes the selected
+/// option string; otherwise pushes the 1-indexed choice number (menuSeq).
 pub unsafe fn resume_menuseq(selection: c_uint, choice: c_int, user: *mut c_void) {
     if selection == 1 { free_coref(user); return; }
     if selection == 2 {
-        lua_ffi::lua_pushnumber(L(), choice as f64);
+        let state = L();
+        let opts = MENU_OPTS.lock().unwrap()
+            .as_mut()
+            .and_then(|m| m.remove(&(user as usize)));
+        match opts {
+            Some(opts) => {
+                let idx = (choice as usize).saturating_sub(1);
+                let s = opts.get(idx).map(|s| s.as_str()).unwrap_or("");
+                let cs = CString::new(s).unwrap_or_default();
+                lua_ffi::lua_pushstring(state, cs.as_ptr());
+            }
+            None => {
+                lua_ffi::lua_pushnumber(state, choice as f64);
+            }
+        }
         do_resume(user, 1);
     } else {
         tracing::warn!("[scripting] resume_menuseq: unexpected selection={selection}");
