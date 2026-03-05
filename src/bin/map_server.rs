@@ -245,15 +245,8 @@ async fn main() -> Result<()> {
     // Register intif_mmo_tosd so packet.rs can call it without linking map_game into libyuri.
     yuri::ffi::map_char::set_mmo_tosd_fn(intif_mmo_tosd);
 
-    // Spawn char server reconnect loop (replaces check_connect_char timer)
-    {
-        let s = Arc::clone(&state);
-        tokio::spawn(async move {
-            yuri::servers::map::char::connect_to_char(s).await;
-        });
-    }
-
-    // Spawn auth DB expiry timer (replaces auth_timer — every 30s)
+    // Spawn auth DB expiry timer (replaces auth_timer — every 30s).
+    // Does not touch Lua, safe on any thread.
     {
         let s = Arc::clone(&state);
         tokio::spawn(async move {
@@ -269,7 +262,17 @@ async fn main() -> Result<()> {
 
     // Run the C session event loop. LocalSet is required for spawn_local (accept_loop,
     // session_io_task). This drives client accept + I/O until shutdown is signalled.
+    //
+    // connect_to_char is spawned on the LocalSet (not tokio::spawn) because its
+    // intif_mmo_tosd → Lua login-event path touches the Lua state, which is
+    // single-threaded and must run on the same thread as the C event loop.
     let local = tokio::task::LocalSet::new();
+    {
+        let s = Arc::clone(&state);
+        local.spawn_local(async move {
+            yuri::servers::map::char::connect_to_char(s).await;
+        });
+    }
     local.run_until(yuri::session::run_async_server(state.config.map_port)).await
         .map_err(|e| anyhow::anyhow!("session loop error: {}", e))?;
 
