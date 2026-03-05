@@ -1300,8 +1300,10 @@ unsafe fn dispatch(sd: *mut MapSessionData, p: *const c_char, len: c_int, log: b
 
     if ((*sd).status.gm_level as c_int) < entry.level { return 0; }
 
-    // Skip past the null byte we inserted, then past whitespace
-    let mut args_ptr = p.add(end + 1);
+    // Skip past the null byte we inserted, then past whitespace.
+    // Clamp to copy_len so we never step past the buffer when end == copy_len.
+    let args_offset = (end + 1).min(copy_len);
+    let mut args_ptr = p.add(args_offset);
     while *args_ptr == b' ' as c_char || *args_ptr == b'\t' as c_char {
         args_ptr = args_ptr.add(1);
     }
@@ -1311,7 +1313,8 @@ unsafe fn dispatch(sd: *mut MapSessionData, p: *const c_char, len: c_int, log: b
                cmd_line.as_ptr());
     }
 
-    (entry.func)(sd, args_ptr as *mut c_char, std::ptr::null_mut())
+    (entry.func)(sd, args_ptr as *mut c_char, std::ptr::null_mut());
+    1 // command matched and executed — caller checks bool, not handler result
 }
 
 #[no_mangle]
