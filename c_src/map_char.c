@@ -21,11 +21,7 @@
 
 int intif_mmo_tosd(int fd, struct mmo_charstatus* p) {
   USER* sd;
-  printf("[map] [intif_mmo_tosd] ENTER fd=%d p=%p map_fd=%d\n", fd, (void*)p, map_fd);
-  fflush(stdout);
   if (fd == map_fd) {
-    printf("[map] [intif_mmo_tosd] REJECTED: fd == map_fd (%d)\n", map_fd);
-    fflush(stdout);
     return 0;
   }
   if (!p) {
@@ -44,13 +40,6 @@ int intif_mmo_tosd(int fd, struct mmo_charstatus* p) {
     return 0;
   }
   memcpy(&sd->status, p, sizeof(struct mmo_charstatus));
-
-  printf("[map] [intif_mmo_tosd] STRUCT CHECK: id=%u name=%.16s level=%d class=%d "
-         "hp=%u mp=%u exp=%u money=%u sex=%d country=%d partner=%u clan=%u\n",
-         sd->status.id, sd->status.name, sd->status.level, sd->status.class,
-         sd->status.hp, sd->status.mp, sd->status.exp, sd->status.money,
-         sd->status.sex, sd->status.country, sd->status.partner, sd->status.clan);
-  fflush(stdout);
 
   sd->fd = fd;
 
@@ -133,20 +122,6 @@ int intif_mmo_tosd(int fd, struct mmo_charstatus* p) {
   pc_magic_startup(sd);
   map_addiddb(&sd->bl);
 
-  /// test stuff
-  /*
-  WFIFOB(sd->fd,0)=0xAA;
-  WFIFOB(sd->fd,1)=0x00;
-  WFIFOB(sd->fd,2)=0x03;
-  WFIFOB(sd->fd,3)=0x49;
-  WFIFOB(sd->fd,4)=0x23;
-  WFIFOB(sd->fd,5)=0x6D;
-  WFIFOSET(sd->fd,6);
-  */
-  printf("[map] [intif_mmo_tosd] SUCCESS: player spawned name=%.*s map=%d x=%d y=%d\n",
-         (int)sizeof(sd->status.name), sd->status.name,
-         sd->status.last_pos.m, sd->status.last_pos.x, sd->status.last_pos.y);
-  fflush(stdout);
   mmo_setonline(sd->status.id, 1);
 
   if (sd->status.gm_level) {
