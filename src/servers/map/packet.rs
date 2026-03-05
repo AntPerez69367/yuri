@@ -171,13 +171,35 @@ async fn handle_charload(_state: &Arc<MapState>, pkt: &[u8]) {
     }
 }
 
-/// 0x3804 — char_server is checking / forcing a player offline.
+/// 0x3804 — char_server is forcing a player offline (duplicate login detected).
 async fn handle_checkonline(_state: &Arc<MapState>, pkt: &[u8]) {
-    tracing::info!("[map] [charif] handle_checkonline len={}", pkt.len());
     if pkt.len() < 6 { return; }
     let char_id = u32::from_le_bytes([pkt[2], pkt[3], pkt[4], pkt[5]]);
-    // TODO: kick the player from the map once map_parse.c FFI is wired
-    tracing::info!("[map] [charif] checkonline char_id={} (kick TODO)", char_id);
+
+    // sl_pc_status_id is in libmap_game.a — only available when the map-game feature is active.
+    #[cfg(feature = "map-game")]
+    {
+        extern "C" {
+            fn sl_pc_status_id(sd: *mut std::ffi::c_void) -> std::os::raw::c_int;
+            fn rust_session_get_data(fd: std::os::raw::c_int) -> *mut std::ffi::c_void;
+            fn rust_session_set_eof(fd: std::os::raw::c_int, reason: std::os::raw::c_int);
+        }
+
+        let manager = crate::session::get_session_manager();
+        for fd in manager.get_all_fds() {
+            let tsd = unsafe { rust_session_get_data(fd) };
+            if tsd.is_null() { continue; }
+            if unsafe { sl_pc_status_id(tsd) } as u32 == char_id {
+                tracing::warn!("[map] [charif] checkonline: kicking char_id={} fd={}", char_id, fd);
+                unsafe { rust_session_set_eof(fd, 1); }
+                return;
+            }
+        }
+        tracing::debug!("[map] [charif] checkonline: char_id={} not found on this map", char_id);
+    }
+
+    #[cfg(not(feature = "map-game"))]
+    tracing::debug!("[map] [charif] checkonline: char_id={} (map-game not active)", char_id);
 }
 
 /// Board/mail response packets (0x3808–0x380F) are forwarded to map_parse.c via C handler.
