@@ -580,9 +580,6 @@ extern "C" {
     fn sl_pc_delguide(sd: *mut c_void, guide: *const c_char);
     fn sl_pc_getcreationitems(sd: *mut c_void, len: c_int, out: *mut c_int) -> c_int;
     fn sl_pc_getcreationamounts(sd: *mut c_void, len: c_int, item_id: c_int) -> c_int;
-    // Coref accessors — Task 10
-    fn sl_user_coref(sd: *mut c_void) -> c_uint;
-    fn sl_user_set_coref(sd: *mut c_void, v: c_uint);
 }
 
 // ─── Task 10: async yield helpers ────────────────────────────────────────────
@@ -615,27 +612,6 @@ fn cstring_ptrs(v: &[CString]) -> Vec<*const c_char> {
     v.iter().map(|s| s.as_ptr()).collect()
 }
 
-/// Store the current Lua coroutine as the player's coref and yield.
-/// Must be called only from within a running Lua coroutine.
-///
-/// # Safety
-/// Accesses the raw lua_State* via sl_gstate. Valid only after sl_init().
-unsafe fn setup_coref_and_yield(sd: *mut c_void) -> c_int {
-    use mlua::ffi as lua_ffi;
-    let l = crate::game::scripting::sl_gstate as *mut lua_ffi::lua_State;
-
-    let coref = sl_user_coref(sd);
-    if coref == 0 {
-        return 0;
-    }
-    lua_ffi::lua_rawgeti(l, lua_ffi::LUA_REGISTRYINDEX, coref as lua_ffi::lua_Integer);
-    let co = lua_ffi::lua_tothread(l, -1);
-    lua_ffi::lua_pop(l, 1);
-    if co.is_null() {
-        return 0;
-    }
-    lua_ffi::lua_yield(co, 0)
-}
 
 impl UserData for PcObject {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
@@ -1930,20 +1906,15 @@ impl UserData for PcObject {
         methods.add_method("input", |_, this, msg: String| {
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             unsafe {
-                sffi::sl_pc_input_send(this.ptr, cs.as_ptr());
-                setup_coref_and_yield(this.ptr);
-            }
+                sffi::sl_pc_input_send(this.ptr, cs.as_ptr());            }
             Ok(mlua::Value::Nil)
         });
 
         methods.add_method("dialog", |_, this, (msg, gfx_tbl): (String, mlua::Table)| {
             let gfx = lua_table_to_ints(&gfx_tbl)?;
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
-            eprintln!("[DBG] dialog: msg={:?} gfx={:?}", msg, gfx);
-            unsafe {
-                sffi::sl_pc_dialog_send(this.ptr, cs.as_ptr(), gfx.as_ptr(), gfx.len() as c_int);
-                setup_coref_and_yield(this.ptr);
-            }
+unsafe {
+                sffi::sl_pc_dialog_send(this.ptr, cs.as_ptr(), gfx.as_ptr(), gfx.len() as c_int);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -1964,9 +1935,7 @@ impl UserData for PcObject {
             let strs = lua_table_to_cstrings_from(&entries_tbl, 2)?;
             let ptrs = cstring_ptrs(&strs);
             unsafe {
-                sffi::sl_pc_dialogseq_send(this.ptr, ptrs.as_ptr(), ptrs.len() as c_int, can_continue as c_int);
-                setup_coref_and_yield(this.ptr);
-            }
+                sffi::sl_pc_dialogseq_send(this.ptr, ptrs.as_ptr(), ptrs.len() as c_int, can_continue as c_int);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -1975,9 +1944,7 @@ impl UserData for PcObject {
             let ptrs = cstring_ptrs(&strs);
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             unsafe {
-                sffi::sl_pc_menu_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int);
-                setup_coref_and_yield(this.ptr);
-            }
+                sffi::sl_pc_menu_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -1986,9 +1953,7 @@ impl UserData for PcObject {
             let ptrs = cstring_ptrs(&strs);
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             unsafe {
-                sffi::sl_pc_menuseq_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int);
-                setup_coref_and_yield(this.ptr);
-            }
+                sffi::sl_pc_menuseq_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -2001,9 +1966,7 @@ impl UserData for PcObject {
                 .collect();
             unsafe {
                 sffi::sl_pc_menustring_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int);
-                crate::game::scripting::async_coro::store_menu_opts(this.ptr, strings);
-                setup_coref_and_yield(this.ptr);
-            }
+                crate::game::scripting::async_coro::store_menu_opts(this.ptr, strings);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -2016,9 +1979,7 @@ impl UserData for PcObject {
                 .collect();
             unsafe {
                 sffi::sl_pc_menustring2_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int);
-                crate::game::scripting::async_coro::store_menu_opts(this.ptr, strings);
-                setup_coref_and_yield(this.ptr);
-            }
+                crate::game::scripting::async_coro::store_menu_opts(this.ptr, strings);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -2034,9 +1995,7 @@ impl UserData for PcObject {
             unsafe {
                 sffi::sl_pc_buy_send(this.ptr, cs.as_ptr(),
                     items.as_ptr(), values.as_ptr(),
-                    dn_p.as_ptr(), bt_p.as_ptr(), items.len() as c_int);
-                setup_coref_and_yield(this.ptr);
-            }
+                    dn_p.as_ptr(), bt_p.as_ptr(), items.len() as c_int);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -2044,9 +2003,7 @@ impl UserData for PcObject {
             let items = lua_table_to_ints(&items_tbl)?;
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             unsafe {
-                sffi::sl_pc_buydialog_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as c_int);
-                setup_coref_and_yield(this.ptr);
-            }
+                sffi::sl_pc_buydialog_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as c_int);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -2058,9 +2015,7 @@ impl UserData for PcObject {
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             unsafe {
                 sffi::sl_pc_buyextend_send(this.ptr, cs.as_ptr(),
-                    items.as_ptr(), prices.as_ptr(), maxs.as_ptr(), items.len() as c_int);
-                setup_coref_and_yield(this.ptr);
-            }
+                    items.as_ptr(), prices.as_ptr(), maxs.as_ptr(), items.len() as c_int);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -2068,9 +2023,7 @@ impl UserData for PcObject {
             let items = lua_table_to_ints(&items_tbl)?;
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             unsafe {
-                sffi::sl_pc_sell_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as c_int);
-                setup_coref_and_yield(this.ptr);
-            }
+                sffi::sl_pc_sell_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as c_int);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -2078,9 +2031,7 @@ impl UserData for PcObject {
             let items = lua_table_to_ints(&items_tbl)?;
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             unsafe {
-                sffi::sl_pc_sell2_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as c_int);
-                setup_coref_and_yield(this.ptr);
-            }
+                sffi::sl_pc_sell2_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as c_int);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -2088,52 +2039,50 @@ impl UserData for PcObject {
             let items = lua_table_to_ints(&items_tbl)?;
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             unsafe {
-                sffi::sl_pc_sellextend_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as c_int);
-                setup_coref_and_yield(this.ptr);
-            }
+                sffi::sl_pc_sellextend_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as c_int);            }
             Ok(mlua::Value::Nil)
         });
 
         methods.add_method("showBank", |_, this, msg: String| {
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
-            unsafe { sffi::sl_pc_showbank_send(this.ptr, cs.as_ptr()); setup_coref_and_yield(this.ptr); }
+            unsafe { sffi::sl_pc_showbank_send(this.ptr, cs.as_ptr()); }
             Ok(mlua::Value::Nil)
         });
         methods.add_method("showBankAdd", |_, this, ()| {
-            unsafe { sffi::sl_pc_showbankadd_send(this.ptr); setup_coref_and_yield(this.ptr); }
+            unsafe { sffi::sl_pc_showbankadd_send(this.ptr); }
             Ok(mlua::Value::Nil)
         });
         methods.add_method("bankAddMoney", |_, this, ()| {
-            unsafe { sffi::sl_pc_bankaddmoney_send(this.ptr); setup_coref_and_yield(this.ptr); }
+            unsafe { sffi::sl_pc_bankaddmoney_send(this.ptr); }
             Ok(mlua::Value::Nil)
         });
         methods.add_method("bankWithdrawMoney", |_, this, ()| {
-            unsafe { sffi::sl_pc_bankwithdrawmoney_send(this.ptr); setup_coref_and_yield(this.ptr); }
+            unsafe { sffi::sl_pc_bankwithdrawmoney_send(this.ptr); }
             Ok(mlua::Value::Nil)
         });
         methods.add_method("clanShowBank", |_, this, msg: String| {
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
-            unsafe { sffi::sl_pc_clanshowbank_send(this.ptr, cs.as_ptr()); setup_coref_and_yield(this.ptr); }
+            unsafe { sffi::sl_pc_clanshowbank_send(this.ptr, cs.as_ptr()); }
             Ok(mlua::Value::Nil)
         });
         methods.add_method("clanShowBankAdd", |_, this, ()| {
-            unsafe { sffi::sl_pc_clanshowbankadd_send(this.ptr); setup_coref_and_yield(this.ptr); }
+            unsafe { sffi::sl_pc_clanshowbankadd_send(this.ptr); }
             Ok(mlua::Value::Nil)
         });
         methods.add_method("clanBankAddMoney", |_, this, ()| {
-            unsafe { sffi::sl_pc_clanbankaddmoney_send(this.ptr); setup_coref_and_yield(this.ptr); }
+            unsafe { sffi::sl_pc_clanbankaddmoney_send(this.ptr); }
             Ok(mlua::Value::Nil)
         });
         methods.add_method("clanBankWithdrawMoney", |_, this, ()| {
-            unsafe { sffi::sl_pc_clanbankwithdrawmoney_send(this.ptr); setup_coref_and_yield(this.ptr); }
+            unsafe { sffi::sl_pc_clanbankwithdrawmoney_send(this.ptr); }
             Ok(mlua::Value::Nil)
         });
         methods.add_method("clanViewBank", |_, this, ()| {
-            unsafe { sffi::sl_pc_clanviewbank_send(this.ptr); setup_coref_and_yield(this.ptr); }
+            unsafe { sffi::sl_pc_clanviewbank_send(this.ptr); }
             Ok(mlua::Value::Nil)
         });
         methods.add_method("repairExtend", |_, this, ()| {
-            unsafe { sffi::sl_pc_repairextend_send(this.ptr); setup_coref_and_yield(this.ptr); }
+            unsafe { sffi::sl_pc_repairextend_send(this.ptr); }
             Ok(mlua::Value::Nil)
         });
         methods.add_method("repairAll", |_, this, npc_bl: mlua::AnyUserData| {
@@ -2142,7 +2091,7 @@ impl UserData for PcObject {
             } else {
                 std::ptr::null_mut()
             };
-            unsafe { sffi::sl_pc_repairall_send(this.ptr, npc_ptr); setup_coref_and_yield(this.ptr); }
+            unsafe { sffi::sl_pc_repairall_send(this.ptr, npc_ptr); }
             Ok(mlua::Value::Nil)
         });
     }
