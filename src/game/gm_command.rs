@@ -142,6 +142,7 @@ extern "C" {
     // SQL
     static sql_handle: *mut c_void;
     fn Sql_Query(handle: *mut c_void, fmt: *const c_char, ...) -> c_int;
+    fn Sql_EscapeString(handle: *mut c_void, out: *mut c_char, src: *const c_char);
     fn Sql_FreeResult(handle: *mut c_void);
     // Sql_ShowDebug has a trailing underscore in libdeps.a
     #[link_name = "Sql_ShowDebug_"]
@@ -685,9 +686,11 @@ unsafe fn command_ban(_sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaS
     let tsd = map_name2sd(name.as_ptr());
     if !tsd.is_null() {
         printf(b"Banning %s\n\0".as_ptr() as *const c_char, name.as_ptr());
+        let mut esc = [0i8; 65];
+        Sql_EscapeString(sql_handle, esc.as_mut_ptr(), name.as_ptr());
         if SQL_ERROR == Sql_Query(sql_handle,
             b"UPDATE `Character` SET ChaBanned = '1' WHERE `ChaName` = '%s'\0".as_ptr() as *const c_char,
-            name.as_ptr()) {
+            esc.as_ptr()) {
             Sql_ShowDebug(sql_handle);
         }
         rust_session_set_eof((*tsd).fd, 1);
@@ -697,9 +700,11 @@ unsafe fn command_ban(_sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaS
 unsafe fn command_unban(_sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
     let name = match parse_str32(line) { Some(v) => v, None => return -1 };
     printf(b"Unbanning %s\n\0".as_ptr() as *const c_char, name.as_ptr());
+    let mut esc = [0i8; 65];
+    Sql_EscapeString(sql_handle, esc.as_mut_ptr(), name.as_ptr());
     if SQL_ERROR == Sql_Query(sql_handle,
         b"UPDATE `Character` SET ChaBanned = '0' WHERE `ChaName` = '%s'\0".as_ptr() as *const c_char,
-        name.as_ptr()) {
+        esc.as_ptr()) {
         Sql_ShowDebug(sql_handle);
     }
     0
