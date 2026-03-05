@@ -2509,33 +2509,7 @@ int map_weather(int id, int n) {
   return 0;
 }
 
-int map_cronjob(int none, int nonetoo) {
-  unsigned int t = time(NULL);
-
-  if (t % 60 == 0) {
-    sl_doscript_blargs("cronJobMin", NULL, 0);
-  }
-
-  if (t % 300 == 0) {
-    sl_doscript_blargs("cronJob5Min", NULL, 0);
-  }
-
-  if (t % 1800 == 0) {
-    sl_doscript_blargs("cronJob30Min", NULL, 0);
-  }
-
-  if (t % 3600 == 0) {
-    sl_doscript_blargs("cronJobHour", NULL, 0);
-  }
-
-  if (t % 86400 == 0) {
-    sl_doscript_blargs("cronJobDay", NULL, 0);
-  }
-
-  sl_doscript_blargs("cronJobSec", NULL, 0);
-
-  return 0;
-}
+// map_cronjob ported to Rust — see src/game/map_server.rs:rust_map_cronjob
 
 int map_savechars(int none, int nonetoo) {
   USER* sd = NULL;

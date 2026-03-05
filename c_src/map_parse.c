@@ -297,27 +297,7 @@ int clif_accept2(int fd, char *name, int name_len) {
     SqlStmt_Free(stmt);
   }
 
-  // session[fd]->name removed — name field is write-only (all reads are commented out)
   intif_load(fd, id, n);
-  auth_delete(n);
-
-  /*t=auth_check(n,rust_session_get_client_ip(fd));
-
-
-  if(t) {
-          memcpy(session[fd]->name,n,name_len);
-          intif_load(fd,t,n);
-          auth_delete(n);
-  } else {
-  a=b=c=d=rust_session_get_client_ip(fd);
-  a &=0xff;
-  b=(b>>8)&0xff;
-  c=(c>>16)&0xff;
-  d=(d>>24)&0xff;
-
-  printf("Denied access to "CL_CYAN"%s"CL_NORMAL"
-  (ip:"CL_MAGENTA"%u.%u.%u.%u)\n",n,a,b,c,d); rust_session_set_eof(fd, 1);
-  }*/
   return 0;
 }
 

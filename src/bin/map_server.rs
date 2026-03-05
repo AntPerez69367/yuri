@@ -12,7 +12,6 @@ extern "C" {
     fn map_initiddb();
     fn npc_init();
     fn warp_init() -> i32;
-    fn intif_init() -> i32;
     fn object_flag_init() -> i32;
     fn rust_sl_init();
     fn rust_sl_doscript_blargs_vec(
@@ -24,9 +23,7 @@ extern "C" {
     fn map_do_term(); // renamed from do_term in Task 5
     fn intif_mmo_tosd(fd: i32, status: *mut u8) -> i32;
     fn lang_read(file: *const i8);
-    fn authdb_init(); // from map_char.c — stays until Task 6
     fn rust_mob_timer_spawns(id: i32, n: i32) -> i32;
-    fn map_cronjob(id: i32, n: i32) -> i32;
     fn npc_runtimers(id: i32, n: i32) -> i32;
 
     // Legacy C SQL functions from libdeps.a
@@ -215,21 +212,19 @@ async fn main() -> Result<()> {
                 rust_classdb_init(data_dir_c.as_ptr());
                 rust_clandb_init();
                 rust_boarddb_init();
-                intif_init();
                 object_flag_init();
                 rust_sl_init();
                 map_loadgameregistry();
                 rust_session_set_default_parse(rust_clif_parse);
                 rust_session_set_default_timeout(clif_timeout);
                 rust_make_listen_port(map_port as i32);
-                authdb_init();
 
                 // Timers from the old do_init — restored here after do_init was removed.
                 let startup = std::ffi::CString::new("startup").unwrap();
                 rust_sl_doscript_blargs_vec(startup.as_ptr(), std::ptr::null(), 0, std::ptr::null());
                 yuri::ffi::timer::timer_insert(50,   50,   Some(rust_mob_timer_spawns), 0, 0);
                 yuri::ffi::timer::timer_insert(100,  100,  Some(npc_runtimers),    0, 0);
-                yuri::ffi::timer::timer_insert(1000, 1000, Some(map_cronjob),      0, 0);
+                yuri::ffi::timer::timer_insert(1000, 1000, Some(yuri::game::map_server::rust_map_cronjob), 0, 0);
 
                 rust_set_termfunc(Some(map_do_term));
             }

@@ -498,7 +498,8 @@ int map_readglobalgamereg(const char *);
 int map_loadclanbank(int);
 
 int map_weather(int, int);
-int map_cronjob(int, int);
+// map_cronjob ported to Rust — use rust_map_cronjob
+int rust_map_cronjob(int, int);
 int map_savechars(int, int);
 int map_loadregistry(int);
 NPC *map_name2npc(const char *);

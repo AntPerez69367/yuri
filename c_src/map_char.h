@@ -16,16 +16,6 @@ void rust_intif_quit(uint32_t char_id);
 void rust_intif_save(const uint8_t* data, uint32_t len);
 void rust_intif_savequit(const uint8_t* data, uint32_t len);
 
-// ---------------------------------------------------------------------------
-// auth_db helpers — still backed by SQL (Authorize table) in map_char.c
-// until map_parse.c is fully ported.
-// ---------------------------------------------------------------------------
-int authdb_init();
-int auth_check(char*, unsigned int);
-int auth_delete(char*);
-int auth_add(char*, unsigned int, unsigned int);
-int intif_init();
-int intif_timer(int, int);
 int intif_mmo_tosd(int, struct mmo_charstatus*);
 int intif_parse(int);
 
