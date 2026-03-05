@@ -33,6 +33,9 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("_async", lua.create_function(|lua, (player_ud, func): (mlua::AnyUserData, mlua::Function)| {
         let sd = player_ud.borrow::<types::pc::PcObject>()?.ptr;
+        if sd.is_null() {
+            return Err(mlua::Error::RuntimeError("_async: null player pointer".into()));
+        }
         unsafe {
             lua.exec_raw::<()>(func, |L| {
                 crate::game::scripting::async_coro::start_async(sd, L);

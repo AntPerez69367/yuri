@@ -953,7 +953,6 @@ impl UserData for PcObject {
                             }
                         }
                     }
-                    eprintln!("[DBG] PcObject unimplemented key={key:?}");
                     tracing::debug!("[scripting] PcObject: unimplemented __index key={key:?}");
                     Ok(mlua::Value::Nil)
                 }

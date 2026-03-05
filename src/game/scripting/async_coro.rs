@@ -131,6 +131,7 @@ pub unsafe fn free_coref(user: *mut c_void) {
     if coref == 0 { return; }
     lua_ffi::luaL_unref(L(), lua_ffi::LUA_REGISTRYINDEX, coref as c_int);
     sl_user_set_coref(user, 0);
+    MENU_OPTS.lock().unwrap().as_mut().map(|m| m.remove(&(user as usize)));
 }
 
 /// Resume after a menu selection. Mirrors `sl_resumemenu`.
