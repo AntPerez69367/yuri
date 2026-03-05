@@ -104,6 +104,10 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
             mlua::Value::Number(f) if f.is_finite() && f >= 0.0 && f <= c_uint::MAX as f64 => {
                 unsafe { ffi::map_id2bl(f as c_uint) }
             }
+            mlua::Value::String(ref s) => {
+                let cs = CString::new(s.as_bytes().to_vec()).map_err(mlua::Error::external)?;
+                unsafe { ffi::map_name2npc(cs.as_ptr()) as *mut c_void }
+            }
             _ => std::ptr::null_mut(),
         };
         if ptr.is_null() { return Ok(mlua::Value::Nil); }

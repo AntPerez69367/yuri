@@ -8501,6 +8501,9 @@ int clif_parsesay(USER *sd) {
     return 0;
   }
 
+  if (is_command(sd, msg, RFIFOB(sd->fd, 6)))
+    return 0;
+
   // memcpy(msg,RFIFOP(sd->fd, 7),RFIFOB(sd->fd, 6));
   strcpy(sd->speech, msg);
   for (int i = 0; i < MAX_SPELLS; i++) {

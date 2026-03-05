@@ -3400,7 +3400,7 @@ pub unsafe extern "C" fn rust_pc_useitem(
 
     // Equipment type: check whether the current equip slot can be replaced.
     let equip_type = itemdb_type((*sd).status.inventory[id_u].id) - 3;
-    if equip_type >= 0 {
+    if equip_type >= 0 && (equip_type as usize) < (*sd).status.equip.len() {
         if (*sd).status.equip[equip_type as usize].id > 0 && (*sd).status.gm_level == 0 {
             if itemdb_unequip((*sd).status.equip[equip_type as usize].id) == 1 {
                 clif_sendminitext(sd, c"You are unable to unequip that.".as_ptr());
