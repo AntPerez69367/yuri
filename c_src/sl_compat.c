@@ -1132,13 +1132,7 @@ void sl_pc_set_country(void *sd, int v)     { ((USER*)sd)->status.country = v; }
 void sl_pc_set_clan(void *sd, int v)        { ((USER*)sd)->status.clan = v; }
 void sl_pc_set_gm_level(void *sd, int v)    { ((USER*)sd)->status.gm_level = v; }
 void sl_pc_set_side(void *sd, int v)        { ((USER*)sd)->status.side = v; }
-void sl_pc_set_state(void *sd, int v)       {
-    fprintf(stderr, "[DBG sl_compat] set_state: %d -> %d (id=%u)\n",
-            ((USER*)sd)->status.state, v, ((USER*)sd)->status.id);
-    ((USER*)sd)->status.state = v;
-    fprintf(stderr, "[DBG sl_compat] set_state after: read back %d\n",
-            ((USER*)sd)->status.state);
-}
+void sl_pc_set_state(void *sd, int v)       { ((USER*)sd)->status.state = v; }
 void sl_pc_set_hair(void *sd, int v)        { ((USER*)sd)->status.hair = v; }
 void sl_pc_set_hair_color(void *sd, int v)  { ((USER*)sd)->status.hair_color = v; }
 void sl_pc_set_face_color(void *sd, int v)  { ((USER*)sd)->status.face_color = v; }
@@ -3071,3 +3065,13 @@ void sl_pc_repairall_send(void *sd_ptr, void *npc_bl) {
     (void)sd_ptr; (void)npc_bl;
     /* no clif_ repair dialog function exists in this codebase */
 }
+
+// ─── Accessors for Rust client dispatcher (src/game/client/mod.rs) ───────────
+int  sl_pc_fd(void *sd)                        { return ((USER*)sd)->fd; }
+int  sl_pc_chat_timer(void *sd)                { return ((USER*)sd)->chat_timer; }
+void sl_pc_set_chat_timer(void *sd, int v)     { ((USER*)sd)->chat_timer = v; }
+int  sl_pc_attacked(void *sd)                  { return ((USER*)sd)->attacked; }
+void sl_pc_set_attacked(void *sd, int v)       { ((USER*)sd)->attacked = v; }
+int  sl_pc_loaded(void *sd)                    { return ((USER*)sd)->loaded; }
+unsigned int sl_pc_inventory_id(void *sd, int pos) { return ((USER*)sd)->status.inventory[pos].id; }
+int  sl_map_spell(int m)                       { return map_isloaded(m) ? map[m].spell : 0; }

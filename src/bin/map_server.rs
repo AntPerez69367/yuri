@@ -3,6 +3,7 @@ use sqlx::mysql::MySqlPoolOptions;
 use std::ffi::CString;
 use std::sync::Arc;
 use yuri::config::ServerConfig;
+use yuri::game::client::rust_clif_parse;
 use yuri::servers::map::MapState;
 
 /// C game-logic functions from libmap_game.a (pure C, not static inline).
@@ -19,7 +20,6 @@ extern "C" {
         nargs: i32, args: *const *mut std::ffi::c_void,
     ) -> i32;
     fn map_loadgameregistry() -> i32;
-    fn clif_parse(fd: i32) -> i32;
     fn clif_timeout(fd: i32) -> i32;
     fn map_do_term(); // renamed from do_term in Task 5
     fn intif_mmo_tosd(fd: i32, status: *mut u8) -> i32;
@@ -219,7 +219,7 @@ async fn main() -> Result<()> {
                 object_flag_init();
                 rust_sl_init();
                 map_loadgameregistry();
-                rust_session_set_default_parse(clif_parse);
+                rust_session_set_default_parse(rust_clif_parse);
                 rust_session_set_default_timeout(clif_timeout);
                 rust_make_listen_port(map_port as i32);
                 authdb_init();
