@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use sqlx::MySqlPool;
 use tokio::runtime::Runtime;
@@ -14,16 +14,18 @@ pub mod mob_db;
 pub mod recipe_db;
 
 static DB_POOL: OnceLock<MySqlPool> = OnceLock::new();
-// Single persistent runtime — pool connections are bound to a reactor; reusing
-// the same runtime keeps pool I/O registered with the correct reactor.
-static DB_RUNTIME: OnceLock<Runtime> = OnceLock::new();
+// Mutex-wrapped so concurrent calls from spawned OS threads (blocking_run_async)
+// are serialised. Pool connections are bound to this runtime's reactor.
+static DB_RUNTIME: OnceLock<Mutex<Runtime>> = OnceLock::new();
 
-fn get_runtime() -> &'static Runtime {
+fn get_runtime() -> &'static Mutex<Runtime> {
     DB_RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
+        Mutex::new(
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+        )
     })
 }
 
@@ -32,7 +34,30 @@ pub(crate) fn get_pool() -> &'static MySqlPool {
 }
 
 pub(crate) fn blocking_run<F: Future>(f: F) -> F::Output {
-    get_runtime().block_on(f)
+    get_runtime().lock().unwrap().block_on(f)
+}
+
+/// Like `blocking_run`, but safe to call from within a Tokio async task (e.g. LocalSet).
+///
+/// When called from inside a runtime (detected via `Handle::try_current`), the future
+/// is driven on a spawned OS thread using the existing runtime handle — no reactor
+/// re-registration needed, sqlx pool connections remain valid.
+///
+/// The future must be `Send + 'static` because it crosses a thread boundary.
+pub(crate) fn blocking_run_async<F>(f: F) -> F::Output
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    match tokio::runtime::Handle::try_current() {
+        Err(_) => get_runtime().lock().unwrap().block_on(f),
+        // Spawn a plain OS thread (not a Tokio worker) so it has no active runtime
+        // context. DB_RUNTIME can then call block_on without "nested runtime" panic,
+        // and sqlx I/O is driven by the correct reactor (the one the pool was created on).
+        Ok(_) => std::thread::spawn(move || get_runtime().lock().unwrap().block_on(f))
+            .join()
+            .expect("blocking_run_async thread panicked"),
+    }
 }
 
 /// Connect to the database. Called from ffi::database::rust_db_connect.
