@@ -1310,15 +1310,6 @@ int uptime(void) {
 
   return 0;
 }
-int keep_char_alive(int n, int a) {
-  if (char_fd) {
-    WFIFOHEAD(char_fd, 3);
-    WFIFOB(char_fd, 0) = 0xFF;
-    WFIFOB(char_fd, 1) = 1;
-    WFIFOSET(char_fd, 2);
-  }
-  return 0;
-}
 int object_flag_init(void) {
   int num = 0;
   char nothing[8] = "";
