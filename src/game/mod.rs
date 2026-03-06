@@ -1,5 +1,7 @@
 #[cfg(feature = "map-game")]
 pub mod map_char;
+#[cfg(feature = "map-game")]
+pub mod map_parse;
 pub mod map_server;
 pub mod mob;
 pub mod npc;

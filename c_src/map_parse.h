@@ -36,6 +36,9 @@ int clif_has_aethers(USER *, int);
 int clif_send_sub(struct block_list *, va_list);
 int clif_send(const unsigned char *, int, struct block_list *, int);
 void clif_send_timer(USER *, char, unsigned int);
+int clif_closeit(USER *);
+int clif_parsenpcdialog(USER *);
+int clif_handle_clickgetinfo(USER *);
 int clif_sendtogm(unsigned char *, int, struct block_list *, int);
 
 int clif_cnpclook_sub(struct block_list *, va_list);
@@ -123,6 +126,14 @@ void clif_send_groupbars(USER *, USER *);
 int clif_send_mobbars(struct block_list *, va_list);
 void clif_intcheck(int, int, int);
 
+// events/ranking — ported to src/game/map_parse/events.rs
+int  sendRewardParcel(USER *, int, int, int, int);
+int  clif_getReward(USER *, int);
+void retrieveEventDates(int, int, int);
+int  checkPlayerScore(int, USER *);
+void updateRanks(int);
+int  checkPlayerRank(int, USER *);
+
 // parse func
 int clif_parsechangepos(USER *);
 int clif_parseattack(USER *);
@@ -132,9 +143,12 @@ int clif_parseranking(USER *, int);
 int clif_sendRewardInfo(USER *, int);
 int clif_parsewalk(USER *);
 int clif_noparsewalk(USER *, char);
+int clif_charspecific(int, int);
+int clif_parsewalkpong(USER *);
 int clif_parseemotion(USER *);
 int clif_parsemap(USER *);
 int clif_parsesay(USER *);
+int clif_parseignore(USER *);
 int clif_parsegetitem(USER *);
 int clif_parsedropitem(USER *);
 int clif_parseuseitem(USER *);
@@ -149,6 +163,19 @@ int clif_mob_look_close_func(struct block_list *, va_list);
 int clif_mob_look_sub(struct block_list *, va_list);
 int clif_object_look_sub(struct block_list *, va_list);
 int clif_object_look_sub2(struct block_list *, va_list);
+// items.rs — ported functions still called from C
+int clif_parseeatitem(USER *);
+int clif_parsewield(USER *);
+int clif_parsethrow(USER *);
+int clif_throwconfirm(USER *);
+int clif_open_sub(USER *);
+int clif_dropgold(USER *, unsigned int);
+int clif_parsechangespell(USER *);
+int clif_equipit(USER *, int);
+int clif_addtocurrent(struct block_list *, va_list);
+int clif_throw_check(struct block_list *, va_list);
+int clif_throwitem_sub(USER *, int, int, int, int);
+
 // script func
 int clif_throwitem_script(USER *);
 int clif_scriptmes(USER *, int, const char *, int, int);
@@ -205,6 +232,7 @@ int clif_parsesell(USER *);
 int clif_showboards(USER *);
 int clif_clickonplayer(USER *, struct block_list *);
 int clif_leavegroup(USER *);
+int clif_findmount(USER *);
 int clif_unequipit(USER *, int);
 int clif_isingroup(USER *sd, USER *tsd);
 int clif_grouphealth_update(USER *sd);

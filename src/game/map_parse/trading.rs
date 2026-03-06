@@ -1,0 +1,1108 @@
+//! Port of trading/exchange handling from `c_src/map_parse.c`.
+//!
+//! Functions declared `#[no_mangle] pub unsafe extern "C"` so they remain
+//! callable from any remaining C code that has not yet been ported.
+//!
+//! Exchange field types in `MapSessionData` (verified from `src/game/pc.rs`):
+//! - `exchange_on: c_int`  — flag (not used by these functions directly)
+//! - `exchange: PcExchange` — embedded struct with:
+//!     - `item: [Item; 52]`
+//!     - `item_count: c_int`
+//!     - `exchange_done: c_int`
+//!     - `list_count: c_int`
+//!     - `gold: c_uint`
+//!     - `target: c_uint` — character ID of exchange partner (NOT a pointer)
+
+#![allow(non_snake_case, clippy::wildcard_imports)]
+
+use std::ffi::{c_char, c_int, c_uint, c_ulong};
+
+use crate::database::map_db::BlockList;
+use crate::ffi::session::{rust_session_exists, rust_session_set_eof};
+use crate::game::mob::MobSpawnData;
+use crate::game::pc::{
+    MapSessionData,
+    BL_MOB, BL_NPC, BL_PC,
+    FLAG_EXCHANGE,
+};
+
+// BL_ALL: all block-list types (from map_server.h enum)
+const BL_ALL: c_int = 0x0F;
+use crate::servers::char::charstatus::MAX_INVENTORY;
+
+use super::packet::{
+    encrypt,
+    rfifob, rfifol,
+    wfifob, wfifow, wfifoset, wfifohead,
+};
+
+// ─── optFlag_stealth (from map_server.h) ─────────────────────────────────────
+
+const OPT_FLAG_STEALTH: c_ulong = 32;
+
+// ─── C FFI: functions remaining in C ─────────────────────────────────────────
+
+extern "C" {
+    fn clif_sendminitext(sd: *mut MapSessionData, msg: *const c_char) -> c_int;
+    fn clif_sendstatus(sd: *mut MapSessionData, flags: c_int) -> c_int;
+    fn map_firstincell(m: c_int, x: c_int, y: c_int, bl_type: c_int) -> *mut BlockList;
+    fn map_id2sd(id: c_uint) -> *mut MapSessionData;
+    fn map_id2mob(id: c_uint) -> *mut MobSpawnData;
+    fn map_id2npc(id: c_uint) -> *mut std::ffi::c_void;
+    fn pc_additem(sd: *mut MapSessionData, it: *const crate::servers::char::charstatus::Item) -> c_int;
+    fn pc_additemnolog(sd: *mut MapSessionData, it: *const crate::servers::char::charstatus::Item) -> c_int;
+    fn pc_delitem(sd: *mut MapSessionData, id: c_int, amount: c_int, kind: c_int) -> c_int;
+    fn pc_isinvenspace(
+        sd: *mut MapSessionData,
+        id: c_int,
+        owner: c_int,
+        engrave: *const c_char,
+        custom_look: c_uint,
+        custom_look_color: c_uint,
+        custom_icon: c_uint,
+        custom_icon_color: c_uint,
+    ) -> c_int;
+    fn pc_readglobalreg(sd: *mut MapSessionData, reg: *const c_char) -> c_int;
+    fn itemdb_exchangeable(id: c_uint) -> c_int;
+    fn itemdb_droppable(id: c_uint) -> c_int;
+    fn itemdb_name(id: c_uint) -> *mut c_char;
+    fn itemdb_text(id: c_uint) -> *mut c_char;
+    fn itemdb_type(id: c_uint) -> c_int;
+    fn itemdb_icon(id: c_uint) -> c_int;
+    fn itemdb_iconcolor(id: c_uint) -> c_int;
+    fn itemdb_dura(id: c_uint) -> c_int;
+    fn classdb_name(id: c_int, rank: c_int) -> *mut c_char;
+    fn sl_doscript_blargs(
+        script: *const c_char,
+        func: *const c_char,
+        n: c_int,
+        ...
+    ) -> c_int;
+}
+
+// SFLAG_XPMONEY (from map_server.h)
+const SFLAG_XPMONEY: c_int = 4;
+
+// Item type constants (from item_db.h)
+const ITM_SMOKE:  c_int = 23;
+const ITM_BAG:    c_int = 25;
+const ITM_MAP:    c_int = 24;
+const ITM_QUIVER: c_int = 26;
+
+// ─── string_truncate: mirror of C stringTruncate ─────────────────────────────
+
+/// Truncate a fixed-size C-string buffer to `max_len` characters.
+/// Mirrors `stringTruncate(buffer, maxLength)` from map_parse.c line 402.
+unsafe fn string_truncate(buf: &mut [i8], max_len: usize) {
+    if max_len < buf.len() {
+        buf[max_len] = 0;
+    }
+}
+
+// ─── clif_exchange_cleanup ───────────────────────────────────────────────────
+
+/// Reset the exchange state on one side.  C lines 9316-9321.
+#[no_mangle]
+pub unsafe extern "C" fn clif_exchange_cleanup(sd: *mut MapSessionData) -> c_int {
+    if sd.is_null() { return 0; }
+    let sd = &mut *sd;
+    sd.exchange.exchange_done = 0;
+    sd.exchange.gold = 0;
+    sd.exchange.item_count = 0;
+    0
+}
+
+// ─── clif_exchange_message ───────────────────────────────────────────────────
+
+/// Send an exchange status message to one player.  C lines 9389-9412.
+#[no_mangle]
+pub unsafe extern "C" fn clif_exchange_message(
+    sd:      *mut MapSessionData,
+    message: *const c_char,
+    kind:    c_int,
+    extra:   c_int,
+) -> c_int {
+    if sd.is_null() { return 0; }
+    let sd = &*sd;
+    let extra = if extra > 1 { 0 } else { extra };
+
+    let msg_len = libc::strlen(message);
+    let len = msg_len + 5;   // mirrors C: len = strlen(message) + 5
+
+    if rust_session_exists(sd.fd) == 0 {
+        rust_session_set_eof(sd.fd, 8);
+        return 0;
+    }
+
+    wfifohead(sd.fd, msg_len + 8);
+    wfifob(sd.fd, 0, 0xAA);
+    wfifob(sd.fd, 3, 0x42);
+    wfifob(sd.fd, 4, 0x03);
+    wfifob(sd.fd, 5, kind as u8);
+    wfifob(sd.fd, 6, extra as u8);
+    wfifob(sd.fd, 7, msg_len as u8);
+    // copy message bytes into WFIFOP(sd->fd, 8)
+    let dst = crate::ffi::session::rust_session_wdata_ptr(sd.fd, 8) as *mut u8;
+    if !dst.is_null() {
+        std::ptr::copy_nonoverlapping(message as *const u8, dst, msg_len);
+    }
+    wfifow(sd.fd, 1, (len + 3) as u16);   // SWAP16(len + 3) — big-endian
+    let p = crate::ffi::session::rust_session_wdata_ptr(sd.fd, 1) as *mut u16;
+    if !p.is_null() { p.write_unaligned(((len + 3) as u16).to_be()); }
+    wfifoset(sd.fd, encrypt(sd.fd) as usize);
+    0
+}
+
+// ─── clif_exchange_finalize ──────────────────────────────────────────────────
+
+/// Transfer items/gold between both sides and clean up.  C lines 9323-9387.
+#[no_mangle]
+pub unsafe extern "C" fn clif_exchange_finalize(
+    sd:  *mut MapSessionData,
+    tsd: *mut MapSessionData,
+) -> c_int {
+    if sd.is_null() || tsd.is_null() { return 0; }
+
+    {
+        let script = b"characterLog\0".as_ptr() as *const c_char;
+        let func   = b"exchangeLogWrite\0".as_ptr() as *const c_char;
+        sl_doscript_blargs(script, func, 2, &mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList);
+    }
+
+    // Transfer sd's items to tsd
+    let sd_item_count = (*sd).exchange.item_count as usize;
+    for i in 0..sd_item_count {
+        let it = (*sd).exchange.item[i];
+        pc_additem(tsd, &it);
+    }
+    (*tsd).status.money = (*tsd).status.money.saturating_add((*sd).exchange.gold);
+    (*sd).status.money  = (*sd).status.money.saturating_sub((*sd).exchange.gold);
+    (*sd).exchange.gold = 0;
+
+    // Transfer tsd's items to sd
+    let tsd_item_count = (*tsd).exchange.item_count as usize;
+    for i in 0..tsd_item_count {
+        let it = (*tsd).exchange.item[i];
+        pc_additem(sd, &it);
+    }
+    (*sd).status.money   = (*sd).status.money.saturating_add((*tsd).exchange.gold);
+    (*tsd).status.money  = (*tsd).status.money.saturating_sub((*tsd).exchange.gold);
+    (*tsd).exchange.gold = 0;
+
+    clif_sendstatus(sd,  SFLAG_XPMONEY);
+    clif_sendstatus(tsd, SFLAG_XPMONEY);
+    0
+}
+
+// ─── clif_exchange_sendok ────────────────────────────────────────────────────
+
+/// Handle one side confirming the exchange.  C lines 9414-9435.
+#[no_mangle]
+pub unsafe extern "C" fn clif_exchange_sendok(
+    sd:  *mut MapSessionData,
+    tsd: *mut MapSessionData,
+) -> c_int {
+    if sd.is_null() || tsd.is_null() { return 0; }
+
+    if (*tsd).exchange.exchange_done == 1 {
+        clif_exchange_finalize(sd, tsd);
+
+        let msg = b"You exchanged, and gave away ownership of the items.\0".as_ptr() as *const c_char;
+        clif_exchange_message(sd,  msg, 5, 0);
+        clif_exchange_message(tsd, msg, 5, 0);
+
+        clif_exchange_cleanup(sd);
+        clif_exchange_cleanup(tsd);
+    } else {
+        (*sd).exchange.exchange_done = 1;
+        let msg = b"You exchanged, and gave away ownership of the items.\0".as_ptr() as *const c_char;
+        clif_exchange_message(tsd, msg, 5, 1);
+        clif_exchange_message(sd,  msg, 5, 1);
+    }
+    0
+}
+
+// ─── clif_startexchange ──────────────────────────────────────────────────────
+
+/// Initiate a trade window between two players.  C lines 9545-9634.
+#[no_mangle]
+pub unsafe extern "C" fn clif_startexchange(
+    sd:     *mut MapSessionData,
+    target: c_uint,
+) -> c_int {
+    if sd.is_null() { return 0; }
+
+    if target == (*sd).bl.id {
+        let msg = b"You move your items from one hand to another, but quickly get bored.\0".as_ptr() as *const c_char;
+        clif_sendminitext(sd, msg);
+        return 0;
+    }
+
+    let tsd = map_id2sd(target);
+    if tsd.is_null() { return 0; }
+
+    (*sd).exchange.target  = target;
+    (*tsd).exchange.target = (*sd).bl.id;
+
+    if (*tsd).status.setting_flags as c_uint & FLAG_EXCHANGE != 0 {
+        let mut buff = [0i8; 256];
+
+        // Build name string for sd (to send to tsd)
+        let tsd_class_name = classdb_name((*tsd).status.class as c_int, (*tsd).status.mark as c_int);
+        if !tsd_class_name.is_null() {
+            libc::snprintf(
+                buff.as_mut_ptr(),
+                buff.len(),
+                b"%s(%s)\0".as_ptr() as *const c_char,
+                (*tsd).status.name.as_ptr(),
+                tsd_class_name,
+            );
+        } else {
+            libc::snprintf(
+                buff.as_mut_ptr(),
+                buff.len(),
+                b"%s()\0".as_ptr() as *const c_char,
+                (*tsd).status.name.as_ptr(),
+            );
+        }
+
+        if rust_session_exists((*sd).fd) == 0 {
+            rust_session_set_eof((*sd).fd, 8);
+            return 0;
+        }
+
+        wfifohead((*sd).fd, 512);
+        wfifob((*sd).fd, 0, 0xAA);
+        wfifob((*sd).fd, 3, 0x42);
+        wfifob((*sd).fd, 4, 0x03);
+        wfifob((*sd).fd, 5, 0x00);
+        // WFIFOL(sd->fd, 6) = SWAP32(tsd->bl.id)
+        let p = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 6) as *mut u32;
+        if !p.is_null() { p.write_unaligned((*tsd).bl.id.to_be()); }
+        let mut len: usize = 4;
+        let buf_len = libc::strlen(buff.as_ptr());
+        wfifob((*sd).fd, len + 6, buf_len as u8);
+        let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, len + 7) as *mut u8;
+        if !dst.is_null() {
+            std::ptr::copy_nonoverlapping(buff.as_ptr() as *const u8, dst, buf_len);
+        }
+        len += buf_len + 1;
+        // WFIFOW(sd->fd, len+6) = SWAP16(tsd->status.level)
+        let p2 = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, len + 6) as *mut u16;
+        if !p2.is_null() { p2.write_unaligned(((*tsd).status.level as u16).to_be()); }
+        len += 2;
+        // WFIFOW(sd->fd, 1) = SWAP16(len + 3)
+        let ph = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
+        if !ph.is_null() { ph.write_unaligned(((len + 3) as u16).to_be()); }
+        wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
+
+        if rust_session_exists((*sd).fd) == 0 {
+            rust_session_set_eof((*sd).fd, 8);
+            return 0;
+        }
+
+        // Build name string for tsd (to send to sd)
+        let sd_class_name = classdb_name((*sd).status.class as c_int, (*sd).status.mark as c_int);
+        if !sd_class_name.is_null() {
+            libc::snprintf(
+                buff.as_mut_ptr(),
+                buff.len(),
+                b"%s(%s)\0".as_ptr() as *const c_char,
+                (*sd).status.name.as_ptr(),
+                sd_class_name,
+            );
+        } else {
+            libc::snprintf(
+                buff.as_mut_ptr(),
+                buff.len(),
+                b"%s()\0".as_ptr() as *const c_char,
+                (*sd).status.name.as_ptr(),
+            );
+        }
+
+        wfifohead((*tsd).fd, 512);
+        wfifob((*tsd).fd, 0, 0xAA);
+        wfifob((*tsd).fd, 3, 0x42);
+        wfifob((*tsd).fd, 4, 0x03);
+        wfifob((*tsd).fd, 5, 0x00);
+        // WFIFOL(tsd->fd, 6) = SWAP32(sd->bl.id)
+        let p3 = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 6) as *mut u32;
+        if !p3.is_null() { p3.write_unaligned((*sd).bl.id.to_be()); }
+        let mut len: usize = 4;
+        let buf_len = libc::strlen(buff.as_ptr());
+        wfifob((*tsd).fd, len + 6, buf_len as u8);
+        let dst = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, len + 7) as *mut u8;
+        if !dst.is_null() {
+            std::ptr::copy_nonoverlapping(buff.as_ptr() as *const u8, dst, buf_len);
+        }
+        len += buf_len + 1;
+        // WFIFOW(tsd->fd, len+6) = SWAP16(sd->status.level)
+        let p4 = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, len + 6) as *mut u16;
+        if !p4.is_null() { p4.write_unaligned(((*sd).status.level as u16).to_be()); }
+        len += 2;
+        let ph2 = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 1) as *mut u16;
+        if !ph2.is_null() { ph2.write_unaligned(((len + 3) as u16).to_be()); }
+        wfifoset((*tsd).fd, encrypt((*tsd).fd) as usize);
+
+        (*sd).status.setting_flags ^= FLAG_EXCHANGE as u16;
+        (*tsd).status.setting_flags ^= FLAG_EXCHANGE as u16;
+
+        (*sd).exchange.item_count  = 0;
+        (*tsd).exchange.item_count = 0;
+        (*sd).exchange.list_count  = 0;
+        (*tsd).exchange.list_count = 1;
+    } else {
+        let msg = b"They have refused to exchange with you\0".as_ptr() as *const c_char;
+        clif_sendminitext(sd, msg);
+    }
+    0
+}
+
+// ─── clif_exchange_additem_else ──────────────────────────────────────────────
+
+/// Send a real_name (engrave) additem packet once per item.  C lines 9635-9694.
+#[no_mangle]
+pub unsafe extern "C" fn clif_exchange_additem_else(
+    sd:  *mut MapSessionData,
+    tsd: *mut MapSessionData,
+    _id: c_int,
+) -> c_int {
+    if sd.is_null()  { return 0; }
+    if tsd.is_null() { return 0; }
+
+    // nameof = sd->exchange.item[sd->exchange.item_count - 1].real_name, truncated to 15
+    let item_idx = ((*sd).exchange.item_count - 1).max(0) as usize;
+    let mut nameof = [0i8; 255];
+    let real_name_ptr = (*sd).exchange.item[item_idx].real_name.as_ptr();
+    let real_name_len = libc::strlen(real_name_ptr).min(nameof.len() - 1);
+    std::ptr::copy_nonoverlapping(real_name_ptr, nameof.as_mut_ptr(), real_name_len);
+    nameof[real_name_len] = 0;
+    string_truncate(&mut nameof, 15);
+    (*sd).exchange.list_count += 1;
+
+    if rust_session_exists((*sd).fd) == 0 {
+        rust_session_set_eof((*sd).fd, 8);
+        return 0;
+    }
+
+    let buf_len = libc::strlen(nameof.as_ptr());
+
+    // Send to sd
+    wfifohead((*sd).fd, 2000);
+    wfifob((*sd).fd, 0, 0xAA);
+    wfifob((*sd).fd, 3, 0x42);
+    wfifob((*sd).fd, 4, 0x03);
+    wfifob((*sd).fd, 5, 0x02);
+    wfifob((*sd).fd, 6, 0x00);
+    wfifob((*sd).fd, 7, (*sd).exchange.list_count as u8);
+    let len: usize = 0;
+    // WFIFOW(sd->fd, len+8) = 0xFFFF
+    let pw = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, len + 8) as *mut u16;
+    if !pw.is_null() { pw.write_unaligned(0xFFFF_u16.to_le()); }
+    wfifob((*sd).fd, len + 10, 0x00);
+    wfifob((*sd).fd, len + 11, buf_len as u8);
+    let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, len + 12) as *mut u8;
+    if !dst.is_null() {
+        std::ptr::copy_nonoverlapping(nameof.as_ptr() as *const u8, dst, buf_len);
+    }
+    let pkt_len = len + buf_len + 5;   // WFIFOW(sd->fd,1) = SWAP16(len+5)
+    let ph = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
+    if !ph.is_null() { ph.write_unaligned(((pkt_len) as u16).to_be()); }
+    wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
+
+    if rust_session_exists((*sd).fd) == 0 {
+        rust_session_set_eof((*sd).fd, 8);
+        return 0;
+    }
+
+    // Send to tsd
+    wfifohead((*tsd).fd, 2000);
+    wfifob((*tsd).fd, 0, 0xAA);
+    wfifob((*tsd).fd, 3, 0x42);
+    wfifob((*tsd).fd, 4, 0x03);
+    wfifob((*tsd).fd, 5, 0x02);
+    wfifob((*tsd).fd, 6, 0x01);
+    wfifob((*tsd).fd, 7, (*sd).exchange.list_count as u8);
+    let pw2 = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 8) as *mut u16;
+    if !pw2.is_null() { pw2.write_unaligned(0xFFFF_u16.to_le()); }
+    wfifob((*tsd).fd, 10, 0);
+    wfifob((*tsd).fd, 11, buf_len as u8);
+    let dst2 = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 12) as *mut u8;
+    if !dst2.is_null() {
+        std::ptr::copy_nonoverlapping(nameof.as_ptr() as *const u8, dst2, buf_len);
+    }
+    let tsd_pkt_len = buf_len + 1;   // len += strlen(buff)+1; WFIFOW(tsd->fd,1)=SWAP16(len+8)
+    let ph2 = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 1) as *mut u16;
+    if !ph2.is_null() { ph2.write_unaligned(((tsd_pkt_len + 8) as u16).to_be()); }
+    wfifoset((*tsd).fd, encrypt((*tsd).fd) as usize);
+
+    0
+}
+
+// ─── clif_exchange_additem ───────────────────────────────────────────────────
+
+/// Add one inventory slot to the exchange offer.  C lines 9696-9851.
+#[no_mangle]
+pub unsafe extern "C" fn clif_exchange_additem(
+    sd:     *mut MapSessionData,
+    tsd:    *mut MapSessionData,
+    id:     c_int,
+    amount: c_int,
+) -> c_int {
+    if sd.is_null()  { return 0; }
+    if tsd.is_null() { return 0; }
+
+    let slot = id as usize;
+    if slot >= (*sd).status.maxinv as usize {
+        return 0;
+    }
+    let item_id = (*sd).status.inventory[slot].id;
+
+    if item_id != 0 {
+        if itemdb_exchangeable(item_id) != 0 {
+            let msg = b"You cannot exchange that.\0".as_ptr() as *const c_char;
+            clif_sendminitext(sd, msg);
+            return 0;
+        }
+    }
+
+    // Check target has inventory space
+    let inv = &(*sd).status.inventory[slot];
+    let space = pc_isinvenspace(
+        tsd,
+        item_id as c_int,
+        inv.owner as c_int,
+        inv.real_name.as_ptr(),
+        inv.custom_look,
+        inv.custom_look_color,
+        inv.custom_icon,
+        inv.custom_icon_color,
+    );
+    if space >= (*tsd).status.maxinv as c_int {
+        let msg = b"Receiving player does not have enough inventory space.\0".as_ptr() as *const c_char;
+        clif_sendminitext(sd, msg);
+        return 0;
+    }
+
+    // Copy item into exchange slot
+    let xcount = (*sd).exchange.item_count as usize;
+    (*sd).exchange.item[xcount] = (*sd).status.inventory[slot];
+    (*sd).exchange.item[xcount].amount = amount;
+
+    // Build display name (nameof = itemdb_name, truncate to 15)
+    let raw_name = itemdb_name((*sd).exchange.item[xcount].id);
+    let mut nameof = [0i8; 255];
+    if !raw_name.is_null() {
+        let name_len = libc::strlen(raw_name).min(nameof.len() - 1);
+        std::ptr::copy_nonoverlapping(raw_name, nameof.as_mut_ptr(), name_len);
+        nameof[name_len] = 0;
+    }
+    string_truncate(&mut nameof, 15);
+    (*sd).exchange.list_count += 1;
+
+    if rust_session_exists((*sd).fd) == 0 {
+        rust_session_set_eof((*sd).fd, 8);
+        return 0;
+    }
+
+    // Build buff string: name(amount) or name with durability annotation
+    let mut buff = [0i8; 300];
+    let i = xcount;
+    let ex_item = &(*sd).exchange.item[i];
+    let ex_type = itemdb_type(ex_item.id);
+    let ex_dura = ex_item.dura;
+
+    if amount > 1 {
+        libc::snprintf(
+            buff.as_mut_ptr(), buff.len(),
+            b"%s(%d)\0".as_ptr() as *const c_char,
+            nameof.as_ptr(), amount,
+        );
+    } else {
+        libc::snprintf(
+            buff.as_mut_ptr(), buff.len(),
+            b"%s\0".as_ptr() as *const c_char,
+            nameof.as_ptr(),
+        );
+    }
+
+    if ex_type > 2 && ex_type < 17 {
+        let max_dura = itemdb_dura(ex_item.id);
+        let percentage = if max_dura > 0 {
+            (ex_dura as f32 / max_dura as f32) * 100.0
+        } else { 0.0 };
+        libc::snprintf(
+            buff.as_mut_ptr(), buff.len(),
+            b"%s (%d%%)\0".as_ptr() as *const c_char,
+            nameof.as_ptr(), percentage as c_int,
+        );
+    } else if ex_type == ITM_SMOKE {
+        let txt = itemdb_text(ex_item.id);
+        libc::snprintf(
+            buff.as_mut_ptr(), buff.len(),
+            b"%s [%d %s]\0".as_ptr() as *const c_char,
+            nameof.as_ptr(), ex_dura, txt,
+        );
+    } else if ex_type == ITM_BAG {
+        libc::snprintf(
+            buff.as_mut_ptr(), buff.len(),
+            b"%s [%d]\0".as_ptr() as *const c_char,
+            nameof.as_ptr(), ex_dura,
+        );
+    } else if ex_type == ITM_MAP {
+        libc::snprintf(
+            buff.as_mut_ptr(), buff.len(),
+            b"[T%d] %s\0".as_ptr() as *const c_char,
+            ex_dura, nameof.as_ptr(),
+        );
+    } else if ex_type == ITM_QUIVER {
+        libc::snprintf(
+            buff.as_mut_ptr(), buff.len(),
+            b"%s [%d]\0".as_ptr() as *const c_char,
+            nameof.as_ptr(), ex_dura,
+        );
+    }
+
+    let buf_len = libc::strlen(buff.as_ptr());
+    let len: usize = 0;
+
+    // Send to sd (own side)
+    wfifohead((*sd).fd, 2000);
+    wfifob((*sd).fd, 0, 0xAA);
+    wfifob((*sd).fd, 3, 0x42);
+    wfifob((*sd).fd, 4, 0x03);
+    wfifob((*sd).fd, 5, 0x02);
+    wfifob((*sd).fd, 6, 0x00);
+    wfifob((*sd).fd, 7, (*sd).exchange.list_count as u8);
+
+    if ex_item.custom_icon != 0 {
+        let icon_val = ex_item.custom_icon + 49152;
+        let pw = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, len + 8) as *mut u16;
+        if !pw.is_null() { pw.write_unaligned((icon_val as u16).to_be()); }
+        wfifob((*sd).fd, len + 10, ex_item.custom_icon_color as u8);
+    } else {
+        let icon_val = itemdb_icon(ex_item.id) as u16;
+        let pw = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, len + 8) as *mut u16;
+        if !pw.is_null() { pw.write_unaligned(icon_val.to_be()); }
+        wfifob((*sd).fd, len + 10, itemdb_iconcolor(ex_item.id) as u8);
+    }
+    wfifob((*sd).fd, len + 11, buf_len as u8);
+    let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, len + 12) as *mut u8;
+    if !dst.is_null() {
+        std::ptr::copy_nonoverlapping(buff.as_ptr() as *const u8, dst, buf_len);
+    }
+    let sd_pkt_len = len + buf_len + 5;
+    let ph = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
+    if !ph.is_null() { ph.write_unaligned((sd_pkt_len as u16).to_be()); }
+    wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
+
+    let len: usize = 0;
+
+    if rust_session_exists((*sd).fd) == 0 {
+        rust_session_set_eof((*sd).fd, 8);
+        return 0;
+    }
+
+    // Rebuild buff for the tsd side (same logic, slightly different format for amount>1)
+    let ex_item = &(*sd).exchange.item[i];
+    if amount > 1 {
+        libc::snprintf(
+            buff.as_mut_ptr(), buff.len(),
+            b"%s (%d)\0".as_ptr() as *const c_char,
+            nameof.as_ptr(), amount,
+        );
+    } else {
+        libc::snprintf(
+            buff.as_mut_ptr(), buff.len(),
+            b"%s\0".as_ptr() as *const c_char,
+            nameof.as_ptr(),
+        );
+    }
+
+    if ex_type > 2 && ex_type < 17 {
+        let max_dura = itemdb_dura(ex_item.id);
+        let percentage = if max_dura > 0 {
+            (ex_dura as f32 / max_dura as f32) * 100.0
+        } else { 0.0 };
+        libc::snprintf(
+            buff.as_mut_ptr(), buff.len(),
+            b"%s (%d%%)\0".as_ptr() as *const c_char,
+            nameof.as_ptr(), percentage as c_int,
+        );
+    } else if ex_type == ITM_SMOKE {
+        let txt = itemdb_text(ex_item.id);
+        libc::snprintf(
+            buff.as_mut_ptr(), buff.len(),
+            b"%s [%d %s]\0".as_ptr() as *const c_char,
+            nameof.as_ptr(), ex_dura, txt,
+        );
+    } else if ex_type == ITM_BAG {
+        libc::snprintf(
+            buff.as_mut_ptr(), buff.len(),
+            b"%s [%d]\0".as_ptr() as *const c_char,
+            nameof.as_ptr(), ex_dura,
+        );
+    } else if ex_type == ITM_MAP {
+        libc::snprintf(
+            buff.as_mut_ptr(), buff.len(),
+            b"[T%d] %s\0".as_ptr() as *const c_char,
+            ex_dura, nameof.as_ptr(),
+        );
+    } else if ex_type == ITM_QUIVER {
+        libc::snprintf(
+            buff.as_mut_ptr(), buff.len(),
+            b"%s [%d]\0".as_ptr() as *const c_char,
+            nameof.as_ptr(), ex_dura,
+        );
+    }
+
+    let buf_len = libc::strlen(buff.as_ptr());
+
+    // Send to tsd (other side)
+    wfifohead((*tsd).fd, 2000);
+    wfifob((*tsd).fd, 0, 0xAA);
+    wfifob((*tsd).fd, 3, 0x42);
+    wfifob((*tsd).fd, 4, 0x03);
+    wfifob((*tsd).fd, 5, 0x02);
+    wfifob((*tsd).fd, 6, 0x01);
+    wfifob((*tsd).fd, 7, (*sd).exchange.list_count as u8);
+
+    let ex_item = &(*sd).exchange.item[i];
+    if ex_item.custom_icon != 0 {
+        let icon_val = ex_item.custom_icon + 49152;
+        let pw = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 8) as *mut u16;
+        if !pw.is_null() { pw.write_unaligned((icon_val as u16).to_be()); }
+        wfifob((*tsd).fd, 10, ex_item.custom_icon_color as u8);
+    } else {
+        let icon_val = itemdb_icon(ex_item.id) as u16;
+        let pw = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 8) as *mut u16;
+        if !pw.is_null() { pw.write_unaligned(icon_val.to_be()); }
+        wfifob((*tsd).fd, 10, itemdb_iconcolor(ex_item.id) as u8);
+    }
+    wfifob((*tsd).fd, 11, buf_len as u8);
+    let dst2 = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 12) as *mut u8;
+    if !dst2.is_null() {
+        std::ptr::copy_nonoverlapping(buff.as_ptr() as *const u8, dst2, buf_len);
+    }
+    let tsd_pkt_len = len + buf_len + 1;   // len += strlen(buff)+1; WFIFOW(tsd->fd,1)=SWAP16(len+8)
+    let ph2 = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 1) as *mut u16;
+    if !ph2.is_null() { ph2.write_unaligned(((tsd_pkt_len + 8) as u16).to_be()); }
+    wfifoset((*tsd).fd, encrypt((*tsd).fd) as usize);
+
+    (*sd).exchange.item_count += 1;
+
+    // Send engrave line if item has a real_name
+    if libc::strlen((*sd).exchange.item[i].real_name.as_ptr()) > 0 {
+        clif_exchange_additem_else(sd, tsd, id);
+    }
+    pc_delitem(sd, id, amount, 9);
+    0
+}
+
+// ─── clif_exchange_money ─────────────────────────────────────────────────────
+
+/// Broadcast the current gold offer to both sides.  C lines 9853-9904.
+#[no_mangle]
+pub unsafe extern "C" fn clif_exchange_money(
+    sd:  *mut MapSessionData,
+    tsd: *mut MapSessionData,
+) -> c_int {
+    if sd.is_null()  { return 0; }
+    if tsd.is_null() { return 0; }
+
+    if rust_session_exists((*sd).fd) == 0 {
+        rust_session_set_eof((*sd).fd, 8);
+        return 0;
+    }
+    if rust_session_exists((*tsd).fd) == 0 {
+        rust_session_set_eof((*tsd).fd, 8);
+        return 0;
+    }
+
+    wfifohead((*sd).fd,  11);
+    wfifohead((*tsd).fd, 11);
+
+    // sd side: own gold offer
+    wfifob((*sd).fd, 0, 0xAA);
+    {
+        let p = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
+        if !p.is_null() { p.write_unaligned(8_u16.to_be()); }
+    }
+    wfifob((*sd).fd, 3, 0x42);
+    wfifob((*sd).fd, 4, 0x03);
+    wfifob((*sd).fd, 5, 0x03);
+    wfifob((*sd).fd, 6, 0x00);
+    {
+        let p = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 7) as *mut u32;
+        if !p.is_null() { p.write_unaligned((*sd).exchange.gold.to_be()); }
+    }
+    wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
+
+    // tsd side: sd's gold offer visible to partner
+    wfifob((*tsd).fd, 0, 0xAA);
+    {
+        let p = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 1) as *mut u16;
+        if !p.is_null() { p.write_unaligned(8_u16.to_be()); }
+    }
+    wfifob((*tsd).fd, 3, 0x42);
+    wfifob((*tsd).fd, 4, 0x03);
+    wfifob((*tsd).fd, 5, 0x03);
+    wfifob((*tsd).fd, 6, 0x01);
+    {
+        let p = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 7) as *mut u32;
+        if !p.is_null() { p.write_unaligned((*sd).exchange.gold.to_be()); }
+    }
+    wfifoset((*tsd).fd, encrypt((*tsd).fd) as usize);
+
+    0
+}
+
+// ─── clif_exchange_close ─────────────────────────────────────────────────────
+
+/// Cancel the exchange and return all held items.  C lines 9906-9926.
+#[no_mangle]
+pub unsafe extern "C" fn clif_exchange_close(sd: *mut MapSessionData) -> c_int {
+    if sd.is_null() { return 0; }
+
+    (*sd).exchange.target = 0;
+
+    let item_count = (*sd).exchange.item_count as usize;
+    for i in 0..item_count {
+        let it = (*sd).exchange.item[i];
+        pc_additemnolog(sd, &it);
+    }
+    clif_exchange_cleanup(sd);
+    0
+}
+
+// ─── clif_handgold ───────────────────────────────────────────────────────────
+
+/// Handle a "hand gold" packet — offer gold from adjacent cell.  C lines 9090-9155.
+#[no_mangle]
+pub unsafe extern "C" fn clif_handgold(sd: *mut MapSessionData) -> c_int {
+    if sd.is_null() { return 0; }
+
+    let gold = {
+        // SWAP32(RFIFOL(sd->fd, 5)) — network big-endian
+        let raw = rfifol((*sd).fd, 5);
+        u32::from_be_bytes(raw.to_le_bytes())   // raw is LE from rfifol; SWAP32 makes BE → flip
+    };
+
+    // C: if (gold < 0) gold = 0; (gold is unsigned so this is a no-op, but kept for fidelity)
+    let gold = gold;
+    if gold == 0 { return 0; }
+    let gold = gold.min((*sd).status.money);
+
+    // Compute adjacent cell based on facing direction
+    let (x, y) = side_cell(&*sd);
+
+    let bl = map_firstincell((*sd).bl.m as c_int, x, y, BL_ALL);
+
+    (*sd).exchange.gold = gold;
+
+    if !bl.is_null() {
+        if (*bl).bl_type as c_int == BL_PC {
+            let tsd = map_id2sd((*bl).id);
+            if !tsd.is_null() && (*tsd).status.setting_flags as c_uint & FLAG_EXCHANGE != 0 {
+                clif_startexchange(sd, (*bl).id);
+                clif_exchange_money(sd, tsd);
+            } else {
+                let msg = b"They have refused to exchange with you\0".as_ptr() as *const c_char;
+                clif_sendminitext(sd, msg);
+            }
+        }
+    }
+    0
+}
+
+// ─── clif_handitem ───────────────────────────────────────────────────────────
+
+/// Handle a "hand item" packet — offer/give item from adjacent cell.  C lines 9206-9314.
+#[no_mangle]
+pub unsafe extern "C" fn clif_handitem(sd: *mut MapSessionData) -> c_int {
+    if sd.is_null() { return 0; }
+
+    let slot      = rfifob((*sd).fd, 5).saturating_sub(1) as usize;
+    let handgive  = rfifob((*sd).fd, 6);
+    let amount: c_int = if handgive == 0 {
+        1
+    } else {
+        (*sd).status.inventory[slot].amount
+    };
+
+    let (x, y) = side_cell(&*sd);
+
+    (*sd).invslot = slot as u8;
+
+    let bl = map_firstincell((*sd).bl.m as c_int, x, y, BL_ALL);
+
+    if bl.is_null() { return 0; }
+
+    if (*bl).bl_type as c_int == BL_PC {
+        let tsd = map_id2sd((*bl).id);
+        if !tsd.is_null() && (*tsd).status.setting_flags as c_uint & FLAG_EXCHANGE != 0 {
+            clif_startexchange(sd, (*bl).id);
+            clif_exchange_additem(sd, tsd, slot as c_int, amount);
+        } else {
+            let msg = b"They have refused to exchange with you\0".as_ptr() as *const c_char;
+            clif_sendminitext(sd, msg);
+        }
+    }
+
+    if (*bl).bl_type as c_int == BL_MOB {
+        let mob = map_id2mob((*bl).id);
+        if mob.is_null() { return 0; }
+
+        if itemdb_exchangeable((*sd).status.inventory[slot].id) == 1 { return 0; }
+
+        let inv_id   = (*sd).status.inventory[slot].id;
+        let inv_dura = (*sd).status.inventory[slot].dura;
+        let inv_own  = (*sd).status.inventory[slot].owner;
+        let inv_prot = (*sd).status.inventory[slot].protected;
+
+        let mut found = false;
+        for i in 0..MAX_INVENTORY {
+            let mob_slot = &mut (*mob).inventory[i];
+            if mob_slot.id == inv_id
+                && mob_slot.dura    == inv_dura
+                && mob_slot.owner   == inv_own
+                && mob_slot.protected == inv_prot
+            {
+                mob_slot.amount += amount;
+                found = true;
+                break;
+            } else if mob_slot.id == 0 {
+                mob_slot.id     = inv_id;
+                mob_slot.amount = amount;
+                mob_slot.owner  = inv_own;
+                mob_slot.dura   = inv_dura;
+                mob_slot.protected = inv_prot;
+                found = true;
+                break;
+            }
+        }
+        let _ = found;
+        pc_delitem(sd, slot as c_int, amount, 9);
+    }
+
+    if (*bl).bl_type as c_int == BL_NPC {
+        let nd = map_id2npc((*bl).id);
+        if nd.is_null() { return 0; }
+
+        // Cast to a minimal NPC view to read receiveItem
+        #[repr(C)]
+        struct NpcMinimal {
+            bl:          BlockList,
+            name:        [i8; 24],
+            receive_item: c_int,
+        }
+        let nd_min = nd as *mut NpcMinimal;
+
+        let inv_id = (*sd).status.inventory[slot].id;
+        if itemdb_exchangeable(inv_id) != 0 || itemdb_droppable(inv_id) != 0 {
+            return 0;
+        }
+
+        if (*nd_min).receive_item == 1 {
+            let func = b"handItem\0".as_ptr() as *const c_char;
+            sl_doscript_blargs(
+                (*nd_min).name.as_ptr(),
+                func,
+                2,
+                &mut (*sd).bl as *mut BlockList,
+                &mut (*nd_min).bl as *mut BlockList,
+            );
+        } else {
+            let item_name = itemdb_name(inv_id);
+            let mut msg = [0i8; 128];
+            libc::snprintf(
+                msg.as_mut_ptr(), msg.len(),
+                b"What are you trying to do? Keep your junky %s with you!\0".as_ptr() as *const c_char,
+                item_name,
+            );
+            let msg_len = libc::strlen(msg.as_ptr());
+
+            if rust_session_exists((*sd).fd) == 0 {
+                rust_session_set_eof((*sd).fd, 8);
+                return 0;
+            }
+
+            wfifohead((*sd).fd, msg_len + 11);
+            wfifob((*sd).fd, 5, 0);
+            {
+                let p = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 6) as *mut u32;
+                if !p.is_null() { p.write_unaligned((*bl).id.to_be()); }
+            }
+            wfifob((*sd).fd, 10, msg_len as u8);
+            let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 11) as *mut u8;
+            if !dst.is_null() {
+                std::ptr::copy_nonoverlapping(msg.as_ptr() as *const u8, dst, msg_len);
+            }
+            wfifob((*sd).fd, 0, 0xAA);
+            wfifob((*sd).fd, 3, 0x0D);
+            wfifob((*sd).fd, 4, 0); // increment placeholder (WFIFOHEADER sets it)
+            {
+                let ph = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
+                if !ph.is_null() { ph.write_unaligned(((msg_len + 11) as u16).to_be()); }
+            }
+            wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
+        }
+    }
+    0
+}
+
+// ─── clif_parse_exchange ─────────────────────────────────────────────────────
+
+/// Dispatch incoming exchange sub-packet by type byte.  C lines 9438-9543.
+#[no_mangle]
+pub unsafe extern "C" fn clif_parse_exchange(sd: *mut MapSessionData) -> c_int {
+    if sd.is_null() { return 0; }
+
+    let kind = rfifob((*sd).fd, 5) as c_int;
+
+    let reg_str = b"goldbardupe\0".as_ptr() as *const c_char;
+    let _dupe_times = pc_readglobalreg(sd, reg_str);
+    // C has a commented-out quarantine block here; no-op as in C.
+
+    match kind {
+        0 => {
+            // Initiation: type 0
+            let raw = rfifol((*sd).fd, 6);
+            let target_id = u32::from_be_bytes(raw.to_le_bytes());
+            let tsd = map_id2sd(target_id);
+            if tsd.is_null()
+                || (*sd).bl.m != (*tsd).bl.m
+                || (*tsd).bl.bl_type as c_int != BL_PC
+            {
+                return 0;
+            }
+            if (*sd).status.gm_level != 0 || ((*tsd).optFlags & OPT_FLAG_STEALTH) == 0 {
+                clif_startexchange(sd, target_id);
+            }
+        }
+        1 => {
+            // Add item — check if it needs an amount prompt
+            let id = rfifob((*sd).fd, 10).saturating_sub(1) as usize;
+            if id >= (*sd).status.maxinv as usize {
+                return 0;
+            }
+            if (*sd).status.inventory[id].amount > 1 {
+                if rust_session_exists((*sd).fd) == 0 {
+                    rust_session_set_eof((*sd).fd, 8);
+                    return 0;
+                }
+                wfifohead((*sd).fd, 7);
+                wfifob((*sd).fd, 0, 0xAA);
+                {
+                    let p = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
+                    if !p.is_null() { p.write_unaligned(4_u16.to_be()); }
+                }
+                wfifob((*sd).fd, 3, 0x42);
+                wfifob((*sd).fd, 4, 0x03);
+                wfifob((*sd).fd, 5, 0x01);
+                wfifob((*sd).fd, 6, (id + 1) as u8);
+                wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
+            } else if (*sd).status.inventory[id].id != 0 {
+                let raw = rfifol((*sd).fd, 6);
+                let target_id = u32::from_be_bytes(raw.to_le_bytes());
+                let tsd = map_id2sd(target_id);
+                clif_exchange_additem(sd, tsd, id as c_int, 1);
+            }
+            // else: blank slot hack attempt — do nothing (matching C)
+        }
+        2 => {
+            // Add item with explicit amount
+            let id     = rfifob((*sd).fd, 10).saturating_sub(1) as usize;
+            if id >= (*sd).status.maxinv as usize {
+                return 0;
+            }
+            let amount = rfifob((*sd).fd, 11) as c_int;
+            let raw = rfifol((*sd).fd, 6);
+            let target_id = u32::from_be_bytes(raw.to_le_bytes());
+            let tsd = map_id2sd(target_id);
+            if amount > 0
+                && (*sd).status.inventory[id].id != 0
+                && amount <= (*sd).status.inventory[id].amount
+            {
+                clif_exchange_additem(sd, tsd, id as c_int, amount);
+            }
+            // else: blank slot or zero amount — do nothing
+        }
+        3 => {
+            // Exchange gold
+            let raw_target = rfifol((*sd).fd, 6);
+            let target_id  = u32::from_be_bytes(raw_target.to_le_bytes());
+            let raw_amount = rfifol((*sd).fd, 10);
+            let amount     = u32::from_be_bytes(raw_amount.to_le_bytes());
+            let tsd = map_id2sd(target_id);
+            if amount > (*sd).status.money {
+                clif_exchange_money(sd, tsd);
+            } else {
+                (*sd).exchange.gold = amount;
+                clif_exchange_money(sd, tsd);
+            }
+        }
+        4 => {
+            // Quit exchange
+            let raw = rfifol((*sd).fd, 6);
+            let target_id = u32::from_be_bytes(raw.to_le_bytes());
+            let tsd = map_id2sd(target_id);
+            let msg = b"Exchange cancelled.\0".as_ptr() as *const c_char;
+            clif_exchange_message(sd, msg, 4, 0);
+            if !tsd.is_null() {
+                clif_exchange_message(tsd, msg, 4, 0);
+            }
+            clif_exchange_close(sd);
+            if !tsd.is_null() {
+                clif_exchange_close(tsd);
+            }
+        }
+        5 => {
+            // Finish exchange
+            let raw = rfifol((*sd).fd, 6);
+            let target_id = u32::from_be_bytes(raw.to_le_bytes());
+            let tsd = map_id2sd(target_id);
+
+            if (*sd).exchange.target != target_id {
+                clif_exchange_close(sd);
+                let msg = b"Exchange cancelled.\0".as_ptr() as *const c_char;
+                clif_exchange_message(sd, msg, 4, 0);
+                if !tsd.is_null() && (*tsd).exchange.target == (*sd).bl.id {
+                    clif_exchange_message(tsd, msg, 4, 0);
+                    clif_exchange_close(tsd);
+                    rust_session_set_eof((*sd).fd, 10);
+                }
+                return 0;
+            }
+            let msg_no_gold = b"You do not have that amount.\0".as_ptr() as *const c_char;
+            let msg_cancel  = b"Exchange cancelled.\0".as_ptr() as *const c_char;
+            if (*sd).exchange.gold > (*sd).status.money {
+                clif_exchange_message(sd, msg_no_gold, 4, 0);
+                clif_exchange_message(tsd, msg_cancel,  4, 0);
+                clif_exchange_close(sd);
+                clif_exchange_close(tsd);
+            } else if !tsd.is_null() {
+                clif_exchange_sendok(sd, tsd);
+            } else {
+                clif_exchange_close(sd);
+            }
+        }
+        _ => {}
+    }
+    0
+}
+
+// ─── side_cell: compute adjacent cell from facing direction ──────────────────
+
+/// Return the (x, y) of the cell in front of the player based on `status.side`.
+/// Matches the repeated side==0..3 pattern in clif_handgold / clif_handitem.
+unsafe fn side_cell(sd: &MapSessionData) -> (c_int, c_int) {
+    match sd.status.side {
+        0 => (sd.bl.x as c_int,     sd.bl.y as c_int - 1),
+        1 => (sd.bl.x as c_int + 1, sd.bl.y as c_int),
+        2 => (sd.bl.x as c_int,     sd.bl.y as c_int + 1),
+        3 => (sd.bl.x as c_int - 1, sd.bl.y as c_int),
+        _ => (sd.bl.x as c_int,     sd.bl.y as c_int),
+    }
+}
+

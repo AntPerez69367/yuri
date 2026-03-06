@@ -56,22 +56,14 @@ extern "C" {
     //   int sl_map_isloaded(int m) { return map_isloaded(m); }
     fn sl_map_isloaded(m: c_int) -> c_int;
 
-    // PC and clif game functions — all remain in C until map_parse.c is ported.
+    // PC game functions — remain in C until pc.c is further ported.
     fn rust_pc_setpos(sd: *mut MapSessionData, m: c_int, x: c_int, y: c_int) -> c_int;
     fn rust_pc_loadmagic(sd: *mut MapSessionData) -> c_int;
     fn rust_pc_starttimer(sd: *mut MapSessionData) -> c_int;
     fn rust_pc_requestmp(sd: *mut MapSessionData) -> c_int;
 
-    fn clif_sendack(sd: *mut MapSessionData) -> c_int;
-    fn clif_sendtime(sd: *mut MapSessionData) -> c_int;
-    fn clif_sendid(sd: *mut MapSessionData) -> c_int;
-    fn clif_sendmapinfo(sd: *mut MapSessionData) -> c_int;
-    fn clif_sendstatus(sd: *mut MapSessionData, flags: c_int) -> c_int;
-    fn clif_mystaytus(sd: *mut MapSessionData) -> c_int;
+    // clif_spawn — still in C (map_parse.c): calls map_addblock + clif_sendchararea.
     fn clif_spawn(sd: *mut MapSessionData) -> c_int;
-    fn clif_refresh(sd: *mut MapSessionData) -> c_int;
-    fn clif_sendxy(sd: *mut MapSessionData) -> c_int;
-    fn clif_getchararea(sd: *mut MapSessionData) -> c_int;
 
     fn clif_mob_look_start(sd: *mut MapSessionData) -> c_int;
     fn clif_mob_look_close(sd: *mut MapSessionData) -> c_int;
@@ -93,8 +85,6 @@ extern "C" {
 
     fn rust_pc_calcstat(sd: *mut MapSessionData) -> c_int;
     fn rust_pc_checklevel(sd: *mut MapSessionData) -> c_int;
-
-    fn clif_retrieveprofile(sd: *mut MapSessionData) -> c_int;
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +200,12 @@ pub unsafe extern "C" fn intif_mmo_tosd(fd: c_int, p: *const MmoCharStatus) -> c
     rust_pc_requestmp(sd);
 
     // Send initial login packets to the client.
+    // Functions now ported to Rust — call via module path.
+    use crate::game::map_parse::player_state::{
+        clif_sendack, clif_sendtime, clif_sendid, clif_sendmapinfo,
+        clif_sendstatus, clif_mystaytus, clif_refresh, clif_sendxy,
+        clif_getchararea, clif_retrieveprofile,
+    };
     clif_sendack(sd);
     clif_sendtime(sd);
     clif_sendid(sd);
@@ -265,3 +261,4 @@ pub unsafe extern "C" fn intif_mmo_tosd(fd: c_int, p: *const MmoCharStatus) -> c
     clif_retrieveprofile(sd);
     0
 }
+

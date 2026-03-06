@@ -148,7 +148,8 @@ extern "C" {
     #[link_name = "Sql_ShowDebug_"]
     fn Sql_ShowDebug(handle: *mut c_void);
     fn SqlStmt_Malloc(handle: *mut c_void) -> *mut c_void;
-    fn SqlStmt_ShowDebug(stmt: *mut c_void);
+    #[link_name = "SqlStmt_ShowDebug_"]
+    fn SqlStmt_ShowDebug(stmt: *mut c_void, file: *const c_char, line: c_ulong);
 
     // session helpers
     fn rust_session_exists(fd: c_int) -> c_int;
