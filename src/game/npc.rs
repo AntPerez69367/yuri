@@ -2,7 +2,7 @@
 
 #![allow(non_snake_case, dead_code)]
 
-use std::ffi::{c_char, c_int, c_uint, c_uchar, c_ushort};
+use std::ffi::{c_char, c_int, c_uint, c_uchar, c_ushort, c_void};
 use crate::database::map_db::{BlockList, GlobalReg};
 use crate::servers::char::charstatus::{Item, MAX_EQUIP};
 use crate::game::types::GfxViewer;
@@ -112,7 +112,7 @@ pub static mut NPCTEMP_ID: c_uint = NPCT_START_NUM as c_uint;
 
 // C map functions needed by npc_get_new_npcid / npc_get_new_npctempid
 extern "C" {
-    pub fn map_id2bl(id: c_uint) -> *mut BlockList;
+    pub fn map_id2bl(id: c_uint) -> *mut c_void;
     pub fn map_id2npc(id: c_uint) -> *mut NpcData;
     pub fn map_addiddb(bl: *mut BlockList);
     pub fn map_deliddb(bl: *mut BlockList);

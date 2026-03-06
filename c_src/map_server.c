@@ -46,9 +46,7 @@
 
 Sql* sql_handle = NULL;
 
-DBMap* id_db;
 DBMap* mobsearch_db;
-DBMap* mobid_db = NULL;
 struct map_msg_data map_msg[MSG_MAX];
 int map_loadgameregistry();
 
@@ -126,56 +124,8 @@ int nmail_sendmessage(USER* sd, char* message, int other, int type) {
   return 0;
 }
 
-struct block_list* map_id2bl(unsigned int id) {
-  struct block_list* bl = NULL;
-  bl = uidb_get(id_db, id);
-  return bl;
-}
-
-void map_deliddb(struct block_list* bl) { uidb_remove(id_db, bl->id); }
-
-void map_addiddb(struct block_list* bl) {
-  // if(bl->type==BL_MOB)
-  // uidb_put(mobid_db,bl->id,bl);
-
-  uidb_put(id_db, bl->id, bl);
-}
-
-void map_initiddb() {
-  id_db = uidb_alloc(DB_OPT_BASE);
-  mobid_db = uidb_alloc(DB_OPT_BASE);
-  // mobsearch_db=numdb_init();
-}
-
-int map_finaliddb(void* key, void* data, va_list ap) {
-  struct block_list* db;
-  // struct npc_data* nd;
-  nullpo_ret(0, db = data);
-
-  map_delblock(db);
-  switch (db->id) {
-    case BL_NPC:
-      // nd = data;
-      switch (db->subtype) {
-        case FLOOR:
-        case SCRIPT:
-          // FREE(nd->script);
-          break;
-      }
-    case BL_PC:
-    case BL_ITEM:
-      FREE(db);
-      break;
-  }
-  return 0;
-}
-
-void map_termiddb() {
-  if (id_db) {
-    // uidb_final(id_db,map_finaliddb);
-    id_db = NULL;
-  }
-}
+// map_id2bl, map_id2sd, map_addiddb, map_deliddb, map_initiddb, map_termiddb
+// ported to Rust in src/game/map_server.rs
 
 void map_clritem() {
   FREE(object);
@@ -283,32 +233,6 @@ int map_src_add(const char* r1) {
   return 0;
 }
 
-USER* map_id2sd(unsigned int id) {
-  USER* sd = NULL;
-
-  sd = (USER*)uidb_get(id_db, id);
-  // nullpo_ret(0,sd=(USER*)uidb_get(id_db,id));
-  return sd;
-}
-int isPlayerActive(USER* sd) {
-  if (!sd) return 0;
-  if (!sd->fd) return 0;
-  if (!rust_session_exists(sd->fd)) {  // This is an anomally, save, and exit.
-    printf(
-        "Abnormal, Player exists but session does not(%s).  Attempting to "
-        "recreate.\n",
-        sd->status.name);
-    // create_session(sd->fd); //Recreate socket data.
-    // rust_session_get_data(sd->fd)=sd;
-    // session[sd->fd]->eof=1;
-    // clif_handle_disconnect(sd);
-    // session_eof(sd->fd);
-    // FREE(sd);
-    // return 1;
-    return 0;
-  }
-  return 1;
-}
 MOB* map_id2mob(unsigned int id) {
   MOB* mob;
   struct block_list* bl;
@@ -1924,69 +1848,7 @@ char* map_id2name(unsigned int id) {
   return owner;
 }
 
-void mmo_setonline(unsigned int id, int val) {
-  int a, b, c, d, regid;
-  char addr[255];
-  USER* sd = map_id2sd(id);
-  SqlStmt* stmt = SqlStmt_Malloc(sql_handle);
 
-  if (stmt == NULL) {
-    SqlStmt_ShowDebug(stmt);
-    SqlStmt_Free(stmt);
-    return;
-  }
-
-  if (SQL_ERROR == SqlStmt_Prepare(
-                       stmt,
-                       "SELECT `ChaId` FROM `Character` WHERE `ChaId` = '%u'",
-                       id) ||
-      SQL_ERROR == SqlStmt_Execute(stmt) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 0, SQLDT_UINT, &regid, 0, NULL, NULL)) {
-    SqlStmt_ShowDebug(stmt);
-    SqlStmt_Free(stmt);
-    return;
-  }
-
-  if (SQL_SUCCESS == SqlStmt_NextRow(stmt)) {
-    a = b = c = d = rust_session_get_client_ip(sd->fd);
-    a &= 0xff;
-    b = (b >> 8) & 0xff;
-    c = (c >> 16) & 0xff;
-    d = (d >> 24) & 0xff;
-    sprintf(addr, "%u.%u.%u.%u", a, b, c, d);
-    printf("[map] [login] name=%s addr=%s\n", sd->status.name, addr);
-
-    // if (strcasecmp(escape,"71.78.153.2") == 0 ||
-    // strcasecmp(escape,"71.238.0.230")
-    // == 0) { clif_handle_disconnect(sd); clif_closeit(sd);}
-
-    sl_doscript_blargs("login", NULL, 1, &sd->bl);
-
-    /*if (SQL_ERROR == Sql_Query(sql_handle, "INSERT INTO `LoginLogs`
-    (`LgnChaId`, `LgnIp`, `LgnActId`) VALUES ('%u', '%s', '%u')", id, escape,
-    regid)) { Sql_ShowDebug(sql_handle);
-    }*/
-  }
-
-  if (SQL_ERROR == Sql_Query(sql_handle,
-                             "UPDATE `Character` SET `ChaOnline` = '%d', "
-                             "`ChaLastIP` = '%s' WHERE `ChaId` = '%u'",
-                             val, addr, id))
-    Sql_ShowDebug(sql_handle);
-
-  SqlStmt_Free(stmt);
-}
-
-char isActive(USER* sd) {
-  if (!sd) return 0;
-
-  if (!rust_session_exists(sd->fd)) return 0;
-
-  if (rust_session_get_eof(sd->fd)) return 0;
-
-  return 1;
-}
 
 int hasCoref(USER* sd) {
   USER* nsd = NULL;

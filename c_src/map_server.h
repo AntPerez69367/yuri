@@ -417,6 +417,8 @@ void map_delitem(unsigned int);
 void map_additem(struct block_list *);
 void map_deliddb(struct block_list *);
 void map_addiddb(struct block_list *);
+void map_initiddb(void);
+void map_termiddb(void);
 int isPlayerActive(USER *sd);
 int map_setmapip(int, unsigned int, unsigned short);
 int map_freeblock(void *);
@@ -476,7 +478,7 @@ void mmo_setonline(unsigned int, int);
 int boards_showposts(struct map_sessiondata *, int);
 int boards_readpost(struct map_sessiondata *, int, int);
 int boards_post(struct map_sessiondata *, int);
-char isActive(struct map_sessiondata *);
+int isActive(struct map_sessiondata *);
 int nmail_show(struct map_sessiondata *);
 int nmail_read(struct map_sessiondata *, int);
 int nmail_sendmail(struct map_sessiondata *, const char *, const char *,

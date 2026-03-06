@@ -39,7 +39,9 @@ exclude = [
 
   # C extern declarations that leaked from game/npc.rs (declared in map_server.h / npc.h).
   "map_id2bl", "map_id2npc", "map_id2sd",
-  "map_addiddb", "map_deliddb", "map_canmove",
+  "map_addiddb", "map_deliddb", "map_initiddb", "map_termiddb", "map_canmove",
+  "mmo_setonline",
+  "isPlayerActive", "isActive",
   "map_foreachinarea", "map_foreachincell", "map_foreachinblock",
   "clif_lookgone", "clif_cnpclook_sub", "clif_object_look_sub2",
   "clif_object_canmove", "clif_object_canmove_from",
