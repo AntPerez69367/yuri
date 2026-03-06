@@ -4,6 +4,7 @@
 pub mod async_coro;
 pub mod ffi;
 pub mod globals;
+pub mod pc_accessors;
 pub mod types;
 
 use mlua::Lua;

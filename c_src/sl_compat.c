@@ -672,379 +672,13 @@ void sl_mob_flushdurationnouncast(MOB *mob, int dis, int minid, int maxid) {
 // All functions take void* to avoid requiring Rust to know USER layout.
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ─── Read: bl / map fields (from block_list embedded in USER) ────────────────
-int  sl_pc_bl_id(void *sd)   { return ((USER*)sd)->bl.id; }
-int  sl_pc_bl_m(void *sd)    { return ((USER*)sd)->bl.m; }
-int  sl_pc_bl_x(void *sd)    { return ((USER*)sd)->bl.x; }
-int  sl_pc_bl_y(void *sd)    { return ((USER*)sd)->bl.y; }
-int  sl_pc_bl_type(void *sd) { return ((USER*)sd)->bl.type; }
 
-// ─── Read: status fields ─────────────────────────────────────────────────────
-int  sl_pc_status_id(void *sd)        { return ((USER*)sd)->status.id; }
-int  sl_pc_status_hp(void *sd)        { return ((USER*)sd)->status.hp; }
-int  sl_pc_status_mp(void *sd)        { return ((USER*)sd)->status.mp; }
-int  sl_pc_status_level(void *sd)     { return ((USER*)sd)->status.level; }
-int  sl_pc_status_exp(void *sd)       { return (int)((USER*)sd)->status.exp; }
-int  sl_pc_status_expsoldmagic(void *sd)  { return ((USER*)sd)->status.expsoldmagic; }
-int  sl_pc_status_expsoldhealth(void *sd) { return ((USER*)sd)->status.expsoldhealth; }
-int  sl_pc_status_expsoldstats(void *sd)  { return ((USER*)sd)->status.expsoldstats; }
-int  sl_pc_status_class(void *sd)     { return ((USER*)sd)->status.class; }
-int  sl_pc_status_totem(void *sd)     { return ((USER*)sd)->status.totem; }
-int  sl_pc_status_tier(void *sd)      { return ((USER*)sd)->status.tier; }
-int  sl_pc_status_mark(void *sd)      { return ((USER*)sd)->status.mark; }
-int  sl_pc_status_country(void *sd)   { return ((USER*)sd)->status.country; }
-int  sl_pc_status_clan(void *sd)      { return ((USER*)sd)->status.clan; }
-int  sl_pc_status_gm_level(void *sd)  { return ((USER*)sd)->status.gm_level; }
-int  sl_pc_status_sex(void *sd)       { return ((USER*)sd)->status.sex; }
-int  sl_pc_status_side(void *sd)      { return ((USER*)sd)->status.side; }
-int  sl_pc_status_state(void *sd)     { return ((USER*)sd)->status.state; }
-int  sl_pc_status_face(void *sd)      { return ((USER*)sd)->status.face; }
-int  sl_pc_status_hair(void *sd)      { return ((USER*)sd)->status.hair; }
-int  sl_pc_status_hair_color(void *sd)  { return ((USER*)sd)->status.hair_color; }
-int  sl_pc_status_face_color(void *sd)  { return ((USER*)sd)->status.face_color; }
-int  sl_pc_status_armor_color(void *sd) { return ((USER*)sd)->status.armor_color; }
-int  sl_pc_status_skin_color(void *sd)  { return ((USER*)sd)->status.skin_color; }
-int  sl_pc_status_basehp(void *sd)    { return ((USER*)sd)->status.basehp; }
-int  sl_pc_status_basemp(void *sd)    { return ((USER*)sd)->status.basemp; }
-int  sl_pc_status_money(void *sd)     { return ((USER*)sd)->status.money; }
-int  sl_pc_status_bankmoney(void *sd) { return ((USER*)sd)->status.bankmoney; }
-int  sl_pc_status_maxslots(void *sd)  { return ((USER*)sd)->status.maxslots; }
-int  sl_pc_status_maxinv(void *sd)    { return ((USER*)sd)->status.maxinv; }
-int  sl_pc_status_partner(void *sd)   { return ((USER*)sd)->status.partner; }
-int  sl_pc_status_pk(void *sd)        { return ((USER*)sd)->status.pk; }
-int  sl_pc_status_killedby(void *sd)  { return ((USER*)sd)->status.killedby; }
-int  sl_pc_status_killspk(void *sd)   { return ((USER*)sd)->status.killspk; }
-int  sl_pc_status_pkduration(void *sd){ return ((USER*)sd)->status.pkduration; }
-int  sl_pc_status_basegrace(void *sd) { return ((USER*)sd)->status.basegrace; }
-int  sl_pc_status_basemight(void *sd) { return ((USER*)sd)->status.basemight; }
-int  sl_pc_status_basewill(void *sd)  { return ((USER*)sd)->status.basewill; }
-int  sl_pc_status_basearmor(void *sd) { return ((USER*)sd)->status.basearmor; }
-int  sl_pc_status_tutor(void *sd)     { return ((USER*)sd)->status.tutor; }
-int  sl_pc_status_karma(void *sd)     { return ((USER*)sd)->status.karma; }
-int  sl_pc_status_alignment(void *sd) { return ((USER*)sd)->status.alignment; }
-int  sl_pc_status_classRank(void *sd) { return ((USER*)sd)->status.classRank; }
-int  sl_pc_status_clanRank(void *sd)  { return ((USER*)sd)->status.clanRank; }
-int  sl_pc_status_novice_chat(void *sd) { return ((USER*)sd)->status.novice_chat; }
-int  sl_pc_status_subpath_chat(void *sd){ return ((USER*)sd)->status.subpath_chat; }
-int  sl_pc_status_clan_chat(void *sd)  { return ((USER*)sd)->status.clan_chat; }
-int  sl_pc_status_miniMapToggle(void *sd){ return ((USER*)sd)->status.miniMapToggle; }
-int  sl_pc_status_heroes(void *sd)    { return ((USER*)sd)->status.heroes; }
-int  sl_pc_status_mute(void *sd)      { return ((USER*)sd)->status.mute; }
-int  sl_pc_status_settingFlags(void *sd){ return (int)((USER*)sd)->status.settingFlags; }
-int  sl_pc_status_killspvp(void *sd)  { return ((USER*)sd)->killspvp; }
-int  sl_pc_status_profile_vitastats(void *sd)  { return ((USER*)sd)->status.profile_vitastats; }
-int  sl_pc_status_profile_equiplist(void *sd)  { return ((USER*)sd)->status.profile_equiplist; }
-int  sl_pc_status_profile_legends(void *sd)    { return ((USER*)sd)->status.profile_legends; }
-int  sl_pc_status_profile_spells(void *sd)     { return ((USER*)sd)->status.profile_spells; }
-int  sl_pc_status_profile_inventory(void *sd)  { return ((USER*)sd)->status.profile_inventory; }
-int  sl_pc_status_profile_bankitems(void *sd)  { return ((USER*)sd)->status.profile_bankitems; }
-const char* sl_pc_status_name(void *sd)      { return ((USER*)sd)->status.name; }
-const char* sl_pc_status_title(void *sd)     { return ((USER*)sd)->status.title; }
-const char* sl_pc_status_clan_title(void *sd){ return ((USER*)sd)->status.clan_title; }
-const char* sl_pc_status_afkmessage(void *sd){ return ((USER*)sd)->status.afkmessage; }
-const char* sl_pc_status_f1name(void *sd)    { return ((USER*)sd)->status.f1name; }
+// ─── Read: computed / indirect fields — ported to src/game/scripting/pc_accessors.rs ───
 
-// ─── Read: direct USER fields ─────────────────────────────────────────────────
-int  sl_pc_npc_g(void *sd)        { return ((USER*)sd)->npc_g; }
-int  sl_pc_npc_gc(void *sd)       { return ((USER*)sd)->npc_gc; }
-int  sl_pc_groupid(void *sd)      { return ((USER*)sd)->groupid; }
-int  sl_pc_time(void *sd)         { return ((USER*)sd)->time; }
-int  sl_pc_fakeDrop(void *sd)     { return ((USER*)sd)->fakeDrop; }
-int  sl_pc_max_hp(void *sd)       { return ((USER*)sd)->max_hp; }
-int  sl_pc_max_mp(void *sd)       { return ((USER*)sd)->max_mp; }
-int  sl_pc_lastvita(void *sd)     { return ((USER*)sd)->lastvita; }
-int  sl_pc_rage(void *sd)         { return ((USER*)sd)->rage; }
-int  sl_pc_polearm(void *sd)      { return ((USER*)sd)->polearm; }
-int  sl_pc_last_click(void *sd)   { return ((USER*)sd)->last_click; }
-int  sl_pc_grace(void *sd)        { return ((USER*)sd)->grace; }
-int  sl_pc_might(void *sd)        { return ((USER*)sd)->might; }
-int  sl_pc_will(void *sd)         { return ((USER*)sd)->will; }
-int  sl_pc_armor(void *sd)        { return ((USER*)sd)->armor; }
-int  sl_pc_dam(void *sd)          { return ((USER*)sd)->dam; }
-int  sl_pc_hit(void *sd)          { return ((USER*)sd)->hit; }
-int  sl_pc_miss(void *sd)         { return ((USER*)sd)->miss; }
-int  sl_pc_sleep(void *sd)        { return ((USER*)sd)->sleep; }
-void sl_pc_set_sleep(void *sd, int v) { ((USER*)sd)->sleep = v; }
-int  sl_pc_attack_speed(void *sd) { return ((USER*)sd)->attack_speed; }
-int  sl_pc_enchanted(void *sd)    { return ((USER*)sd)->enchanted; }
-int  sl_pc_confused(void *sd)     { return ((USER*)sd)->confused; }
-int  sl_pc_target(void *sd)       { return ((USER*)sd)->target; }
-void sl_pc_set_target(void *sd, int v) { ((USER*)sd)->target = (unsigned int)v; }
-int  sl_pc_deduction(void *sd)    { return ((USER*)sd)->deduction; }
-int  sl_pc_speed(void *sd)        { return ((USER*)sd)->speed; }
-int  sl_pc_disguise(void *sd)     { return ((USER*)sd)->disguise; }
-int  sl_pc_disguise_color(void *sd){ return ((USER*)sd)->disguise_color; }
-int  sl_pc_attacker(void *sd)     { return ((USER*)sd)->attacker; }
-int  sl_pc_invis(void *sd)        { return ((USER*)sd)->invis; }
-int  sl_pc_damage(void *sd)       { return ((USER*)sd)->damage; }
-int  sl_pc_crit(void *sd)         { return ((USER*)sd)->crit; }
-int  sl_pc_critchance(void *sd)   { return ((USER*)sd)->critchance; }
-int  sl_pc_critmult(void *sd)     { return ((USER*)sd)->critmult; }
-int  sl_pc_rangeTarget(void *sd)  { return ((USER*)sd)->rangeTarget; }
-int  sl_pc_exchange_gold(void *sd){ return ((USER*)sd)->exchange.gold; }
-int  sl_pc_exchange_count(void *sd){ return ((USER*)sd)->exchange.item_count; }
-int  sl_pc_bod_count(void *sd)    { return ((USER*)sd)->boditems.bod_count; }
-int  sl_pc_paralyzed(void *sd)    { return ((USER*)sd)->paralyzed; }
-int  sl_pc_blind(void *sd)        { return ((USER*)sd)->blind; }
-int  sl_pc_drunk(void *sd)        { return ((USER*)sd)->drunk; }
-int  sl_pc_board(void *sd)        { return ((USER*)sd)->board; }
-int  sl_pc_board_candel(void *sd) { return ((USER*)sd)->board_candel; }
-int  sl_pc_board_canwrite(void *sd){ return ((USER*)sd)->board_canwrite; }
-int  sl_pc_boardshow(void *sd)    { return ((USER*)sd)->boardshow; }
-int  sl_pc_boardnameval(void *sd) { return ((USER*)sd)->boardnameval; }
-int  sl_pc_msPing(void *sd)       { return ((USER*)sd)->msPing; }
-int  sl_pc_pbColor(void *sd)      { return ((USER*)sd)->pbColor; }
-int  sl_pc_coref(void *sd)        { return (int)((USER*)sd)->coref; }
-int  sl_pc_optFlags(void *sd)     { return (int)((USER*)sd)->optFlags; }
-int  sl_pc_snare(void *sd)        { return ((USER*)sd)->snare; }
-int  sl_pc_silence(void *sd)      { return ((USER*)sd)->silence; }
-int  sl_pc_extendhit(void *sd)    { return ((USER*)sd)->extendhit; }
-int  sl_pc_afk(void *sd)          { return ((USER*)sd)->afk; }
-int  sl_pc_afktime(void *sd)      { return ((USER*)sd)->afktime; }
-int  sl_pc_totalafktime(void *sd) { return ((USER*)sd)->totalafktime; }
-int  sl_pc_backstab(void *sd)     { return ((USER*)sd)->backstab; }
-int  sl_pc_flank(void *sd)        { return ((USER*)sd)->flank; }
-int  sl_pc_healing(void *sd)      { return ((USER*)sd)->healing; }
-int  sl_pc_minSdam(void *sd)      { return ((USER*)sd)->minSdam; }
-int  sl_pc_maxSdam(void *sd)      { return ((USER*)sd)->maxSdam; }
-int  sl_pc_minLdam(void *sd)      { return ((USER*)sd)->minLdam; }
-int  sl_pc_maxLdam(void *sd)      { return ((USER*)sd)->maxLdam; }
-int  sl_pc_talktype(void *sd)     { return ((USER*)sd)->talktype; }
-int  sl_pc_equipid(void *sd)      { return ((USER*)sd)->equipid; }
-int  sl_pc_takeoffid(void *sd)    { return ((USER*)sd)->takeoffid; }
-int  sl_pc_breakid(void *sd)      { return ((USER*)sd)->breakid; }
-int  sl_pc_equipslot(void *sd)    { return ((USER*)sd)->equipslot; }
-int  sl_pc_invslot(void *sd)      { return ((USER*)sd)->invslot; }
-int  sl_pc_pickuptype(void *sd)   { return ((USER*)sd)->pickuptype; }
-int  sl_pc_spottraps(void *sd)    { return ((USER*)sd)->spottraps; }
-int  sl_pc_fury(void *sd)         { return ((USER*)sd)->fury; }
-int  sl_pc_faceacctwo_id(void *sd){ return ((USER*)sd)->status.equip[EQ_FACEACCTWO].id; }
-int  sl_pc_faceacctwo_custom(void *sd){ return ((USER*)sd)->status.equip[EQ_FACEACCTWO].custom; }
-int  sl_pc_protection(void *sd)   { return ((USER*)sd)->protection; }
-int  sl_pc_clone(void *sd)        { return ((USER*)sd)->clone; }
-int  sl_pc_wisdom(void *sd)       { return ((USER*)sd)->wisdom; }
-int  sl_pc_con(void *sd)          { return ((USER*)sd)->con; }
-int  sl_pc_deathflag(void *sd)    { return ((USER*)sd)->deathflag; }
-int  sl_pc_selfbar(void *sd)      { return ((USER*)sd)->selfbar; }
-int  sl_pc_groupbars(void *sd)    { return ((USER*)sd)->groupbars; }
-int  sl_pc_mobbars(void *sd)      { return ((USER*)sd)->mobbars; }
-int  sl_pc_disptimertick(void *sd){ return ((USER*)sd)->disptimertick; }
-int  sl_pc_bindmap(void *sd)      { return ((USER*)sd)->bindmap; }
-int  sl_pc_bindx(void *sd)        { return ((USER*)sd)->bindx; }
-int  sl_pc_bindy(void *sd)        { return ((USER*)sd)->bindy; }
-int  sl_pc_ambushtimer(void *sd)  { return ((USER*)sd)->ambushtimer; }
-int  sl_pc_dialogtype(void *sd)   { return ((USER*)sd)->dialogtype; }
-void sl_pc_set_dialogtype(void *sd, int v) { ((USER*)sd)->dialogtype = v; }
-int  sl_pc_cursed(void *sd)       { return ((USER*)sd)->cursed; }
-int  sl_pc_action(void *sd)       { return ((USER*)sd)->action; }
-int  sl_pc_scripttick(void *sd)   { return ((USER*)sd)->scripttick; }
-int  sl_pc_dmgshield(void *sd)    { return ((USER*)sd)->dmgshield; }
-int  sl_pc_dmgdealt(void *sd)     { return ((USER*)sd)->dmgdealt; }
-int  sl_pc_dmgtaken(void *sd)     { return ((USER*)sd)->dmgtaken; }
-const char* sl_pc_ipaddress(void *sd) { return ((USER*)sd)->ipaddress; }
-const char* sl_pc_speech(void *sd)    { return ((USER*)sd)->speech; }
-const char* sl_pc_question(void *sd)  { return ((USER*)sd)->question; }
-const char* sl_pc_mail(void *sd)      { return ((USER*)sd)->mail; }
-
-// ─── Read: GFX fields ────────────────────────────────────────────────────────
-int  sl_pc_gfx_face(void *sd)     { return ((USER*)sd)->gfx.face; }
-int  sl_pc_gfx_hair(void *sd)     { return ((USER*)sd)->gfx.hair; }
-int  sl_pc_gfx_chair(void *sd)    { return ((USER*)sd)->gfx.chair; }
-int  sl_pc_gfx_cface(void *sd)    { return ((USER*)sd)->gfx.cface; }
-int  sl_pc_gfx_cskin(void *sd)    { return ((USER*)sd)->gfx.cskin; }
-int  sl_pc_gfx_dye(void *sd)      { return ((USER*)sd)->gfx.dye; }
-int  sl_pc_gfx_weapon(void *sd)   { return ((USER*)sd)->gfx.weapon; }
-int  sl_pc_gfx_cweapon(void *sd)  { return ((USER*)sd)->gfx.cweapon; }
-int  sl_pc_gfx_armor(void *sd)    { return ((USER*)sd)->gfx.armor; }
-int  sl_pc_gfx_carmor(void *sd)   { return ((USER*)sd)->gfx.carmor; }
-int  sl_pc_gfx_shield(void *sd)   { return ((USER*)sd)->gfx.shield; }
-int  sl_pc_gfx_cshield(void *sd)  { return ((USER*)sd)->gfx.cshield; }
-int  sl_pc_gfx_helm(void *sd)     { return ((USER*)sd)->gfx.helm; }
-int  sl_pc_gfx_chelm(void *sd)    { return ((USER*)sd)->gfx.chelm; }
-int  sl_pc_gfx_mantle(void *sd)   { return ((USER*)sd)->gfx.mantle; }
-int  sl_pc_gfx_cmantle(void *sd)  { return ((USER*)sd)->gfx.cmantle; }
-int  sl_pc_gfx_crown(void *sd)    { return ((USER*)sd)->gfx.crown; }
-int  sl_pc_gfx_ccrown(void *sd)   { return ((USER*)sd)->gfx.ccrown; }
-int  sl_pc_gfx_faceAcc(void *sd)  { return ((USER*)sd)->gfx.faceAcc; }
-int  sl_pc_gfx_cfaceAcc(void *sd) { return ((USER*)sd)->gfx.cfaceAcc; }
-int  sl_pc_gfx_faceAccT(void *sd) { return ((USER*)sd)->gfx.faceAccT; }
-int  sl_pc_gfx_cfaceAccT(void *sd){ return ((USER*)sd)->gfx.cfaceAccT; }
-int  sl_pc_gfx_boots(void *sd)    { return ((USER*)sd)->gfx.boots; }
-int  sl_pc_gfx_cboots(void *sd)   { return ((USER*)sd)->gfx.cboots; }
-int  sl_pc_gfx_necklace(void *sd) { return ((USER*)sd)->gfx.necklace; }
-int  sl_pc_gfx_cnecklace(void *sd){ return ((USER*)sd)->gfx.cnecklace; }
-const char* sl_pc_gfx_name(void *sd){ return ((USER*)sd)->gfx.name; }
-
-// ─── Read: computed / indirect fields ────────────────────────────────────────
-extern int   clif_isregistered(unsigned int);
-
-int  sl_pc_actid(void *sd)        { return clif_isregistered(((USER*)sd)->status.id); }
-const char* sl_pc_email(void *sd) { return clif_getaccountemail(((USER*)sd)->status.id); }
-const char* sl_pc_clanname(void *sd)      { return clandb_name(((USER*)sd)->status.clan); }
-int         sl_pc_baseclass(void *sd)     { return classdb_path(((USER*)sd)->status.class); }
-const char* sl_pc_baseClassName(void *sd) { return classdb_name(classdb_path(((USER*)sd)->status.class), 0); }
-const char* sl_pc_className(void *sd)     { return classdb_name(((USER*)sd)->status.class, 0); }
-const char* sl_pc_classNameMark(void *sd) { return classdb_name(((USER*)sd)->status.class, ((USER*)sd)->status.mark); }
-
-// ─── Write: direct field setters ─────────────────────────────────────────────
-void sl_pc_set_hp(void *sd, int v)          { ((USER*)sd)->status.hp = v; }
-void sl_pc_set_mp(void *sd, int v)          { ((USER*)sd)->status.mp = v; }
-void sl_pc_set_max_hp(void *sd, int v)      { ((USER*)sd)->max_hp = v; }
-void sl_pc_set_max_mp(void *sd, int v)      { ((USER*)sd)->max_mp = v; }
-void sl_pc_set_exp(void *sd, int v)         { ((USER*)sd)->status.exp = v; }
-void sl_pc_set_level(void *sd, int v)       { ((USER*)sd)->status.level = v; }
-void sl_pc_set_class(void *sd, int v)       { ((USER*)sd)->status.class = v; }
-void sl_pc_set_totem(void *sd, int v)       { ((USER*)sd)->status.totem = v; }
-void sl_pc_set_tier(void *sd, int v)        { ((USER*)sd)->status.tier = v; }
-void sl_pc_set_mark(void *sd, int v)        { ((USER*)sd)->status.mark = v; }
-void sl_pc_set_country(void *sd, int v)     { ((USER*)sd)->status.country = v; }
-void sl_pc_set_clan(void *sd, int v)        { ((USER*)sd)->status.clan = v; }
-void sl_pc_set_gm_level(void *sd, int v)    { ((USER*)sd)->status.gm_level = v; }
-void sl_pc_set_side(void *sd, int v)        { ((USER*)sd)->status.side = v; }
-void sl_pc_set_state(void *sd, int v)       { ((USER*)sd)->status.state = v; }
-void sl_pc_set_hair(void *sd, int v)        { ((USER*)sd)->status.hair = v; }
-void sl_pc_set_hair_color(void *sd, int v)  { ((USER*)sd)->status.hair_color = v; }
-void sl_pc_set_face_color(void *sd, int v)  { ((USER*)sd)->status.face_color = v; }
-void sl_pc_set_armor_color(void *sd, int v) { ((USER*)sd)->status.armor_color = v; }
-void sl_pc_set_skin_color(void *sd, int v)  { ((USER*)sd)->status.skin_color = v; }
-void sl_pc_set_face(void *sd, int v)        { ((USER*)sd)->status.face = v; }
-void sl_pc_set_money(void *sd, int v)       { ((USER*)sd)->status.money = v; }
-void sl_pc_set_bankmoney(void *sd, int v)   { ((USER*)sd)->status.bankmoney = v; }
-void sl_pc_set_maxslots(void *sd, int v)    { ((USER*)sd)->status.maxslots = v; }
-void sl_pc_set_maxinv(void *sd, int v)      { ((USER*)sd)->status.maxinv = v; }
-void sl_pc_set_partner(void *sd, int v)     { ((USER*)sd)->status.partner = v; }
-void sl_pc_set_pk(void *sd, int v)          { ((USER*)sd)->status.pk = v; }
-void sl_pc_set_basehp(void *sd, int v)      { ((USER*)sd)->status.basehp = v; }
-void sl_pc_set_basemp(void *sd, int v)      { ((USER*)sd)->status.basemp = v; }
-void sl_pc_set_karma(void *sd, int v)       { ((USER*)sd)->status.karma = v; }
-void sl_pc_set_alignment(void *sd, int v)   { ((USER*)sd)->status.alignment = v; }
-void sl_pc_set_basegrace(void *sd, int v)   { ((USER*)sd)->status.basegrace = v; }
-void sl_pc_set_basemight(void *sd, int v)   { ((USER*)sd)->status.basemight = v; }
-void sl_pc_set_basewill(void *sd, int v)    { ((USER*)sd)->status.basewill = v; }
-void sl_pc_set_basearmor(void *sd, int v)   { ((USER*)sd)->status.basearmor = v; }
-void sl_pc_set_novice_chat(void *sd, int v) { ((USER*)sd)->status.novice_chat = v; }
-void sl_pc_set_subpath_chat(void *sd, int v){ ((USER*)sd)->status.subpath_chat = v; }
-void sl_pc_set_clan_chat(void *sd, int v)   { ((USER*)sd)->status.clan_chat = v; }
-void sl_pc_set_tutor(void *sd, int v)       { ((USER*)sd)->status.tutor = v; }
-void sl_pc_set_profile_vitastats(void *sd, int v) { ((USER*)sd)->status.profile_vitastats = v; }
-void sl_pc_set_profile_equiplist(void *sd, int v) { ((USER*)sd)->status.profile_equiplist = v; }
-void sl_pc_set_profile_legends(void *sd, int v)   { ((USER*)sd)->status.profile_legends = v; }
-void sl_pc_set_profile_spells(void *sd, int v)    { ((USER*)sd)->status.profile_spells = v; }
-void sl_pc_set_profile_inventory(void *sd, int v) { ((USER*)sd)->status.profile_inventory = v; }
-void sl_pc_set_profile_bankitems(void *sd, int v) { ((USER*)sd)->status.profile_bankitems = v; }
-void sl_pc_set_npc_g(void *sd, int v)       { ((USER*)sd)->npc_g = v; }
-void sl_pc_set_npc_gc(void *sd, int v)      { ((USER*)sd)->npc_gc = v; }
-void sl_pc_set_last_click(void *sd, int v)  { ((USER*)sd)->last_click = v; }
-void sl_pc_set_time(void *sd, int v)        { ((USER*)sd)->time = v; }
-void sl_pc_set_rage(void *sd, int v)        { ((USER*)sd)->rage = v; }
-void sl_pc_set_polearm(void *sd, int v)     { ((USER*)sd)->polearm = v; }
-void sl_pc_set_deduction(void *sd, int v)   { ((USER*)sd)->deduction = v; }
-void sl_pc_set_speed(void *sd, int v)       { ((USER*)sd)->speed = v; }
-void sl_pc_set_attacker(void *sd, int v)    { ((USER*)sd)->attacker = v; }
-void sl_pc_set_invis(void *sd, int v)       { ((USER*)sd)->invis = v; }
-void sl_pc_set_damage(void *sd, int v)      { ((USER*)sd)->damage = v; }
-void sl_pc_set_crit(void *sd, int v)        { ((USER*)sd)->crit = v; }
-void sl_pc_set_critchance(void *sd, int v)  { ((USER*)sd)->critchance = v; }
-void sl_pc_set_critmult(void *sd, int v)    { ((USER*)sd)->critmult = v; }
-void sl_pc_set_rangeTarget(void *sd, int v) { ((USER*)sd)->rangeTarget = v; }
-void sl_pc_set_disguise(void *sd, int v)    { ((USER*)sd)->disguise = v; }
-void sl_pc_set_disguise_color(void *sd, int v){ ((USER*)sd)->disguise_color = v; }
-void sl_pc_set_paralyzed(void *sd, int v)   { ((USER*)sd)->paralyzed = v; }
-void sl_pc_set_blind(void *sd, int v)       { ((USER*)sd)->blind = v; }
-void sl_pc_set_drunk(void *sd, int v)       { ((USER*)sd)->drunk = v; }
-void sl_pc_set_board_candel(void *sd, int v){ ((USER*)sd)->board_candel = v; }
-void sl_pc_set_board_canwrite(void *sd, int v){ ((USER*)sd)->board_canwrite = v; }
-void sl_pc_set_boardshow(void *sd, int v)   { ((USER*)sd)->boardshow = v; }
-void sl_pc_set_boardnameval(void *sd, int v){ ((USER*)sd)->boardnameval = v; }
-void sl_pc_set_snare(void *sd, int v)       { ((USER*)sd)->snare = v; }
-void sl_pc_set_silence(void *sd, int v)     { ((USER*)sd)->silence = v; }
-void sl_pc_set_extendhit(void *sd, int v)   { ((USER*)sd)->extendhit = v; }
-void sl_pc_set_afk(void *sd, int v)         { ((USER*)sd)->afk = v; }
-void sl_pc_set_confused(void *sd, int v)    { ((USER*)sd)->confused = v; }
-void sl_pc_set_spottraps(void *sd, int v)   { ((USER*)sd)->spottraps = v; }
-void sl_pc_set_selfbar(void *sd, int v)     { ((USER*)sd)->selfbar = v; }
-void sl_pc_set_groupbars(void *sd, int v)   { ((USER*)sd)->groupbars = v; }
-void sl_pc_set_mobbars(void *sd, int v)     { ((USER*)sd)->mobbars = v; }
-void sl_pc_set_mute(void *sd, int v)        { ((USER*)sd)->status.mute = v; }
-void sl_pc_set_settingFlags(void *sd, int v){ ((USER*)sd)->status.settingFlags = (unsigned int)v; }
-void sl_pc_set_optFlags_xor(void *sd, int v){ ((USER*)sd)->optFlags ^= (unsigned int)v; }
-void sl_pc_set_uflags_xor(void *sd, int v)  { ((USER*)sd)->uFlags ^= (unsigned int)v; }
-void sl_pc_set_talktype(void *sd, int v)    { ((USER*)sd)->talktype = v; }
-void sl_pc_set_cursed(void *sd, int v)      { ((USER*)sd)->cursed = v; }
-void sl_pc_set_deathflag(void *sd, int v)   { ((USER*)sd)->deathflag = v; }
-void sl_pc_set_bindmap(void *sd, int v)     { ((USER*)sd)->bindmap = v; }
-void sl_pc_set_bindx(void *sd, int v)       { ((USER*)sd)->bindx = v; }
-void sl_pc_set_bindy(void *sd, int v)       { ((USER*)sd)->bindy = v; }
-void sl_pc_set_protection(void *sd, int v)  { ((USER*)sd)->protection = v; }
-void sl_pc_set_dmgshield(void *sd, int v)   { ((USER*)sd)->dmgshield = v; }
-void sl_pc_set_dmgdealt(void *sd, int v)    { ((USER*)sd)->dmgdealt = v; }
-void sl_pc_set_dmgtaken(void *sd, int v)    { ((USER*)sd)->dmgtaken = v; }
-void sl_pc_set_heroshow(void *sd, int v)    { ((USER*)sd)->status.heroes = v; }
-void sl_pc_set_fakeDrop(void *sd, int v)    { ((USER*)sd)->fakeDrop = v; }
-void sl_pc_set_sex(void *sd, int v)         { ((USER*)sd)->status.sex = v; }
-void sl_pc_set_clone(void *sd, int v)       { ((USER*)sd)->clone = v; }
-void sl_pc_set_classRank(void *sd, int v)   { ((USER*)sd)->status.classRank = v; }
-void sl_pc_set_clanRank(void *sd, int v)    { ((USER*)sd)->status.clanRank = v; }
-void sl_pc_set_fury(void *sd, int v)        { ((USER*)sd)->fury = v; }
-void sl_pc_set_coref_container(void *sd, int v) { ((USER*)sd)->coref_container = (unsigned int)v; }
-void sl_pc_set_wisdom(void *sd, int v)      { ((USER*)sd)->wisdom = v; }
-void sl_pc_set_con(void *sd, int v)         { ((USER*)sd)->con = v; }
-void sl_pc_set_backstab(void *sd, int v)    { ((USER*)sd)->backstab = v; }
-void sl_pc_set_flank(void *sd, int v)       { ((USER*)sd)->flank = v; }
-void sl_pc_set_healing(void *sd, int v)     { ((USER*)sd)->healing = v; }
-void sl_pc_set_pbColor(void *sd, int v)     { ((USER*)sd)->pbColor = v; }
-
-// ─── Write: GFX setters ───────────────────────────────────────────────────────
-void sl_pc_set_gfx_face(void *sd, int v)    { ((USER*)sd)->gfx.face = v; }
-void sl_pc_set_gfx_hair(void *sd, int v)    { ((USER*)sd)->gfx.hair = v; }
-void sl_pc_set_gfx_chair(void *sd, int v)   { ((USER*)sd)->gfx.chair = v; }
-void sl_pc_set_gfx_cface(void *sd, int v)   { ((USER*)sd)->gfx.cface = v; }
-void sl_pc_set_gfx_cskin(void *sd, int v)   { ((USER*)sd)->gfx.cskin = v; }
-void sl_pc_set_gfx_dye(void *sd, int v)     { ((USER*)sd)->gfx.dye = v; }
-void sl_pc_set_gfx_weapon(void *sd, int v)  { ((USER*)sd)->gfx.weapon = v; }
-void sl_pc_set_gfx_cweapon(void *sd, int v) { ((USER*)sd)->gfx.cweapon = v; }
-void sl_pc_set_gfx_armor(void *sd, int v)   { ((USER*)sd)->gfx.armor = v; }
-void sl_pc_set_gfx_carmor(void *sd, int v)  { ((USER*)sd)->gfx.carmor = v; }
-void sl_pc_set_gfx_shield(void *sd, int v)  { ((USER*)sd)->gfx.shield = v; }
-void sl_pc_set_gfx_cshield(void *sd, int v) { ((USER*)sd)->gfx.cshield = v; }
-void sl_pc_set_gfx_helm(void *sd, int v)    { ((USER*)sd)->gfx.helm = v; }
-void sl_pc_set_gfx_chelm(void *sd, int v)   { ((USER*)sd)->gfx.chelm = v; }
-void sl_pc_set_gfx_mantle(void *sd, int v)  { ((USER*)sd)->gfx.mantle = v; }
-void sl_pc_set_gfx_cmantle(void *sd, int v) { ((USER*)sd)->gfx.cmantle = v; }
-void sl_pc_set_gfx_crown(void *sd, int v)   { ((USER*)sd)->gfx.crown = v; }
-void sl_pc_set_gfx_ccrown(void *sd, int v)  { ((USER*)sd)->gfx.ccrown = v; }
-void sl_pc_set_gfx_faceAcc(void *sd, int v) { ((USER*)sd)->gfx.faceAcc = v; }
-void sl_pc_set_gfx_cfaceAcc(void *sd, int v){ ((USER*)sd)->gfx.cfaceAcc = v; }
-void sl_pc_set_gfx_faceAccT(void *sd, int v){ ((USER*)sd)->gfx.faceAccT = v; }
-void sl_pc_set_gfx_cfaceAccT(void *sd, int v){ ((USER*)sd)->gfx.cfaceAccT = v; }
-void sl_pc_set_gfx_boots(void *sd, int v)   { ((USER*)sd)->gfx.boots = v; }
-void sl_pc_set_gfx_cboots(void *sd, int v)  { ((USER*)sd)->gfx.cboots = v; }
-void sl_pc_set_gfx_necklace(void *sd, int v){ ((USER*)sd)->gfx.necklace = v; }
-void sl_pc_set_gfx_cnecklace(void *sd, int v){ ((USER*)sd)->gfx.cnecklace = v; }
-void sl_pc_set_gfx_name(void *sd, const char *v) {
-    strncpy(((USER*)sd)->gfx.name, v ? v : "", sizeof(((USER*)sd)->gfx.name) - 1);
-    ((USER*)sd)->gfx.name[sizeof(((USER*)sd)->gfx.name) - 1] = '\0';
-}
-void sl_pc_set_name(void *sd, const char *v) {
-    strncpy(((USER*)sd)->status.name, v ? v : "", sizeof(((USER*)sd)->status.name) - 1);
-    ((USER*)sd)->status.name[sizeof(((USER*)sd)->status.name) - 1] = '\0';
-}
-void sl_pc_set_title(void *sd, const char *v) {
-    strncpy(((USER*)sd)->status.title, v ? v : "", sizeof(((USER*)sd)->status.title) - 1);
-    ((USER*)sd)->status.title[sizeof(((USER*)sd)->status.title) - 1] = '\0';
-}
-void sl_pc_set_clan_title(void *sd, const char *v) {
-    strncpy(((USER*)sd)->status.clan_title, v ? v : "", sizeof(((USER*)sd)->status.clan_title) - 1);
-    ((USER*)sd)->status.clan_title[sizeof(((USER*)sd)->status.clan_title) - 1] = '\0';
-}
-void sl_pc_set_afkmessage(void *sd, const char *v) {
-    strncpy(((USER*)sd)->status.afkmessage, v ? v : "", sizeof(((USER*)sd)->status.afkmessage) - 1);
-    ((USER*)sd)->status.afkmessage[sizeof(((USER*)sd)->status.afkmessage) - 1] = '\0';
-}
-void sl_pc_set_speech(void *sd, const char *v) {
-    strncpy(((USER*)sd)->speech, v ? v : "", sizeof(((USER*)sd)->speech) - 1);
-    ((USER*)sd)->speech[sizeof(((USER*)sd)->speech) - 1] = '\0';
-}
+// ─── Write: direct field setters — ported to src/game/scripting/pc_accessors.rs ───
+// ─── Write: GFX setters — ported to src/game/scripting/pc_accessors.rs ──────────
+// sl_pc_set_gfx_name, sl_pc_set_name, sl_pc_set_title, sl_pc_set_clan_title,
+// sl_pc_set_afkmessage, sl_pc_set_speech — ported to pc_accessors.rs (bounded_copy).
 
 // ─── Method wrappers ─────────────────────────────────────────────────────────
 // Simple methods: thin C wrappers around C game functions.
@@ -1140,7 +774,6 @@ void sl_pc_checklevel(void *sd) { pc_checklevel((USER*)sd); }
 
 // ── UI / display ─────────────────────────────────────────────────────────────
 void sl_pc_sendminimap(void *sd)                  { clif_sendminimap((USER*)sd); }
-void sl_pc_setminimaptoggle(void *sd, int flag)   { ((USER*)sd)->status.miniMapToggle = flag; }
 void sl_pc_popup(void *sd, const char *msg)       { clif_popup((USER*)sd, msg); }
 void sl_pc_guitext(void *sd, const char *msg)     { clif_guitextsd(msg, (USER*)sd); }
 void sl_pc_sendminitext(void *sd, const char *msg){ clif_sendminitext((USER*)sd, msg); }
@@ -1702,17 +1335,17 @@ int sl_pc_getpk(void *sd_ptr, int id) {
 
 /* --- PC regen overflow accumulators (float fields) --- */
 int  sl_pc_vregenoverflow(void *sd) { return (int)((USER*)sd)->vregenoverflow; }
-void sl_pc_set_vregenoverflow(void *sd, int v) { ((USER*)sd)->vregenoverflow = (float)v; }
+// sl_pc_set_vregenoverflow — ported to pc_accessors.rs
 int  sl_pc_mregenoverflow(void *sd) { return (int)((USER*)sd)->mregenoverflow; }
-void sl_pc_set_mregenoverflow(void *sd, int v) { ((USER*)sd)->mregenoverflow = (float)v; }
+// sl_pc_set_mregenoverflow — ported to pc_accessors.rs
 
 /* --- PC group membership fields --- */
 int  sl_pc_group_count(void *sd)  { return ((USER*)sd)->group_count; }
-void sl_pc_set_group_count(void *sd, int v) { ((USER*)sd)->group_count = v; }
+// sl_pc_set_group_count — ported to pc_accessors.rs
 int  sl_pc_group_on(void *sd)     { return ((USER*)sd)->group_on; }
-void sl_pc_set_group_on(void *sd, int v) { ((USER*)sd)->group_on = v; }
+// sl_pc_set_group_on — ported to pc_accessors.rs
 int  sl_pc_group_leader(void *sd) { return (int)((USER*)sd)->group_leader; }
-void sl_pc_set_group_leader(void *sd, int v) { ((USER*)sd)->group_leader = (unsigned int)v; }
+// sl_pc_set_group_leader — ported to pc_accessors.rs
 
 /* Fill `out` with group member char IDs. Returns the count written.
  * Mirrors the original scripting.c `group` table construction:
@@ -2835,12 +2468,7 @@ void sl_pc_repairall_send(void *sd_ptr, void *npc_bl) {
     /* no clif_ repair dialog function exists in this codebase */
 }
 
-// ─── Accessors for Rust client dispatcher (src/game/client/mod.rs) ───────────
-int  sl_pc_fd(void *sd)                        { return ((USER*)sd)->fd; }
-int  sl_pc_chat_timer(void *sd)                { return ((USER*)sd)->chat_timer; }
-void sl_pc_set_chat_timer(void *sd, int v)     { ((USER*)sd)->chat_timer = v; }
-int  sl_pc_attacked(void *sd)                  { return ((USER*)sd)->attacked; }
-void sl_pc_set_attacked(void *sd, int v)       { ((USER*)sd)->attacked = v; }
-int  sl_pc_loaded(void *sd)                    { return ((USER*)sd)->loaded; }
-unsigned int sl_pc_inventory_id(void *sd, int pos) { return ((USER*)sd)->status.inventory[pos].id; }
+// ─── Accessors for Rust client dispatcher — ported to src/game/scripting/pc_accessors.rs ───
+// sl_pc_fd, sl_pc_chat_timer, sl_pc_set_chat_timer, sl_pc_attacked, sl_pc_set_attacked,
+// sl_pc_loaded, sl_pc_inventory_id — all ported to pc_accessors.rs.
 int  sl_map_spell(int m)                       { return map_isloaded(m) ? map[m].spell : 0; }
