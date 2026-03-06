@@ -1,6 +1,6 @@
 //! Global Lua functions (91 total) — registered in sl_init.
 
-use std::ffi::{CStr, CString, c_char, c_int, c_uint, c_uchar};
+use std::ffi::{CStr, CString, c_char, c_int, c_uint, c_uchar, c_void};
 use mlua::{Lua, Value};
 
 use crate::database::{blocking_run, get_pool};
@@ -275,7 +275,16 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("getWeather", lua.create_function(|_, (region, indoor): (i32, i32)| {
-        Ok(unsafe { sffi::sl_g_getweather(region as c_uchar, indoor as c_uchar) as i64 })
+        for id in 0..crate::database::map_db::MAP_SLOTS as u16 {
+            let ptr = unsafe { get_map_ptr(id) };
+            if ptr.is_null() { continue; }
+            let md = unsafe { &*ptr };
+            if md.xs == 0 { continue; }
+            if md.region as i32 == region && md.indoor as i32 == indoor {
+                return Ok(md.weather as i64);
+            }
+        }
+        Ok(0i64)
     })?)?;
 
     g.set("setWeather", lua.create_function(|_, (region, indoor, w): (i32, i32, i32)| {
@@ -284,13 +293,32 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("setLight", lua.create_function(|_, (region, indoor, light): (i32, i32, i32)| {
-        unsafe { sffi::sl_g_setlight(region as c_uchar, indoor as c_uchar, light as c_uchar); }
+        for id in 0..crate::database::map_db::MAP_SLOTS as u16 {
+            let ptr = unsafe { get_map_ptr(id) };
+            if ptr.is_null() { continue; }
+            let md = unsafe { &mut *ptr };
+            if md.xs == 0 { continue; }
+            if md.region as i32 == region && md.indoor as i32 == indoor && md.light == 0 {
+                md.light = light as c_uchar;
+            }
+        }
         Ok(())
     })?)?;
 
     g.set("getMapRegistry", lua.create_function(|_, (m, key): (i32, String)| {
-        let ckey = CString::new(key).map_err(mlua::Error::external)?;
-        Ok(unsafe { sffi::map_readglobalreg(m as c_int, ckey.as_ptr()) as i64 })
+        if m < 0 { return Ok(0i64); }
+        let ptr = unsafe { get_map_ptr(m as u16) };
+        if ptr.is_null() { return Ok(0i64); }
+        let md = unsafe { &*ptr };
+        if md.registry.is_null() { return Ok(0i64); }
+        for i in 0..md.registry_num as usize {
+            let reg = unsafe { &*md.registry.add(i) };
+            let reg_str = unsafe { CStr::from_ptr(reg.str.as_ptr()) };
+            if reg_str.to_string_lossy().eq_ignore_ascii_case(&key) {
+                return Ok(reg.val as i64);
+            }
+        }
+        Ok(0i64)
     })?)?;
 
     g.set("setMapRegistry", lua.create_function(|_, (m, key, val): (i32, String, i32)| {
@@ -421,19 +449,74 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("saveMap", lua.create_function(|_, (m, path): (i32, String)| {
-        let cpath = CString::new(path).map_err(mlua::Error::external)?;
-        Ok(unsafe { sffi::sl_g_savemap(m as c_int, cpath.as_ptr()) != 0 })
+        if m < 0 { return Ok(false); }
+        let ptr = unsafe { get_map_ptr(m as u16) };
+        if ptr.is_null() { return Ok(false); }
+        let md = unsafe { &*ptr };
+        if md.xs == 0 || md.tile.is_null() || md.pass.is_null() || md.obj.is_null() { return Ok(false); }
+        use std::io::Write;
+        let mut fp = match std::fs::File::create(&path) {
+            Ok(f) => f,
+            Err(_) => return Ok(false),
+        };
+        if fp.write_all(&md.xs.to_be_bytes()).is_err() { return Ok(false); }
+        if fp.write_all(&md.ys.to_be_bytes()).is_err() { return Ok(false); }
+        for pos in 0..(md.xs as usize * md.ys as usize) {
+            let tile = unsafe { *md.tile.add(pos) };
+            let pass = unsafe { *md.pass.add(pos) };
+            let obj  = unsafe { *md.obj.add(pos) };
+            let _ = fp.write_all(&tile.to_be_bytes());
+            let _ = fp.write_all(&pass.to_be_bytes());
+            let _ = fp.write_all(&obj.to_be_bytes());
+        }
+        Ok(true)
     })?)?;
 
     // -----------------------------------------------------------------------
     // Warps
     // -----------------------------------------------------------------------
     g.set("getWarp", lua.create_function(|_, (m, x, y): (i32, i32, i32)| {
-        Ok(unsafe { sffi::sl_g_getwarp(m as c_int, x as c_int, y as c_int) != 0 })
+        use crate::database::map_db::{BLOCK_SIZE, MAP_SLOTS};
+        if m < 0 || m as usize >= MAP_SLOTS { return Ok(false); }
+        let ptr = unsafe { get_map_ptr(m as u16) };
+        if ptr.is_null() { return Ok(false); }
+        let md = unsafe { &*ptr };
+        if md.xs == 0 || md.warp.is_null() { return Ok(false); }
+        let x = x.clamp(0, md.xs as i32 - 1) as usize;
+        let y = y.clamp(0, md.ys as i32 - 1) as usize;
+        let idx = x / BLOCK_SIZE + (y / BLOCK_SIZE) * md.bxs as usize;
+        let mut node = unsafe { *md.warp.add(idx) };
+        while !node.is_null() {
+            let n = unsafe { &*node };
+            if n.x == x as i32 && n.y == y as i32 { return Ok(true); }
+            node = n.next;
+        }
+        Ok(false)
     })?)?;
 
     g.set("setWarps", lua.create_function(|_, (mm, mx, my, tm, tx, ty): (i32,i32,i32,i32,i32,i32)| {
-        Ok(unsafe { sffi::sl_g_setwarps(mm as c_int, mx as c_int, my as c_int, tm as c_int, tx as c_int, ty as c_int) != 0 })
+        use crate::database::map_db::{BLOCK_SIZE, MAP_SLOTS, WarpList};
+        if mm < 0 || mm as usize >= MAP_SLOTS { return Ok(false); }
+        if tm < 0 || tm as usize >= MAP_SLOTS { return Ok(false); }
+        let mm_ptr = unsafe { get_map_ptr(mm as u16) };
+        let tm_ptr = unsafe { get_map_ptr(tm as u16) };
+        if mm_ptr.is_null() || tm_ptr.is_null() { return Ok(false); }
+        let md = unsafe { &mut *mm_ptr };
+        if md.xs == 0 || unsafe { (*tm_ptr).xs } == 0 { return Ok(false); }
+        if mx < 0 || my < 0 || mx >= md.xs as i32 || my >= md.ys as i32 { return Ok(false); }
+        if md.warp.is_null() { return Ok(false); }
+        let idx = mx as usize / BLOCK_SIZE + (my as usize / BLOCK_SIZE) * md.bxs as usize;
+        let existing = unsafe { *md.warp.add(idx) };
+        let war = Box::into_raw(Box::new(WarpList {
+            x: mx, y: my, tm, tx, ty,
+            next: existing,
+            prev: std::ptr::null_mut(),
+        }));
+        unsafe {
+            if !existing.is_null() { (*existing).prev = war; }
+            *md.warp.add(idx) = war;
+        }
+        Ok(true)
     })?)?;
 
     g.set("getWarps", lua.create_function(|lua, _m: i32| {
@@ -475,7 +558,19 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // addMob / checkOnline / getOfflineID
     // -----------------------------------------------------------------------
     g.set("addMob", lua.create_function(|_, (m, x, y, mobid): (i32, i32, i32, i32)| {
-        Ok(unsafe { sffi::sl_g_addmob(m as c_int, x as c_int, y as c_int, mobid as c_int) != 0 })
+        if !unsafe { crate::ffi::map_db::map_is_loaded(m as u16) } { return Ok(false); }
+        let sid = unsafe { sffi::serverid };
+        let ok = blocking_run(
+            sqlx::query(&format!(
+                "INSERT INTO `Spawns{}` (`SpnMapId`,`SpnX`,`SpnY`,`SpnMobId`,\
+                 `SpnLastDeath`,`SpnStartTime`,`SpnEndTime`,`SpnMobIdReplace`) \
+                 VALUES(?,?,?,?,0,25,25,0)",
+                sid
+            ))
+            .bind(m).bind(x).bind(y).bind(mobid)
+            .execute(get_pool())
+        ).is_ok();
+        Ok(ok)
     })?)?;
 
     g.set("checkOnline", lua.create_function(|_, v: Value| {
@@ -619,8 +714,19 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("setClanName", lua.create_function(|_, (clan, name): (i32, String)| {
-        let cs = CString::new(name).map_err(mlua::Error::external)?;
-        unsafe { sffi::sl_g_setclanname(clan as c_int, cs.as_ptr()); }
+        let _ = blocking_run(sqlx::query!(
+            "UPDATE `Clans` SET `ClnName`=? WHERE `ClnId`=?", name, clan
+        ).execute(get_pool()));
+        let ptr = unsafe { crate::database::clan_db::searchexist(clan) };
+        if !ptr.is_null() {
+            let dst = unsafe { &mut (*ptr).name };
+            let bytes = name.as_bytes();
+            let copy_len = bytes.len().min(dst.len() - 1);
+            for (i, &b) in bytes.iter().take(copy_len).enumerate() {
+                dst[i] = b as c_char;
+            }
+            dst[copy_len] = 0;
+        }
         Ok(())
     })?)?;
 
@@ -653,31 +759,114 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // Clan member management
     // -----------------------------------------------------------------------
     g.set("removeClanMember", lua.create_function(|_, id: i32| {
-        Ok(unsafe { sffi::sl_g_removeclanmember(id as c_int) != 0 })
+        let sd = unsafe { sffi::map_id2sd(id as c_uint) as *mut crate::game::pc::MapSessionData };
+        if !sd.is_null() {
+            unsafe {
+                (*sd).status.clan = 0;
+                (*sd).status.clan_title[0] = 0;
+                (*sd).status.clan_rank = 0;
+                sffi::clif_mystaytus(sd as *mut c_void);
+            }
+        }
+        let ok = blocking_run(sqlx::query!(
+            "UPDATE `Character` SET `ChaClnId`='0',`ChaClanTitle`='',`ChaClnRank`='0' WHERE `ChaId`=?",
+            id as u32
+        ).execute(get_pool())).map(|r| r.rows_affected() > 0).unwrap_or(false);
+        Ok(ok)
     })?)?;
 
     g.set("addClanMember", lua.create_function(|_, (id, clan): (i32, i32)| {
-        Ok(unsafe { sffi::sl_g_addclanmember(id as c_int, clan as c_int) != 0 })
+        let sd = unsafe { sffi::map_id2sd(id as c_uint) as *mut crate::game::pc::MapSessionData };
+        if !sd.is_null() {
+            unsafe {
+                (*sd).status.clan = clan as u32;
+                (*sd).status.clan_title[0] = 0;
+                (*sd).status.clan_rank = 1;
+                sffi::clif_mystaytus(sd as *mut c_void);
+            }
+        }
+        let ok = blocking_run(sqlx::query!(
+            "UPDATE `Character` SET `ChaClnId`=?,`ChaClanTitle`='',`ChaClnRank`='1' WHERE `ChaId`=?",
+            clan as u32, id as u32
+        ).execute(get_pool())).map(|r| r.rows_affected() > 0).unwrap_or(false);
+        Ok(ok)
     })?)?;
 
     g.set("updateClanMemberRank", lua.create_function(|_, (id, rank): (i32, i32)| {
-        Ok(unsafe { sffi::sl_g_updateclanmemberrank(id as c_int, rank as c_int) != 0 })
+        let sd = unsafe { sffi::map_id2sd(id as c_uint) as *mut crate::game::pc::MapSessionData };
+        if !sd.is_null() {
+            unsafe { (*sd).status.clan_rank = rank; }
+        }
+        let ok = blocking_run(sqlx::query!(
+            "UPDATE `Character` SET `ChaClnRank`=? WHERE `ChaId`=?", rank, id as u32
+        ).execute(get_pool())).map(|r| r.rows_affected() > 0).unwrap_or(false);
+        Ok(ok)
     })?)?;
 
     g.set("updateClanMemberTitle", lua.create_function(|_, (id, title): (i32, String)| {
-        let cs = CString::new(title).map_err(mlua::Error::external)?;
-        Ok(unsafe { sffi::sl_g_updateclanmembertitle(id as c_int, cs.as_ptr()) != 0 })
+        let sd = unsafe { sffi::map_id2sd(id as c_uint) as *mut crate::game::pc::MapSessionData };
+        if !sd.is_null() {
+            unsafe {
+                let dst = &mut (*sd).status.clan_title;
+                let bytes = title.as_bytes();
+                let copy_len = bytes.len().min(dst.len() - 1);
+                for (i, &b) in bytes.iter().take(copy_len).enumerate() { dst[i] = b as i8; }
+                dst[copy_len] = 0;
+                sffi::clif_mystaytus(sd as *mut c_void);
+            }
+        }
+        let ok = blocking_run(sqlx::query!(
+            "UPDATE `Character` SET `ChaClanTitle`=? WHERE `ChaId`=?", title, id as u32
+        ).execute(get_pool())).map(|r| r.rows_affected() > 0).unwrap_or(false);
+        Ok(ok)
     })?)?;
 
     // -----------------------------------------------------------------------
     // Path member management
     // -----------------------------------------------------------------------
     g.set("removePathMember", lua.create_function(|_, id: i32| {
-        Ok(unsafe { sffi::sl_g_removepathmember(id as c_int) != 0 })
+        let sd = unsafe { sffi::map_id2sd(id as c_uint) as *mut crate::game::pc::MapSessionData };
+        if !sd.is_null() {
+            let new_class = unsafe {
+                crate::database::class_db::path((*sd).status.class as i32) as u8
+            };
+            unsafe {
+                (*sd).status.class = new_class;
+                (*sd).status.class_rank = 0;
+                sffi::clif_mystaytus(sd as *mut c_void);
+            }
+            let ok = blocking_run(sqlx::query!(
+                "UPDATE `Character` SET `ChaPthId`=?,`ChaPthRank`='0' WHERE `ChaId`=?",
+                new_class as u32, id as u32
+            ).execute(get_pool())).map(|r| r.rows_affected() > 0).unwrap_or(false);
+            return Ok(ok);
+        }
+        // offline: fetch current class, apply path(), update
+        let pth: u32 = blocking_run(sqlx::query_scalar!(
+            "SELECT `ChaPthId` FROM `Character` WHERE `ChaId`=?", id as u32
+        ).fetch_optional(get_pool())).unwrap_or(None).unwrap_or(0);
+        let new_pth = crate::database::class_db::path(pth as i32) as u32;
+        let ok = blocking_run(sqlx::query!(
+            "UPDATE `Character` SET `ChaPthId`=?,`ChaPthRank`='0' WHERE `ChaId`=?",
+            new_pth, id as u32
+        ).execute(get_pool())).map(|r| r.rows_affected() > 0).unwrap_or(false);
+        Ok(ok)
     })?)?;
 
     g.set("addPathMember", lua.create_function(|_, (id, cls): (i32, i32)| {
-        Ok(unsafe { sffi::sl_g_addpathmember(id as c_int, cls as c_int) != 0 })
+        let sd = unsafe { sffi::map_id2sd(id as c_uint) as *mut crate::game::pc::MapSessionData };
+        if !sd.is_null() {
+            unsafe {
+                (*sd).status.class = cls as u8;
+                (*sd).status.class_rank = 0;
+                sffi::clif_mystaytus(sd as *mut c_void);
+            }
+        }
+        let ok = blocking_run(sqlx::query!(
+            "UPDATE `Character` SET `ChaPthId`=?,`ChaPthRank`='0' WHERE `ChaId`=?",
+            cls as u32, id as u32
+        ).execute(get_pool())).map(|r| r.rows_affected() > 0).unwrap_or(false);
+        Ok(ok)
     })?)?;
 
     // setOfflinePlayerRegistry — core logic was commented out in C, no-op.

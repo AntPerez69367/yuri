@@ -45,7 +45,6 @@ extern "C" {
     pub fn map_setglobalreg_sd(sd: *mut c_void, attrname: *const c_char, val: c_int) -> c_int;
 
     // Map-indexed registries (direct map slot, not from USER*)
-    pub fn map_readglobalreg(m: c_int, attrname: *const c_char) -> c_int;
     pub fn map_setglobalreg(m: c_int, attrname: *const c_char, val: c_int) -> c_int;
 
     // Game-global registries (no self pointer)
@@ -64,6 +63,7 @@ extern "C" {
     // Broadcast
     pub fn clif_broadcast(msg: *const c_char, m: c_int) -> c_int;
     pub fn clif_gmbroadcast(msg: *const c_char, m: c_int) -> c_int;
+    pub fn clif_mystaytus(sd: *mut c_void);
 
     // Map helpers
     pub fn map_changepostcolor(board: c_int, post: c_int, color: c_int) -> c_int;
@@ -82,13 +82,8 @@ extern "C" {
     pub fn map_id2bl(id: c_uint) -> *mut c_void;
 
     // sl_globals — typed wrappers in sl_compat.c
-    pub fn sl_g_getwarp(m: c_int, x: c_int, y: c_int) -> c_int;
-    pub fn sl_g_setwarps(mm: c_int, mx: c_int, my: c_int, tm: c_int, tx: c_int, ty: c_int) -> c_int;
-    pub fn sl_g_getweather(region: c_uchar, indoor: c_uchar) -> c_int;
     pub fn sl_g_setweather(region: c_uchar, indoor: c_uchar, weather: c_uchar);
     pub fn sl_g_setweatherm(m: c_int, weather: c_uchar);
-    pub fn sl_g_setlight(region: c_uchar, indoor: c_uchar, light: c_uchar);
-    pub fn sl_g_savemap(m: c_int, path: *const c_char) -> c_int;
     pub fn sl_g_setmap(
         m: c_int, mapfile: *const c_char, title: *const c_char,
         bgm: c_int, bgmtype: c_int, pvp: c_int, spell: c_int,
@@ -102,14 +97,6 @@ extern "C" {
         icon: c_int, color: c_int, action: c_int,
     );
     pub fn sl_g_sendmeta();
-    pub fn sl_g_addmob(m: c_int, x: c_int, y: c_int, mobid: c_int) -> c_int;
-    pub fn sl_g_setclanname(clan: c_int, name: *const c_char);
-    pub fn sl_g_removeclanmember(id: c_int) -> c_int;
-    pub fn sl_g_addclanmember(id: c_int, clan: c_int) -> c_int;
-    pub fn sl_g_updateclanmemberrank(id: c_int, rank: c_int) -> c_int;
-    pub fn sl_g_updateclanmembertitle(id: c_int, title: *const c_char) -> c_int;
-    pub fn sl_g_removepathmember(id: c_int) -> c_int;
-    pub fn sl_g_addpathmember(id: c_int, cls: c_int) -> c_int;
 
     // pc_* stubs added in Phase 6 as method bodies are written.
     // clif_* stubs added as method bodies are written.
