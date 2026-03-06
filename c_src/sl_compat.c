@@ -80,15 +80,6 @@ int map_setglobalreg_sd(void *sd, const char *attrname, int val) {
  * --------------------------------------------------------------------- */
 
 /* --- Real-time helpers --- */
-void sl_g_realtime(int *day, int *hour, int *minute, int *second) {
-    time_t now = time(NULL);
-    struct tm *t = localtime(&now);
-    *day    = t->tm_wday;
-    *hour   = t->tm_hour;
-    *minute = t->tm_min;
-    *second = t->tm_sec;
-}
-
 /* --- Warp helpers --- */
 int sl_g_getwarp(int m, int x, int y) {
     struct warp_list *i;
@@ -322,203 +313,6 @@ int sl_g_addmob(int m, int x, int y, int mobid) {
     return 1;
 }
 
-/* --- checkOnline --- */
-int sl_g_checkonline_id(int id) {
-    unsigned int cha_id = 0;
-    int result = 0;
-    SqlStmt *stmt = SqlStmt_Malloc(sql_handle);
-    if (!stmt) return 0;
-    if (SQL_ERROR == SqlStmt_Prepare(stmt,
-        "SELECT `ChaId` FROM `Character` WHERE `ChaOnline`='1' AND `ChaId`='%u'",
-        (unsigned)id) ||
-        SQL_ERROR == SqlStmt_Execute(stmt) ||
-        SQL_ERROR == SqlStmt_BindColumn(stmt, 0, SQLDT_UINT, &cha_id, 0, NULL, NULL)) {
-        SqlStmt_ShowDebug(stmt); SqlStmt_Free(stmt); return 0;
-    }
-    result = (SQL_SUCCESS == SqlStmt_NextRow(stmt)) ? 1 : 0;
-    SqlStmt_Free(stmt);
-    return result;
-}
-
-int sl_g_checkonline_name(const char *name) {
-    unsigned int cha_id = 0;
-    int result = 0;
-    char esc[128] = {0};
-    SqlStmt *stmt = SqlStmt_Malloc(sql_handle);
-    if (!stmt) return 0;
-    Sql_EscapeStringLen(sql_handle, esc, name, strnlen(name, 64));
-    if (SQL_ERROR == SqlStmt_Prepare(stmt,
-        "SELECT `ChaId` FROM `Character` WHERE `ChaOnline`='1' AND `ChaName`='%s'",
-        esc) ||
-        SQL_ERROR == SqlStmt_Execute(stmt) ||
-        SQL_ERROR == SqlStmt_BindColumn(stmt, 0, SQLDT_UINT, &cha_id, 0, NULL, NULL)) {
-        SqlStmt_ShowDebug(stmt); SqlStmt_Free(stmt); return 0;
-    }
-    result = (SQL_SUCCESS == SqlStmt_NextRow(stmt)) ? 1 : 0;
-    SqlStmt_Free(stmt);
-    return result;
-}
-
-/* --- getOfflineID --- */
-int sl_g_getofflineid(const char *name) {
-    unsigned int id = 0;
-    char esc[128] = {0};
-    SqlStmt *stmt = SqlStmt_Malloc(sql_handle);
-    if (!stmt) return 0;
-    Sql_EscapeStringLen(sql_handle, esc, name, strnlen(name, 64));
-    if (SQL_ERROR == SqlStmt_Prepare(stmt,
-        "SELECT `ChaId` FROM `Character` WHERE `ChaName`='%s'", esc) ||
-        SQL_ERROR == SqlStmt_Execute(stmt) ||
-        SQL_ERROR == SqlStmt_BindColumn(stmt, 0, SQLDT_UINT, &id, 0, NULL, NULL)) {
-        SqlStmt_ShowDebug(stmt); SqlStmt_Free(stmt); return 0;
-    }
-    SqlStmt_NextRow(stmt);
-    SqlStmt_Free(stmt);
-    return (int)id;
-}
-
-/* --- MapModifiers --- */
-int sl_g_addmapmodifier(unsigned int mapid, const char *modifier, int value) {
-    size_t modlen = modifier ? strlen(modifier) : 0;
-    char *esc = (char *)malloc(2 * modlen + 1);
-    if (!esc) return 0;
-    Sql_EscapeStringLen(sql_handle, esc, modifier ? modifier : "", modlen);
-    if (SQL_ERROR == Sql_Query(sql_handle,
-        "INSERT INTO `MapModifiers` (`ModMapId`,`ModModifier`,`ModValue`) "
-        "VALUES('%u','%s','%d')", mapid, esc, value)) {
-        Sql_ShowDebug(sql_handle); free(esc); return 0;
-    }
-    free(esc);
-    return 1;
-}
-
-int sl_g_removemapmodifier(unsigned int mapid, const char *modifier) {
-    size_t len = modifier ? strlen(modifier) : 0;
-    char *esc = (char *)malloc(2 * len + 1);
-    if (!esc) return 0;
-    Sql_EscapeStringLen(sql_handle, esc, modifier ? modifier : "", len);
-    if (SQL_ERROR == Sql_Query(sql_handle,
-        "DELETE FROM `MapModifiers` WHERE `ModMapId`='%u' AND `ModModifier`='%s'",
-        mapid, esc)) {
-        Sql_ShowDebug(sql_handle); free(esc); return 0;
-    }
-    free(esc);
-    return 1;
-}
-
-int sl_g_removemapmodifierid(unsigned int mapid) {
-    if (SQL_ERROR == Sql_Query(sql_handle,
-        "DELETE FROM `MapModifiers` WHERE `ModMapId`='%u'", mapid)) {
-        Sql_ShowDebug(sql_handle); return 0;
-    }
-    return 1;
-}
-
-int sl_g_getfreemapmodifierid(void) {
-    unsigned int mapid = 0;
-    SqlStmt *stmt = SqlStmt_Malloc(sql_handle);
-    if (!stmt) return 0;
-    if (SQL_ERROR == SqlStmt_Prepare(stmt, "SELECT MAX(`ModMapId`) FROM `MapModifiers`") ||
-        SQL_ERROR == SqlStmt_Execute(stmt) ||
-        SQL_ERROR == SqlStmt_BindColumn(stmt, 0, SQLDT_UINT, &mapid, 0, NULL, NULL)) {
-        SqlStmt_ShowDebug(stmt); SqlStmt_Free(stmt); return 0;
-    }
-    SqlStmt_NextRow(stmt);
-    SqlStmt_Free(stmt);
-    return (int)mapid + 1;
-}
-
-/* --- WisdomStar --- */
-float sl_g_getwisdomstarmultiplier(void) {
-    float mult = 0.0f;
-    SqlStmt *stmt = SqlStmt_Malloc(sql_handle);
-    if (!stmt) return 0.0f;
-    if (SQL_ERROR == SqlStmt_Prepare(stmt, "SELECT `WSMultiplier` FROM `WisdomStar`") ||
-        SQL_ERROR == SqlStmt_Execute(stmt) ||
-        SQL_ERROR == SqlStmt_BindColumn(stmt, 0, SQLDT_FLOAT, &mult, 0, NULL, NULL)) {
-        SqlStmt_ShowDebug(stmt); SqlStmt_Free(stmt); return 0.0f;
-    }
-    SqlStmt_NextRow(stmt);
-    SqlStmt_Free(stmt);
-    return mult;
-}
-
-void sl_g_setwisdomstarmultiplier(float mult, int value) {
-    Sql_Query(sql_handle,
-        "UPDATE `WisdomStar` SET `WSMultiplier`='%f',`WSValue`='%d'", mult, value);
-}
-
-/* --- KanDonationPoints --- */
-int sl_g_getkandonationpoints(void) {
-    unsigned int val = 0;
-    SqlStmt *stmt = SqlStmt_Malloc(sql_handle);
-    if (!stmt) return 0;
-    if (SQL_ERROR == SqlStmt_Prepare(stmt, "SELECT `KDPPoints` FROM `KanDonationPool`") ||
-        SQL_ERROR == SqlStmt_Execute(stmt) ||
-        SQL_ERROR == SqlStmt_BindColumn(stmt, 0, SQLDT_UINT, &val, 0, NULL, NULL)) {
-        SqlStmt_ShowDebug(stmt); SqlStmt_Free(stmt); return 0;
-    }
-    SqlStmt_NextRow(stmt);
-    SqlStmt_Free(stmt);
-    return (int)val;
-}
-
-void sl_g_setkandonationpoints(int val) {
-    Sql_Query(sql_handle, "UPDATE `KanDonationPool` SET `KDPPoints`='%d'", val);
-}
-
-void sl_g_addkandonationpoints(int val) {
-    Sql_Query(sql_handle,
-        "UPDATE `KanDonationPool` SET `KDPPoints`=`KDPPoints`+'%d'", val);
-}
-
-/* --- ClanTribute --- */
-unsigned int sl_g_getclantribute(int clan) {
-    unsigned int val = 0;
-    SqlStmt *stmt = SqlStmt_Malloc(sql_handle);
-    if (!stmt) return 0;
-    if (SQL_ERROR == SqlStmt_Prepare(stmt,
-        "SELECT `ClnTribute` FROM `Clans` WHERE `ClnId`='%i'", clan) ||
-        SQL_ERROR == SqlStmt_Execute(stmt) ||
-        SQL_ERROR == SqlStmt_BindColumn(stmt, 0, SQLDT_UINT, &val, 0, NULL, NULL)) {
-        SqlStmt_ShowDebug(stmt); SqlStmt_Free(stmt); return 0;
-    }
-    SqlStmt_NextRow(stmt);
-    SqlStmt_Free(stmt);
-    return val;
-}
-
-void sl_g_setclantribute(int clan, unsigned int val) {
-    Sql_Query(sql_handle,
-        "UPDATE `Clans` SET `ClnTribute`='%u' WHERE `ClnId`='%i'", val, clan);
-}
-
-void sl_g_addclantribute(int clan, unsigned int val) {
-    Sql_Query(sql_handle,
-        "UPDATE `Clans` SET `ClnTribute`=`ClnTribute`+'%u' WHERE `ClnId`='%i'", val, clan);
-}
-
-/* --- ClanName --- */
-int sl_g_getclanname(int clan, char *buf, int buflen) {
-    char name[64] = {0};
-    SqlStmt *stmt = SqlStmt_Malloc(sql_handle);
-    if (!stmt) return 0;
-    if (SQL_ERROR == SqlStmt_Prepare(stmt,
-        "SELECT `ClnName` FROM `Clans` WHERE `ClnId`='%i'", clan) ||
-        SQL_ERROR == SqlStmt_Execute(stmt) ||
-        SQL_ERROR == SqlStmt_BindColumn(stmt, 0, SQLDT_STRING, &name, sizeof(name), NULL, NULL)) {
-        SqlStmt_ShowDebug(stmt); SqlStmt_Free(stmt); return 0;
-    }
-    if (SQL_SUCCESS == SqlStmt_NextRow(stmt)) {
-        strncpy(buf, name, (size_t)(buflen - 1));
-        buf[buflen - 1] = '\0';
-        SqlStmt_Free(stmt);
-        return 1;
-    }
-    SqlStmt_Free(stmt);
-    return 0;
-}
-
 void sl_g_setclanname(int clan, const char *name) {
     char esc[128];
     struct ClanData *db;
@@ -527,27 +321,6 @@ void sl_g_setclanname(int clan, const char *name) {
         "UPDATE `Clans` SET `ClnName`='%s' WHERE `ClnId`='%i'", esc, clan);
     db = rust_clandb_searchexist(clan);
     if (db) strncpy(db->name, name, sizeof(db->name) - 1);
-}
-
-/* --- ClanBankSlots --- */
-int sl_g_getclanbankslots(int clan) {
-    int val = 0;
-    SqlStmt *stmt = SqlStmt_Malloc(sql_handle);
-    if (!stmt) return 0;
-    if (SQL_ERROR == SqlStmt_Prepare(stmt,
-        "SELECT `ClnBankSlots` FROM `Clans` WHERE `ClnId`='%i'", clan) ||
-        SQL_ERROR == SqlStmt_Execute(stmt) ||
-        SQL_ERROR == SqlStmt_BindColumn(stmt, 0, SQLDT_INT, &val, 0, NULL, NULL)) {
-        SqlStmt_ShowDebug(stmt); SqlStmt_Free(stmt); return 0;
-    }
-    SqlStmt_NextRow(stmt);
-    SqlStmt_Free(stmt);
-    return val;
-}
-
-void sl_g_setclanbankslots(int clan, int val) {
-    Sql_Query(sql_handle,
-        "UPDATE `Clans` SET `ClnBankSlots`='%i' WHERE `ClnId`='%i'", val, clan);
 }
 
 /* --- ClanMember --- */
@@ -667,11 +440,7 @@ int sl_g_addpathmember(int id, int cls) {
     return 1;
 }
 
-/* --- XP for level --- */
-unsigned int sl_g_getxpforlevel(int path, int level) {
-    if (path > 5) path = classdb_path(path);
-    return classdb_level(path, level);
-}
+// sl_g_getxpforlevel ported to Rust — see globals.rs getXPforLevel
 
 /* -------------------------------------------------------------------------
  * Mob scripting helpers — called from scripting/types/mob.rs.

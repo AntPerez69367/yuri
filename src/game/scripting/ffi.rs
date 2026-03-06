@@ -82,7 +82,6 @@ extern "C" {
     pub fn map_id2bl(id: c_uint) -> *mut c_void;
 
     // sl_globals — typed wrappers in sl_compat.c
-    pub fn sl_g_realtime(day: *mut c_int, hour: *mut c_int, minute: *mut c_int, second: *mut c_int);
     pub fn sl_g_getwarp(m: c_int, x: c_int, y: c_int) -> c_int;
     pub fn sl_g_setwarps(mm: c_int, mx: c_int, my: c_int, tm: c_int, tx: c_int, ty: c_int) -> c_int;
     pub fn sl_g_getweather(region: c_uchar, indoor: c_uchar) -> c_int;
@@ -104,32 +103,13 @@ extern "C" {
     );
     pub fn sl_g_sendmeta();
     pub fn sl_g_addmob(m: c_int, x: c_int, y: c_int, mobid: c_int) -> c_int;
-    pub fn sl_g_checkonline_id(id: c_int) -> c_int;
-    pub fn sl_g_checkonline_name(name: *const c_char) -> c_int;
-    pub fn sl_g_getofflineid(name: *const c_char) -> c_int;
-    pub fn sl_g_addmapmodifier(mapid: c_uint, modifier: *const c_char, value: c_int) -> c_int;
-    pub fn sl_g_removemapmodifier(mapid: c_uint, modifier: *const c_char) -> c_int;
-    pub fn sl_g_removemapmodifierid(mapid: c_uint) -> c_int;
-    pub fn sl_g_getfreemapmodifierid() -> c_int;
-    pub fn sl_g_getwisdomstarmultiplier() -> f32;
-    pub fn sl_g_setwisdomstarmultiplier(mult: f32, value: c_int);
-    pub fn sl_g_getkandonationpoints() -> c_int;
-    pub fn sl_g_setkandonationpoints(val: c_int);
-    pub fn sl_g_addkandonationpoints(val: c_int);
-    pub fn sl_g_getclantribute(clan: c_int) -> c_uint;
-    pub fn sl_g_setclantribute(clan: c_int, val: c_uint);
-    pub fn sl_g_addclantribute(clan: c_int, val: c_uint);
-    pub fn sl_g_getclanname(clan: c_int, buf: *mut c_char, buflen: c_int) -> c_int;
     pub fn sl_g_setclanname(clan: c_int, name: *const c_char);
-    pub fn sl_g_getclanbankslots(clan: c_int) -> c_int;
-    pub fn sl_g_setclanbankslots(clan: c_int, val: c_int);
     pub fn sl_g_removeclanmember(id: c_int) -> c_int;
     pub fn sl_g_addclanmember(id: c_int, clan: c_int) -> c_int;
     pub fn sl_g_updateclanmemberrank(id: c_int, rank: c_int) -> c_int;
     pub fn sl_g_updateclanmembertitle(id: c_int, title: *const c_char) -> c_int;
     pub fn sl_g_removepathmember(id: c_int) -> c_int;
     pub fn sl_g_addpathmember(id: c_int, cls: c_int) -> c_int;
-    pub fn sl_g_getxpforlevel(path: c_int, level: c_int) -> c_uint;
 
     // pc_* stubs added in Phase 6 as method bodies are written.
     // clif_* stubs added as method bodies are written.
