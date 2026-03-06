@@ -51,7 +51,6 @@ set(YURI_LINK_GROUP -Wl,--start-group common ${YURI_LIB} deps -Wl,--end-group)
 # map_server is now a Rust binary (src/bin/map_server.rs).
 # map_game contains all C game-logic files that Rust links against.
 add_library(map_game STATIC
-    c_src/map_char.c
     c_src/creation_db.c
     c_src/map_parse.c
     c_src/map_server.c

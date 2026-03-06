@@ -26,6 +26,12 @@
 #include "magic_db.h"
 
 /* -------------------------------------------------------------------------
+ * sl_map_isloaded — thin C wrapper around the map_isloaded macro.
+ * Called from Rust (src/game/map_char.rs) which cannot expand C macros.
+ */
+int sl_map_isloaded(int m) { return map_isloaded(m); }
+
+/* -------------------------------------------------------------------------
  * Functions previously in scripting.c that are referenced as callbacks or
  * used by sl_g_* wrappers.
  * --------------------------------------------------------------------- */

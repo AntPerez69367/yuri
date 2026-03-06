@@ -49,6 +49,7 @@ exclude = [
   "clif_object_look_sub", "clif_npc_move",
   "npc_helper_mob_is_dead", "npc_helper_pc_is_skip",
   "sl_doscript_blargs", "serverid",
+  "intif_mmo_tosd",
 ]
 
 [export.rename]
