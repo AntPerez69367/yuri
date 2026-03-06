@@ -221,6 +221,9 @@ exclude = [
   "BoardsReadPost0",
   "BoardsPost0",
 
+  # map_parse/mod.rs: main packet dispatcher — declared in map_parse.h.
+  "clif_parse",
+
   # combat.rs: combat/magic/animation/durability system ported from map_parse.c.
   "clif_pc_damage",
   "clif_send_pc_health",

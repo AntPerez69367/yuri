@@ -206,18 +206,30 @@ pub unsafe extern "C" fn intif_mmo_tosd(fd: c_int, p: *const MmoCharStatus) -> c
         clif_sendstatus, clif_mystaytus, clif_refresh, clif_sendxy,
         clif_getchararea, clif_retrieveprofile,
     };
+    let fd = (*sd).fd;
+    tracing::info!("[map] [login] fd={} step=sendack", fd);
     clif_sendack(sd);
+    tracing::info!("[map] [login] fd={} step=sendtime", fd);
     clif_sendtime(sd);
+    tracing::info!("[map] [login] fd={} step=sendid", fd);
     clif_sendid(sd);
+    tracing::info!("[map] [login] fd={} step=sendmapinfo", fd);
     clif_sendmapinfo(sd);
+    tracing::info!("[map] [login] fd={} step=sendstatus", fd);
     clif_sendstatus(sd, SFLAG_FULLSTATS | SFLAG_HPMP | SFLAG_XPMONEY);
+    tracing::info!("[map] [login] fd={} step=mystaytus_1", fd);
     clif_mystaytus(sd);
+    tracing::info!("[map] [login] fd={} step=spawn", fd);
     clif_spawn(sd);
+    tracing::info!("[map] [login] fd={} step=refresh", fd);
     clif_refresh(sd);
+    tracing::info!("[map] [login] fd={} step=sendxy", fd);
     clif_sendxy(sd);
+    tracing::info!("[map] [login] fd={} step=getchararea", fd);
     clif_getchararea(sd);
 
     // Broadcast visible entities to the new player.
+    tracing::info!("[map] [login] fd={} step=mob_look_start", fd);
     clif_mob_look_start(sd);
     map_foreachinarea(
         clif_object_look_sub,
@@ -232,22 +244,29 @@ pub unsafe extern "C" fn intif_mmo_tosd(fd: c_int, p: *const MmoCharStatus) -> c
     clif_mob_look_close(sd);
 
     // Load inventory and equipment.
+    tracing::info!("[map] [login] fd={} step=loaditem", fd);
     rust_pc_loaditem(sd);
+    tracing::info!("[map] [login] fd={} step=loadequip", fd);
     rust_pc_loadequip(sd);
 
     // Initialise magic system state for this session.
+    tracing::info!("[map] [login] fd={} step=magic_startup", fd);
     rust_pc_magic_startup(sd);
 
     // Register the player in the global ID database and mark online.
+    tracing::info!("[map] [login] fd={} step=addiddb", fd);
     crate::game::map_server::map_addiddb(ptr::addr_of_mut!((*sd).bl));
     crate::game::map_server::mmo_setonline((*sd).status.id, 1);
 
     // Final stat calculation and state broadcast.
+    tracing::info!("[map] [login] fd={} step=calcstat", fd);
     rust_pc_calcstat(sd);
     rust_pc_checklevel(sd);
+    tracing::info!("[map] [login] fd={} step=mystaytus_2", fd);
     clif_mystaytus(sd);
 
     // Send our state to all PCs in the area.
+    tracing::info!("[map] [login] fd={} step=updatestate", fd);
     map_foreachinarea(
         clif_updatestate,
         (*sd).bl.m as c_int,
@@ -258,7 +277,9 @@ pub unsafe extern "C" fn intif_mmo_tosd(fd: c_int, p: *const MmoCharStatus) -> c
         sd,
     );
 
+    tracing::info!("[map] [login] fd={} step=retrieveprofile", fd);
     clif_retrieveprofile(sd);
+    tracing::info!("[map] [login] fd={} step=done", fd);
     0
 }
 

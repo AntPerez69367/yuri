@@ -154,11 +154,6 @@ extern "C" {
         nargs: c_int,
         ...
     ) -> c_int;
-    /// Returns 1 if the MOB pointed to by `bl` is in the MOB_DEAD state, 0 otherwise.
-    pub fn npc_helper_mob_is_dead(bl: *mut BlockList) -> c_int;
-    /// Returns 1 if the PC pointed to by `bl` should be skipped during NPC movement
-    /// collision (dead/invisible/GM) given the NPC's block_list `npc_bl`, 0 otherwise.
-    pub fn npc_helper_pc_is_skip(bl: *mut BlockList, npc_bl: *mut BlockList) -> c_int;
 }
 
 /// Enum value for `AREA` as defined in `c_src/map_parse.h`:
@@ -892,6 +887,58 @@ pub fn npc_init() -> c_int {
 }
 
 // ---------------------------------------------------------------------------
+// npc_helper_mob_is_dead / npc_helper_pc_is_skip — ported from c_src/npc.c
+// ---------------------------------------------------------------------------
+
+/// Returns 1 if the MOB pointed to by `bl` is in the MOB_DEAD state, 0 otherwise.
+/// Called from `npc_move_sub` during NPC movement collision checks.
+///
+/// # Safety
+/// `bl` must point to a valid `MobSpawnData` (i.e. `bl.bl_type == BL_MOB`).
+#[no_mangle]
+pub unsafe extern "C" fn npc_helper_mob_is_dead(bl: *mut BlockList) -> c_int {
+    if bl.is_null() { return 0; }
+    let mob = bl as *const crate::game::mob::MobSpawnData;
+    if (*mob).state == crate::game::mob::MOB_DEAD { 1 } else { 0 }
+}
+
+/// Returns 1 if the PC pointed to by `bl` should be skipped during NPC movement
+/// collision (dead, invisible state, or GM level >= 50), 0 otherwise.
+/// `npc_bl` is the NPC's block_list (used to read the map's show_ghosts flag).
+///
+/// # Safety
+/// `bl` must point to a valid `MapSessionData` and `npc_bl` to a valid `BlockList`
+/// whose `.m` field is a loaded map ID.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn npc_helper_pc_is_skip(bl: *mut BlockList, npc_bl: *mut BlockList) -> c_int {
+    use crate::game::pc::{MapSessionData, PC_DIE};
+    if bl.is_null() || npc_bl.is_null() { return 0; }
+    let sd = bl as *const MapSessionData;
+    let npc_m = (*npc_bl).m;
+    let show_ghosts: u8 = if map_is_loaded(npc_m) {
+        (*get_map_ptr(npc_m)).show_ghosts
+    } else {
+        0
+    };
+    let state = (*sd).status.state;
+    if (show_ghosts != 0 && state == PC_DIE as i8)
+        || state == -1
+        || (*sd).status.gm_level >= 50
+    {
+        1
+    } else {
+        0
+    }
+}
+
+/// Test stub — map access is not available in unit tests.
+#[cfg(test)]
+pub unsafe extern "C" fn npc_helper_pc_is_skip(_bl: *mut BlockList, _npc_bl: *mut BlockList) -> c_int {
+    0
+}
+
+// ---------------------------------------------------------------------------
 // npc_move_sub — va_list callback for map_foreachincell during NPC movement
 // ---------------------------------------------------------------------------
 
@@ -928,7 +975,7 @@ pub unsafe extern "C" fn npc_move_sub(bl: *mut BlockList, mut ap: ...) -> c_int 
         }
         x if x == BL_PC as c_uchar => {
             // Dead / invisible / GM players do not block movement.
-            if npc_helper_pc_is_skip(bl, &raw mut (*nd).bl) != 0 { return 0; }
+            if npc_helper_pc_is_skip(bl, &raw mut (*nd).bl as *mut BlockList) != 0 { return 0; }
         }
         _ => {
             // Unknown type — do not block.

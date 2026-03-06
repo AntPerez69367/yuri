@@ -38,6 +38,9 @@ tokio = { version = "1", features = ["full"] }
 # Only enable when building the map_server binary.
 map-game = []
 
+[build-dependencies]
+cc = "1"
+
 [dev-dependencies]
 criterion = "0.8.2"
 
@@ -53,3 +56,11 @@ path = "src/bin/char_server.rs"
 name = "map_server"
 path = "src/bin/map_server.rs"
 required-features = ["map-game"]
+
+[[bin]]
+name = "decrypt_cli"
+path = "src/bin/decrypt_cli.rs"
+
+[[bin]]
+name = "metan_cli"
+path = "src/bin/metan_cli.rs"

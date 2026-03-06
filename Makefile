@@ -5,14 +5,15 @@ NPROC        := $(shell nproc)
 RUST_PROFILE ?= debug
 
 ifeq ($(RUST_PROFILE),release)
-CARGO_FLAGS     := --release
-CMAKE_BUILD_TYPE := Release
+CARGO_FLAGS  := --release
 else
-CARGO_FLAGS     :=
-CMAKE_BUILD_TYPE := Debug
+CARGO_FLAGS  :=
 endif
 
-all: clean libyuri cmake binaries
+# C source files are now compiled directly by cargo's build.rs (cc crate).
+# No cmake step is needed.
+
+all: binaries
 
 libyuri:
 	@echo "libyuri:"
@@ -21,24 +22,8 @@ libyuri:
 yuri.h:
 	@cbindgen --config cbindgen.toml --crate yuri --output ./c_deps/yuri.h --lang c
 
-cmake:
-	@cmake -H. -Bbuild -DCMAKE_BUILD_TYPE=$(CMAKE_BUILD_TYPE)
-
-common: deps
-	@cmake --build build --target common --parallel $(NPROC)
-
-deps: cmake libyuri yuri.h
-	@cmake --build build --target deps --parallel $(NPROC)
-
-# Build all binaries: cmake builds C game lib + CLI tools; cargo builds Rust binaries.
-binaries: common
-	@cmake --build build \
-		--target metan_cli \
-		--target decrypt_cli \
-		--target map_game \
-		--target common_nocore \
-		--parallel $(NPROC)
-	@ln -sf metan_cli bin/metan
+# Build all binaries: cargo builds Rust binaries (build.rs compiles C game libs).
+binaries:
 	@cargo build --bin login_server --bin char_server $(CARGO_FLAGS)
 	@cargo build --bin map_server --features map-game $(CARGO_FLAGS)
 	@cp target/$(RUST_PROFILE)/login_server bin/login_server
@@ -46,25 +31,24 @@ binaries: common
 	@cp target/$(RUST_PROFILE)/map_server bin/map_server
 
 # Individual targets kept for incremental builds.
-metan_cli: common
-	@cmake --build build --target metan_cli --parallel $(NPROC)
-	@ln -sf metan_cli bin/metan
-decrypt_cli: common
-	@cmake --build build --target decrypt_cli --parallel $(NPROC)
 char_server: libyuri
-	@cargo build --bin char_server $(CARGO_FLAGS)
-	@cp target/$(RUST_PROFILE)/char_server bin/char_server
-char_server_rust: libyuri
 	@cargo build --bin char_server $(CARGO_FLAGS)
 	@cp target/$(RUST_PROFILE)/char_server bin/char_server
 login_server: libyuri
 	@cargo build --bin login_server $(CARGO_FLAGS)
 	@cp target/$(RUST_PROFILE)/login_server bin/login_server
-map_game: common
-	@cmake --build build --target map_game --target common_nocore --parallel $(NPROC)
-map_server: libyuri map_game
+map_server: libyuri
 	@cargo build --bin map_server --features map-game $(CARGO_FLAGS)
 	@cp target/$(RUST_PROFILE)/map_server bin/map_server
+
+decrypt_cli:
+	@cargo build --bin decrypt_cli $(CARGO_FLAGS)
+	@cp target/$(RUST_PROFILE)/decrypt_cli bin/decrypt_cli
+
+metan_cli:
+	@cargo build --bin metan_cli $(CARGO_FLAGS)
+	@cp target/$(RUST_PROFILE)/metan_cli bin/metan_cli
+	@ln -sf metan_cli bin/metan
 
 clean:
 	@rm -rf ./bin/*

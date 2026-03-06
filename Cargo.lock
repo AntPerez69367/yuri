@@ -2698,6 +2698,7 @@ dependencies = [
  "bcrypt",
  "bytemuck",
  "bytes",
+ "cc",
  "chrono",
  "criterion",
  "flate2",

@@ -1143,6 +1143,7 @@ pub unsafe extern "C" fn clif_parsemap(sd: *mut MapSessionData) -> c_int {
         checksum = 0;
     }
 
+    tracing::debug!("[map] [parsemap] fd={} m={} x0={} y0={} x1={} y1={} check={}", fd, (*sd).bl.m, x0, y0, x1, y1, checksum);
     clif_sendmapdata(sd, (*sd).bl.m as c_int, x0, y0, x1, y1, checksum);
     0
 }
@@ -1184,6 +1185,7 @@ pub unsafe extern "C" fn clif_sendmapdata(
 
     // Sanity: C limit is x1*y1 > 323
     if x1 * y1 > 323 {
+        tracing::warn!("[map] [sendmapdata] fd={} viewport too large x1={} y1={} product={}", fd, x1, y1, x1 * y1);
         return 0;
     }
 
@@ -1235,8 +1237,15 @@ pub unsafe extern "C" fn clif_sendmapdata(
 
     let checksum = nex_crcc(&crc_buf[..a]);
 
-    if pos <= 12 { return 0; }
-    if checksum == check as i16 { return 0; }
+    if pos <= 12 {
+        tracing::warn!("[map] [sendmapdata] fd={} no tiles written pos={}", fd, pos);
+        return 0;
+    }
+    if checksum == check as i16 {
+        tracing::debug!("[map] [sendmapdata] fd={} checksum match={} skip send", fd, checksum);
+        return 0;
+    }
+    tracing::debug!("[map] [sendmapdata] fd={} sending {} bytes computed_check={} client_check={}", fd, pos, checksum, check);
 
     // Write big-endian packet size at [1..2]
     buf2[1..3].copy_from_slice(&((pos - 3) as u16).swap_bytes().to_ne_bytes());

@@ -1,42 +1,114 @@
-// build.rs — link directives for the map_server binary.
+// build.rs — compile C game-logic files and link them into the map_server binary.
 //
-// map_server calls C game-logic functions (npc_init, clif_parse, etc.) that
-// live in libmap_game.a, built by cmake before cargo runs.
+// Previously, a separate cmake step built libmap_game.a and libcommon_nocore.a
+// into bin/. Now the cc crate compiles those C files directly as part of the
+// Cargo build, eliminating the cmake dependency entirely.
 //
-// libmap_game.a, libcommon.a, and libyuri.a have circular symbol dependencies
-// (same pattern documented in MEMORY.md). We use --start-group/--end-group.
+// libmap_game_c (compiled here) and libyuri.a have circular symbol dependencies.
+// We use --start-group/--end-group to allow multiple linker passes.
 
 fn main() {
-    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-    let bin_dir = std::path::Path::new("bin");
-    let target_dir = std::path::PathBuf::from(format!("target/{}", profile));
+    // OUT_DIR is where cc places the compiled .a files (e.g. target/debug/build/yuri-.../out/)
+    let out_dir = std::env::var("OUT_DIR").unwrap();
 
-    // Only emit map_game link directives when cmake has produced the library.
-    // This lets `cargo check` / `cargo test` work in pure-Rust contexts.
-    if bin_dir.join("libmap_game.a").exists() && bin_dir.join("libcommon_nocore.a").exists() {
-        // Group: libmap_game.a ↔ libcommon_nocore.a ↔ libyuri.a ↔ libdeps.a (circular deps).
-        // We use common_nocore (no core.c) to avoid a duplicate main() symbol
-        // — core.c defines main() for C executables; Rust provides its own main().
-        println!("cargo:rustc-link-arg-bin=map_server=-Wl,--start-group");
-        println!("cargo:rustc-link-arg-bin=map_server=-Wl,bin/libmap_game.a");
-        println!("cargo:rustc-link-arg-bin=map_server=-Wl,bin/libcommon_nocore.a");
-        println!("cargo:rustc-link-arg-bin=map_server=-Wl,bin/libdeps.a");
-        println!(
-            "cargo:rustc-link-arg-bin=map_server=-Wl,{}/libyuri.a",
-            target_dir.display()
-        );
-        println!("cargo:rustc-link-arg-bin=map_server=-Wl,--end-group");
+    // Tell cargo to search OUT_DIR for our cc-compiled archives
+    println!("cargo:rustc-link-search=native={}", out_dir);
 
-        // External deps required by map_game and deps
-        println!("cargo:rustc-link-lib=luajit-5.1");
-        println!("cargo:rustc-link-lib=mysqlclient");
-        println!("cargo:rustc-link-lib=z");
-        println!("cargo:rustc-link-lib=m");
-        println!("cargo:rustc-link-lib=dl");
-        println!("cargo:rustc-link-lib=pthread");
+    // Common C flags
+    let base_flags = &[
+        "-std=gnu17",
+        "-g3",
+        "-DDEBUG",
+        "-DFD_SETSIZE=1024",
+        "-fno-stack-protector",
+        // Suppress warnings that are harmless but noisy during the migration
+        "-Wno-implicit-function-declaration",
+        "-Wno-unused-variable",
+        "-Wno-return-type",
+    ];
+
+    // Compile config.c (common_nocore) — config globals referenced by Rust FFI.
+    let mut config_build = cc::Build::new();
+    config_build
+        .file("c_src/config.c")
+        .include("c_src")
+        .include("c_deps")
+        .include("/usr/include/mysql");
+    for flag in base_flags {
+        config_build.flag(flag);
     }
+    config_build.compile("config_c");
 
-    println!("cargo:rerun-if-changed=bin/libmap_game.a");
-    println!("cargo:rerun-if-changed=bin/libcommon_nocore.a");
+    // Compile c_deps/*.c (db, timer, showmsg, strlib, etc.)
+    let mut deps_build = cc::Build::new();
+    deps_build
+        .files(&[
+            "c_deps/db_mysql.c",
+            "c_deps/db.c",
+            "c_deps/ers.c",
+            "c_deps/md5calc.c",
+            "c_deps/rndm.c",
+            "c_deps/showmsg.c",
+            "c_deps/strlib.c",
+            "c_deps/timer.c",
+        ])
+        .include("c_src")
+        .include("c_deps")
+        .include("/usr/include/mysql");
+    for flag in base_flags {
+        deps_build.flag(flag);
+    }
+    deps_build.compile("deps_c");
+
+    // Compile map_game C files (sl_compat.c, map_server.c) — game logic that
+    // Rust map_server links against. Needs LuaJIT and MySQL headers.
+    let mut map_game_build = cc::Build::new();
+    map_game_build
+        .files(&["c_src/map_server.c", "c_src/sl_compat.c", "c_src/rust_shims.c", "c_src/rust_shims_map.c"])
+        .include("c_src")
+        .include("c_deps")
+        .include("/usr/include/mysql")
+        .include("/usr/include/luajit-2.1");
+    for flag in base_flags {
+        map_game_build.flag(flag);
+    }
+    map_game_build.compile("map_game_c");
+
+    // Link the cc-compiled C archives in a group to handle circular dependencies
+    // between the three C archives and libyuri (the Rust rlib, linked automatically
+    // by cargo — we don't need to reference libyuri.a explicitly here since cargo
+    // uses the rlib for Rust→C linkage when building a binary).
+    //
+    // cc::Build::compile() already emits `cargo:rustc-link-lib=static=<name>` for
+    // each archive, which causes them to be linked. We wrap them in --start-group
+    // /--end-group to handle any circular refs within the C archives themselves.
+    println!("cargo:rustc-link-arg-bin=map_server=-Wl,--start-group");
+    println!("cargo:rustc-link-arg-bin=map_server=-Wl,{}/libmap_game_c.a", out_dir);
+    println!("cargo:rustc-link-arg-bin=map_server=-Wl,{}/libconfig_c.a", out_dir);
+    println!("cargo:rustc-link-arg-bin=map_server=-Wl,{}/libdeps_c.a", out_dir);
+    println!("cargo:rustc-link-arg-bin=map_server=-Wl,--end-group");
+
+    // External deps required by the C game libraries.
+    println!("cargo:rustc-link-lib=luajit-5.1");
+    println!("cargo:rustc-link-lib=mysqlclient");
+    println!("cargo:rustc-link-lib=z");
+    println!("cargo:rustc-link-lib=m");
+    println!("cargo:rustc-link-lib=dl");
+    println!("cargo:rustc-link-lib=pthread");
+
+    // Re-run triggers
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=c_src/config.c");
+    println!("cargo:rerun-if-changed=c_src/map_server.c");
+    println!("cargo:rerun-if-changed=c_src/sl_compat.c");
+    println!("cargo:rerun-if-changed=c_src/rust_shims.c");
+    println!("cargo:rerun-if-changed=c_src/rust_shims_map.c");
+    println!("cargo:rerun-if-changed=c_deps/db_mysql.c");
+    println!("cargo:rerun-if-changed=c_deps/db.c");
+    println!("cargo:rerun-if-changed=c_deps/ers.c");
+    println!("cargo:rerun-if-changed=c_deps/md5calc.c");
+    println!("cargo:rerun-if-changed=c_deps/rndm.c");
+    println!("cargo:rerun-if-changed=c_deps/showmsg.c");
+    println!("cargo:rerun-if-changed=c_deps/strlib.c");
+    println!("cargo:rerun-if-changed=c_deps/timer.c");
 }

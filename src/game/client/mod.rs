@@ -209,6 +209,7 @@ pub unsafe extern "C" fn rust_clif_parse(fd: c_int) -> c_int {
 
     // EOF → disconnect and clean up
     if rust_session_get_eof(fd) != 0 {
+        tracing::info!("[map] [parse] fd={} eof reason={} sd_null={}", fd, rust_session_get_eof(fd), sd.is_null());
         if !sd.is_null() {
             clif_handle_disconnect(sd);
             clif_closeit(sd);
@@ -221,6 +222,7 @@ pub unsafe extern "C" fn rust_clif_parse(fd: c_int) -> c_int {
     // Validate packet header: must start with 0xAA
     let avail = rust_session_available(fd);
     if avail > 0 && rbyte(fd, 0) != 0xAA {
+        tracing::warn!("[map] [parse] fd={} bad header byte0={:#04X} avail={}", fd, rbyte(fd, 0), avail);
         rust_session_set_eof(fd, 13);
         return 0;
     }
@@ -231,8 +233,12 @@ pub unsafe extern "C" fn rust_clif_parse(fd: c_int) -> c_int {
 
     // Pre-login: only opcode 0x10 (character accept) is allowed
     if sd.is_null() {
-        if rbyte(fd, 3) == 0x10 {
+        let op = rbyte(fd, 3);
+        if op == 0x10 {
+            tracing::debug!("[map] [parse] fd={} pre-login accept op=0x10", fd);
             clif_accept2(fd, rptr(fd, 16), rbyte(fd, 15));
+        } else {
+            tracing::debug!("[map] [parse] fd={} pre-login op={:#04X} dropped (sd not set)", fd, op);
         }
         rust_session_skip(fd, pkt_len);
         return 0;
@@ -246,6 +252,7 @@ pub unsafe extern "C" fn rust_clif_parse(fd: c_int) -> c_int {
 
     decrypt(fd);
 
+    tracing::debug!("[map] [parse] fd={} op={:#04X} pkt_len={}", fd, rbyte(fd, 3), pkt_len);
     match rbyte(fd, 3) {
         0x05 => {
             clif_parsemap(sd);
