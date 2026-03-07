@@ -367,6 +367,10 @@ struct game_data {
   int registry_num;
 };
 
+// gamereg — definition moved to Rust: src/game/map_server.rs (static mut gamereg: GameData).
+// Declared extern here so C TUs (e.g. map_readglobalgamereg) can access it.
+extern struct game_data gamereg;
+
 #define map_isloaded(m) (map[m].registry)
 #define read_map(m, x, y) (map[m].map[(x) + (y)*map[m].xs])
 #define read_tile(m, x, y) (map[m].tile[(x) + (y)*map[m].xs])
@@ -399,7 +403,8 @@ extern int map_n;
 extern struct userlist_data userlist;
 extern struct auth_data auth_fifo[];
 extern int auth_n;
-extern struct block_list bl_head; /* sentinel for block grid chains; owned by map_server.c */
+extern struct block_list bl_head; /* sentinel for block grid chains; now owned by Rust: src/ffi/block.rs */
+extern struct block_list *bl_list[]; /* scratch buffer for foreachin* queries; now owned by Rust: src/ffi/block.rs */
 
 extern int map_fd;
 extern int char_fd;

@@ -3,23 +3,49 @@
 //! Rust owns the grid mutation side: addblock, delblock, initblock, moveblock, termblock.
 //! The foreachin* spatial query family stays in C (variadic va_list callbacks).
 //!
-//! `bl_head` is defined in map_server.c (non-static); imported here for sentinel comparison.
+//! `bl_head` and `bl_list` are now owned by Rust and exported via `#[no_mangle]`.
+//! They were previously defined in map_server.c.
 
-use std::os::raw::{c_int, c_ushort};
+use std::os::raw::{c_int, c_uchar, c_uint, c_ushort, c_void};
 use std::ptr;
 
 use crate::database::map_db::{BlockList, WarpList, MAP_SLOTS, BLOCK_SIZE};
 use crate::ffi::map_db::map;
+use crate::game::scripting::types::floor::FloorItemData;
 
-const BL_MOB: u8 = 0x02;
-const BL_PC:  u8 = 0x01;
+/// `ITM_TRAPS` from `item_db.h` — floor items of this type are skipped by `map_firstincell`.
+const ITM_TRAPS: c_int = 20;
 
-// Sentinel node — lives in map_server.c, exported via map_server.h.
-// map_addblock sets bl->prev = &bl_head; map_delblock checks bl->prev == &bl_head
-// to know whether the entity is at the head of its chain.
 extern "C" {
-    static mut bl_head: BlockList;
+    #[link_name = "rust_itemdb_type"]
+    fn itemdb_type(id: c_uint) -> c_int;
 }
+
+
+pub const BL_LIST_MAX: usize = 32768;
+
+/// Sentinel node — `bl->prev == &raw mut bl_head` means bl is the chain head.
+/// Previously defined in map_server.c; now owned by Rust, exported via `#[no_mangle]`.
+#[no_mangle]
+pub static mut bl_head: BlockList = BlockList {
+    next:          std::ptr::null_mut(),
+    prev:          std::ptr::null_mut(),
+    id:            0 as c_uint,
+    bx:            0 as c_uint,
+    by:            0 as c_uint,
+    graphic_id:    0 as c_uint,
+    graphic_color: 0 as c_uint,
+    m:             0 as c_ushort,
+    x:             0 as c_ushort,
+    y:             0 as c_ushort,
+    bl_type:       0 as c_uchar,
+    subtype:       0 as c_uchar,
+};
+
+/// Scratch buffer used by block query functions to collect results before iterating.
+/// Previously defined in map_server.c; now owned by Rust, exported via `#[no_mangle]`.
+#[no_mangle]
+pub static mut bl_list: [*mut BlockList; BL_LIST_MAX] = [std::ptr::null_mut(); BL_LIST_MAX];
 
 /// Allocate a zeroed array of `len` null pointers and return a raw pointer.
 /// Caller owns the allocation; free via `Vec::from_raw_parts(ptr, len, len)`.
@@ -110,7 +136,7 @@ pub unsafe extern "C" fn map_addblock(bl: *mut BlockList) -> c_int {
 
     let pos = (x as usize / BLOCK_SIZE) + (y as usize / BLOCK_SIZE) * slot.bxs as usize;
 
-    if bl.bl_type == BL_MOB {
+    if bl.bl_type as c_int == crate::game::mob::BL_MOB {
         let chain_head = slot.block_mob.add(pos);
         bl.next = *chain_head;
         bl.prev = ptr::addr_of_mut!(bl_head);
@@ -128,7 +154,7 @@ pub unsafe extern "C" fn map_addblock(bl: *mut BlockList) -> c_int {
         *chain_head = bl as *mut BlockList;
     }
 
-    if bl.bl_type == BL_PC {
+    if bl.bl_type as c_int == crate::game::mob::BL_PC {
         slot.user += 1;
     }
 
@@ -171,7 +197,7 @@ pub unsafe extern "C" fn map_delblock(bl: *mut BlockList) -> c_int {
     // Otherwise stitch prev->next.
     if bl.prev == ptr::addr_of_mut!(bl_head) {
         let slot = &mut *map.add(m);
-        if bl.bl_type == BL_MOB {
+        if bl.bl_type as c_int == crate::game::mob::BL_MOB {
             *slot.block_mob.add(pos) = bl.next;
         } else {
             *slot.block.add(pos) = bl.next;
@@ -180,7 +206,7 @@ pub unsafe extern "C" fn map_delblock(bl: *mut BlockList) -> c_int {
         (*bl.prev).next = bl.next;
     }
 
-    if bl.bl_type == BL_PC {
+    if bl.bl_type as c_int == crate::game::mob::BL_PC {
         let slot = &mut *map.add(m);
         slot.user -= 1;
     }
@@ -206,4 +232,352 @@ pub unsafe extern "C" fn map_moveblock(bl: *mut BlockList, x1: c_int, y1: c_int)
     }
     map_addblock(bl);
     0
+}
+
+// Callback: int (*func)(struct block_list*, va_list)
+// va_list is ABI-compatible with *mut c_void on x86-64 Linux.
+type BlockCallback = unsafe extern "C" fn(*mut BlockList, *mut c_void) -> c_int;
+
+/// Inner block query: collect all entities of `bl_type` in rect [x0..x1]×[y0..y1]
+/// on map `m` into `bl_list`, then call `func(bl, ap)` for each live entity.
+/// Replaces `map_foreachinblockva` in `c_src/map_server.c`.
+///
+/// # Safety
+/// - `map` must be initialized and `m` must be a valid loaded map slot.
+/// - `func` must be a valid C function pointer.
+/// - `ap` is a `va_list*` forwarded opaquely to `func`; caller owns its lifetime.
+#[no_mangle]
+pub unsafe extern "C" fn map_foreachinblockva(
+    func: Option<BlockCallback>,
+    m: c_int,
+    mut x0: c_int,
+    mut y0: c_int,
+    mut x1: c_int,
+    mut y1: c_int,
+    bl_type: c_int,
+    ap: *mut c_void,
+) -> c_int {
+    let func = match func {
+        Some(f) => f,
+        None => return 0,
+    };
+    let m_idx = m as usize;
+    if m < 0 || map.is_null() || m_idx >= MAP_SLOTS {
+        return 0;
+    }
+    let slot = &*map.add(m_idx);
+    if slot.registry.is_null() {
+        return 0; // map not loaded
+    }
+
+    // Clamp to map bounds
+    if x0 < 0 { x0 = 0; }
+    if y0 < 0 { y0 = 0; }
+    if x1 >= slot.xs as c_int { x1 = slot.xs as c_int - 1; }
+    if y1 >= slot.ys as c_int { y1 = slot.ys as c_int - 1; }
+
+    let mut blockcount: usize = 0;
+
+    // Collect non-mob entities (PC, items, etc.)
+    if (bl_type & !(crate::game::mob::BL_MOB)) != 0 {
+        let by0 = y0 as usize / BLOCK_SIZE;
+        let by1 = y1 as usize / BLOCK_SIZE;
+        let bx0 = x0 as usize / BLOCK_SIZE;
+        let bx1 = x1 as usize / BLOCK_SIZE;
+        'outer: for by in by0..=by1 {
+            for bx in bx0..=bx1 {
+                let pos = bx + by * slot.bxs as usize;
+                let mut bl = *slot.block.add(pos);
+                while !bl.is_null() && blockcount < BL_LIST_MAX {
+                    let b = &*bl;
+                    if (b.bl_type as c_int & bl_type) != 0
+                        && b.x as c_int >= x0
+                        && b.x as c_int <= x1
+                        && b.y as c_int >= y0
+                        && b.y as c_int <= y1
+                    {
+                        bl_list[blockcount] = bl;
+                        blockcount += 1;
+                    }
+                    bl = b.next;
+                }
+                if blockcount >= BL_LIST_MAX {
+                    break 'outer;
+                }
+            }
+        }
+    }
+
+    // Collect mob entities
+    if (bl_type & crate::game::mob::BL_MOB) != 0 {
+        let by0 = y0 as usize / BLOCK_SIZE;
+        let by1 = y1 as usize / BLOCK_SIZE;
+        let bx0 = x0 as usize / BLOCK_SIZE;
+        let bx1 = x1 as usize / BLOCK_SIZE;
+        'outer_mob: for by in by0..=by1 {
+            for bx in bx0..=bx1 {
+                let pos = bx + by * slot.bxs as usize;
+                let mut bl = *slot.block_mob.add(pos);
+                while !bl.is_null() && blockcount < BL_LIST_MAX {
+                    let b = &*bl;
+                    let mob = bl as *mut crate::game::mob::MobSpawnData;
+                    if (*mob).state != crate::game::mob::MOB_DEAD
+                        && b.x as c_int >= x0
+                        && b.x as c_int <= x1
+                        && b.y as c_int >= y0
+                        && b.y as c_int <= y1
+                    {
+                        bl_list[blockcount] = bl;
+                        blockcount += 1;
+                    }
+                    bl = b.next;
+                }
+                if blockcount >= BL_LIST_MAX {
+                    break 'outer_mob;
+                }
+            }
+        }
+    }
+
+    if blockcount >= BL_LIST_MAX {
+        tracing::warn!("map_foreachinblockva: bl_list overflow");
+    }
+
+    let mut return_count: c_int = 0;
+    for i in 0..blockcount {
+        let bl = bl_list[i];
+        if !(*bl).prev.is_null() {
+            // live check: prev is non-null for entities in the grid
+            return_count += func(bl, ap);
+        }
+    }
+    return_count
+}
+
+/// Scan the mob grid chain at `pos` for the first non-dead mob at exact coords (x, y).
+/// Returns null if none found.
+///
+/// # Safety
+/// `slot.block_mob` must be a valid initialized pointer array produced by `map_initblock`.
+#[inline]
+unsafe fn first_mob_in_cell(
+    slot: &crate::database::map_db::MapData,
+    pos: usize,
+    x: c_int,
+    y: c_int,
+) -> *mut BlockList {
+    let mut bl = *slot.block_mob.add(pos);
+    while !bl.is_null() {
+        let b = &*bl;
+        let mob = bl as *mut crate::game::mob::MobSpawnData;
+        if (*mob).state != crate::game::mob::MOB_DEAD
+            && b.x as c_int == x
+            && b.y as c_int == y
+        {
+            return bl;
+        }
+        bl = b.next;
+    }
+    ptr::null_mut()
+}
+
+/// Return the first live entity of `bl_type` at cell (x, y) on map `m`, or null.
+/// Floor items of type `ITM_TRAPS` are skipped — use `map_firstincellwithtraps` to include them.
+/// Replaces `map_firstincell` in `c_src/map_server.c`.
+///
+/// # Safety
+/// - `map` must be initialized and `m` must be a valid map index.
+/// - Coords are clamped to map bounds if out of range.
+#[no_mangle]
+pub unsafe extern "C" fn map_firstincell(
+    m: c_int,
+    x: c_int,
+    y: c_int,
+    bl_type: c_int,
+) -> *mut BlockList {
+    if m < 0 || map.is_null() {
+        return ptr::null_mut();
+    }
+    let m_idx = m as usize;
+    if m_idx >= MAP_SLOTS {
+        return ptr::null_mut();
+    }
+    let slot = &*map.add(m_idx);
+    if slot.registry.is_null() {
+        return ptr::null_mut();
+    }
+
+    let x = x.clamp(0, slot.xs as c_int - 1);
+    let y = y.clamp(0, slot.ys as c_int - 1);
+    let pos = (x as usize / BLOCK_SIZE) + (y as usize / BLOCK_SIZE) * slot.bxs as usize;
+
+    // Search non-mob chain (PC, items, NPCs, …)
+    if (bl_type & !(crate::game::mob::BL_MOB)) != 0 {
+        let mut bl = *slot.block.add(pos);
+        while !bl.is_null() {
+            let b = &*bl;
+            if (b.bl_type as c_int & bl_type) != 0
+                && b.x as c_int == x
+                && b.y as c_int == y
+            {
+                if b.bl_type as c_int != crate::game::mob::BL_ITEM {
+                    return bl;
+                } else {
+                    // Skip trap floor items — callers that want traps use map_firstincellwithtraps.
+                    let fl = bl as *mut FloorItemData;
+                    if itemdb_type((*fl).data.id) != ITM_TRAPS {
+                        return bl;
+                    }
+                }
+            }
+            bl = b.next;
+        }
+    }
+
+    // Search mob chain
+    if (bl_type & crate::game::mob::BL_MOB) != 0 {
+        let result = first_mob_in_cell(slot, pos, x, y);
+        if !result.is_null() {
+            return result;
+        }
+    }
+
+    ptr::null_mut()
+}
+
+/// Iterate mobs across entire map `m`, calling `func(bl, ap)` for each live mob.
+/// Replaces `map_respawnmobs` in `c_src/map_server.c`.
+///
+/// Despite the name, this function calls `func` only for mobs whose `prev` pointer is
+/// non-null (i.e. currently live in the grid). Dead mobs (`prev == null`) are collected
+/// into `bl_list` but skipped in the dispatch loop — this matches the C source exactly
+/// (line 588: `if (bl_list[i]->prev)`).
+///
+/// The full-map coord bounds check in C (`bl->x >= x0 && bl->x <= x1 && ...`) is omitted
+/// here because x0=0, y0=0, x1=map.xs-1, y1=map.ys-1 makes it trivially true for any
+/// mob in the grid.
+///
+/// `map_respawn` in C stays as a variadic shim that calls this function after `va_start`.
+///
+/// # Safety
+/// - `map` must be initialized and `m` a valid loaded map slot.
+/// - `func` must be a valid C function pointer.
+/// - `ap` is a `va_list*` forwarded opaquely to `func`; caller owns its lifetime.
+#[no_mangle]
+pub unsafe extern "C" fn map_respawnmobs(
+    func: Option<BlockCallback>,
+    m: c_int,
+    bl_type: c_int,
+    ap: *mut c_void,
+) -> c_int {
+    let func = match func {
+        Some(f) => f,
+        None => return 0,
+    };
+    if m < 0 || map.is_null() {
+        return 0;
+    }
+    let m_idx = m as usize;
+    if m_idx >= MAP_SLOTS {
+        return 0;
+    }
+    let slot = &*map.add(m_idx);
+    if slot.registry.is_null() {
+        return 0;
+    }
+
+    let x1 = slot.xs as usize;
+    let y1 = slot.ys as usize;
+
+    let mut blockcount: usize = 0;
+
+    // Collect mobs — full map sweep over every block cell.
+    // Only the mob grid is consulted (matches C: only `if (type & BL_MOB)` branch exists).
+    if (bl_type & crate::game::mob::BL_MOB) != 0 {
+        let by1 = (y1.saturating_sub(1)) / BLOCK_SIZE;
+        let bx1 = (x1.saturating_sub(1)) / BLOCK_SIZE;
+        'outer: for by in 0..=by1 {
+            for bx in 0..=bx1 {
+                let pos = bx + by * slot.bxs as usize;
+                let mut bl = *slot.block_mob.add(pos);
+                while !bl.is_null() && blockcount < BL_LIST_MAX {
+                    bl_list[blockcount] = bl;
+                    blockcount += 1;
+                    bl = (*bl).next;
+                }
+                if blockcount >= BL_LIST_MAX {
+                    break 'outer;
+                }
+            }
+        }
+    }
+
+    if blockcount >= BL_LIST_MAX {
+        tracing::warn!("map_respawnmobs: bl_list overflow");
+    }
+
+    let mut return_count: c_int = 0;
+    for i in 0..blockcount {
+        let bl = bl_list[i];
+        // Live check: matches C `if (bl_list[i]->prev)` — dead mobs have prev=null.
+        if !(*bl).prev.is_null() {
+            return_count += func(bl, ap);
+        }
+    }
+    return_count
+}
+
+/// Same as `map_firstincell` but includes trap floor items.
+/// Replaces `map_firstincellwithtraps` in `c_src/map_server.c`.
+///
+/// # Safety
+/// - `map` must be initialized and `m` must be a valid map index.
+/// - Coords are clamped to map bounds if out of range.
+#[no_mangle]
+pub unsafe extern "C" fn map_firstincellwithtraps(
+    m: c_int,
+    x: c_int,
+    y: c_int,
+    bl_type: c_int,
+) -> *mut BlockList {
+    if m < 0 || map.is_null() {
+        return ptr::null_mut();
+    }
+    let m_idx = m as usize;
+    if m_idx >= MAP_SLOTS {
+        return ptr::null_mut();
+    }
+    let slot = &*map.add(m_idx);
+    if slot.registry.is_null() {
+        return ptr::null_mut();
+    }
+
+    let x = x.clamp(0, slot.xs as c_int - 1);
+    let y = y.clamp(0, slot.ys as c_int - 1);
+    let pos = (x as usize / BLOCK_SIZE) + (y as usize / BLOCK_SIZE) * slot.bxs as usize;
+
+    // Search non-mob chain — all BL_ITEM entities returned regardless of trap type.
+    if (bl_type & !(crate::game::mob::BL_MOB)) != 0 {
+        let mut bl = *slot.block.add(pos);
+        while !bl.is_null() {
+            let b = &*bl;
+            if (b.bl_type as c_int & bl_type) != 0
+                && b.x as c_int == x
+                && b.y as c_int == y
+            {
+                return bl;
+            }
+            bl = b.next;
+        }
+    }
+
+    // Search mob chain
+    if (bl_type & crate::game::mob::BL_MOB) != 0 {
+        let result = first_mob_in_cell(slot, pos, x, y);
+        if !result.is_null() {
+            return result;
+        }
+    }
+
+    ptr::null_mut()
 }

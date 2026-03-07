@@ -21,11 +21,10 @@ use super::packet::{
 
 // ─── C FFI declarations ───────────────────────────────────────────────────────
 
+use crate::game::map_server::sql_handle;
+
 extern "C" {
     // SQL
-    #[link_name = "sql_handle"]
-    static sql_handle: *mut Sql;
-
     fn Sql_Query(handle: *mut Sql, fmt: *const c_char, ...) -> c_int;
     fn Sql_NextRow(handle: *mut Sql) -> c_int;
     fn Sql_FreeResult(handle: *mut Sql);

@@ -60,11 +60,14 @@ fn main() {
     }
     deps_build.compile("deps_c");
 
-    // Compile map_game C files (sl_compat.c, map_server.c) — game logic that
+    // Compile map_game C files (sl_compat.c, map_server_stubs.c) — game logic that
     // Rust map_server links against. Needs LuaJIT and MySQL headers.
+    // map_server.c has been deleted; its globals (sql_handle, char_fd, map_fd,
+    // userlist, auth_n) now live in src/game/map_server.rs as #[no_mangle] statics.
+    // map_server_stubs.c contains the remaining live C functions (Phase 3 TODO items).
     let mut map_game_build = cc::Build::new();
     map_game_build
-        .files(&["c_src/map_server.c", "c_src/sl_compat.c", "c_src/rust_shims.c", "c_src/rust_shims_map.c"])
+        .files(&["c_src/map_server_stubs.c", "c_src/sl_compat.c", "c_src/rust_shims.c", "c_src/rust_shims_map.c"])
         .include("c_src")
         .include("c_deps")
         .include("/usr/include/mysql")
@@ -99,7 +102,7 @@ fn main() {
     // Re-run triggers
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=c_src/config.c");
-    println!("cargo:rerun-if-changed=c_src/map_server.c");
+    println!("cargo:rerun-if-changed=c_src/map_server_stubs.c");
     println!("cargo:rerun-if-changed=c_src/sl_compat.c");
     println!("cargo:rerun-if-changed=c_src/rust_shims.c");
     println!("cargo:rerun-if-changed=c_src/rust_shims_map.c");

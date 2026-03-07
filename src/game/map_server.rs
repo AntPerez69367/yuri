@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{c_char, c_ulong, c_void};
-use std::os::raw::{c_int, c_uint};
+use std::os::raw::{c_int, c_uchar, c_uint, c_ushort};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::database::{blocking_run, blocking_run_async, get_pool};
@@ -28,11 +28,13 @@ extern "C" {
     fn rust_session_get_eof(fd: c_int) -> c_int;
     fn rust_session_get_client_ip(fd: c_int) -> c_uint;
     fn rust_session_set_eof(fd: c_int, val: c_int);
+    fn rust_session_get_data(fd: c_int) -> *mut MapSessionData;
+
+    // fd_max — max file-descriptor index; defined in map_server binary (core.c equivalent).
+    static fd_max: c_int;
 
     // encrypt — C function in net_crypt.c
     fn encrypt(fd: c_int) -> c_int;
-
-    static char_fd: c_int;
 
     // sl_doscript_blargs — Lua call from C
     fn sl_doscript_blargs(
@@ -46,7 +48,7 @@ extern "C" {
     fn rust_boarddb_script(id: c_int) -> c_int;
     fn rust_boarddb_yname(id: c_int) -> *mut c_char;
 
-    // game-global registry reader — map_server.c
+    // game-global registry reader — still in map_server_stubs.c
     fn map_readglobalgamereg(attrname: *const c_char) -> c_int;
 
     // sl_exec (= rust_sl_exec) — scripting.h
@@ -54,8 +56,6 @@ extern "C" {
     fn sl_exec(user: *mut c_void, code: *mut c_char);
 
     // SQL C FFI (mirrors pc.rs pub extern "C" block).
-    #[link_name = "sql_handle"]
-    static sql_handle: *mut Sql;
     fn Sql_Query(self_: *mut Sql, query: *const c_char, ...) -> c_int;
     fn Sql_FreeResult(self_: *mut Sql);
     fn Sql_EscapeString(self_: *mut Sql, out_to: *mut c_char, from: *const c_char) -> usize;
@@ -76,6 +76,268 @@ extern "C" {
     fn SqlStmt_Free(self_: *mut SqlStmt);
     // The C macro SqlStmt_ShowDebug(stmt) expands to SqlStmt_ShowDebug_(stmt, __FILE__, __LINE__).
     fn SqlStmt_ShowDebug_(stmt: *mut SqlStmt, file: *const c_char, line: c_ulong);
+}
+
+// ---------------------------------------------------------------------------
+// In-game time globals — ported from `c_src/map_server.c`.
+//
+// These are exported with `#[no_mangle]` so that C translation units that
+// reference `cur_time`, `cur_day`, `cur_season`, `cur_year`, and `old_time`
+// via the `extern int` declarations in `map_server.h` continue to link.
+// ---------------------------------------------------------------------------
+
+/// Current in-game hour (0–23).  Incremented by `change_time_char` every game hour.
+#[no_mangle]
+pub static mut cur_time: c_int = 0;
+
+/// Current in-game day within the current season (1–91).
+#[no_mangle]
+pub static mut cur_day: c_int = 0;
+
+/// Current in-game season (1–4).
+#[no_mangle]
+pub static mut cur_season: c_int = 0;
+
+/// Current in-game year.
+#[no_mangle]
+pub static mut cur_year: c_int = 0;
+
+/// Previous in-game hour; used by `map_weather` to detect hour transitions.
+#[no_mangle]
+pub static mut old_time: c_int = 0;
+
+// ---------------------------------------------------------------------------
+// Network / session globals — moved from `c_src/map_server.c`.
+//
+// These are `#[no_mangle]` so that C TUs (sl_compat.c, map_server_stubs.c)
+// that reference them via the extern declarations in mmo.h / map_server.h
+// continue to link against the single Rust-owned instance.
+// ---------------------------------------------------------------------------
+
+/// File descriptor for the char-server connection.
+/// Written by `map_char.c` / the Rust map_char handler on connect.
+/// Declared `extern int char_fd` in `c_src/mmo.h`.
+#[no_mangle]
+pub static mut char_fd: c_int = 0;
+
+/// File descriptor for the map network socket (map listen port).
+/// Declared `extern int map_fd` in `c_src/map_server.h`.
+#[no_mangle]
+pub static mut map_fd: c_int = 0;
+
+/// Legacy C MySQL handle — allocated by `Sql_Malloc()` / `Sql_Connect()` in
+/// `src/bin/map_server.rs` and also used by sl_compat.c C code.
+/// Declared `extern Sql* sql_handle` in `c_src/map_server.h` / `mmo.h`.
+#[no_mangle]
+pub static mut sql_handle: *mut Sql = std::ptr::null_mut();
+
+/// Online user list (count + per-slot char-id array).
+/// Declared `extern struct userlist_data userlist` in `c_src/map_server.h`.
+/// `userlist_data` is `{ unsigned int user_count; unsigned int user[10000]; }`.
+/// We store it as a flat C-layout array; the Rust side only reads `user_count`.
+#[repr(C)]
+pub struct UserlistData {
+    pub user_count: c_uint,
+    pub user: [c_uint; 10000],
+}
+
+#[no_mangle]
+pub static mut userlist: UserlistData = UserlistData {
+    user_count: 0,
+    user: [0u32; 10000],
+};
+
+/// Authentication-attempt counter.
+/// Declared `extern int auth_n` in `c_src/map_server.h`.
+#[no_mangle]
+pub static mut auth_n: c_int = 0;
+
+// ---------------------------------------------------------------------------
+// Floor item ID pool — mirrors `object[]` / `object_n` in C map_server.c
+// ---------------------------------------------------------------------------
+
+/// Upper bound on simultaneously active floor items.
+/// Matches `MAX_FLOORITEM` in `c_src/map_server.h`.
+const MAX_FLOORITEM: usize = 100_000_000;
+
+/// Bitmap tracking which floor item slots are in use (1 = occupied, 0 = free).
+/// Allocated on first `map_additem` call; freed by `map_clritem`.
+static mut OBJECT: *mut u8 = std::ptr::null_mut();
+
+/// Current allocated length of `OBJECT`.
+static mut OBJECT_N: usize = 0;
+
+/// Free all floor item ID slots and release the backing memory.
+///
+/// Replaces `map_clritem` in `c_src/map_server.c`.
+///
+/// # Safety
+/// Must be called on the game thread. `OBJECT` must be null or a pointer
+/// previously allocated by `map_additem` via `libc::realloc`/`libc::calloc`.
+#[no_mangle]
+pub unsafe extern "C" fn map_clritem() {
+    if !OBJECT.is_null() {
+        // OBJECT was allocated via libc::calloc / libc::realloc — match with libc::free.
+        libc::free(OBJECT as *mut libc::c_void);
+        OBJECT = std::ptr::null_mut();
+    }
+    OBJECT_N = 0;
+}
+
+/// Remove a floor item from the world by its ID.
+///
+/// Unlinks from the ID database and block grid, then frees the `FloorItemData`
+/// node. The node was allocated with `libc::calloc` by `map_additem` callers
+/// (see `mob.rs`, `pc.rs`), so it is freed with `libc::free`.
+///
+/// Replaces `map_delitem` in `c_src/map_server.c`.
+///
+/// # Safety
+/// `id` must be a valid floor item ID currently registered in the ID database.
+#[no_mangle]
+pub unsafe extern "C" fn map_delitem(id: c_uint) {
+    use crate::ffi::block::map_delblock;
+    let bl = map_id2bl(id) as *mut BlockList;
+    if bl.is_null() {
+        return;
+    }
+    map_deliddb(bl);
+    map_delblock(bl);
+    // FloorItemData nodes are always allocated via libc::calloc (mob.rs, pc.rs).
+    libc::free(bl as *mut libc::c_void);
+
+    let idx = id.wrapping_sub(crate::game::mob::FLOORITEM_START_NUM) as usize;
+    if !OBJECT.is_null() && idx < OBJECT_N {
+        *OBJECT.add(idx) = 0;
+    }
+}
+
+/// Assign an ID to a new floor item and insert it into the world.
+///
+/// Scans the bitmap for the first free slot, grows the bitmap if necessary,
+/// assigns the item's ID, then registers it in the ID database and block grid.
+///
+/// Replaces `map_additem` in `c_src/map_server.c`.
+///
+/// # Safety
+/// - `bl` must be a valid non-null pointer to a `FloorItemData` (cast to `BlockList`),
+///   allocated via `libc::calloc`, with `m`/`x`/`y` already set.
+/// - Must be called on the game thread (single-threaded game loop).
+#[no_mangle]
+pub unsafe extern "C" fn map_additem(bl: *mut BlockList) {
+    use crate::ffi::block::map_addblock;
+
+    // Find first free slot.
+    let mut i = 0usize;
+    while !OBJECT.is_null() && i < OBJECT_N && *OBJECT.add(i) != 0 {
+        i += 1;
+    }
+
+    if i >= MAX_FLOORITEM {
+        tracing::error!("map_additem: floor item capacity exceeded ({MAX_FLOORITEM})");
+        return;
+    }
+
+    // Grow bitmap if the free slot is beyond the current allocation.
+    if i >= OBJECT_N {
+        let new_n = i + 256;
+        if OBJECT_N == 0 {
+            // First allocation: calloc for a zeroed array.
+            OBJECT = libc::calloc(new_n, 1) as *mut u8;
+        } else {
+            // Grow with realloc; zero the newly added bytes.
+            let old_n = OBJECT_N;
+            let old_ptr = OBJECT as *mut libc::c_void;
+            OBJECT = libc::realloc(old_ptr, new_n) as *mut u8;
+            if !OBJECT.is_null() {
+                // Zero the newly appended bytes (realloc does not zero them).
+                std::ptr::write_bytes(OBJECT.add(old_n), 0, new_n - old_n);
+            } else {
+                // realloc failed — free original allocation to avoid leak.
+                libc::free(old_ptr);
+            }
+        }
+        if OBJECT.is_null() {
+            OBJECT_N = 0;
+            tracing::error!("map_additem: realloc failed — item pool cleared");
+            return;
+        }
+        OBJECT_N = new_n;
+    }
+
+    *OBJECT.add(i) = 1;
+    let id = (i as u32).wrapping_add(crate::game::mob::FLOORITEM_START_NUM);
+    (*bl).id      = id;
+    (*bl).bl_type = crate::game::mob::BL_ITEM as c_uchar;
+    (*bl).prev    = std::ptr::null_mut();
+    (*bl).next    = std::ptr::null_mut();
+    map_addiddb(bl);
+    map_addblock(bl);
+}
+
+/// Acquire the deferred-free lock.
+///
+/// The original C implementation was commented out entirely; call sites are
+/// also commented out. This is a no-op that returns 0 for ABI compatibility.
+///
+/// Replaces `map_freeblock_lock` stub in `c_src/map_server.c`.
+#[no_mangle]
+pub unsafe extern "C" fn map_freeblock_lock() -> c_int {
+    0
+}
+
+/// Release the deferred-free lock.
+///
+/// The original C implementation was commented out entirely; call sites are
+/// also commented out. This is a no-op that returns 0 for ABI compatibility.
+///
+/// Replaces `map_freeblock_unlock` stub in `c_src/map_server.c`.
+#[no_mangle]
+pub unsafe extern "C" fn map_freeblock_unlock() -> c_int {
+    0
+}
+
+/// Set the IP address and port for a map slot.
+///
+/// Returns 0 on success, 1 if `id` is out of range.
+///
+/// Replaces `map_setmapip` in `c_src/map_server.c`.
+///
+/// # Safety
+/// `crate::ffi::map_db::map` must be a valid initialized pointer (non-null, pointing to at
+/// least `MAP_SLOTS` slots). Call only after `rust_map_init` has completed.
+#[no_mangle]
+pub unsafe extern "C" fn map_setmapip(id: c_int, ip: c_uint, port: c_ushort) -> c_int {
+    if id < 0 || id as usize >= crate::database::map_db::MAP_SLOTS {
+        return 1;
+    }
+    (*crate::ffi::map_db::map.add(id as usize)).ip = ip;
+    (*crate::ffi::map_db::map.add(id as usize)).port = port;
+    0
+}
+
+/// Free a block-list pointer.
+///
+/// The original C implementation was commented out (the entire freeblock/lock/unlock
+/// block is inside `/* ... */` in `c_src/map_server.c`).  Since `map_freeblock_lock`
+/// and `map_freeblock_unlock` are no-op stubs, the lock counter is always 0, so the
+/// deferred-free path is unreachable.  This implementation matches the C behaviour for
+/// lock == 0: free the pointer immediately with `libc::free` (matching the C `FREE`
+/// macro which expands to `free()`).
+///
+/// Returns 0 (the lock value), matching the original C return convention.
+///
+/// Provides the ABI symbol declared in `c_src/map_server.h`.
+///
+/// # Safety
+/// `bl`, if non-null, must have been allocated by the C heap allocator (`malloc`/`calloc`/
+/// `realloc`) and must not be freed again after this call.
+#[no_mangle]
+pub unsafe extern "C" fn map_freeblock(bl: *mut c_void) -> c_int {
+    if !bl.is_null() {
+        libc::free(bl);
+    }
+    0 // lock is always 0 (stubs); matches C `return bl_free_lock`
 }
 
 // ---------------------------------------------------------------------------
@@ -1209,4 +1471,1209 @@ unsafe fn libc_strlen(s: *const c_char) -> usize {
 
 extern "C" {
     fn clif_Hacker(name: *mut c_char, reason: *const c_char) -> c_int;
+}
+
+// ---------------------------------------------------------------------------
+// Language / message table — map_msg[] and lang_read
+// ---------------------------------------------------------------------------
+//
+// Previously defined in `c_src/map_server.c`.  C callers access `map_msg[]`
+// via the `extern struct map_msg_data { … } map_msg[MSG_MAX]` declaration in
+// `c_src/map_server.h`.
+
+/// Number of named message slots.  Matches `MSG_MAX` in `c_src/map_server.h`.
+///
+/// Enum values (0-based): MAP_WHISPFAIL…MAP_ERRSUMMON = 29 entries, then MSG_MAX = 30.
+pub const MSG_MAX: usize = 30;
+
+/// One message entry in the language table.
+///
+/// Layout must exactly match `struct map_msg_data` in `c_src/map_server.h`:
+/// ```c
+/// struct map_msg_data { char message[256]; int len; };
+/// ```
+#[repr(C)]
+pub struct MapMsgData {
+    pub message: [libc::c_char; 256],
+    pub len:     c_int,
+}
+
+/// The global language message table.
+///
+/// Exported as `map_msg` so C translation units that include `map_server.h`
+/// (`extern struct map_msg_data map_msg[MSG_MAX]`) link against this symbol.
+///
+/// Entries are populated by `lang_read`.  The `message` field is a
+/// null-terminated, fixed-length C string stored directly in the struct
+/// (no heap allocation); `len` caches `strlen(message)` capped at 255.
+#[no_mangle]
+pub static mut map_msg: [MapMsgData; MSG_MAX] = {
+    // const-initialise all slots to zero / empty string.
+    const ZERO: MapMsgData = MapMsgData { message: [0; 256], len: 0 };
+    [ZERO; MSG_MAX]
+};
+
+/// Mapping from the string key used in the lang file to the `map_msg` slot index.
+///
+/// Mirrors the `map_msg_db[]` table inside the C `lang_read` function.
+static LANG_KEY_MAP: &[(&str, usize)] = &[
+    ("MAP_WHISPFAIL",  0),
+    ("MAP_ERRGHOST",   1),
+    ("MAP_ERRITMLEVEL", 2),
+    ("MAP_ERRITMMIGHT", 3),
+    ("MAP_ERRITMGRACE", 4),
+    ("MAP_ERRITMWILL",  5),
+    ("MAP_ERRITMSEX",   6),
+    ("MAP_ERRITMFULL",  7),
+    ("MAP_ERRITMMAX",   8),
+    ("MAP_ERRITMPATH",  9),
+    ("MAP_ERRITMMARK",  10),
+    ("MAP_ERRITM2H",    11),
+    ("MAP_ERRMOUNT",    12),
+    ("MAP_EQHELM",      13),
+    ("MAP_EQWEAP",      14),
+    ("MAP_EQARMOR",     15),
+    ("MAP_EQSHIELD",    16),
+    ("MAP_EQLEFT",      17),
+    ("MAP_EQRIGHT",     18),
+    ("MAP_EQSUBLEFT",   19),
+    ("MAP_EQSUBRIGHT",  20),
+    ("MAP_EQFACEACC",   21),
+    ("MAP_EQCROWN",     22),
+    ("MAP_EQMANTLE",    23),
+    ("MAP_EQNECKLACE",  24),
+    ("MAP_EQBOOTS",     25),
+    ("MAP_EQCOAT",      26),
+    ("MAP_ERRVITA",     27),
+    ("MAP_ERRMANA",     28),
+    ("MAP_ERRSUMMON",   29),
+];
+
+/// Parse the language config file and populate `map_msg[]`.
+///
+/// The file format is line-based:
+/// - Lines starting with `//` are comments and are skipped.
+/// - Non-comment lines are parsed as `KEY: value` (separated by `: `).
+/// - The key is matched case-insensitively against the known `MAP_*`/`MSG_*` names.
+/// - Matching entries are written into `map_msg[index].message` (truncated to 255
+///   bytes) and `map_msg[index].len` is set accordingly.
+///
+/// Replaces `lang_read` in `c_src/map_server.c`.
+///
+/// Returns 0 on success, 1 if the file cannot be opened.
+///
+/// # Safety
+/// `cfg_file` must be a valid, non-null, null-terminated C string.  This
+/// function must only be called from the game thread (no concurrent access to
+/// `map_msg`).
+#[no_mangle]
+pub unsafe extern "C" fn lang_read(cfg_file: *const c_char) -> c_int {
+    use std::io::BufRead as _;
+
+    let path = std::ffi::CStr::from_ptr(cfg_file).to_string_lossy();
+
+    let file = match std::fs::File::open(path.as_ref()) {
+        Ok(f) => f,
+        Err(_) => {
+            println!("CFG_ERR: Language file ({path}) not found.");
+            return 1;
+        }
+    };
+
+    for line in std::io::BufReader::new(file).lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+
+        // Skip comment lines.
+        if line.starts_with("//") {
+            continue;
+        }
+
+        // Parse `KEY: value` — split on the first `: ` only.
+        let Some(colon_pos) = line.find(": ") else { continue };
+        let key = &line[..colon_pos];
+        // Value is everything after `: `, stripping any trailing \r\n.
+        let value = line[colon_pos + 2..].trim_end_matches(['\r', '\n']);
+
+        // Look up the key (case-insensitive).
+        let key_up = key.to_ascii_uppercase();
+        let Some(&(_, idx)) = LANG_KEY_MAP.iter().find(|(k, _)| *k == key_up.as_str()) else {
+            continue;
+        };
+
+        // Copy the value into the fixed message buffer, truncating at 255 bytes.
+        let bytes = value.as_bytes();
+        let copy_len = bytes.len().min(255);
+        let slot = &mut map_msg[idx];
+        // Zero the whole buffer first (matches strncpy semantics for short strings).
+        slot.message = [0; 256];
+        for (i, &b) in bytes[..copy_len].iter().enumerate() {
+            slot.message[i] = b as libc::c_char;
+        }
+        slot.message[copy_len] = 0; // null terminator (already zero, but be explicit)
+        slot.len = copy_len as c_int;
+    }
+
+    println!("[map] [lang_read] file={path}");
+    0
+}
+
+// ---------------------------------------------------------------------------
+// In-game time functions — ported from `c_src/map_server.c`.
+// ---------------------------------------------------------------------------
+
+/// Advance the in-game clock by one hour and broadcast the new time to all
+/// connected players.
+///
+/// Call order: `cur_time` wraps 0–23; each full day advances `cur_day` (1–91);
+/// each full season (91 days) advances `cur_season` (1–4); each four seasons
+/// advances `cur_year`.  After updating globals the new values are written to
+/// the `Time` table and `clif_sendtime` is called for every active session.
+///
+/// Replaces `change_time_char` in `c_src/map_server.c`.
+///
+/// # Safety
+/// Must be called on the game thread.  `sql_handle` must be a valid live
+/// connection.  `fd_max` must reflect the current session table bounds.
+#[no_mangle]
+pub unsafe extern "C" fn change_time_char(_id: c_int, _n: c_int) -> c_int {
+    cur_time += 1;
+
+    if cur_time == 24 {
+        cur_time = 0;
+        cur_day += 1;
+        if cur_day == 92 {
+            cur_day = 1;
+            cur_season += 1;
+            if cur_season == 5 {
+                cur_season = 1;
+                cur_year += 1;
+            }
+        }
+    }
+
+    // Broadcast updated time to all active sessions.
+    for i in 0..fd_max {
+        if rust_session_exists(i) != 0 {
+            let sd = rust_session_get_data(i);
+            if !sd.is_null() {
+                crate::game::map_parse::player_state::clif_sendtime(sd);
+            }
+        }
+    }
+
+    // Persist updated time to the database.
+    if SQL_ERROR == Sql_Query(
+        sql_handle,
+        c"UPDATE `Time` SET `TimHour`='%d', `TimDay`='%d', `TimSeason`='%d', `TimYear`='%d'".as_ptr(),
+        cur_time, cur_day, cur_season, cur_year,
+    ) {
+        Sql_ShowDebug_(sql_handle, c"map_server.rs".as_ptr(), line!() as c_ulong);
+    }
+
+    0
+}
+
+/// Load in-game time from the database and initialise `cur_time`, `cur_day`,
+/// `cur_season`, `cur_year`, and `old_time`.
+///
+/// Reads the first row of the `Time` table.  If the query fails or no row is
+/// returned the globals are left at their previous values (zero on startup).
+///
+/// Replaces `get_time_thing` in `c_src/map_server.c`.
+///
+/// # Safety
+/// Must be called on the game thread after `sql_handle` is live.
+#[no_mangle]
+pub unsafe extern "C" fn get_time_thing() -> c_int {
+    let stmt = SqlStmt_Malloc(sql_handle);
+    if stmt.is_null() {
+        SqlStmt_ShowDebug_(stmt, c"map_server.rs".as_ptr(), line!() as c_ulong);
+        return 0;
+    }
+
+    let mut time_val:   c_int = 0;
+    let mut day_val:    c_int = 0;
+    let mut season_val: c_int = 0;
+    let mut year_val:   c_int = 0;
+
+    if SQL_ERROR == SqlStmt_Prepare(
+        stmt,
+        c"SELECT `TimHour`, `TimDay`, `TimSeason`, `TimYear` FROM `Time`".as_ptr(),
+    ) || SQL_ERROR == SqlStmt_Execute(stmt)
+      || SQL_ERROR == SqlStmt_BindColumn(
+          stmt, 0, SqlDataType::SqlDtInt,
+          std::ptr::addr_of_mut!(time_val) as *mut c_void,
+          0, std::ptr::null_mut(), std::ptr::null_mut(),
+      )
+      || SQL_ERROR == SqlStmt_BindColumn(
+          stmt, 1, SqlDataType::SqlDtInt,
+          std::ptr::addr_of_mut!(day_val) as *mut c_void,
+          0, std::ptr::null_mut(), std::ptr::null_mut(),
+      )
+      || SQL_ERROR == SqlStmt_BindColumn(
+          stmt, 2, SqlDataType::SqlDtInt,
+          std::ptr::addr_of_mut!(season_val) as *mut c_void,
+          0, std::ptr::null_mut(), std::ptr::null_mut(),
+      )
+      || SQL_ERROR == SqlStmt_BindColumn(
+          stmt, 3, SqlDataType::SqlDtInt,
+          std::ptr::addr_of_mut!(year_val) as *mut c_void,
+          0, std::ptr::null_mut(), std::ptr::null_mut(),
+      )
+    {
+        SqlStmt_ShowDebug_(stmt, c"map_server.rs".as_ptr(), line!() as c_ulong);
+        SqlStmt_Free(stmt);
+        return 0;
+    }
+
+    if SQL_SUCCESS == SqlStmt_NextRow(stmt) {
+        old_time   = time_val;
+        cur_time   = time_val;
+        cur_day    = day_val;
+        cur_season = season_val;
+        cur_year   = year_val;
+    }
+
+    SqlStmt_Free(stmt);
+    0
+}
+
+/// Record the current UNIX timestamp as the server start time in the `UpTime`
+/// table (row `UtmId = 3`).
+///
+/// Deletes the existing row then inserts the current `time(NULL)` value.
+///
+/// Replaces `uptime` in `c_src/map_server.c`.
+///
+/// # Safety
+/// Must be called on the game thread after `sql_handle` is live.
+#[no_mangle]
+pub unsafe extern "C" fn uptime() -> c_int {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as c_int)
+        .unwrap_or(0);
+
+    if SQL_ERROR == Sql_Query(
+        sql_handle,
+        c"DELETE FROM `UpTime` WHERE `UtmId` = '3'".as_ptr(),
+    ) {
+        Sql_ShowDebug_(sql_handle, c"map_server.rs".as_ptr(), line!() as c_ulong);
+    }
+
+    if SQL_ERROR == Sql_Query(
+        sql_handle,
+        c"INSERT INTO `UpTime`(`UtmId`, `UtmValue`) VALUES('3', '%d')".as_ptr(),
+        now,
+    ) {
+        Sql_ShowDebug_(sql_handle, c"map_server.rs".as_ptr(), line!() as c_ulong);
+    }
+
+    0
+}
+
+// ---------------------------------------------------------------------------
+// objectFlags — static object collision-flag table loaded from static_objects.tbl
+//
+// `objectFlags` is a heap-allocated byte array indexed by a tile/object ID.
+// Each byte encodes directional movement flags (OBJ_UP / OBJ_RIGHT / OBJ_DOWN /
+// OBJ_LEFT) for its corresponding object.  The C extern declaration in
+// `c_src/map_server.h` (`extern unsigned char *objectFlags;`) is satisfied by
+// the `#[no_mangle]` static below; `sl_compat.c` indexes it directly.
+// ---------------------------------------------------------------------------
+
+/// Pointer to the static object flag table allocated by `object_flag_init`.
+///
+/// C extern: `extern unsigned char *objectFlags;` in `map_server.h`.
+/// `sl_compat.c` reads `objectFlags[object]` for directional collision checks.
+#[no_mangle]
+pub static mut objectFlags: *mut u8 = std::ptr::null_mut();
+
+/// Load the static object flag table from `static_objects.tbl`.
+///
+/// Reads a binary file whose format is:
+/// - 4 bytes: total object count (`num`, little-endian `i32`)
+/// - 1 byte: initial flag (consumed before the loop)
+/// - Then `num` records, each:
+///   - 1 byte: count of tile IDs that follow
+///   - `count` × 2 bytes: tile IDs
+///   - 5 bytes: reserved/padding
+///   - 1 byte: flag byte for this object
+///
+/// Allocates `objectFlags` with `num + 1` bytes via `libc::calloc`.
+/// The actual per-object flag assignment is intentionally left commented out,
+/// preserving the original C behaviour (table allocated but entries stay zero).
+///
+/// Replaces `object_flag_init` in `c_src/map_server.c`.
+///
+/// # Safety
+/// Must be called on the game thread before any `sl_compat.c` function that
+/// reads `objectFlags`.  `data_dir` (C global from `config.c`) must be valid
+/// and point to a null-terminated string.
+#[no_mangle]
+pub unsafe extern "C" fn object_flag_init() -> c_int {
+    // data_dir is a C global (char*) defined in config.c.
+    extern "C" {
+        static data_dir: *const c_char;
+    }
+
+    let filename = b"static_objects.tbl\0";
+    let dir_cstr = std::ffi::CStr::from_ptr(data_dir);
+    let dir_bytes = dir_cstr.to_bytes();
+
+    // Build full path: data_dir + filename (without the extra NUL added by CString).
+    let mut path_bytes: Vec<u8> = Vec::with_capacity(dir_bytes.len() + filename.len() - 1);
+    path_bytes.extend_from_slice(dir_bytes);
+    path_bytes.extend_from_slice(&filename[..filename.len() - 1]);
+    let path_cstr = match std::ffi::CString::new(path_bytes) {
+        Ok(s) => s,
+        Err(_) => {
+            eprintln!("[map] [object_flag_init] path contains interior nul byte");
+            std::process::exit(1);
+        }
+    };
+
+    let path_str = path_cstr.to_string_lossy();
+    println!(
+        "[map] [object_flag_init] reading static obj table path={}",
+        path_str
+    );
+
+    let fi = libc::fopen(path_cstr.as_ptr(), b"rb\0".as_ptr().cast());
+    if fi.is_null() {
+        eprintln!(
+            "[map] [error] cannot read static object table path={}",
+            path_str
+        );
+        std::process::exit(1);
+    }
+
+    let mut num: i32 = 0;
+    libc::fread(std::ptr::addr_of_mut!(num).cast(), 4, 1, fi);
+
+    // Allocate objectFlags with num+1 bytes, zero-initialised (matches C CALLOC).
+    objectFlags = libc::calloc((num as usize) + 1, 1).cast();
+
+    let mut flag: i8 = 0;
+    libc::fread(std::ptr::addr_of_mut!(flag).cast(), 1, 1, fi);
+
+    let mut z: i32 = 1;
+    while libc::feof(fi) == 0 {
+        let mut count: i8 = 0;
+        libc::fread(std::ptr::addr_of_mut!(count).cast(), 1, 1, fi);
+        let mut remaining = count;
+        while remaining != 0 {
+            let mut tile: i16 = 0;
+            libc::fread(std::ptr::addr_of_mut!(tile).cast(), 2, 1, fi);
+            remaining -= 1;
+        }
+
+        let mut nothing = [0u8; 5];
+        libc::fread(nothing.as_mut_ptr().cast(), 5, 1, fi);
+        libc::fread(std::ptr::addr_of_mut!(flag).cast(), 1, 1, fi);
+        // objectFlags[z as usize] = flag as u8;  // intentionally not assigned, matching C
+        z += 1;
+    }
+
+    libc::fclose(fi);
+    0
+}
+
+// ---------------------------------------------------------------------------
+// map_src linked-list — ported from `c_src/map_server.c`
+//
+// The C implementation used a `struct map_src_list` singly-linked list with
+// heap-allocated nodes.  Replaced here with a `Vec<MapSrcEntry>` for safety.
+// `map_src_clear` frees the list; `map_src_add` appends one parsed entry.
+//
+// These functions are declared in `c_src/map_server.h` and may be called from
+// C (currently unused in the codebase, but retained for ABI completeness).
+// ---------------------------------------------------------------------------
+
+// Retained for ABI compatibility — map_src_add/map_src_clear are declared in
+// map_server.h; callers may be external or future script paths.
+#[allow(dead_code)]
+/// One entry in the map source list (equivalent to C `struct map_src_list`).
+#[derive(Debug)]
+struct MapSrcEntry {
+    id: i32,
+    pvp: i32,
+    spell: i32,
+    sweeptime: u32,
+    title: [u8; 64],
+    cantalk: u8,
+    show_ghosts: u8,
+    region: u8,
+    indoor: u8,
+    warpout: u8,
+    bind: u8,
+    bgm: u16,
+    bgmtype: u16,
+    light: u16,
+    weather: u16,
+    mapfile: Vec<u8>,
+}
+
+// Retained for ABI compatibility — map_src_add/map_src_clear are declared in
+// map_server.h; callers may be external or future script paths.
+#[allow(dead_code)]
+/// The parsed map source list, replacing the C `map_src_first` / `map_src_last`
+/// singly-linked list.
+static mut MAP_SRC_LIST: Vec<MapSrcEntry> = Vec::new();
+
+/// Free all entries in the map source list.
+///
+/// Equivalent to the C `map_src_clear()` which walked the linked list and
+/// freed each node and its `mapfile` string.  Dropping `MAP_SRC_LIST` via
+/// `clear()` releases all `MapSrcEntry` allocations automatically.
+///
+/// Replaces `map_src_clear` in `c_src/map_server.c`.
+///
+/// # Safety
+/// Must be called on the game thread.  No other thread may concurrently access
+/// `MAP_SRC_LIST`.
+#[no_mangle]
+pub unsafe extern "C" fn map_src_clear() -> c_int {
+    MAP_SRC_LIST.clear();
+    0
+}
+
+/// Parse one CSV line and append it to the map source list.
+///
+/// Expected format (matching the C `sscanf` format string):
+/// ```text
+/// map_id,title,bgm,pvp,spell,light,weather,sweeptime,cantalk,showghosts,
+/// region,indoor, warpout,bind,mapfile
+/// ```
+/// (Note the C format has a leading space before `warpout`: `", %c"`.)
+///
+/// Returns `0` on success, `-1` if fewer than 13 fields can be parsed.
+///
+/// Replaces `map_src_add` in `c_src/map_server.c`.
+///
+/// # Safety
+/// `r1` must be a valid, non-null, null-terminated C string.
+/// Must be called on the game thread.
+#[no_mangle]
+pub unsafe extern "C" fn map_src_add(r1: *const c_char) -> c_int {
+    let line = std::ffi::CStr::from_ptr(r1).to_string_lossy();
+
+    // Split on commas, matching the C sscanf format (15 fields max).
+    // Format: map_id,title,bgm,pvp,spell,light,weather,sweeptime,
+    //         cantalk,showghosts,region,indoor, warpout,bind,mapfile
+    // The title field may contain spaces but not commas ([^,] in sscanf).
+    let parts: Vec<&str> = line.splitn(15, ',').collect();
+    if parts.len() < 13 {
+        return -1;
+    }
+
+    let map_id: i32 = match parts[0].trim().parse() {
+        Ok(v) => v,
+        Err(_) => return -1,
+    };
+    let map_title = parts[1];
+    let map_bgm: u16 = match parts[2].trim().parse() {
+        Ok(v) => v,
+        Err(_) => return -1,
+    };
+    let pvp: i32 = match parts[3].trim().parse() {
+        Ok(v) => v,
+        Err(_) => return -1,
+    };
+    let spell: i32 = match parts[4].trim().parse() {
+        Ok(v) => v,
+        Err(_) => return -1,
+    };
+    let light: u16 = match parts[5].trim().parse() {
+        Ok(v) => v,
+        Err(_) => return -1,
+    };
+    let weather: u16 = match parts[6].trim().parse() {
+        Ok(v) => v,
+        Err(_) => return -1,
+    };
+    let sweeptime: u32 = match parts[7].trim().parse() {
+        Ok(v) => v,
+        Err(_) => return -1,
+    };
+    // Single-character fields (%c in C sscanf) — read first byte only.
+    let cantalk    = parts[8].trim().as_bytes().first().copied().unwrap_or(0);
+    let showghosts = parts[9].trim().as_bytes().first().copied().unwrap_or(0);
+    let region     = parts[10].trim().as_bytes().first().copied().unwrap_or(0);
+    let indoor     = parts[11].trim().as_bytes().first().copied().unwrap_or(0);
+    // C format has a leading space before warpout: `", %c"` — trim handles it.
+    let warpout    = parts[12].trim().as_bytes().first().copied().unwrap_or(0);
+    if parts.len() < 14 {
+        return -1;
+    }
+    let bind       = parts[13].trim().as_bytes().first().copied().unwrap_or(0);
+    let map_file   = if parts.len() >= 15 { parts[14].trim() } else { "" };
+
+    let mut title_buf = [0u8; 64];
+    let title_bytes = map_title.as_bytes();
+    let copy_len = title_bytes.len().min(63);
+    title_buf[..copy_len].copy_from_slice(&title_bytes[..copy_len]);
+
+    let entry = MapSrcEntry {
+        id: map_id,
+        pvp,
+        spell,
+        sweeptime,
+        title: title_buf,
+        cantalk,
+        show_ghosts: showghosts,
+        region,
+        indoor,
+        warpout,
+        bind,
+        bgm: map_bgm,
+        bgmtype: 0, // not populated from CSV; C calloc'd struct also left this as 0
+        light,
+        weather,
+        mapfile: map_file.as_bytes().to_vec(),
+    };
+
+    MAP_SRC_LIST.push(entry);
+    0
+}
+
+// ---------------------------------------------------------------------------
+// gamereg — game-global registry (replaces `struct game_data gamereg` in C)
+//
+// `gamereg` is the server-wide key/value integer store backed by the
+// `GameRegistry<serverid>` table.  The C definition at the top of
+// `c_src/map_server.c` (`struct game_data gamereg;`) is deleted and replaced
+// by this `#[no_mangle]` Rust static so that both Rust and C (via
+// `map_readglobalgamereg`) link against a single symbol.
+// ---------------------------------------------------------------------------
+
+/// Capacity of the game-global registry.  Mirrors `MAX_GAMEREG` in `map_server.h`.
+const MAX_GAMEREG: usize = 5000;
+
+/// Mirrors `struct game_data` from `c_src/map_server.h`.
+/// Must be `#[repr(C)]` and match the C layout exactly.
+///
+/// ```c
+/// struct game_data {
+///     struct global_reg *registry;
+///     int registry_num;
+/// };
+/// ```
+#[repr(C)]
+pub struct GameData {
+    pub registry:     *mut crate::database::map_db::GlobalReg,
+    pub registry_num: c_int,
+}
+
+// SAFETY: `gamereg` is only accessed on the single-threaded game loop.
+// No Rust code takes shared references to it across threads.
+unsafe impl Send for GameData {}
+unsafe impl Sync for GameData {}
+
+/// The game-wide registry global.
+///
+/// Exported as `gamereg` so the remaining C function `map_readglobalgamereg`
+/// in `map_server.c` can access it without change.  Populated by
+/// `map_loadgameregistry` and mutated by `map_setglobalgamereg`.
+#[no_mangle]
+pub static mut gamereg: GameData = GameData {
+    registry:     std::ptr::null_mut(),
+    registry_num: 0,
+};
+
+/// Allocate a zeroed array of `GlobalReg` entries of the given length via the
+/// global allocator.  The caller is responsible for freeing via the same allocator.
+fn alloc_zeroed_gamereg_registry(len: usize) -> *mut crate::database::map_db::GlobalReg {
+    use crate::database::map_db::GlobalReg;
+    let layout = std::alloc::Layout::array::<GlobalReg>(len).unwrap();
+    let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
+    if ptr.is_null() {
+        std::alloc::handle_alloc_error(layout);
+    }
+    ptr as *mut GlobalReg
+}
+
+/// ASCII case-insensitive comparison of a `GlobalReg.str` field against a C string.
+///
+/// Returns `true` if the two null-terminated byte sequences are equal ignoring ASCII case.
+/// Equivalent to `strcasecmp` used in the C registry search loops.
+unsafe fn reg_str_eq(arr: &[i8; 64], cstr: *const c_char) -> bool {
+    if cstr.is_null() {
+        return false;
+    }
+    for i in 0..64usize {
+        let a = arr[i] as u8;
+        let b = *cstr.add(i) as u8;
+        if a.to_ascii_lowercase() != b.to_ascii_lowercase() {
+            return false;
+        }
+        if a == 0 {
+            return true; // both null-terminated at the same position
+        }
+    }
+    false
+}
+
+/// Copy a C string into a `[i8; 64]` field, null-terminating. Truncates at 63 chars.
+unsafe fn copy_cstr_to_reg_str(dest: &mut [i8; 64], src: *const c_char) {
+    let mut i = 0usize;
+    while i < 63 {
+        let b = *src.add(i) as i8;
+        dest[i] = b;
+        if b == 0 {
+            return;
+        }
+        i += 1;
+    }
+    dest[63] = 0; // ensure null termination
+}
+
+// ---------------------------------------------------------------------------
+// map_registrysave — persist one map registry slot to the `MapRegistry` table.
+//
+// Mirrors `map_registrysave` in `c_src/map_server.c`.
+//
+// Logic:
+//   - SELECT MrgPosition WHERE MrgMapId=m AND MrgIdentifier=str → save_id (-1 if not found)
+//   - If found:
+//       val==0 → DELETE WHERE MrgMapId=m AND MrgIdentifier=str
+//       val!=0 → UPDATE SET MrgIdentifier=str, MrgValue=val WHERE MrgMapId=m AND MrgPosition=save_id
+//   - If not found:
+//       val>0  → INSERT (MrgMapId, MrgIdentifier, MrgValue, MrgPosition)
+// ---------------------------------------------------------------------------
+
+/// Persist one map registry slot at index `i` on map `m` to the `MapRegistry` table.
+///
+/// Replaces `map_registrysave` in `c_src/map_server.c`.
+///
+/// # Safety
+/// `crate::ffi::map_db::map` must be a valid initialised pointer.  `m` must be a
+/// loaded map index and `i` must be within `[0, MAX_MAPREG)`.
+#[no_mangle]
+pub unsafe extern "C" fn map_registrysave(m: c_int, i: c_int) -> c_int {
+    use crate::database::map_db::{GlobalReg, MAP_SLOTS, MAX_MAPREG};
+
+    if m < 0 || m as usize >= MAP_SLOTS { return 0; }
+    if i < 0 || i as usize >= MAX_MAPREG { return 0; }
+
+    let slot = &mut *crate::ffi::map_db::map.add(m as usize);
+    if slot.registry.is_null() { return 0; }
+
+    let p: &GlobalReg = &*slot.registry.add(i as usize);
+
+    // Read the identifier (null-terminated i8 array) into a Rust String.
+    let identifier = {
+        let bytes: &[u8] = std::slice::from_raw_parts(p.str.as_ptr() as *const u8, 64);
+        let end = bytes.iter().position(|&b| b == 0).unwrap_or(64);
+        String::from_utf8_lossy(&bytes[..end]).into_owned()
+    };
+    let val = p.val;
+
+    let m_u32 = m as u32;
+    let i_u32 = i as u32;
+
+    // SELECT existing position.
+    let save_id: Option<u32> = blocking_run(
+        sqlx::query_scalar::<_, u32>(
+            "SELECT MrgPosition FROM MapRegistry \
+             WHERE MrgMapId = ? AND MrgIdentifier = ?",
+        )
+        .bind(m_u32)
+        .bind(&identifier)
+        .fetch_optional(get_pool()),
+    )
+    .unwrap_or(None);
+
+    match save_id {
+        Some(pos) => {
+            if val == 0 {
+                // Delete the entry — value cleared.
+                let _ = blocking_run(
+                    sqlx::query(
+                        "DELETE FROM MapRegistry \
+                         WHERE MrgMapId = ? AND MrgIdentifier = ?",
+                    )
+                    .bind(m_u32)
+                    .bind(&identifier)
+                    .execute(get_pool()),
+                );
+            } else {
+                // Update in-place.
+                let _ = blocking_run(
+                    sqlx::query(
+                        "UPDATE MapRegistry SET MrgIdentifier = ?, MrgValue = ? \
+                         WHERE MrgMapId = ? AND MrgPosition = ?",
+                    )
+                    .bind(&identifier)
+                    .bind(val)
+                    .bind(m_u32)
+                    .bind(pos)
+                    .execute(get_pool()),
+                );
+            }
+        }
+        None => {
+            if val > 0 {
+                // Insert new row.
+                let _ = blocking_run(
+                    sqlx::query(
+                        "INSERT INTO MapRegistry \
+                         (MrgMapId, MrgIdentifier, MrgValue, MrgPosition) \
+                         VALUES (?, ?, ?, ?)",
+                    )
+                    .bind(m_u32)
+                    .bind(&identifier)
+                    .bind(val)
+                    .bind(i_u32)
+                    .execute(get_pool()),
+                );
+            }
+        }
+    }
+
+    0
+}
+
+// ---------------------------------------------------------------------------
+// map_setglobalreg — set a map-level registry key/value in memory and persist.
+//
+// Mirrors `map_setglobalreg` in `c_src/map_server.c`.
+//
+// Uses the `map_isloaded` guard (registry != null), then:
+//   1. Linear search for an existing entry with the same name (strcasecmp).
+//   2. If found: update val, persist, clear str if val==0.
+//   3. If not found: reuse the first empty slot, or extend registry_num if capacity allows.
+// ---------------------------------------------------------------------------
+
+/// Set a key/value pair in the per-map registry for map `m`, then persist to DB.
+///
+/// Replaces `map_setglobalreg` in `c_src/map_server.c`.
+///
+/// # Safety
+/// `crate::ffi::map_db::map` must be a valid initialised pointer.  `m` must be within
+/// `[0, MAP_SLOTS)`.  `reg` must be a valid non-null null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn map_setglobalreg(m: c_int, reg: *const c_char, val: c_int) -> c_int {
+    use crate::database::map_db::MAP_SLOTS;
+
+    if reg.is_null() { return 0; }
+    if m < 0 || m as usize >= MAP_SLOTS { return 0; }
+    let slot = &mut *crate::ffi::map_db::map.add(m as usize);
+    // map_isloaded(m) — registry must be non-null.
+    if slot.registry.is_null() { return 0; }
+
+    let num = slot.registry_num as usize;
+
+    // Search for an existing entry.
+    let mut exist: Option<usize> = None;
+    for idx in 0..num {
+        let entry = &*slot.registry.add(idx);
+        if reg_str_eq(&entry.str, reg) {
+            exist = Some(idx);
+            break;
+        }
+    }
+
+    if let Some(idx) = exist {
+        let entry = &mut *slot.registry.add(idx);
+        entry.val = val;
+        map_registrysave(m, idx as c_int);
+        if val == 0 {
+            entry.str = [0i8; 64]; // empty registry slot
+        }
+        return 0;
+    }
+
+    // Search for an empty slot to reuse.
+    for idx in 0..num {
+        let entry = &*slot.registry.add(idx);
+        if entry.str[0] == 0 {
+            let entry = &mut *slot.registry.add(idx);
+            copy_cstr_to_reg_str(&mut entry.str, reg);
+            entry.val = val;
+            map_registrysave(m, idx as c_int);
+            return 0;
+        }
+    }
+
+    // Extend if capacity allows.
+    if num < crate::database::map_db::MAX_MAPREG {
+        let new_num = num + 1;
+        slot.registry_num = new_num as c_int;
+        let entry = &mut *slot.registry.add(num);
+        copy_cstr_to_reg_str(&mut entry.str, reg);
+        entry.val = val;
+        map_registrysave(m, num as c_int);
+    }
+
+    0
+}
+
+// ---------------------------------------------------------------------------
+// map_readglobalreg — read a map-level registry value from memory.
+//
+// Mirrors `map_readglobalreg` in `c_src/map_server.c`.
+// ---------------------------------------------------------------------------
+
+/// Return the value for registry key `reg` on map `m`, or 0 if not found.
+///
+/// Replaces `map_readglobalreg` in `c_src/map_server.c`.
+///
+/// # Safety
+/// `crate::ffi::map_db::map` must be a valid initialised pointer.  `m` must be within
+/// `[0, MAP_SLOTS)`.  `reg` must be a valid non-null null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn map_readglobalreg(m: c_int, reg: *const c_char) -> c_int {
+    use crate::database::map_db::MAP_SLOTS;
+
+    if m < 0 || m as usize >= MAP_SLOTS { return 0; }
+    let slot = &*crate::ffi::map_db::map.add(m as usize);
+    if slot.registry.is_null() { return 0; }
+
+    let num = slot.registry_num as usize;
+    for idx in 0..num {
+        let entry = &*slot.registry.add(idx);
+        if reg_str_eq(&entry.str, reg) {
+            return entry.val;
+        }
+    }
+    0
+}
+
+// ---------------------------------------------------------------------------
+// map_loadgameregistry — load game-global registry from `GameRegistry<id>` table.
+//
+// Mirrors `map_loadgameregistry` in `c_src/map_server.c`.
+//
+// Allocates gamereg.registry, queries all rows, copies them into the array.
+// ---------------------------------------------------------------------------
+
+/// Load the game-global registry from the `GameRegistry<serverid>` table.
+///
+/// Replaces `map_loadgameregistry` in `c_src/map_server.c`.
+///
+/// # Safety
+/// Must be called on the game thread after the database pool is initialised.
+/// `serverid` must be a valid C extern int.
+#[no_mangle]
+pub unsafe extern "C" fn map_loadgameregistry() -> c_int {
+    extern "C" { static serverid: c_int; }
+
+    let sid = serverid;
+    let limit = MAX_GAMEREG as u32;
+
+    gamereg.registry_num = 0;
+
+    // Free previous registry if reload.
+    if !gamereg.registry.is_null() {
+        let layout = std::alloc::Layout::array::<crate::database::map_db::GlobalReg>(MAX_GAMEREG)
+            .expect("layout computation is infallible for MAX_GAMEREG = 5000");
+        std::alloc::dealloc(gamereg.registry as *mut u8, layout);
+        gamereg.registry = std::ptr::null_mut();
+    }
+
+    gamereg.registry = alloc_zeroed_gamereg_registry(MAX_GAMEREG);
+
+    let sql = format!(
+        "SELECT GrgIdentifier, GrgValue FROM `GameRegistry{sid}` LIMIT {limit}"
+    );
+
+    #[derive(sqlx::FromRow)]
+    struct GrgRow {
+        #[sqlx(rename = "GrgIdentifier")]
+        grg_identifier: String,
+        #[sqlx(rename = "GrgValue")]
+        grg_value: i32,
+    }
+
+    let rows: Vec<GrgRow> = match blocking_run(
+        sqlx::query_as::<_, GrgRow>(&sql).fetch_all(get_pool()),
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::error!("[map] map_loadgameregistry failed: {e:#}");
+            return 0;
+        }
+    };
+
+    let count = rows.len().min(MAX_GAMEREG);
+    gamereg.registry_num = count as c_int;
+
+    for (i, row) in rows.iter().take(count).enumerate() {
+        let entry = &mut *gamereg.registry.add(i);
+        let bytes = row.grg_identifier.as_bytes();
+        let copy_len = bytes.len().min(63);
+        std::ptr::copy_nonoverlapping(
+            bytes.as_ptr() as *const i8,
+            entry.str.as_mut_ptr(),
+            copy_len,
+        );
+        entry.str[copy_len] = 0;
+        entry.val = row.grg_value;
+    }
+
+    tracing::info!("[map] [load_game_registry] count={count}");
+    0
+}
+
+// ---------------------------------------------------------------------------
+// map_savegameregistry — persist one game-global registry slot to DB.
+//
+// Mirrors `map_savegameregistry` in `c_src/map_server.c`.
+//
+// Logic:
+//   - SELECT GrgId WHERE GrgIdentifier=str → save_id (0 if not found)
+//   - If found (save_id != 0):
+//       val==0 → DELETE WHERE GrgIdentifier=str
+//       val!=0 → UPDATE SET GrgIdentifier=str, GrgValue=val WHERE GrgId=save_id
+//   - If not found (save_id==0):
+//       val>0  → INSERT (GrgIdentifier, GrgValue)
+// ---------------------------------------------------------------------------
+
+/// Persist one game-global registry slot at index `i` to `GameRegistry<serverid>`.
+///
+/// Replaces `map_savegameregistry` in `c_src/map_server.c`.
+///
+/// # Safety
+/// Must be called on the game thread.  `i` must be within `[0, registry_num)`.
+/// `gamereg.registry` must be a valid allocated array.
+#[no_mangle]
+pub unsafe extern "C" fn map_savegameregistry(i: c_int) -> c_int {
+    extern "C" { static serverid: c_int; }
+
+    if gamereg.registry.is_null() { return 0; }
+    if i < 0 || i as usize >= gamereg.registry_num as usize { return 0; }
+
+    let sid = serverid;
+    let entry = &*gamereg.registry.add(i as usize);
+
+    let identifier = {
+        let bytes: &[u8] = std::slice::from_raw_parts(entry.str.as_ptr() as *const u8, 64);
+        let end = bytes.iter().position(|&b| b == 0).unwrap_or(64);
+        String::from_utf8_lossy(&bytes[..end]).into_owned()
+    };
+    let val = entry.val;
+
+    // SELECT existing GrgId.
+    let save_id: Option<u32> = blocking_run(
+        sqlx::query_scalar::<_, u32>(&format!(
+            "SELECT GrgId FROM `GameRegistry{sid}` WHERE GrgIdentifier = ?",
+        ))
+        .bind(&identifier)
+        .fetch_optional(get_pool()),
+    )
+    .unwrap_or(None);
+
+    match save_id {
+        Some(grg_id) if grg_id != 0 => {
+            if val == 0 {
+                let _ = blocking_run(
+                    sqlx::query(&format!(
+                        "DELETE FROM `GameRegistry{sid}` WHERE GrgIdentifier = ?",
+                    ))
+                    .bind(&identifier)
+                    .execute(get_pool()),
+                );
+            } else {
+                let _ = blocking_run(
+                    sqlx::query(&format!(
+                        "UPDATE `GameRegistry{sid}` \
+                         SET GrgIdentifier = ?, GrgValue = ? \
+                         WHERE GrgId = ?",
+                    ))
+                    .bind(&identifier)
+                    .bind(val)
+                    .bind(grg_id)
+                    .execute(get_pool()),
+                );
+            }
+        }
+        _ => {
+            if val > 0 {
+                let _ = blocking_run(
+                    sqlx::query(&format!(
+                        "INSERT INTO `GameRegistry{sid}` \
+                         (GrgIdentifier, GrgValue) VALUES (?, ?)",
+                    ))
+                    .bind(&identifier)
+                    .bind(val)
+                    .execute(get_pool()),
+                );
+            }
+        }
+    }
+
+    0
+}
+
+// ---------------------------------------------------------------------------
+// map_setglobalgamereg — set a game-global registry key/value and persist.
+//
+// Mirrors `map_setglobalgamereg` in `c_src/map_server.c`.
+//
+// Same three-phase logic as map_setglobalreg but operates on `gamereg`.
+// Uses MAX_GLOBALREG as the capacity limit (== MAX_GAMEREG == 5000).
+// ---------------------------------------------------------------------------
+
+/// Set a key/value pair in the game-global registry, then persist to DB.
+///
+/// Replaces `map_setglobalgamereg` in `c_src/map_server.c`.
+///
+/// # Safety
+/// Must be called on the game thread.  `reg` must be a valid non-null
+/// null-terminated C string.  `gamereg.registry` must be initialised.
+#[no_mangle]
+pub unsafe extern "C" fn map_setglobalgamereg(reg: *const c_char, val: c_int) -> c_int {
+    if reg.is_null() { return 0; }
+    if gamereg.registry.is_null() { return 0; }
+
+    let num = gamereg.registry_num as usize;
+
+    // Search for an existing entry (strcasecmp).
+    let mut exist: Option<usize> = None;
+    for idx in 0..num {
+        let entry = &*gamereg.registry.add(idx);
+        if reg_str_eq(&entry.str, reg) {
+            exist = Some(idx);
+            break;
+        }
+    }
+
+    if let Some(idx) = exist {
+        let entry = &mut *gamereg.registry.add(idx);
+        entry.val = val;
+        map_savegameregistry(idx as c_int);
+        if val == 0 {
+            entry.str = [0i8; 64]; // empty slot
+        }
+        return 0;
+    }
+
+    // Reuse an empty slot.
+    for idx in 0..num {
+        let entry = &*gamereg.registry.add(idx);
+        if entry.str[0] == 0 {
+            let entry = &mut *gamereg.registry.add(idx);
+            copy_cstr_to_reg_str(&mut entry.str, reg);
+            entry.val = val;
+            map_savegameregistry(idx as c_int);
+            return 0;
+        }
+    }
+
+    // Extend if capacity allows (C used MAX_GLOBALREG == 5000 == MAX_GAMEREG).
+    if num < MAX_GAMEREG {
+        gamereg.registry_num = (num + 1) as c_int;
+        let entry = &mut *gamereg.registry.add(num);
+        copy_cstr_to_reg_str(&mut entry.str, reg);
+        entry.val = val;
+        map_savegameregistry(num as c_int);
+    }
+
+    0
+}
+
+// ---------------------------------------------------------------------------
+// map_registrydelete — no-op stub for ABI completeness.
+//
+// `c_src/map_server.h` declares `int map_registrydelete(int, int)` but the
+// original C implementation was commented out and has no current callers.
+// The stub prevents linker failures if any translation unit ever calls it.
+// ---------------------------------------------------------------------------
+
+/// No-op stub — `map_registrydelete` was commented out in C and has no current callers.
+/// Retained for ABI completeness.
+#[allow(dead_code)]
+#[no_mangle]
+pub unsafe extern "C" fn map_registrydelete(_m: c_int, _i: c_int) -> c_int {
+    0
+}
+
+// ---------------------------------------------------------------------------
+// map_lastdeath_mob — record a mob's last-death time in the Spawns table.
+//
+// Mirrors `map_lastdeath_mob` in `c_src/map_server.c`.
+//
+// SQL: UPDATE `Spawns<serverid>` SET SpnLastDeath=last_death
+//      WHERE SpnX=startx AND SpnY=starty AND SpnMapId=bl.m AND SpnId=id
+// ---------------------------------------------------------------------------
+
+/// Record the mob's last-death timestamp in the `Spawns<serverid>` DB table.
+///
+/// Replaces `map_lastdeath_mob` in `c_src/map_server.c`.
+///
+/// # Safety
+/// `p` must be a valid non-null pointer to a `MobSpawnData` struct.
+/// Must be called on the game thread after the DB pool is initialised.
+#[no_mangle]
+pub unsafe extern "C" fn map_lastdeath_mob(
+    p: *mut crate::game::mob::MobSpawnData,
+) -> c_int {
+    extern "C" { static serverid: c_int; }
+
+    if p.is_null() { return 0; }
+
+    let last_death = (*p).last_death;
+    let startx     = (*p).startx as i32;
+    let starty     = (*p).starty as i32;
+    let map_id     = (*p).bl.m  as i32;
+    let mob_id     = (*p).bl.id as i32;
+    let sid        = serverid;
+
+    let sql = format!(
+        "UPDATE `Spawns{sid}` \
+         SET SpnLastDeath = ? \
+         WHERE SpnX = ? AND SpnY = ? AND SpnMapId = ? AND SpnId = ?",
+    );
+
+    blocking_run(
+        sqlx::query(&sql)
+            .bind(last_death)
+            .bind(startx)
+            .bind(starty)
+            .bind(map_id)
+            .bind(mob_id)
+            .execute(get_pool()),
+    )
+    .unwrap_or_else(|e| {
+        tracing::error!("[map] map_lastdeath_mob failed: {e:#}");
+        Default::default()
+    });
+
+    0
+}
+
+// ---------------------------------------------------------------------------
+// hasCoref — ported from `c_src/map_server.c`
+// ---------------------------------------------------------------------------
+
+/// Returns 1 if the player `sd` has an active co-reference or is contained
+/// inside another player that is still in the ID database.  Returns 0 otherwise.
+///
+/// Replaces `hasCoref` in `c_src/map_server.c`.
+///
+/// # Safety
+/// `sd` must be a valid non-null pointer to a `MapSessionData` that is
+/// currently registered in the game world.  Must be called on the game thread.
+#[no_mangle]
+pub unsafe extern "C" fn hasCoref(sd: *mut MapSessionData) -> c_int {
+    if sd.is_null() {
+        return 0;
+    }
+    // Direct coref: this player is already flagged.
+    if (*sd).coref != 0 {
+        return 1;
+    }
+    // Container coref: the container player must still be in the ID database.
+    if (*sd).coref_container != 0 {
+        let container = map_id2sd((*sd).coref_container) as *mut MapSessionData;
+        if !container.is_null() {
+            return 1;
+        }
+    }
+    0
 }

@@ -40,6 +40,8 @@ const OPT_WALKTHROUGH: c_ulong = 128;
 // C FFI declarations
 // ---------------------------------------------------------------------------
 
+use crate::game::map_server::map_fd;
+
 extern "C" {
     fn rust_session_set_eof(fd: c_int, val: c_int);
     fn rust_session_set_data(fd: c_int, data: *mut c_void);
@@ -47,9 +49,6 @@ extern "C" {
     // net_crypt.h: `static inline char *populate_table(const char*, char*, int)`
     // forwards to this symbol.
     fn rust_crypt_populate_table(name: *const c_char, table: *mut i8, len: c_int) -> *mut i8;
-
-    // Inter-server file descriptor (declared extern in map_server.h).
-    static map_fd: c_int;
 
     // map_isloaded is a C macro: `#define map_isloaded(m) (map[m].registry)`.
     // sl_compat.c exposes a thin function wrapper:

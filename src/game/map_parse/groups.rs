@@ -34,6 +34,8 @@ use super::packet::{
     SAMEMAP,
 };
 
+use crate::game::map_server::sql_handle;
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MAX_GROUPS: usize = 256;
@@ -75,8 +77,6 @@ extern "C" {
     ) -> c_int;
 
     // SQL
-    #[link_name = "sql_handle"]
-    static sql_handle: *mut Sql;
     fn Sql_Query(handle: *mut Sql, fmt: *const c_char, ...) -> c_int;
     fn SqlStmt_Malloc(handle: *mut Sql) -> *mut SqlStmt;
     #[link_name = "SqlStmt_ShowDebug_"]

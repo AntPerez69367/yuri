@@ -17,6 +17,10 @@ exclude = [
   # cbindgen would emit BlockList/WarpList with Rust names, conflicting with the C declarations.
   "BlockList", "WarpList",
   "map_addblock", "map_delblock", "map_initblock", "map_moveblock", "map_termblock",
+  "map_clritem", "map_delitem", "map_additem",
+  "map_freeblock", "map_freeblock_lock", "map_freeblock_unlock",
+  "map_setmapip",
+  "OBJECT", "OBJECT_N", "MAX_FLOORITEM",
 
   # NPC game types: declared in map_server.h using C names (npc_data / struct gfxViewer).
   # cbindgen emits NpcData/GfxViewer with Rust names which conflict.
@@ -201,6 +205,40 @@ exclude = [
   "checkPlayerScore",
   "updateRanks",
   "checkPlayerRank",
+
+  # gamereg / GameData (map_server.rs): declared in map_server.h as extern struct game_data.
+  # cbindgen must not re-export GameData or gamereg; the C declarations are authoritative.
+  "GameData", "gamereg",
+
+  # map_registrysave / map_setglobalreg / map_readglobalreg (map_server.rs):
+  # declared in map_server.h with C signatures.
+  "map_registrysave", "map_setglobalreg", "map_readglobalreg",
+
+  # map_loadgameregistry / map_savegameregistry / map_setglobalgamereg / map_lastdeath_mob /
+  # map_registrydelete / hasCoref (map_server.rs): declared in map_server.h with C signatures.
+  "map_loadgameregistry", "map_savegameregistry", "map_setglobalgamereg", "map_lastdeath_mob",
+  "map_registrydelete", "hasCoref",
+
+  # Internal helpers used only within map_server.rs.
+  "MAX_GAMEREG", "alloc_zeroed_gamereg_registry", "reg_str_eq", "copy_cstr_to_reg_str",
+
+  # In-game time globals (map_server.rs): declared in map_server.h as extern int.
+  # cbindgen must not re-export them; the C extern declarations in map_server.h are authoritative.
+  "cur_time", "cur_day", "cur_season", "cur_year", "old_time",
+
+  # In-game time functions (map_server.rs): declared in map_server.h.
+  "change_time_char", "get_time_thing", "uptime",
+
+  # object_flag_init / objectFlags / map_src_* (map_server.rs): declared in map_server.h.
+  # objectFlags is declared as `extern unsigned char *objectFlags;` in map_server.h.
+  # map_src_clear / map_src_add are declared in map_server.h with C signatures.
+  # MapSrcEntry is an internal Rust struct; cbindgen must not emit it.
+  "object_flag_init", "objectFlags", "map_src_clear", "map_src_add",
+  "MapSrcEntry", "MAP_SRC_LIST",
+
+  # lang_read / map_msg (map_server.rs): declared in map_server.h.
+  # map_msg is a C extern symbol; MapMsgData would conflict with the C struct name.
+  "lang_read", "map_msg", "MapMsgData", "MSG_MAX",
 
   # boards/nmail functions (map_server.rs): declared in map_server.h.
   "nmail_sendmessage",

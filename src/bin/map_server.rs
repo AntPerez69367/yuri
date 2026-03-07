@@ -12,7 +12,6 @@ extern "C" {
     fn map_initiddb();
     fn npc_init();
     fn warp_init() -> i32;
-    fn object_flag_init() -> i32;
     fn rust_sl_init();
     fn rust_sl_doscript_blargs_vec(
         root: *const i8, method: *const i8,
@@ -54,10 +53,9 @@ extern "C" {
     fn rust_set_termfunc(f: Option<unsafe extern "C" fn()>);
 }
 
-// sql_handle is defined in map_server.c; we write to it after Sql_Connect succeeds.
-extern "C" {
-    static mut sql_handle: *mut std::ffi::c_void;
-}
+// sql_handle is now a Rust #[no_mangle] static in src/game/map_server.rs.
+// We access it directly via the game module.
+use yuri::game::map_server::sql_handle;
 
 // fd_max is normally defined in core.c (which we exclude to avoid duplicate main()).
 // The Rust session layer updates this via the c_update_fd_max callback.
@@ -171,7 +169,7 @@ async fn main() -> Result<()> {
         if rc != 0 { // SQL_SUCCESS == 0
             anyhow::bail!("Sql_Connect failed");
         }
-        sql_handle = handle;
+        sql_handle = handle as *mut yuri::game::pc::Sql;
     }
 
     // Reset online flags
@@ -212,7 +210,7 @@ async fn main() -> Result<()> {
                 rust_classdb_init(data_dir_c.as_ptr());
                 rust_clandb_init();
                 rust_boarddb_init();
-                object_flag_init();
+                yuri::game::map_server::object_flag_init();
                 rust_sl_init();
                 map_loadgameregistry();
                 rust_session_set_default_parse(rust_clif_parse);

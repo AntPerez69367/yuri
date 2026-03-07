@@ -6,6 +6,8 @@ use std::ffi::{c_char, c_double, c_float, c_int, c_long, c_short, c_uchar, c_uin
 use std::os::raw::c_void;
 
 use crate::database::map_db::BlockList;
+// sql_handle is a Rust #[no_mangle] static in src/game/map_server.rs.
+use crate::game::map_server::sql_handle;
 // MobSpawnData is used by future porting tasks (Tasks 6+); import it when needed.
 use crate::game::types::GfxViewer;
 use crate::servers::char::charstatus::MmoCharStatus;
@@ -503,14 +505,9 @@ pub const MAP_ERRITMMARK:   usize = 10;
 pub const MAP_ERRITM2H:     usize = 11;
 pub const MAP_ERRMOUNT:     usize = 12;
 
-/// `struct map_msg_data` from `c_src/map_server.h`.
-/// Layout: `char message[256]` at offset 0, `int len` at offset 256.
-/// MSG_MAX = 38 entries (count from map_server.h enum).
-#[repr(C)]
-pub struct MapMsgData {
-    pub message: [i8; 256],
-    pub len:     c_int,
-}
+// MapMsgData and map_msg are defined authoritatively in map_server.rs.
+// Re-exported here so callers importing from `crate::game::pc` still find them.
+pub use crate::game::map_server::{MapMsgData, map_msg};
 
 // Sql opaque handle (declared in db_mysql.h as `struct Sql`)
 // Used for sql_handle global in pc.c
@@ -785,9 +782,8 @@ extern "C" {
     pub fn classdb_level(path: c_int, lvl: c_int) -> c_uint;
 
     // ── SQL / db_mysql functions ───────────────────────────────────────────────
-    /// The global MySQL handle (map_server.c / map_server.h)
-    #[link_name = "sql_handle"]
-    pub static sql_handle: *mut Sql;
+    // sql_handle is now a Rust #[no_mangle] static in src/game/map_server.rs.
+    // Access it via crate::game::map_server::sql_handle.
 
     /// `int Sql_Query(Sql* self, const char* query, ...)` — variadic
     pub fn Sql_Query(self_: *mut Sql, query: *const c_char, ...) -> c_int;
@@ -841,12 +837,8 @@ extern "C" {
     // rnd and gettick are already declared in mob.rs extern block.
     // cur_time is already declared in mob.rs extern block.
 
-    // ── map_msg global array ──────────────────────────────────────────────────
-    // `extern struct map_msg_data map_msg[MSG_MAX]`
-    // MSG_MAX = 38 (count from map_server.h enum ending at MSG_MAX).
-    // map_msg[idx].message is a char[256], offset 0; len is int at offset 256.
-    #[link_name = "map_msg"]
-    pub static map_msg: [MapMsgData; 38];
+    // map_msg is now owned by map_server.rs (MSG_MAX = 30, #[no_mangle]).
+    // Accessed via `crate::game::map_server::map_msg` re-exported below.
 
     // ── map_foreachincell — re-declared for pc.rs item callbacks ─────────────
     #[link_name = "map_foreachincell"]

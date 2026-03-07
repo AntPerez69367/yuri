@@ -51,8 +51,9 @@ extern "C" {
     fn sl_async_freeco(sd: *mut c_void) -> c_int;
     fn Sql_EscapeString(handle: *mut c_void, out: *mut c_char, src: *const c_char);
     fn clif_Hacker(name: *mut c_char, reason: *const c_char) -> c_int;
-    static sql_handle: *mut c_void;
 }
+
+use crate::game::map_server::sql_handle;
 
 // NPC subtype constant (from map_server.h)
 const SCRIPT: u8 = 0;
@@ -938,7 +939,7 @@ pub unsafe extern "C" fn clif_parsewisp(sd: *mut MapSessionData) -> c_int {
 
     // Sql_EscapeString for the msg
     let mut escape = [0i8; 255];
-    Sql_EscapeString(sql_handle, escape.as_mut_ptr(), msg_c);
+    Sql_EscapeString(sql_handle as *mut c_void, escape.as_mut_ptr(), msg_c);
 
     // "!" → clan chat
     if dst_name[0] == b'!' && dst_name[1] == 0 {
@@ -1130,7 +1131,7 @@ pub unsafe extern "C" fn clif_sendscriptsay(
     }
 
     let mut escape = [0i8; 255];
-    Sql_EscapeString(sql_handle, escape.as_mut_ptr(), msg);
+    Sql_EscapeString(sql_handle as *mut c_void, escape.as_mut_ptr(), msg);
 
     if rust_is_command(sd, msg, msglen) != 0 {
         return 0;

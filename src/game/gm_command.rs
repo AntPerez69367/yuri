@@ -33,12 +33,11 @@ const MAX_MAP_PER_SERVER: c_int = 65535;
 // MAX_KILLREG (from mmo.h)
 const MAX_KILLREG: usize = 5000;
 
-// External globals (from map_server.c / map_parse.c / core.c)
+// External globals (from map_parse.c / core.c)
 extern "C" {
     static fd_max:      c_int;
     static mut xp_rate: c_int;
     static mut d_rate:  c_int;
-    static char_fd:     c_int;
     static map_n:           c_int;
     static MOB_SPAWN_START:   c_uint;
     static MOB_SPAWN_MAX:     c_uint;
@@ -46,15 +45,12 @@ extern "C" {
     static MOB_ONETIME_MAX:   c_uint;
 }
 
-// UserList struct -- only user_count needed
-#[repr(C)]
-struct UserList {
-    user_count: c_int,
-    _pad: [u8; 1024],  // remaining fields ignored
-}
-extern "C" {
-    static userlist: UserList;
-}
+// char_fd, sql_handle, and userlist are now Rust #[no_mangle] statics in src/game/map_server.rs.
+use crate::game::map_server::{char_fd, sql_handle as SQL_HANDLE, userlist};
+
+/// Helper: cast the Rust sql_handle (*mut Sql) to *mut c_void for C FFI calls in this file.
+#[inline(always)]
+unsafe fn sql_handle_void() -> *mut c_void { SQL_HANDLE as *mut c_void }
 
 type LuaState = c_void; // opaque
 
@@ -139,8 +135,7 @@ extern "C" {
     #[link_name = "rust_mobspawn_read"]
     fn mobspawn_read() -> c_int;
 
-    // SQL
-    static sql_handle: *mut c_void;
+    // SQL (sql_handle is now a Rust static; access via crate::game::map_server::sql_handle cast to *mut c_void)
     fn Sql_Query(handle: *mut c_void, fmt: *const c_char, ...) -> c_int;
     fn Sql_EscapeString(handle: *mut c_void, out: *mut c_char, src: *const c_char);
     fn Sql_FreeResult(handle: *mut c_void);
@@ -688,11 +683,11 @@ unsafe fn command_ban(_sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaS
     if !tsd.is_null() {
         printf(b"Banning %s\n\0".as_ptr() as *const c_char, name.as_ptr());
         let mut esc = [0i8; 65];
-        Sql_EscapeString(sql_handle, esc.as_mut_ptr(), name.as_ptr());
-        if SQL_ERROR == Sql_Query(sql_handle,
+        Sql_EscapeString(sql_handle_void(), esc.as_mut_ptr(), name.as_ptr());
+        if SQL_ERROR == Sql_Query(sql_handle_void(),
             b"UPDATE `Character` SET ChaBanned = '1' WHERE `ChaName` = '%s'\0".as_ptr() as *const c_char,
             esc.as_ptr()) {
-            Sql_ShowDebug(sql_handle);
+            Sql_ShowDebug(sql_handle_void());
         }
         rust_session_set_eof((*tsd).fd, 1);
     }
@@ -702,11 +697,11 @@ unsafe fn command_unban(_sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lu
     let name = match parse_str32(line) { Some(v) => v, None => return -1 };
     printf(b"Unbanning %s\n\0".as_ptr() as *const c_char, name.as_ptr());
     let mut esc = [0i8; 65];
-    Sql_EscapeString(sql_handle, esc.as_mut_ptr(), name.as_ptr());
-    if SQL_ERROR == Sql_Query(sql_handle,
+    Sql_EscapeString(sql_handle_void(), esc.as_mut_ptr(), name.as_ptr());
+    if SQL_ERROR == Sql_Query(sql_handle_void(),
         b"UPDATE `Character` SET ChaBanned = '0' WHERE `ChaName` = '%s'\0".as_ptr() as *const c_char,
         esc.as_ptr()) {
-        Sql_ShowDebug(sql_handle);
+        Sql_ShowDebug(sql_handle_void());
     }
     0
 }
@@ -1044,11 +1039,11 @@ unsafe fn command_job(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaSt
     if subjob < 0 || subjob > 16 { subjob = 0; }
     (*sd).status.class = job as u8;
     (*sd).status.mark = subjob as u8;
-    if SQL_ERROR == Sql_Query(sql_handle,
+    if SQL_ERROR == Sql_Query(sql_handle_void(),
         b"UPDATE `Character` SET `ChaPthId` = '%u', `ChaMark` = '%u' WHERE `ChaId` = '%u'\0".as_ptr() as *const c_char,
         (*sd).status.class as c_uint, (*sd).status.mark as c_uint, (*sd).status.id) {
-        Sql_ShowDebug(sql_handle);
-        Sql_FreeResult(sql_handle);
+        Sql_ShowDebug(sql_handle_void());
+        Sql_FreeResult(sql_handle_void());
         return 0;
     }
     clif_mystaytus(sd);
