@@ -14,9 +14,9 @@ pub const BL_ALL:  c_int = 0x0F;
 extern "C" {
     // --- Map id/name lookups used by constructors ---
     pub fn map_id2sd(id: c_uint) -> *mut c_void;
-    pub fn map_name2sd(name: *const c_char) -> *mut c_void;
-    pub fn map_name2npc(name: *const c_char) -> *mut c_void;
-    pub fn map_id2mob(id: c_uint) -> *mut c_void;
+    pub fn map_name2sd(name: *const c_char) -> *mut c_void;  // impl in map_server.rs
+    pub fn map_name2npc(name: *const c_char) -> *mut c_void; // impl in map_server.rs
+    pub fn map_id2mob(id: c_uint) -> *mut c_void;            // impl in map_server.rs
 
     // --- Phase 2: registry types ---
 
@@ -67,7 +67,7 @@ extern "C" {
 
     // Map helpers
     pub fn map_changepostcolor(board: c_int, post: c_int, color: c_int) -> c_int;
-    /// Returns a pointer into the C map[] id-database for floor items.
+    /// Returns a pointer into the id-database for floor items; impl in map_server.rs.
     pub fn map_id2fl(id: c_uint) -> *mut c_void;
 
     // Magic/mob DB (Rust #[no_mangle] symbols)
@@ -81,9 +81,7 @@ extern "C" {
     ) -> *mut c_uint;
     pub fn map_id2bl(id: c_uint) -> *mut c_void;
 
-    // sl_globals — typed wrappers in sl_compat.c
-    pub fn sl_g_setweather(region: c_uchar, indoor: c_uchar, weather: c_uchar);
-    pub fn sl_g_setweatherm(m: c_int, weather: c_uchar);
+    // sl_globals — typed wrappers; weather funcs ported to map_globals.rs
     pub fn sl_g_setmap(
         m: c_int, mapfile: *const c_char, title: *const c_char,
         bgm: c_int, bgmtype: c_int, pvp: c_int, spell: c_int,
@@ -131,8 +129,8 @@ extern "C" {
         bl: *mut c_void, bl_type: c_int,
         out_ptrs: *mut *mut c_void, max_count: c_int,
     ) -> c_int;
-    pub fn sl_g_getmappvp(m: c_int) -> c_int;
-    pub fn sl_g_getmaptitle(m: c_int, buf: *mut c_char, buflen: c_int) -> c_int;
+    // sl_g_getmappvp — ported to map_globals.rs
+    // sl_g_getmaptitle — ported to map_globals.rs
     pub fn sl_pc_getpk(sd: *mut c_void, id: c_int) -> c_int;
     pub fn sl_g_getobjectsinmap(
         m: c_int, bl_type: c_int,
@@ -142,7 +140,7 @@ extern "C" {
     pub fn sl_g_sendanimxy(bl: *mut c_void, anim: c_int, x: c_int, y: c_int, times: c_int);
     pub fn sl_g_delete_bl(bl: *mut c_void);
     pub fn sl_g_talk(bl: *mut c_void, talk_type: c_int, msg: *const c_char);
-    pub fn sl_g_getusers(out_ptrs: *mut *mut c_void, max_count: c_int) -> c_int;
+    pub fn sl_g_getusers(out_ptrs: *mut *mut c_void, max_count: c_int) -> c_int; // impl in map_globals.rs
     pub fn sl_g_addnpc(
         name: *const c_char, m: c_int, x: c_int, y: c_int, subtype: c_int,
         timer: c_int, duration: c_int, owner: c_int, movetime: c_int,
@@ -154,6 +152,7 @@ extern "C" {
     pub fn sl_pc_set_vregenoverflow(sd: *mut c_void, v: c_int);
     pub fn sl_pc_mregenoverflow(sd: *mut c_void) -> c_int;
     pub fn sl_pc_set_mregenoverflow(sd: *mut c_void, v: c_int);
+    // group fields — all ported to pc_accessors.rs (resolved via #[no_mangle] at link time)
     pub fn sl_pc_group_count(sd: *mut c_void) -> c_int;
     pub fn sl_pc_set_group_count(sd: *mut c_void, v: c_int);
     pub fn sl_pc_group_on(sd: *mut c_void) -> c_int;

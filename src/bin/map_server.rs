@@ -19,7 +19,7 @@ extern "C" {
     ) -> i32;
     fn map_loadgameregistry() -> i32;
     fn clif_timeout(fd: i32) -> i32;
-    fn map_do_term(); // renamed from do_term in Task 5
+    fn map_do_term(); // impl in src/game/map_server.rs
     fn intif_mmo_tosd(fd: i32, status: *mut u8) -> i32;
     fn lang_read(file: *const i8);
     fn rust_mob_timer_spawns(id: i32, n: i32) -> i32;

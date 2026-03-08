@@ -270,7 +270,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("setWeatherM", lua.create_function(|_, (m, w): (i32, i32)| {
-        unsafe { sffi::sl_g_setweatherm(m as c_int, w as c_uchar); }
+        unsafe { crate::game::scripting::map_globals::sl_g_setweatherm(m as c_int, w as c_uchar); }
         Ok(())
     })?)?;
 
@@ -288,7 +288,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("setWeather", lua.create_function(|_, (region, indoor, w): (i32, i32, i32)| {
-        unsafe { sffi::sl_g_setweather(region as c_uchar, indoor as c_uchar, w as c_uchar); }
+        unsafe { crate::game::scripting::map_globals::sl_g_setweather(region as c_uchar, indoor as c_uchar, w as c_uchar); }
         Ok(())
     })?)?;
 

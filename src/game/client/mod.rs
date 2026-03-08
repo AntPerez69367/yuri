@@ -13,13 +13,34 @@
 //! `extern "C"` stubs below. As each handler is ported to Rust, remove its stub
 //! and add a Rust implementation in its place.
 
-use std::os::raw::{c_char, c_int, c_void};
+pub mod handlers;
+pub mod visual;
+
+// Shims for visual.rs functions that take *mut MapSessionData but are called from
+// the dispatcher with *mut c_void. These thin wrappers perform the pointer cast.
+#[inline]
+unsafe fn clif_cancelafk(sd: *mut c_void) {
+    visual::clif_cancelafk(sd as *mut crate::game::pc::MapSessionData);
+}
+#[inline]
+unsafe fn clif_sendprofile(sd: *mut c_void) {
+    visual::clif_sendprofile(sd as *mut crate::game::pc::MapSessionData);
+}
+#[inline]
+unsafe fn clif_sendboard(sd: *mut c_void) {
+    visual::clif_sendboard(sd as *mut crate::game::pc::MapSessionData);
+}
+
+use std::os::raw::{c_char, c_int, c_uchar, c_void};
 use crate::ffi::session::{
     rust_session_exists, rust_session_get_data, rust_session_get_eof,
     rust_session_rdata_ptr, rust_session_set_eof, rust_session_skip,
-    rust_session_available,
+    rust_session_available, rust_session_wfifohead, rust_session_wdata_ptr,
+    rust_session_commit,
 };
 use crate::session::get_session_manager;
+use crate::database::map_db::BlockList;
+use crate::game::pc::MapSessionData;
 
 // ─── Session buffer helpers ───────────────────────────────────────────────────
 
@@ -64,9 +85,9 @@ extern "C" {
     // Disconnect
     fn clif_handle_disconnect(sd: *mut c_void);
     fn clif_closeit(sd: *mut c_void);
-    fn clif_print_disconnect(fd: c_int);
+    // clif_print_disconnect — ported to Rust (src/game/client/visual.rs)
     // AFK / state
-    fn clif_cancelafk(sd: *mut c_void);
+    // clif_cancelafk — ported to Rust (src/game/client/visual.rs)
     fn clif_mystaytus(sd: *mut c_void);
     fn clif_groupstatus(sd: *mut c_void);
     fn clif_refresh(sd: *mut c_void);
@@ -123,12 +144,12 @@ extern "C" {
     fn rust_pc_warp(sd: *mut c_void, m: c_int, x: c_int, y: c_int) -> c_int;
     // Profile
     fn clif_changeprofile(sd: *mut c_void);
-    fn clif_sendprofile(sd: *mut c_void);
+    // clif_sendprofile — ported to Rust (src/game/client/visual.rs)
     // Boards / mail
     fn clif_handle_boards(sd: *mut c_void);
     fn clif_handle_powerboards(sd: *mut c_void);
     fn clif_parseparcel(sd: *mut c_void);
-    fn clif_sendboard(sd: *mut c_void);
+    // clif_sendboard — ported to Rust (src/game/client/visual.rs)
     // Ranking / towns
     fn clif_parseranking(sd: *mut c_void, fd: c_int);
     fn clif_sendRewardInfo(sd: *mut c_void, fd: c_int);
@@ -169,6 +190,295 @@ extern "C" {
     fn sl_pc_inventory_id(sd: *mut c_void, pos: c_int) -> u32;
     fn sl_map_spell(m: c_int) -> c_int;
     fn sl_pc_bl_m(sd: *mut c_void) -> c_int;
+
+    // Packet encryption (net_crypt.c / Rust)
+    fn encrypt(fd: c_int) -> c_int;
+
+    // Declared in map_parse.h; implemented in Rust (src/game/map_parse/chat.rs).
+    // Returns 1 if communication is ALLOWED, 0 if blocked by ignore list.
+    fn clif_isignore(src: *mut c_void, dst: *mut c_void) -> c_int;
+
+    // Non-variadic trampoline: calls map_foreachinarea(clif_send_sub, ...).
+    // Defined as a static helper in sl_compat.c.
+    fn clif_send_area(
+        m: c_int,
+        x: c_int,
+        y: c_int,
+        area_type: c_int,
+        send_type: c_int,
+        buf: *const c_uchar,
+        len: c_int,
+        src_bl: *mut BlockList,
+    );
+}
+
+// ─── Send-type constants (from map_parse.h) ───────────────────────────────────
+
+const ALL_CLIENT:  c_int = 0;
+const SAMESRV:     c_int = 1;
+const SAMEMAP:     c_int = 2;
+const SAMEMAP_WOS: c_int = 3;
+const AREA:        c_int = 4;
+const AREA_WOS:    c_int = 5;
+const SAMEAREA:    c_int = 6;
+const SAMEAREA_WOS: c_int = 7;
+const CORNER:      c_int = 8;
+const SELF:        c_int = 9;
+
+/// BL_PC type constant (from map_server.h).
+const BL_PC: c_uchar = 0x01;
+
+// ─── clif_send / clif_sendtogm ────────────────────────────────────────────────
+
+/// Send `buf[0..len]` to clients matching `type`, applying ignore-list filtering.
+///
+/// Rust replacement for `clif_send` in `sl_compat.c`.
+///
+/// # Safety
+///
+/// - `buf` must point to at least `len` readable bytes.
+/// - `bl` must be a valid pointer to an initialized `BlockList`. When
+///   `bl.bl_type == BL_PC`, it may be cast to `*mut MapSessionData`. When
+///   `send_type == SELF`, `bl` must point to a `MapSessionData` (`bl_type == BL_PC`).
+#[no_mangle]
+pub unsafe extern "C" fn clif_send(
+    buf: *const c_uchar,
+    len: c_int,
+    bl: *mut BlockList,
+    send_type: c_int,
+) -> c_int {
+    // Compute once: non-null only when `bl` is a player (BL_PC), used for ignore-list checks.
+    let tsd: *mut MapSessionData = if (*bl).bl_type == BL_PC {
+        bl as *mut MapSessionData
+    } else {
+        std::ptr::null_mut()
+    };
+
+    match send_type {
+        ALL_CLIENT | SAMESRV => {
+            for i_fd in get_session_manager().get_all_fds() {
+                let sd = rust_session_get_data(i_fd) as *mut MapSessionData;
+                if sd.is_null() {
+                    continue;
+                }
+                // Ignore-list: skip if this is a whisper (opcode 0x0D) that src ignores.
+                if !tsd.is_null()
+                    && !buf.is_null()
+                    && *buf.add(3) == 0x0D
+                    && clif_isignore(tsd as *mut c_void, sd as *mut c_void) == 0
+                {
+                    continue;
+                }
+                send_to_fd(i_fd, buf, len);
+            }
+        }
+        SAMEMAP => {
+            for i_fd in get_session_manager().get_all_fds() {
+                let sd = rust_session_get_data(i_fd) as *mut MapSessionData;
+                if sd.is_null() {
+                    continue;
+                }
+                if (*sd).bl.m != (*bl).m {
+                    continue;
+                }
+                if !tsd.is_null()
+                    && !buf.is_null()
+                    && *buf.add(3) == 0x0D
+                    && clif_isignore(tsd as *mut c_void, sd as *mut c_void) == 0
+                {
+                    continue;
+                }
+                send_to_fd(i_fd, buf, len);
+            }
+        }
+        SAMEMAP_WOS => {
+            for i_fd in get_session_manager().get_all_fds() {
+                let sd = rust_session_get_data(i_fd) as *mut MapSessionData;
+                if sd.is_null() {
+                    continue;
+                }
+                if (*sd).bl.m != (*bl).m {
+                    continue;
+                }
+                // Skip sending to `bl` itself when it is a player.
+                if !tsd.is_null() && sd == tsd {
+                    continue;
+                }
+                if !tsd.is_null()
+                    && !buf.is_null()
+                    && *buf.add(3) == 0x0D
+                    && clif_isignore(tsd as *mut c_void, sd as *mut c_void) == 0
+                {
+                    continue;
+                }
+                send_to_fd(i_fd, buf, len);
+            }
+        }
+        AREA | AREA_WOS => {
+            clif_send_area(
+                (*bl).m as c_int,
+                (*bl).x as c_int,
+                (*bl).y as c_int,
+                AREA,
+                send_type,
+                buf,
+                len,
+                bl,
+            );
+        }
+        SAMEAREA | SAMEAREA_WOS => {
+            clif_send_area(
+                (*bl).m as c_int,
+                (*bl).x as c_int,
+                (*bl).y as c_int,
+                SAMEAREA,
+                send_type,
+                buf,
+                len,
+                bl,
+            );
+        }
+        CORNER => {
+            clif_send_area(
+                (*bl).m as c_int,
+                (*bl).x as c_int,
+                (*bl).y as c_int,
+                CORNER,
+                send_type,
+                buf,
+                len,
+                bl,
+            );
+        }
+        SELF => {
+            let sd = bl as *mut MapSessionData;
+            send_to_fd((*sd).fd, buf, len);
+        }
+        _ => {}
+    }
+    0
+}
+
+/// Send `buf[0..len]` to clients matching `type`, without ignore-list filtering.
+///
+/// Rust replacement for `clif_sendtogm` in `sl_compat.c`.
+///
+/// # Safety
+///
+/// - `buf` must point to at least `len` readable bytes.
+/// - `bl` must be a valid pointer to an initialized `BlockList`. When
+///   `bl.bl_type == BL_PC`, it may be cast to `*mut MapSessionData`. When
+///   `send_type == SELF`, `bl` must point to a `MapSessionData` (`bl_type == BL_PC`).
+#[no_mangle]
+pub unsafe extern "C" fn clif_sendtogm(
+    buf: *const c_uchar,
+    len: c_int,
+    bl: *mut BlockList,
+    send_type: c_int,
+) -> c_int {
+    match send_type {
+        ALL_CLIENT | SAMESRV => {
+            for i_fd in get_session_manager().get_all_fds() {
+                let sd = rust_session_get_data(i_fd) as *mut MapSessionData;
+                if sd.is_null() {
+                    continue;
+                }
+                send_to_fd(i_fd, buf, len);
+            }
+        }
+        SAMEMAP => {
+            for i_fd in get_session_manager().get_all_fds() {
+                let sd = rust_session_get_data(i_fd) as *mut MapSessionData;
+                if sd.is_null() {
+                    continue;
+                }
+                if (*sd).bl.m != (*bl).m {
+                    continue;
+                }
+                send_to_fd(i_fd, buf, len);
+            }
+        }
+        SAMEMAP_WOS => {
+            let src_sd = if (*bl).bl_type == BL_PC {
+                bl as *mut MapSessionData
+            } else {
+                std::ptr::null_mut()
+            };
+            for i_fd in get_session_manager().get_all_fds() {
+                let sd = rust_session_get_data(i_fd) as *mut MapSessionData;
+                if sd.is_null() {
+                    continue;
+                }
+                if (*sd).bl.m != (*bl).m {
+                    continue;
+                }
+                if !src_sd.is_null() && sd == src_sd {
+                    continue;
+                }
+                send_to_fd(i_fd, buf, len);
+            }
+        }
+        AREA | AREA_WOS => {
+            clif_send_area(
+                (*bl).m as c_int,
+                (*bl).x as c_int,
+                (*bl).y as c_int,
+                AREA,
+                send_type,
+                buf,
+                len,
+                bl,
+            );
+        }
+        SAMEAREA | SAMEAREA_WOS => {
+            clif_send_area(
+                (*bl).m as c_int,
+                (*bl).x as c_int,
+                (*bl).y as c_int,
+                SAMEAREA,
+                send_type,
+                buf,
+                len,
+                bl,
+            );
+        }
+        CORNER => {
+            clif_send_area(
+                (*bl).m as c_int,
+                (*bl).x as c_int,
+                (*bl).y as c_int,
+                CORNER,
+                send_type,
+                buf,
+                len,
+                bl,
+            );
+        }
+        SELF => {
+            let sd = bl as *mut MapSessionData;
+            send_to_fd((*sd).fd, buf, len);
+        }
+        _ => {}
+    }
+    0
+}
+
+/// Write `buf[0..len]` into fd's send buffer and commit.
+///
+/// Mirrors `WFIFOHEAD(fd, len+3); memcpy(WFIFOP(fd,0), buf, len); WFIFOSET(fd, encrypt(fd))`.
+///
+/// # Safety
+///
+/// - `fd` must be a live session registered with the session manager.
+/// - `buf` must point to at least `len` readable bytes.
+#[inline]
+unsafe fn send_to_fd(fd: c_int, buf: *const c_uchar, len: c_int) {
+    rust_session_wfifohead(fd, (len as usize) + 3);
+    let wptr = rust_session_wdata_ptr(fd, 0);
+    if !wptr.is_null() {
+        std::ptr::copy_nonoverlapping(buf, wptr, len as usize);
+    }
+    rust_session_commit(fd, encrypt(fd) as usize);
 }
 
 // ─── Dual-login check ─────────────────────────────────────────────────────────
@@ -214,7 +524,7 @@ pub unsafe extern "C" fn rust_clif_parse(fd: c_int) -> c_int {
             clif_handle_disconnect(sd);
             clif_closeit(sd);
         }
-        clif_print_disconnect(fd);
+        visual::clif_print_disconnect(fd);
         rust_session_set_eof(fd, 1);
         return 0;
     }

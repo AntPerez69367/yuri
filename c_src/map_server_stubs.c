@@ -49,10 +49,10 @@
  *   map_firstincell, map_firstincellwithtraps — src/ffi/block.rs
  *   map_respawnmobs                          — src/ffi/block.rs
  *   rust_map_loadregistry, rust_map_reload   — src/game/map_server.rs / src/ffi/map_db.rs
+ *   map_do_term                              — src/game/map_server.rs
  *
  * TODO (Phase 3 — blocked on map_parse.c Rust port):
  *   map_reload         — calls map_foreachinarea + sl_updatepeople
- *   map_do_term        — calls map_savechars + C FREE loop on map[]
  *   map_reset_timer    — calls clif_broadcast + clif_handle_disconnect
  *   map_foreachincell  — C closure interface (varargs va_list)
  *   map_foreachincellwithtraps — same
@@ -126,81 +126,19 @@ int cronjobtimer;
 #define BL_LIST_MAX 32768
 int bl_list_count = 0;
 
-time_t gettickthing(void) { return time(NULL); }
-int command_input(char* val) { return 0; }
+// gettickthing  — dead stub removed
+// command_input  — dead stub removed
+// map_timerthing — dead stub removed
 
-int map_timerthing(int x, int b) { return 0; }
+// map_id2mob — ported to src/game/map_server.rs
 
-MOB* map_id2mob(unsigned int id) {
-  MOB* mob;
-  struct block_list* bl;
+// map_id2npc — ported to src/game/map_server.rs
 
-  if (id < MOB_START_NUM) id += MOB_START_NUM - 1;
-  bl = map_id2bl(id);
-  if (bl) {
-    if (bl->type == BL_MOB) {
-      mob = (MOB*)bl;
-      return mob;
-    }
-  }
-  return NULL;
-}
+// map_name2npc — ported to src/game/map_server.rs
 
-NPC* map_id2npc(unsigned int id) {
-  NPC* npc;
-  struct block_list* bl;
+// map_id2fl — ported to src/game/map_server.rs
 
-  if (id < NPC_START_NUM) id += NPC_START_NUM - 2;
-  bl = map_id2bl(id);
-  if (bl) {
-    if (bl->type == BL_NPC) {
-      npc = (NPC*)bl;
-      return npc;
-    }
-  }
-  return NULL;
-}
-
-NPC* map_name2npc(const char* name) {
-  unsigned int i;
-  NPC* nd = NULL;
-
-  for (i = NPC_START_NUM; i <= npc_id; i++) {
-    nd = map_id2npc(i);
-
-    if (nd && !strcasecmp(nd->npc_name, name)) {
-      return nd;
-    }
-  }
-
-  return NULL;
-}
-
-FLOORITEM* map_id2fl(unsigned int id) {
-  FLOORITEM* fl;
-  struct block_list* bl;
-
-  bl = map_id2bl(id);
-  if (bl) {
-    if (bl->type == BL_ITEM) {
-      fl = (FLOORITEM*)bl;
-      return fl;
-    }
-  }
-  return NULL;
-}
-
-USER* map_name2sd(const char* name) {
-  int i;
-  USER* sd = NULL;
-
-  for (i = 0; i < fd_max; i++) {
-    if (rust_session_exists(i) && (sd = rust_session_get_data(i))) {
-      if (strcasecmp(name, sd->status.name) == 0) return sd;
-    }
-  }
-  return NULL;
-}
+// map_name2sd — ported to src/game/map_server.rs
 
 int map_foreachinarea(int (*func)(struct block_list*, va_list), int m, int x,
                       int y, int area, int type, ...) {
@@ -415,10 +353,13 @@ int map_respawn(int (*func)(struct block_list*, va_list), int m, int type,
   return 0;
 }
 
-int map_loadregistry(int id) {
-  return rust_map_loadregistry(id);
-}
+// map_loadregistry — thin shim; rust_map_loadregistry is #[no_mangle] and linked directly
 
+// map_read — dead function removed; superseded by rust_map_init (src/ffi/map_db.rs).
+// The following block was the C implementation; kept here as a reference comment.
+// int map_read(void) {
+
+#if 0  /* dead — rust_map_init() replaced this */
 int map_read(void) {
   unsigned short buff;
   unsigned int pos = 0;
@@ -603,6 +544,7 @@ int map_read(void) {
   printf("Map data file reading finished. %d map loaded!\n", map_n);
   return 0;
 }
+#endif  /* dead — map_read */
 
 // TODO: port map_reload to Rust (Phase 3).
 // Blocked by: map_foreachinarea + sl_updatepeople still in C.
@@ -620,53 +562,9 @@ int map_reload(void) {
   return 0;
 }
 
-void help_screen(void) {
-  printf("HELP LIST\n");
-  printf("---------\n");
-  printf(" --conf [FILENAME]  : set config file\n");
-  printf(" --lang [FILENAME]  : set lang file\n");
-  exit(0);
-}
+// help_screen — dead function removed (no callers)
 
-char* map_id2name(unsigned int id) {
-  char* owner;
-  CALLOC(owner, char, 255);
-  memset(owner, 0, 255);
-
-  char name[16];
-
-  if (!id) {
-    strcpy(owner, "None");
-    return owner;
-  }
-
-  SqlStmt* stmt;
-  stmt = SqlStmt_Malloc(sql_handle);
-  if (stmt == NULL) {
-    SqlStmt_ShowDebug(stmt);
-    return 0;
-  }
-
-  if (SQL_ERROR == SqlStmt_Prepare(
-                       stmt,
-                       "SELECT `ChaName` FROM `Character` WHERE `ChaId` = '%u'",
-                       id) ||
-      SQL_ERROR == SqlStmt_Execute(stmt) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 0, SQLDT_STRING, &name,
-                                      sizeof(name), NULL, NULL)) {
-    SqlStmt_ShowDebug(stmt);
-  }
-
-  if (SQL_SUCCESS != SqlStmt_NextRow(stmt)) {
-    SqlStmt_ShowDebug(stmt);
-  }
-
-  SqlStmt_Free(stmt);
-
-  memcpy(owner, name, sizeof(name));
-
-  return owner;
-}
+// map_id2name — ported to src/game/map_server.rs
 
 // TODO: port map_reset_timer to Rust (Phase 3).
 // Blocked by: clif_broadcast and clif_handle_disconnect still in C (map_parse.c).
@@ -722,241 +620,14 @@ int map_reset_timer(int v1, int v2) {
 }
 
 // reads game registry value (gamereg is a Rust static in src/game/map_server.rs)
-int map_readglobalgamereg(const char* reg) {
-  int i, exist;
+// map_readglobalgamereg — ported to src/game/map_server.rs
 
-  exist = -1;
-  nullpo_ret(0, reg);
+// map_loadclanbank — dead function removed (no callers in the codebase)
 
-  for (i = 0; i < gamereg.registry_num; i++) {
-    if (!strcasecmp(gamereg.registry[i].str, reg)) {
-      exist = i;
-      break;
-    }
-  }
+// map_saveclanbank — dead function removed (no callers in the codebase)
 
-  if (exist != -1) {
-    return gamereg.registry[exist].val;
-  }
-  return 0;
-}
+// map_weather — ported to src/game/map_server.rs
 
-int map_loadclanbank(int id) {
-  int i;
-  int count = 0;
+// map_do_term — ported to src/game/map_server.rs
 
-  SqlStmt* stmt;
-  struct clan_bank cbank;
-  struct clan_data* clan = NULL;
-
-  memset(&cbank, 0, sizeof(cbank));
-
-  stmt = SqlStmt_Malloc(sql_handle);
-  if (stmt == NULL) {
-    SqlStmt_ShowDebug(stmt);
-    SqlStmt_Free(stmt);
-    return -1;
-  }
-
-  clan = (struct clan_data*)rust_clandb_search(id);
-  if (clan == NULL) {
-    printf("[map] map_loadclanbank: clan %d not found\n", id);
-    SqlStmt_Free(stmt);
-    return -1;
-  }
-
-  if (SQL_ERROR ==
-          SqlStmt_Prepare(
-              stmt,
-              "SELECT `CbkEngrave`, `CbkItmId`,`CbkAmount`,`CbkChaIdOwner`, "
-              "`CbkPosition`, `CbkCustomLook`, `CbkCustomLookColor`, "
-              "`CbkCustomIcon`, `CbkCustomIconColor`, `CbkProtected`, "
-              "`CbkNote` FROM `ClanBanks` WHERE `CbkClnId` = '%u' LIMIT 255",
-              id) ||
-      SQL_ERROR == SqlStmt_Execute(stmt) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 0, SQLDT_STRING, &cbank.real_name,
-                                      sizeof(cbank.real_name), NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 1, SQLDT_UINT, &cbank.item_id, 0,
-                                      NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 2, SQLDT_UINT, &cbank.amount, 0,
-                                      NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 3, SQLDT_UINT, &cbank.owner, 0,
-                                      NULL, NULL) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 4, SQLDT_UCHAR, &cbank.pos, 0, NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 5, SQLDT_UINT, &cbank.customLook, 0,
-                                      NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 6, SQLDT_UINT,
-                                      &cbank.customLookColor, 0, NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 7, SQLDT_UINT, &cbank.customIcon, 0,
-                                      NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 8, SQLDT_UINT,
-                                      &cbank.customIconColor, 0, NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 9, SQLDT_UINT, &cbank.protected, 0,
-                                      NULL, NULL) ||
-      SQL_ERROR == SqlStmt_BindColumn(stmt, 10, SQLDT_STRING, &cbank.note,
-                                      sizeof(cbank.note), NULL, NULL)) {
-    SqlStmt_ShowDebug(stmt);
-    SqlStmt_Free(stmt);
-    return -1;
-  }
-
-  for (i = 0; i < SqlStmt_NumRows(stmt) && SQL_SUCCESS == SqlStmt_NextRow(stmt);
-       i++) {
-    memcpy(&clan->clanbanks[i], &cbank, sizeof *clan->clanbanks);
-    count++;
-  }
-
-  SqlStmt_Free(stmt);
-  printf("[map] [clan bank slots] count=%i name=%s\n", count, clandb_name(id));
-  return 0;
-}
-
-int map_saveclanbank(int id) {
-  SqlStmt* stmt;
-
-  unsigned int max = 255;
-
-  int save_id[max];
-  int item_id = -1;
-  int i;
-  char escape[64];
-  char escape2[300];
-
-  struct clan_data* clan = NULL;
-  clan = (struct clan_data*)rust_clandb_search(id);
-
-  if (clan == NULL) return 0;
-
-  memset(save_id, 0, max * sizeof(int));
-  stmt = SqlStmt_Malloc(sql_handle);
-
-  if (stmt == NULL) {
-    SqlStmt_ShowDebug(stmt);
-    return 0;
-  }
-
-  if (SQL_ERROR == SqlStmt_Prepare(stmt,
-                                   "SELECT `CbkPosition` FROM `ClanBanks` "
-                                   "WHERE `CbkClnId` = '%u' LIMIT 255",
-                                   id) ||
-      SQL_ERROR == SqlStmt_Execute(stmt) ||
-      SQL_ERROR ==
-          SqlStmt_BindColumn(stmt, 0, SQLDT_INT, &item_id, 0, NULL, NULL)) {
-    SqlStmt_ShowDebug(stmt);
-    SqlStmt_Free(stmt);
-    return 0;
-  }
-
-  for (i = 0; i < max; i++) save_id[i] = -1;
-
-  for (i = 0; i < SqlStmt_NumRows(stmt) && SQL_SUCCESS == SqlStmt_NextRow(stmt);
-       i++)
-    save_id[item_id] = item_id;
-
-  SqlStmt_Free(stmt);
-
-  for (i = 0; i < max; i++) {
-    Sql_EscapeString(sql_handle, escape, clan->clanbanks[i].real_name);
-    Sql_EscapeString(sql_handle, escape2, clan->clanbanks[i].note);
-
-    if (save_id[i] == i) {
-      if (clan->clanbanks[i].item_id == 0) {
-        if (SQL_ERROR == Sql_Query(sql_handle,
-                                   "DELETE FROM `ClanBanks` WHERE `CbkClnId` = "
-                                   "'%u' AND `CbkPosition` = '%d'",
-                                   id, i)) {
-          Sql_ShowDebug(sql_handle);
-          return 0;
-        }
-      } else {
-        if (SQL_ERROR ==
-            Sql_Query(
-                sql_handle,
-                "UPDATE `ClanBanks` SET `CbkItmId` = '%u', `CbkAmount` = '%u', "
-                "`CbkChaIdOwner` = '%u', `CbkTimer` = '%u', `CbkEngrave` = "
-                "'%s', `CbkCustomLook` = '%u', `CbkCustomLookColor` = '%u', "
-                "`CbkCustomIcon` = '%u', `CbkCustomIconColor` = '%u', "
-                "`CbkProtected` = '%d', `CbkNote` = '%s' WHERE `CbkClnId` = "
-                "'%u' AND `CbkPosition` = '%d'",
-                clan->clanbanks[i].item_id, clan->clanbanks[i].amount,
-                clan->clanbanks[i].owner, clan->clanbanks[i].time, escape,
-                clan->clanbanks[i].customLook,
-                clan->clanbanks[i].customLookColor,
-                clan->clanbanks[i].customIcon,
-                clan->clanbanks[i].customIconColor,
-                clan->clanbanks[i].protected, escape2, id, i)) {
-          Sql_ShowDebug(sql_handle);
-          return 0;
-        }
-      }
-    } else {
-      if (clan->clanbanks[i].item_id > 0) {
-        if (SQL_ERROR ==
-            Sql_Query(sql_handle,
-                      "INSERT INTO `ClanBanks` (`CBkClnId`, `CbkItmId`, "
-                      "`CbkAmount`, `CbkChaIdOwner`, `CbkTimer`, `CbkEngrave`, "
-                      "`CbkCustomLook`, `CbkCustomLookColor`, `CbkCustomIcon`, "
-                      "`CbkCustomIconColor`, `CbkProtected`, `CbkNote`, "
-                      "`CbkPosition`) VALUES ('%u', '%u', '%u', '%u', '%u', "
-                      "'%s', '%u', '%u', '%u', '%u', '%d', '%s', '%d')",
-                      id, clan->clanbanks[i].item_id, clan->clanbanks[i].amount,
-                      clan->clanbanks[i].owner, clan->clanbanks[i].time, escape,
-                      clan->clanbanks[i].customLook,
-                      clan->clanbanks[i].customLookColor,
-                      clan->clanbanks[i].customIcon,
-                      clan->clanbanks[i].customIconColor,
-                      clan->clanbanks[i].protected, escape2, i)) {
-          Sql_ShowDebug(sql_handle);
-          return 0;
-        }
-      }
-    }
-  }
-
-  return 1;
-}
-
-int map_weather(int id, int n) {
-  if (old_time != cur_time) {
-    old_time = cur_time;
-    sl_doscript_blargs("mapWeather", NULL, 0);
-  }
-  return 0;
-}
-
-// TODO: port map_do_term to Rust (Phase 3).
-// Blocked by: map_savechars still in C, and the FREE(map[i].tile/...) loop
-// uses the C `map[]` global array and the FREE macro.
-void map_do_term(void) {
-  int i;
-  map_savechars(0, 0);
-  map_clritem();
-  map_termiddb();
-  for (i = 0; i < MAX_MAP_PER_SERVER; i++) {
-    FREE(map[i].tile);
-    FREE(map[i].obj);
-    FREE(map[i].map);
-    FREE(map[i].block);
-    FREE(map[i].block_mob);
-    FREE(map[i].warp);
-  }
-  map_termblock();
-  itemdb_term();
-  magicdb_term();
-  classdb_term();
-  printf("[map] Map Server Shutdown\n");
-}
-
-int map_savechars(int none, int nonetoo) {
-  USER* sd = NULL;
-  int x;
-
-  for (x = 0; x < fd_max; x++) {
-    if (rust_session_exists(x) && (sd = (USER*)rust_session_get_data(x)) &&
-        !rust_session_get_eof(x)) {
-      intif_save(sd);
-    }
-  }
-  return 0;
-}
+// map_savechars — ported to src/game/map_server.rs

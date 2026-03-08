@@ -267,6 +267,10 @@ extern "C" {
     pub fn magicdb_yname(id: c_int) -> *mut c_char;
     #[link_name = "rust_magicdb_name"]
     pub fn magicdb_name(id: c_int) -> *mut c_char;
+    #[link_name = "rust_magicdb_id"]
+    pub fn magicdb_id(s: *const c_char) -> c_int;
+    #[link_name = "rust_magicdb_dispel"]
+    pub fn magicdb_dispel(id: c_int) -> c_int;
 
     // mob_db lookups — static inline in C, redirect to actual Rust symbols
     #[link_name = "rust_mobdb_experience"]
@@ -2373,6 +2377,254 @@ pub unsafe fn mobspawn_onetime(
         }
     }
     spawnedmobs
+}
+
+// ─── sl_mob_* Lua scripting glue (ported from c_src/sl_compat.c) ─────────────
+
+/// Heal mob: fire on_healed Lua event then send the negative-damage health packet.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn sl_mob_addhealth(mob: *mut MobSpawnData, damage: c_int) {
+    use crate::game::map_parse::combat::clif_send_mob_healthscript;
+    if mob.is_null() { return; }
+    let bl = map_id2bl((*mob).attacker);
+    let data = (*mob).data;
+    if !data.is_null() && !bl.is_null() && damage > 0 {
+        let yname = match (*data).subtype {
+            0 => c"mob_ai_basic".as_ptr(),
+            1 => c"mob_ai_normal".as_ptr(),
+            2 => c"mob_ai_hard".as_ptr(),
+            3 => c"mob_ai_boss".as_ptr(),
+            5 => c"mob_ai_ghost".as_ptr(),
+            _ => (*data).yname.as_ptr(),
+        };
+        sl_doscript_blargs(yname, c"on_healed".as_ptr(), 2, &raw mut (*mob).bl, bl);
+    } else if !data.is_null() && damage > 0 {
+        let yname = match (*data).subtype {
+            0 => c"mob_ai_basic".as_ptr(),
+            1 => c"mob_ai_normal".as_ptr(),
+            2 => c"mob_ai_hard".as_ptr(),
+            3 => c"mob_ai_boss".as_ptr(),
+            5 => c"mob_ai_ghost".as_ptr(),
+            _ => (*data).yname.as_ptr(),
+        };
+        sl_doscript_blargs(yname, c"on_healed".as_ptr(), 1, &raw mut (*mob).bl);
+    }
+    clif_send_mob_healthscript(mob, -damage, 0);
+}
+
+/// Damage mob: set attacker/damage fields then send the health packet.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn sl_mob_removehealth(mob: *mut MobSpawnData, damage: c_int, caster_id: c_uint) {
+    use crate::game::map_parse::combat::clif_send_mob_healthscript;
+    if mob.is_null() { return; }
+    let bl = if caster_id > 0 {
+        (*mob).attacker = caster_id;
+        map_id2bl(caster_id)
+    } else {
+        map_id2bl((*mob).attacker)
+    };
+    if !bl.is_null() {
+        if (*bl).bl_type as c_int == BL_PC {
+            let tsd = bl as *mut MapSessionData;
+            (*tsd).damage = damage as c_float;
+            (*tsd).critchance = 0;
+        } else if (*bl).bl_type as c_int == BL_MOB {
+            let tmob = bl as *mut MobSpawnData;
+            (*tmob).damage = damage as c_float;
+            (*tmob).critchance = 0;
+        }
+    } else {
+        (*mob).damage = damage as c_float;
+        (*mob).critchance = 0;
+    }
+    if (*mob).state != MOB_DEAD {
+        clif_send_mob_healthscript(mob, damage, 0);
+    }
+}
+
+/// Return accumulated threat amount from a specific player on this mob.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn sl_mob_checkthreat(mob: *mut MobSpawnData, player_id: c_uint) -> c_int {
+    if mob.is_null() { return 0; }
+    let tsd = map_id2sd_mob(player_id);
+    if tsd.is_null() { return 0; }
+    let uid = (*tsd).bl.id;
+    for x in 0..MAX_THREATCOUNT {
+        if (*mob).threat[x].user == uid {
+            return (*mob).threat[x].amount as c_int;
+        }
+    }
+    0
+}
+
+/// Add individual damage from player to mob's dmgindtable.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn sl_mob_setinddmg(mob: *mut MobSpawnData, player_id: c_uint, dmg: f32) -> c_int {
+    if mob.is_null() { return 0; }
+    let sd = map_id2sd_mob(player_id);
+    if sd.is_null() { return 0; }
+    let cid = (*sd).status.id;
+    for x in 0..MAX_THREATCOUNT {
+        if (*mob).dmgindtable[x][0] as c_uint == cid || (*mob).dmgindtable[x][0] == 0.0 {
+            (*mob).dmgindtable[x][0] = cid as f64;
+            (*mob).dmgindtable[x][1] += dmg as f64;
+            return 1;
+        }
+    }
+    0
+}
+
+/// Add group damage from player to mob's dmggrptable.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn sl_mob_setgrpdmg(mob: *mut MobSpawnData, player_id: c_uint, dmg: f32) -> c_int {
+    if mob.is_null() { return 0; }
+    let sd = map_id2sd_mob(player_id);
+    if sd.is_null() { return 0; }
+    let gid = (*sd).groupid;
+    for x in 0..MAX_THREATCOUNT {
+        if (*mob).dmggrptable[x][0] as c_uint == gid || (*mob).dmggrptable[x][0] == 0.0 {
+            (*mob).dmggrptable[x][0] = gid as f64;
+            (*mob).dmggrptable[x][1] += dmg as f64;
+            return 1;
+        }
+    }
+    0
+}
+
+/// Call a named event on this mob's custom AI script.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn sl_mob_callbase(mob: *mut MobSpawnData, script: *const c_char) -> c_int {
+    if mob.is_null() || script.is_null() { return 0; }
+    let bl = map_id2bl((*mob).attacker);
+    let yname = (*(*mob).data).yname.as_ptr();
+    if !bl.is_null() {
+        sl_doscript_blargs(yname, script, 2, &raw mut (*mob).bl, bl);
+    } else {
+        sl_doscript_blargs(yname, script, 2, &raw mut (*mob).bl, &raw mut (*mob).bl);
+    }
+    1
+}
+
+/// Return 1 if the mob can step forward in its current direction, 0 if blocked.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn sl_mob_checkmove(mob: *mut MobSpawnData) -> c_int {
+    if mob.is_null() { return 0; }
+    let m = (*mob).bl.m as c_int;
+    let mut dx = (*mob).bl.x as c_int;
+    let mut dy = (*mob).bl.y as c_int;
+    let direction = (*mob).side;
+    match direction {
+        0 => dy -= 1,
+        1 => dx += 1,
+        2 => dy += 1,
+        3 => dx -= 1,
+        _ => {}
+    }
+    let slot = ffi_get_map_ptr((*mob).bl.m);
+    if slot.is_null() { return 0; }
+    dx = dx.max(0).min((*slot).xs as c_int - 1);
+    dy = dy.max(0).min((*slot).ys as c_int - 1);
+    if warp_at(slot, dx, dy) { return 0; }
+    (*mob).canmove = 0;
+    map_foreachincell(rust_mob_move, m, dx, dy, BL_MOB, mob as *mut _);
+    map_foreachincell(rust_mob_move, m, dx, dy, BL_PC, mob as *mut _);
+    map_foreachincell(rust_mob_move, m, dx, dy, BL_NPC, mob as *mut _);
+    if clif_object_canmove(m, dx, dy, direction) != 0 { return 0; }
+    if clif_object_canmove_from(m, (*mob).bl.x as c_int, (*mob).bl.y as c_int, direction) != 0 { return 0; }
+    if map_canmove(m, dx, dy) == 1 || (*mob).canmove == 1 { return 0; }
+    1
+}
+
+/// Set or clear a magic-effect duration slot on the mob.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn sl_mob_setduration(
+    mob: *mut MobSpawnData, name: *const c_char,
+    mut time: c_int, caster_id: c_uint, recast: c_int,
+) {
+    if mob.is_null() { return; }
+    let id = magicdb_id(name);
+    if time > 0 && time < 1000 { time = 1000; }
+    let mut alreadycast = 0i32;
+    for x in 0..MAX_MAGIC_TIMERS {
+        if (*mob).da[x].id as c_int == id && (*mob).da[x].caster_id == caster_id && (*mob).da[x].duration > 0 {
+            alreadycast = 1;
+        }
+    }
+    for x in 0..MAX_MAGIC_TIMERS {
+        let mid = (*mob).da[x].id as c_int;
+        if mid == id && time <= 0 && (*mob).da[x].caster_id == caster_id && alreadycast == 1 {
+            let saved_caster_id = (*mob).da[x].caster_id;
+            (*mob).da[x].duration = 0; (*mob).da[x].id = 0; (*mob).da[x].caster_id = 0;
+            map_foreachinarea(clif_sendanimation, (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
+                              AREA, BL_PC, (*mob).da[x].animation as c_int, &raw mut (*mob).bl, -1i32);
+            (*mob).da[x].animation = 0;
+            let bl = if saved_caster_id != (*mob).bl.id { map_id2bl(saved_caster_id) } else { std::ptr::null_mut() };
+            if !bl.is_null() { sl_doscript_blargs(magicdb_yname(mid), c"uncast".as_ptr(), 2, &raw mut (*mob).bl, bl); }
+            else             { sl_doscript_blargs(magicdb_yname(mid), c"uncast".as_ptr(), 1, &raw mut (*mob).bl); }
+            return;
+        } else if (*mob).da[x].id as c_int == id && (*mob).da[x].caster_id == caster_id
+                && ((*mob).da[x].duration > time || recast == 1) && alreadycast == 1 {
+            (*mob).da[x].duration = time;
+            return;
+        } else if (*mob).da[x].id == 0 && (*mob).da[x].duration == 0 && time != 0 && alreadycast != 1 {
+            (*mob).da[x].id = id as u16;
+            (*mob).da[x].duration = time;
+            (*mob).da[x].caster_id = caster_id;
+            return;
+        }
+    }
+}
+
+/// Clear magic-effect timers in id range [minid..maxid], firing uncast Lua events.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn sl_mob_flushduration(mob: *mut MobSpawnData, dis: c_int, minid: c_int, maxid: c_int) {
+    if mob.is_null() { return; }
+    let maxid = if maxid < minid { minid } else { maxid };
+    for x in 0..MAX_MAGIC_TIMERS {
+        let id = (*mob).da[x].id as c_int;
+        if id == 0 { continue; }
+        if magicdb_dispel(id) > dis { continue; }
+        let flush = if minid <= 0 { true } else if maxid <= 0 { id == minid } else { id >= minid && id <= maxid };
+        if flush {
+            (*mob).da[x].duration = 0;
+            map_foreachinarea(clif_sendanimation, (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
+                              AREA, BL_PC, (*mob).da[x].animation as c_int, &raw mut (*mob).bl, -1i32);
+            (*mob).da[x].animation = 0; (*mob).da[x].id = 0;
+            let bl = map_id2bl((*mob).da[x].caster_id);
+            (*mob).da[x].caster_id = 0;
+            if !bl.is_null() { sl_doscript_blargs(magicdb_yname(id), c"uncast".as_ptr(), 2, &raw mut (*mob).bl, bl); }
+            else             { sl_doscript_blargs(magicdb_yname(id), c"uncast".as_ptr(), 1, &raw mut (*mob).bl); }
+        }
+    }
+}
+
+/// Clear magic-effect timers without firing uncast Lua events.
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn sl_mob_flushdurationnouncast(mob: *mut MobSpawnData, dis: c_int, minid: c_int, maxid: c_int) {
+    if mob.is_null() { return; }
+    let maxid = if maxid < minid { minid } else { maxid };
+    for x in 0..MAX_MAGIC_TIMERS {
+        let id = (*mob).da[x].id as c_int;
+        if id == 0 { continue; }
+        if magicdb_dispel(id) > dis { continue; }
+        let flush = if minid <= 0 { true } else if maxid <= 0 { id == minid } else { id >= minid && id <= maxid };
+        if flush {
+            (*mob).da[x].duration = 0; (*mob).da[x].caster_id = 0;
+            map_foreachinarea(clif_sendanimation, (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
+                              AREA, BL_PC, (*mob).da[x].animation as c_int, &raw mut (*mob).bl, -1i32);
+            (*mob).da[x].animation = 0; (*mob).da[x].id = 0;
+        }
+    }
 }
 
 #[cfg(test)]

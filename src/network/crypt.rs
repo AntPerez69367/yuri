@@ -173,6 +173,271 @@ pub fn tk_crypt_static(buff: &mut [u8], xor_key: &[u8]) {
     tk_crypt_dynamic(buff, xor_key);
 }
 
+// ─── C ABI wrappers (port of c_src/net_crypt.c / c_src/sl_compat.c) ──────────
+
+/// Encrypts the pending write buffer for `fd` and returns the total byte count to commit.
+///
+/// Mirrors `encrypt()` in `c_src/sl_compat.c` (line 4618).
+/// Called as `rust_session_commit(fd, encrypt(fd) as usize)` from every packet sender.
+///
+/// Algorithm:
+/// 1. Read the original payload length from `wbuf[1..2]` (big-endian u16).
+/// 2. Append 3 index bytes via `set_packet_indexes` (updates `wbuf[1..2]` to new length).
+/// 3. Apply dynamic or static XOR encryption.
+/// 4. Return `new_payload_len + 3` = total bytes to commit (including the 3-byte framing header).
+///
+/// # Safety
+/// `fd` must be a valid session fd with pending write data staged by `rust_session_wfifohead`.
+#[no_mangle]
+pub unsafe extern "C" fn encrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int {
+    use crate::ffi::config::config;
+    use crate::ffi::session::{rust_session_get_data, rust_session_wdata_ptr};
+    use crate::game::pc::MapSessionData;
+
+    let sd = rust_session_get_data(fd) as *const MapSessionData;
+    if sd.is_null() {
+        tracing::error!("[encrypt] sd is NULL for fd={}", fd);
+        return 1;
+    }
+
+    let buf = rust_session_wdata_ptr(fd, 0);
+    if buf.is_null() {
+        tracing::error!("[encrypt] write buffer NULL for fd={}", fd);
+        return 1;
+    }
+
+    // Original payload length from packet header bytes 1–2 (big-endian).
+    // After set_packet_indexes the header is updated; total slice = original + 6
+    // (3 bytes framing offset + 3 index bytes appended by set_packet_indexes).
+    let original_len = u16::from_be_bytes([*buf.add(1), *buf.add(2)]) as usize;
+    let total_size = original_len + 6;
+    let buf_slice = std::slice::from_raw_parts_mut(buf, total_size);
+
+    set_packet_indexes(buf_slice);
+
+    if is_key_server(buf_slice[3]) {
+        // Dynamic encryption: derive session key from EncHash lookup table.
+        // EncHash is [i8; 0x401]; reinterpret as &[u8] for the crypto functions.
+        let enc_hash = std::slice::from_raw_parts(
+            (*sd).EncHash.as_ptr() as *const u8,
+            (*sd).EncHash.len(),
+        );
+        let mut key = [0u8; 10];
+        generate_key2(buf_slice, enc_hash, &mut key, false);
+        tk_crypt_dynamic(buf_slice, &key);
+    } else {
+        tk_crypt_static(buf_slice, config().xor_key.as_bytes());
+    }
+
+    // buf_slice[1..2] was updated by set_packet_indexes to the new payload length.
+    u16::from_be_bytes([buf_slice[1], buf_slice[2]]) as std::os::raw::c_int + 3
+}
+
+/// Decrypts the incoming read buffer for `fd` in-place.
+///
+/// Mirrors `decrypt()` in `c_src/sl_compat.c` (line 4647).
+/// Called by the packet dispatch loop before `map_parse` processes a packet.
+///
+/// # Safety
+/// `fd` must be a valid session fd with a complete incoming packet in the read buffer.
+/// The read buffer is C-allocated session memory; the `*const u8 → *mut u8` cast for
+/// in-place XOR mirrors the C `RFIFOP(fd, 0)` usage and is safe here because
+/// packet dispatch is single-threaded and no other thread aliases this buffer.
+#[no_mangle]
+pub unsafe extern "C" fn decrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int {
+    use crate::ffi::config::config;
+    use crate::ffi::session::{rust_session_available, rust_session_get_data, rust_session_rdata_ptr};
+    use crate::game::pc::MapSessionData;
+
+    let sd = rust_session_get_data(fd) as *const MapSessionData;
+    if sd.is_null() {
+        return 1;
+    }
+
+    let rdata_const = rust_session_rdata_ptr(fd, 0);
+    if rdata_const.is_null() {
+        return 0;
+    }
+
+    // Cast to *mut u8 for in-place XOR (see Safety doc above).
+    let available = rust_session_available(fd);
+    let buf_slice = std::slice::from_raw_parts_mut(rdata_const as *mut u8, available);
+
+    let enc_hash = std::slice::from_raw_parts(
+        (*sd).EncHash.as_ptr() as *const u8,
+        (*sd).EncHash.len(),
+    );
+
+    if is_key_client(buf_slice[3]) {
+        let mut key = [0u8; 10];
+        generate_key2(buf_slice, enc_hash, &mut key, true);
+        tk_crypt_dynamic(buf_slice, &key);
+    } else {
+        tk_crypt_static(buf_slice, config().xor_key.as_bytes());
+    }
+
+    0
+}
+
+// ─── Meta file packet senders ─────────────────────────────────────────────────
+//
+// Ported from c_src/sl_compat.c lines 3196–3295.
+// `metacrc` / `send_metafile` are internal helpers; `send_meta` and
+// `send_metalist` are exported C symbols called from map_parse.c dispatch and
+// sl_g_sendmeta() respectively.
+
+unsafe fn metacrc_path(path: &str) -> u32 {
+    use flate2::Crc;
+    let data = std::fs::read(path).unwrap_or_default();
+    let mut crc = Crc::new();
+    crc.update(&data);
+    crc.sum()
+}
+
+unsafe fn send_metafile_impl(fd: std::os::raw::c_int, file: &str) {
+    use flate2::write::ZlibEncoder;
+    use flate2::Compression;
+    use std::io::Write;
+    use crate::ffi::config::config;
+    use crate::ffi::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
+
+    let cfg = config();
+    let path = format!("{}{}", cfg.meta_dir, file);
+
+    let data = match std::fs::read(&path) {
+        Ok(d) => d,
+        Err(_) => return,
+    };
+
+    let checksum = metacrc_path(&path);
+    let mut enc = ZlibEncoder::new(Vec::new(), Compression::default());
+    let _ = enc.write_all(&data);
+    let compressed = enc.finish().unwrap_or_default();
+    let clen = compressed.len() as u16;
+
+    // Packet layout (offsets from write-buffer base):
+    //   [0]=0xAA  [1-2]=len+3 (set last)  [3]=0x6F  [4]=0  [5]=0 (subtype file)
+    //   [6]=name_len  [7..7+name_len]=name  [7+name_len]='\0'
+    //   then: checksum 4B | clen 2B | compressed data | 0x00
+    // len = (name_len+1) + 4 + 2 + compressed.len() + 1
+    let fname = file.as_bytes();
+    let name_len = fname.len();
+    let len = (name_len + 1) + 4 + 2 + compressed.len() + 1;
+
+    // original_len = len + 3; total buf needed = original_len + 6 = len + 9
+    let total = len + 9;
+    rust_session_wfifohead(fd, total);
+
+    let w = |off: usize| rust_session_wdata_ptr(fd, off);
+    *w(0) = 0xAA;
+    let plen = (len + 3) as u16;
+    *w(1) = (plen >> 8) as u8;
+    *w(2) = (plen & 0xFF) as u8;
+    *w(3) = 0x6F;
+    *w(4) = 0;
+    *w(5) = 0;
+    *w(6) = name_len as u8;
+    for (i, &b) in fname.iter().enumerate() {
+        *w(7 + i) = b;
+    }
+    *w(7 + name_len) = 0; // null terminator (mirrors strcpy)
+
+    let mut off = 7 + name_len + 1;
+    let cs = checksum.to_be_bytes();
+    *w(off) = cs[0]; *w(off+1) = cs[1]; *w(off+2) = cs[2]; *w(off+3) = cs[3];
+    off += 4;
+    let cl = clen.to_be_bytes();
+    *w(off) = cl[0]; *w(off+1) = cl[1];
+    off += 2;
+    std::ptr::copy_nonoverlapping(compressed.as_ptr(), rust_session_wdata_ptr(fd, off), compressed.len());
+    off += compressed.len();
+    *w(off) = 0;
+
+    let n = encrypt(fd) as usize;
+    rust_session_commit(fd, n);
+}
+
+/// Respond to a client meta-file request with the compressed file data.
+/// Replaces `send_meta` in `c_src/sl_compat.c` (line 3268).
+///
+/// # Safety
+/// `sd` must be a valid, non-null pointer to an initialized [`crate::game::pc::MapSessionData`].
+#[no_mangle]
+pub unsafe extern "C" fn send_meta(sd: *mut crate::game::pc::MapSessionData) -> std::os::raw::c_int {
+    use crate::ffi::session::rust_session_rdata_ptr;
+    if sd.is_null() { return 0; }
+    let fd = (*sd).fd;
+    let name_len = *rust_session_rdata_ptr(fd, 6) as usize;
+    let mut buf = vec![0u8; name_len];
+    for i in 0..name_len {
+        buf[i] = *rust_session_rdata_ptr(fd, 7 + i);
+    }
+    let file = String::from_utf8_lossy(&buf).into_owned();
+    send_metafile_impl(fd, &file);
+    0
+}
+
+/// Send the list of meta files and their CRC32 checksums to the client.
+/// Replaces `send_metalist` in `c_src/sl_compat.c` (line 3276).
+///
+/// # Safety
+/// `sd` must be a valid, non-null pointer to an initialized [`crate::game::pc::MapSessionData`].
+#[no_mangle]
+pub unsafe extern "C" fn send_metalist(sd: *mut crate::game::pc::MapSessionData) -> std::os::raw::c_int {
+    use flate2::Crc;
+    use crate::ffi::config::config;
+    use crate::ffi::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
+
+    if sd.is_null() { return 0; }
+    let fd = (*sd).fd;
+    let cfg = config();
+    let files = &cfg.meta;
+    let meta_dir = &cfg.meta_dir;
+
+    // Pre-compute payload length: 2 (count) + per-file (1 + name_len + 4)
+    let entry_bytes: usize = files.iter().map(|f| 1 + f.len() + 4).sum();
+    // len = 2 + entry_bytes; WFIFOW(1) = len + 4; WFIFOSET = len + 10
+    let len = 2 + entry_bytes;
+    let total = len + 10;
+    rust_session_wfifohead(fd, total);
+
+    let w = |off: usize| rust_session_wdata_ptr(fd, off);
+    *w(0) = 0xAA;
+    // [1-2] set after computing len
+    *w(3) = 0x6F;
+    *w(4) = 0;
+    *w(5) = 1; // subtype: list
+    let count = files.len() as u16;
+    *w(6) = (count >> 8) as u8;
+    *w(7) = (count & 0xFF) as u8;
+
+    let mut off = 8; // 6 (fixed header base) + 2 (count)
+    for fname in files.iter() {
+        let fbytes = fname.as_bytes();
+        *w(off) = fbytes.len() as u8;
+        off += 1;
+        for (i, &b) in fbytes.iter().enumerate() {
+            *w(off + i) = b;
+        }
+        off += fbytes.len();
+        let path = format!("{}{}", meta_dir, fname);
+        let mut crc = Crc::new();
+        crc.update(&std::fs::read(&path).unwrap_or_default());
+        let cs = crc.sum().to_be_bytes();
+        *w(off) = cs[0]; *w(off+1) = cs[1]; *w(off+2) = cs[2]; *w(off+3) = cs[3];
+        off += 4;
+    }
+
+    // Set length field: len + 4 (matches C: WFIFOW(1) = len + 4)
+    let plen = (len + 4) as u16;
+    *w(1) = (plen >> 8) as u8;
+    *w(2) = (plen & 0xFF) as u8;
+
+    let n = encrypt(fd) as usize;
+    rust_session_commit(fd, n);
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

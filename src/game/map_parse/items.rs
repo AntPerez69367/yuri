@@ -69,7 +69,7 @@ extern "C" {
     fn clif_object_canmove_from(m: c_int, x: c_int, y: c_int, dir: c_int) -> c_int;
     fn map_id2name(id: c_uint) -> *mut c_char;
     fn map_additem(bl: *mut BlockList);
-    fn read_pass(m: c_int, x: c_int, y: c_int) -> c_int;
+    // read_pass — inlined below; no longer an extern "C" call
     fn pc_readglobalreg(sd: *mut MapSessionData, reg: *const c_char) -> c_int;
     fn sl_doscript_blargs(
         script: *const c_char,
@@ -1292,7 +1292,12 @@ pub unsafe extern "C" fn clif_parsethrow(sd: *mut MapSessionData) -> c_int {
         map_foreachincell(clif_throw_check, m, x1, y1, BL_NPC, found.as_mut_ptr());
         map_foreachincell(clif_throw_check, m, x1, y1, BL_PC,  found.as_mut_ptr());
         map_foreachincell(clif_throw_check, m, x1, y1, BL_MOB, found.as_mut_ptr());
-        found[0] += read_pass(m, x1, y1) as c_int;
+        // read_pass(m, x, y) — mirrors map[m].pass[x + y*xs]
+        let pass_val = if map.is_null() { 0 } else {
+            let md = &*map.add(m as usize);
+            if md.pass.is_null() { 0 } else { *md.pass.add(x1 as usize + y1 as usize * md.xs as usize) as c_int }
+        };
+        found[0] += pass_val;
         found[0] += clif_object_canmove(m, x1, y1, (*sd).status.side as c_int);
         found[0] += clif_object_canmove_from(m, x1, y1, (*sd).status.side as c_int);
 

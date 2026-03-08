@@ -167,8 +167,6 @@ extern "C" {
     #[link_name = "rust_pc_warp"]
     fn pc_warp(sd: *mut MapSessionData, m: c_int, x: c_int, y: c_int) -> c_int;
 
-    fn clif_pushback(sd: *mut MapSessionData) -> c_int;
-
     #[link_name = "rust_itemdb_look"]
     fn itemdb_look(id: c_uint) -> c_int;
     #[link_name = "rust_itemdb_lookcolor"]
@@ -1405,4 +1403,323 @@ unsafe fn do_warp_check(sd: *mut MapSessionData) {
     }
 
     pc_warp(sd, zm, zx, zy);
+}
+
+// ─── Object collision flag queries ───────────────────────────────────────────
+//
+// Ported from c_src/sl_compat.c lines 3950–3977.
+// OBJ_* bits (from c_src/map_server.h):
+const OBJ_UP:    u8 = 1;
+const OBJ_DOWN:  u8 = 2;
+const OBJ_RIGHT: u8 = 4;
+const OBJ_LEFT:  u8 = 8;
+
+/// Return non-zero if the object at `(m, x, y)` blocks movement in `side` direction.
+/// `side`: 0=up, 1=right, 2=down, 3=left.
+/// Replaces `clif_object_canmove` in `c_src/sl_compat.c` (line 3950).
+#[no_mangle]
+pub unsafe extern "C" fn clif_object_canmove(m: c_int, x: c_int, y: c_int, side: c_int) -> c_int {
+    use crate::game::map_server::objectFlags;
+    let object = read_obj(m, x, y) as usize;
+    if objectFlags.is_null() { return 0; }
+    let flag = *objectFlags.add(object);
+    match side {
+        0 => if flag & OBJ_UP    != 0 { 1 } else { 0 },
+        1 => if flag & OBJ_RIGHT != 0 { 1 } else { 0 },
+        2 => if flag & OBJ_DOWN  != 0 { 1 } else { 0 },
+        3 => if flag & OBJ_LEFT  != 0 { 1 } else { 0 },
+        _ => 0,
+    }
+}
+
+/// Return non-zero if movement is blocked when *leaving* `(m, x, y)` in `side` direction.
+/// Uses the reverse-direction flag (leaving down = OBJ_UP on the destination side).
+/// Replaces `clif_object_canmove_from` in `c_src/sl_compat.c` (line 3964).
+#[no_mangle]
+pub unsafe extern "C" fn clif_object_canmove_from(m: c_int, x: c_int, y: c_int, side: c_int) -> c_int {
+    use crate::game::map_server::objectFlags;
+    let object = read_obj(m, x, y) as usize;
+    if objectFlags.is_null() { return 0; }
+    let flag = *objectFlags.add(object);
+    match side {
+        0 => if flag & OBJ_DOWN  != 0 { 1 } else { 0 },
+        1 => if flag & OBJ_LEFT  != 0 { 1 } else { 0 },
+        2 => if flag & OBJ_UP    != 0 { 1 } else { 0 },
+        3 => if flag & OBJ_RIGHT != 0 { 1 } else { 0 },
+        _ => 0,
+    }
+}
+
+/// Push player back 2 tiles opposite their facing direction.
+/// Replaces `clif_pushback` in `c_src/sl_compat.c` (line 4176).
+///
+/// # Safety
+/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
+#[no_mangle]
+pub unsafe extern "C" fn clif_pushback(sd: *mut MapSessionData) -> c_int {
+    let m = (*sd).bl.m as c_int;
+    let x = (*sd).bl.x as c_int;
+    let y = (*sd).bl.y as c_int;
+    match (*sd).status.side {
+        0 => { pc_warp(sd, m, x,     y + 2); }
+        1 => { pc_warp(sd, m, x - 2, y    ); }
+        2 => { pc_warp(sd, m, x,     y - 2); }
+        3 => { pc_warp(sd, m, x + 2, y    ); }
+        _ => {}
+    }
+    0
+}
+
+/// Respond to a client viewport scroll: update position delta and refresh visible objects.
+/// Replaces `clif_parseviewchange` in `c_src/sl_compat.c` (line 3070).
+///
+/// # Safety
+/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
+#[no_mangle]
+pub unsafe extern "C" fn clif_parseviewchange(sd: *mut MapSessionData) -> c_int {
+    use crate::game::map_parse::chat::clif_sendminitext;
+    use crate::game::map_parse::player_state::clif_sendxychange;
+
+    let fd = (*sd).fd;
+    let direction = *crate::ffi::session::rust_session_rdata_ptr(fd, 5) as c_int;
+    let mut dx = *crate::ffi::session::rust_session_rdata_ptr(fd, 6) as c_int;
+    let mut dy = *crate::ffi::session::rust_session_rdata_ptr(fd, 7) as c_int;
+    let x0 = u16::from_be_bytes([
+        *crate::ffi::session::rust_session_rdata_ptr(fd, 8),
+        *crate::ffi::session::rust_session_rdata_ptr(fd, 9),
+    ]) as c_int;
+    let y0 = u16::from_be_bytes([
+        *crate::ffi::session::rust_session_rdata_ptr(fd, 10),
+        *crate::ffi::session::rust_session_rdata_ptr(fd, 11),
+    ]) as c_int;
+    let x1 = *crate::ffi::session::rust_session_rdata_ptr(fd, 12) as c_int;
+    let y1 = *crate::ffi::session::rust_session_rdata_ptr(fd, 13) as c_int;
+
+    if (*sd).status.state == 3 {
+        clif_sendminitext(sd, c"You cannot do that while riding a mount.".as_ptr());
+        return 0;
+    }
+
+    match direction {
+        0 => dy += 1,
+        1 => dx -= 1,
+        2 => dy -= 1,
+        3 => dx += 1,
+        _ => {}
+    }
+
+    clif_sendxychange(sd, dx, dy);
+    clif_mob_look_start(sd);
+    map_foreachinblock(clif_object_look_sub, (*sd).bl.m as c_int, x0, y0, x0 + (x1 - 1), y0 + (y1 - 1), BL_ALL,  LOOK_GET,  sd);
+    clif_mob_look_close(sd);
+    map_foreachinblock(clif_charlook_sub,        (*sd).bl.m as c_int, x0, y0, x0 + (x1 - 1), y0 + (y1 - 1), BL_PC,   LOOK_GET,  sd);
+    map_foreachinblock(clif_cnpclook_sub,        (*sd).bl.m as c_int, x0, y0, x0 + (x1 - 1), y0 + (y1 - 1), BL_NPC,  LOOK_GET,  sd);
+    map_foreachinblock(clif_cmoblook_sub,        (*sd).bl.m as c_int, x0, y0, x0 + (x1 - 1), y0 + (y1 - 1), BL_MOB,  LOOK_GET,  sd);
+    map_foreachinblock(clif_charlook_sub,        (*sd).bl.m as c_int, x0, y0, x0 + (x1 - 1), y0 + (y1 - 1), BL_PC,   LOOK_SEND, sd);
+    0
+}
+
+// ─── Look-at handlers ────────────────────────────────────────────────────────
+//
+// Ported from c_src/sl_compat.c lines 3023–3060.
+
+/// `map_foreachincell` callback: fires the "onLook" Lua event when player looks at a cell.
+/// Args: `USER *sd`.
+/// Replaces `clif_parselookat_sub` in `c_src/sl_compat.c` (line 3023).
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn clif_parselookat_sub(bl: *mut BlockList, mut ap: ...) -> c_int {
+    let sd = ap.arg::<*mut MapSessionData>();
+    if bl.is_null() || sd.is_null() { return 0; }
+    sl_doscript_blargs(c"onLook".as_ptr(), std::ptr::null(), 2, &raw mut (*sd).bl, bl);
+    0
+}
+
+/// Dead code stub — body was removed in original C.
+/// Replaces `clif_parselookat_scriptsub` in `c_src/sl_compat.c` (line 3031).
+#[no_mangle]
+pub unsafe extern "C" fn clif_parselookat_scriptsub(
+    _sd: *mut MapSessionData,
+    _bl: *mut BlockList,
+) -> c_int {
+    0
+}
+
+/// Look at the cell directly ahead of the player (based on `side`).
+/// Replaces `clif_parselookat_2` in `c_src/sl_compat.c` (line 3036).
+///
+/// # Safety
+/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn clif_parselookat_2(sd: *mut MapSessionData) -> c_int {
+    use crate::game::mob::BL_ITEM;
+    let mut dx = (*sd).bl.x as c_int;
+    let mut dy = (*sd).bl.y as c_int;
+    match (*sd).status.side {
+        0 => dy -= 1,
+        1 => dx += 1,
+        2 => dy += 1,
+        3 => dx -= 1,
+        _ => {}
+    }
+    let m = (*sd).bl.m as c_int;
+    map_foreachincell(clif_parselookat_sub, m, dx, dy, BL_PC,   sd);
+    map_foreachincell(clif_parselookat_sub, m, dx, dy, BL_MOB,  sd);
+    map_foreachincell(clif_parselookat_sub, m, dx, dy, BL_ITEM, sd);
+    map_foreachincell(clif_parselookat_sub, m, dx, dy, BL_NPC,  sd);
+    0
+}
+
+/// Look at a specific map cell (coordinates from packet bytes 5–8).
+/// Replaces `clif_parselookat` in `c_src/sl_compat.c` (line 3054).
+///
+/// # Safety
+/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn clif_parselookat(sd: *mut MapSessionData) -> c_int {
+    use crate::game::mob::BL_ITEM;
+    let fd = (*sd).fd;
+    let x = u16::from_be_bytes([
+        *crate::ffi::session::rust_session_rdata_ptr(fd, 5),
+        *crate::ffi::session::rust_session_rdata_ptr(fd, 6),
+    ]) as c_int;
+    let y = u16::from_be_bytes([
+        *crate::ffi::session::rust_session_rdata_ptr(fd, 7),
+        *crate::ffi::session::rust_session_rdata_ptr(fd, 8),
+    ]) as c_int;
+    let m = (*sd).bl.m as c_int;
+    map_foreachincell(clif_parselookat_sub, m, x, y, BL_PC,   sd);
+    map_foreachincell(clif_parselookat_sub, m, x, y, BL_MOB,  sd);
+    map_foreachincell(clif_parselookat_sub, m, x, y, BL_ITEM, sd);
+    map_foreachincell(clif_parselookat_sub, m, x, y, BL_NPC,  sd);
+    0
+}
+
+// ─── clif_refreshnoclick ─────────────────────────────────────────────────────
+//
+// Ported from c_src/sl_compat.c line 2960.
+
+/// Resync the client's view (areas, chars, objects) after a non-click teleport.
+/// Replaces `clif_refreshnoclick` in `c_src/sl_compat.c` (line 2960).
+///
+/// # Safety
+/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn clif_refreshnoclick(sd: *mut MapSessionData) -> c_int {
+    use crate::ffi::map_db::map;
+    use crate::ffi::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
+    use crate::game::map_parse::player_state::{clif_sendmapinfo, clif_sendxynoclick};
+    use crate::game::client::visual::clif_destroyold;
+    use crate::game::pc::FLAG_GROUP;
+    use crate::network::crypt::set_packet_indexes;
+
+    clif_sendmapinfo(sd);
+    clif_sendxynoclick(sd);
+    clif_mob_look_start(sd);
+    map_foreachinarea(clif_object_look_sub, (*sd).bl.m as c_int, (*sd).bl.x as c_int, (*sd).bl.y as c_int, 6 /* SAMEAREA */, BL_ALL, LOOK_GET, sd);
+    clif_mob_look_close(sd);
+    clif_destroyold(sd);
+    clif_sendchararea(sd);
+    crate::game::map_parse::player_state::clif_getchararea(sd);
+
+    if rust_session_exists((*sd).fd) == 0 {
+        rust_session_set_eof((*sd).fd, 8);
+        return 0;
+    }
+
+    // Send 0x22/0x03 packet: 5-byte payload + 3 index bytes = 8 committed
+    rust_session_wfifohead((*sd).fd, 8);
+    let w = |off: usize| rust_session_wdata_ptr((*sd).fd, off);
+    *w(0) = 0xAA;
+    *w(1) = 0x00;
+    *w(2) = 0x02;  // payload length = 2
+    *w(3) = 0x22;
+    *w(4) = 0x03;
+    let mut buf = std::slice::from_raw_parts_mut(rust_session_wdata_ptr((*sd).fd, 0), 8);
+    let n = set_packet_indexes(&mut buf);  // appends 3 index bytes, updates [1-2]
+    rust_session_commit((*sd).fd, n);
+
+    let md = &*map.add((*sd).bl.m as usize);
+    if md.can_group == 0 {
+        use crate::game::map_parse::groups::clif_leavegroup;
+        (*sd).status.setting_flags ^= FLAG_GROUP as u16;
+        if (*sd).status.setting_flags & FLAG_GROUP as u16 == 0 && (*sd).group_count > 0 {
+            clif_leavegroup(sd);
+            clif_sendstatus(sd, 0);
+            clif_sendminitext(sd, c"Join a group     :OFF".as_ptr());
+        }
+    }
+    0
+}
+
+// ─── clif_npc_move ────────────────────────────────────────────────────────────
+
+/// Variadic callback: broadcast an NPC position packet to a nearby player.
+///
+/// Args (va_list): `(int type_unused, NpcData *nd)`; `bl` is cast to `*mut MapSessionData`.
+/// Builds a 32-byte buffer and calls `clif_send(buf, 32, &nd->bl, AREA_WOS)`.
+/// Replaces `clif_npc_move` in `c_src/sl_compat.c` (line 3913).
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn clif_npc_move(bl: *mut BlockList, mut ap: ...) -> c_int {
+    use crate::game::npc::NpcData;
+    let _type_unused = ap.arg::<c_int>();
+    let sd = bl as *mut MapSessionData;
+    let nd = ap.arg::<*mut NpcData>();
+    if sd.is_null() || nd.is_null() { return 0; }
+
+    let mut buf = [0u8; 32];
+    buf[0] = 0xAA;
+    buf[1] = 0x00;
+    buf[2] = 0x0C;
+    buf[3] = 0x0C;
+    buf[5..9].copy_from_slice(&(*nd).bl.id.to_be_bytes());
+    buf[9..11].copy_from_slice(&((*nd).bl.bx as u16).to_be_bytes());
+    buf[11..13].copy_from_slice(&((*nd).bl.by as u16).to_be_bytes());
+    buf[13] = (*nd).side as u8;
+    // buf[14] = 0x00 (already zeroed)
+    clif_send(buf.as_ptr(), 32, &raw mut (*nd).bl, AREA_WOS);
+    0
+}
+
+// ─── clif_mob_move ────────────────────────────────────────────────────────────
+
+/// Variadic callback: send a mob-position packet to a player.
+///
+/// When `type == LOOK_GET`: `bl` is the viewing player, first arg is the mob.
+/// When `type == LOOK_SEND`: `bl` is the mob, first arg is the viewing player.
+/// Replaces `clif_mob_move` in `c_src/sl_compat.c` (line 3938).
+#[cfg(not(test))]
+#[no_mangle]
+pub unsafe extern "C" fn clif_mob_move(bl: *mut BlockList, mut ap: ...) -> c_int {
+    use crate::game::mob::{MobSpawnData, MOB_DEAD};
+    let type_arg = ap.arg::<c_int>();
+    let (sd, mob): (*mut MapSessionData, *mut MobSpawnData) = if type_arg == LOOK_GET {
+        let sd = ap.arg::<*mut MapSessionData>();
+        let mob = bl as *mut MobSpawnData;
+        (sd, mob)
+    } else {
+        let sd = bl as *mut MapSessionData;
+        let mob = ap.arg::<*mut MobSpawnData>();
+        (sd, mob)
+    };
+    if sd.is_null() || mob.is_null() { return 0; }
+    if (*mob).state == MOB_DEAD { return 0; }
+    if rust_session_exists((*sd).fd) == 0 {
+        rust_session_set_eof((*sd).fd, 8);
+        return 0;
+    }
+    let fd = (*sd).fd;
+    wfifoheader(fd, 0x0C, 11);
+    // WFIFOL(fd, 5) = SWAP32(mob->bl.id)
+    let pw = |off: usize| crate::ffi::session::rust_session_wdata_ptr(fd, off);
+    (pw(5) as *mut u32).write_unaligned((*mob).bl.id.to_be());
+    (pw(9) as *mut u16).write_unaligned(((*mob).bx as u16).to_be());
+    (pw(11) as *mut u16).write_unaligned(((*mob).by_ as u16).to_be());
+    *pw(13) = (*mob).side as u8;
+    wfifoset(fd, encrypt(fd) as usize);
+    0
 }

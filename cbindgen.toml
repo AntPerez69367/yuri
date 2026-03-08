@@ -262,6 +262,72 @@ exclude = [
   # map_parse/mod.rs: main packet dispatcher — declared in map_parse.h.
   "clif_parse",
 
+  # client/mod.rs: clif_send / clif_sendtogm — declared in map_parse.h.
+  # cbindgen must not re-export them; C callers use the map_parse.h declarations.
+  "clif_send",
+  "clif_sendtogm",
+
+  # visual.rs: status packet builders ported from sl_compat.c.
+  # All declared in c_src/map_parse.h (except clif_sendupdatestatus2) —
+  # cbindgen must not re-export them; the C header declarations are authoritative.
+  "clif_sendupdatestatus",
+  "clif_sendupdatestatus_onkill",
+  "clif_sendupdatestatus_onequip",
+  "clif_sendupdatestatus_onunequip",
+  "clif_getLevelTNL",
+  "clif_getXPBarPercent",
+  # visual.rs: utility/packet-builder functions ported from sl_compat.c (Task 15).
+  # clif_cancelafk/clif_destroyold/clif_popup declared in map_parse.h lines 217/159/75.
+  # clif_mapmsgnum/clif_sendprofile/clif_sendboard not in map_parse.h but excluded to
+  # prevent cbindgen from emitting stale declarations.
+  "clif_cancelafk",
+  "clif_destroyold",
+  "clif_mapmsgnum",
+  "clif_popup",
+  "clif_sendprofile",
+  "clif_sendboard",
+  # visual.rs: utility functions ported from sl_compat.c (Task 16).
+  # clif_show_ghost declared in map_parse.h line 59.
+  # clif_sendweather declared in map_parse.h line 76.
+  # clif_getitemarea declared in map_parse.h line 111.
+  # clif_getequiptype/clif_getlvlxp/clif_user_list/clif_debug not in map_parse.h but
+  # excluded to prevent cbindgen from emitting them.
+  "clif_show_ghost",
+  "clif_sendweather",
+  "clif_getitemarea",
+  "clif_getequiptype",
+  "clif_getlvlxp",
+  "clif_user_list",
+  "clif_debug",
+
+  # visual.rs: URL / popup / disconnect functions ported from sl_compat.c (Task 17).
+  # clif_sendurl declared in map_parse.h line 30.
+  # clif_timeout declared in map_parse.h line 121.
+  # clif_paperpopup declared in map_parse.h line 263.
+  # clif_paperpopupwrite declared in map_parse.h line 261.
+  # clif_sendtest declared in map_parse.h line 70.
+  # clif_print_disconnect: not found in map_parse.h; was extern "C" in client/mod.rs — now Rust.
+  "clif_sendurl",
+  "clif_timeout",
+  "clif_paperpopup",
+  "clif_paperpopupwrite",
+  "clif_sendtest",
+  "clif_print_disconnect",
+
+  # visual.rs Task 18: RFIFO-reader functions ported from sl_compat.c.
+  # None of the three are declared in map_parse.h — exclude to suppress cbindgen output.
+  "clif_paperpopupwrite_save",
+  "clif_changeprofile",
+  "check_packet_size",
+
+  # visual.rs Task 19: mob-broadcast function ported from sl_compat.c.
+  "clif_sendmob_side",
+
+  # network/crypt.rs: encrypt/decrypt ported from sl_compat.c / net_crypt.c.
+  # Already declared in c_src/net_crypt.h — exclude to prevent duplicate symbol.
+  "encrypt",
+  "decrypt",
+
   # combat.rs: combat/magic/animation/durability system ported from map_parse.c.
   "clif_pc_damage",
   "clif_send_pc_health",

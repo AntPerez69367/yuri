@@ -48,8 +48,7 @@ extern "C" {
     fn rust_boarddb_script(id: c_int) -> c_int;
     fn rust_boarddb_yname(id: c_int) -> *mut c_char;
 
-    // game-global registry reader — still in map_server_stubs.c
-    fn map_readglobalgamereg(attrname: *const c_char) -> c_int;
+    // game-global registry reader — ported to map_server.rs
 
     // sl_exec (= rust_sl_exec) — scripting.h
     #[link_name = "rust_sl_exec"]
@@ -383,6 +382,98 @@ pub unsafe extern "C" fn map_addiddb(bl: *mut BlockList) {
 pub unsafe extern "C" fn map_deliddb(bl: *mut BlockList) {
     if bl.is_null() { return; }
     id_db().remove(&(*bl).id);
+}
+
+/// Returns the MOB* for an entity by ID. Adjusts IDs below MOB_START_NUM.
+///
+/// Mirrors `map_id2mob` in `c_src/map_server_stubs.c`.
+#[no_mangle]
+pub unsafe extern "C" fn map_id2mob(mut id: c_uint) -> *mut crate::game::mob::MobSpawnData {
+    use crate::game::mob::{MOB_START_NUM, BL_MOB};
+    if id < MOB_START_NUM { id = id.saturating_add(MOB_START_NUM - 1); }
+    let bl = map_id2bl(id) as *mut BlockList;
+    if bl.is_null() { return std::ptr::null_mut(); }
+    if (*bl).bl_type as c_int == BL_MOB { bl as *mut crate::game::mob::MobSpawnData } else { std::ptr::null_mut() }
+}
+
+/// Returns the NPC* for an entity by ID. Adjusts IDs below NPC_START_NUM.
+///
+/// Mirrors `map_id2npc` in `c_src/map_server_stubs.c`.
+#[no_mangle]
+pub unsafe extern "C" fn map_id2npc(id: c_uint) -> *mut crate::game::npc::NpcData {
+    use crate::game::npc::NPC_START_NUM;
+    let adj_id = if id < NPC_START_NUM { id.saturating_add(NPC_START_NUM - 2) } else { id };
+    let bl = map_id2bl(adj_id) as *mut BlockList;
+    if bl.is_null() { return std::ptr::null_mut(); }
+    if (*bl).bl_type as c_int == crate::game::pc::BL_NPC { bl as *mut crate::game::npc::NpcData } else { std::ptr::null_mut() }
+}
+
+/// Returns the FLOORITEM* for an entity by ID.
+///
+/// Mirrors `map_id2fl` in `c_src/map_server_stubs.c`.
+#[no_mangle]
+pub unsafe extern "C" fn map_id2fl(id: c_uint) -> *mut c_void {
+    let bl = map_id2bl(id) as *mut BlockList;
+    if bl.is_null() { return std::ptr::null_mut(); }
+    if (*bl).bl_type as c_int == crate::game::pc::BL_ITEM { bl as *mut c_void } else { std::ptr::null_mut() }
+}
+
+/// Find a player session by name (case-insensitive).
+///
+/// Mirrors `map_name2sd` in `c_src/map_server_stubs.c`.
+#[no_mangle]
+pub unsafe extern "C" fn map_name2sd(name: *const c_char) -> *mut MapSessionData {
+    use crate::ffi::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof};
+    if name.is_null() { return std::ptr::null_mut(); }
+    for i in 0..fd_max {
+        if rust_session_exists(i) == 0 { continue; }
+        if rust_session_get_eof(i) != 0 { continue; }
+        let sd = rust_session_get_data(i) as *mut MapSessionData;
+        if sd.is_null() { continue; }
+        if libc::strcasecmp((*sd).status.name.as_ptr(), name) == 0 {
+            return sd;
+        }
+    }
+    std::ptr::null_mut()
+}
+
+/// Find an NPC by name (case-insensitive). Iterates NPC ID range.
+///
+/// Mirrors `map_name2npc` in `c_src/map_server_stubs.c`.
+#[no_mangle]
+pub unsafe extern "C" fn map_name2npc(name: *const c_char) -> *mut c_void {
+    use crate::game::npc::{NPC_ID, NPC_START_NUM};
+    if name.is_null() { return std::ptr::null_mut(); }
+    let mut i = NPC_START_NUM as c_uint;
+    while i <= NPC_ID {
+        let nd = map_id2npc(i);
+        if !nd.is_null() && libc::strcasecmp((*nd).npc_name.as_ptr(), name) == 0 {
+            return nd as *mut c_void;
+        }
+        i += 1;
+    }
+    std::ptr::null_mut()
+}
+
+/// Reload the map registry for a single map — thin shim over `rust_map_loadregistry`.
+///
+/// Mirrors the C shim `map_loadregistry` in `c_src/map_server_stubs.c`.
+#[no_mangle]
+pub unsafe extern "C" fn map_loadregistry(id: c_int) -> c_int {
+    crate::ffi::map_db::rust_map_loadregistry(id)
+}
+
+/// Read a game-global registry value by name (case-insensitive).
+///
+/// Mirrors `map_readglobalgamereg` in `c_src/map_server_stubs.c`.
+#[no_mangle]
+pub unsafe extern "C" fn map_readglobalgamereg(reg: *const c_char) -> c_int {
+    if reg.is_null() || gamereg.registry.is_null() { return 0; }
+    for i in 0..gamereg.registry_num as usize {
+        let entry = &*gamereg.registry.add(i);
+        if reg_str_eq(&entry.str, reg) { return entry.val; }
+    }
+    0
 }
 
 /// Timer callback — runs Lua cron hooks based on wall-clock seconds.
@@ -2585,6 +2676,67 @@ pub unsafe extern "C" fn map_setglobalgamereg(reg: *const c_char, val: c_int) ->
 // The stub prevents linker failures if any translation unit ever calls it.
 // ---------------------------------------------------------------------------
 
+/// Lookup a character's name by ID; allocates a 255-byte heap buffer (caller must free).
+/// Returns "None" for id=0, empty string if not found.
+///
+/// Mirrors `map_id2name` in `c_src/map_server_stubs.c`.
+#[no_mangle]
+pub unsafe extern "C" fn map_id2name(id: c_uint) -> *mut c_char {
+    let buf = libc::calloc(255, 1) as *mut c_char;
+    if buf.is_null() { return buf; }
+    if id == 0 {
+        let none = b"None\0";
+        std::ptr::copy_nonoverlapping(none.as_ptr() as *const c_char, buf, none.len());
+        return buf;
+    }
+    let name: Option<String> = crate::database::blocking_run(async move {
+        sqlx::query_scalar::<_, String>(
+            "SELECT `ChaName` FROM `Character` WHERE `ChaId`=?"
+        )
+        .bind(id)
+        .fetch_optional(crate::database::get_pool()).await
+        .ok()
+        .flatten()
+    });
+    if let Some(s) = name {
+        let bytes = s.as_bytes();
+        let len = bytes.len().min(254);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const c_char, buf, len);
+        *buf.add(len) = 0;
+    }
+    buf
+}
+
+/// Trigger the mapWeather Lua hook when the in-game hour changes.
+///
+/// Mirrors `map_weather` in `c_src/map_server_stubs.c`.
+#[no_mangle]
+pub unsafe extern "C" fn map_weather(_id: c_int, _n: c_int) -> c_int {
+    if old_time != cur_time {
+        old_time = cur_time;
+        crate::game::scripting::sl_doscript_blargs_vec(
+            c"mapWeather".as_ptr(), std::ptr::null(), 0, std::ptr::null(),
+        );
+    }
+    0
+}
+
+/// Save all online character sessions to the char server.
+///
+/// Mirrors `map_savechars` in `c_src/map_server_stubs.c`.
+#[no_mangle]
+pub unsafe extern "C" fn map_savechars(_none: c_int, _nonetoo: c_int) -> c_int {
+    use crate::ffi::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof};
+    extern "C" { fn sl_intif_save(sd: *mut c_void) -> c_int; }
+    for x in 0..fd_max {
+        if rust_session_exists(x) == 0 { continue; }
+        if rust_session_get_eof(x) != 0 { continue; }
+        let sd = rust_session_get_data(x);
+        if !sd.is_null() { sl_intif_save(sd); }
+    }
+    0
+}
+
 /// No-op stub — `map_registrydelete` was commented out in C and has no current callers.
 /// Retained for ABI completeness.
 #[allow(dead_code)]
@@ -2676,4 +2828,75 @@ pub unsafe extern "C" fn hasCoref(sd: *mut MapSessionData) -> c_int {
         }
     }
     0
+}
+
+// ---------------------------------------------------------------------------
+// map_do_term — ported from `c_src/map_server_stubs.c`
+// ---------------------------------------------------------------------------
+
+/// Shuts down the map server: save characters, free all map tile/grid
+/// allocations, and terminate all subsystem databases.
+///
+/// Replaces `map_do_term()` in `c_src/map_server_stubs.c`.
+///
+/// # Safety
+/// Must be called exactly once at shutdown, on the game thread, after all
+/// clients have been disconnected.
+#[no_mangle]
+pub unsafe extern "C" fn map_do_term() {
+    use crate::database::map_db::{GlobalReg, MAP_SLOTS, MAX_MAPREG};
+    use crate::database::map_db::{BlockList, WarpList};
+
+    map_savechars(0, 0);
+    map_clritem();
+    map_termiddb();
+
+    // Free per-slot tile arrays (Rust Vec alloc) and block grid arrays.
+    if !crate::ffi::map_db::map.is_null() {
+        let slots = std::slice::from_raw_parts_mut(crate::ffi::map_db::map, MAP_SLOTS);
+        for slot in slots.iter_mut() {
+            let cells  = slot.xs as usize * slot.ys as usize;
+            let bcells = slot.bxs as usize * slot.bys as usize;
+
+            if !slot.tile.is_null() && cells > 0 {
+                drop(Vec::from_raw_parts(slot.tile, cells, cells));
+                slot.tile = std::ptr::null_mut();
+            }
+            if !slot.obj.is_null() && cells > 0 {
+                drop(Vec::from_raw_parts(slot.obj, cells, cells));
+                slot.obj = std::ptr::null_mut();
+            }
+            if !slot.map.is_null() && cells > 0 {
+                drop(Vec::from_raw_parts(slot.map, cells, cells));
+                slot.map = std::ptr::null_mut();
+            }
+            if !slot.pass.is_null() && cells > 0 {
+                drop(Vec::from_raw_parts(slot.pass, cells, cells));
+                slot.pass = std::ptr::null_mut();
+            }
+            if !slot.block.is_null() && bcells > 0 {
+                drop(Vec::<*mut BlockList>::from_raw_parts(slot.block, bcells, bcells));
+                slot.block = std::ptr::null_mut();
+            }
+            if !slot.block_mob.is_null() && bcells > 0 {
+                drop(Vec::<*mut BlockList>::from_raw_parts(slot.block_mob, bcells, bcells));
+                slot.block_mob = std::ptr::null_mut();
+            }
+            if !slot.warp.is_null() && bcells > 0 {
+                drop(Vec::<*mut WarpList>::from_raw_parts(slot.warp, bcells, bcells));
+                slot.warp = std::ptr::null_mut();
+            }
+            if !slot.registry.is_null() {
+                let layout = std::alloc::Layout::array::<GlobalReg>(MAX_MAPREG).unwrap();
+                std::alloc::dealloc(slot.registry as *mut u8, layout);
+                slot.registry = std::ptr::null_mut();
+            }
+        }
+    }
+
+    crate::ffi::block::map_termblock();
+    crate::ffi::item_db::rust_itemdb_term();
+    crate::ffi::magic_db::rust_magicdb_term();
+    crate::ffi::class_db::rust_classdb_term();
+    println!("[map] Map Server Shutdown");
 }

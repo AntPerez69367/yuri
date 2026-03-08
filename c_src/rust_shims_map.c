@@ -1,21 +1,20 @@
 /*
- * rust_shims_map.c — read_pass shim in a separate TU.
+ * rust_shims_map.c — trampolines for static-inline map_char.h functions.
  *
- * Separated from rust_shims.c because map_server.h pulls in mmo.h → item_db.h
- * which has static-inline definitions that conflict with the non-inline
- * definitions in rust_shims.c.
+ * Rust cannot call static-inline C functions directly; these non-inline
+ * wrappers provide linkable symbols for the Rust game modules.
  *
- * This TU ONLY defines read_pass and is allowed to include map_server.h.
+ * read_pass was previously provided here; it is now inlined in Rust
+ * (src/game/map_parse/items.rs and movement.rs) and removed.
  */
 
 #include "map_server.h"
+#include "map_char.h"
 
-/* map_server.h defines read_pass as a macro:
- *   #define read_pass(m, x, y) (map[m].pass[(x) + (y)*map[m].xs])
- * #undef it so we can provide a real function with the same name.
- */
-#undef read_pass
+/* sl_intif_savequit: trampoline for the static-inline intif_savequit in map_char.h.
+ * Caller: src/game/client/handlers.rs */
+int sl_intif_savequit(USER *sd) { return intif_savequit(sd); }
 
-int read_pass(int m, int x, int y) {
-    return (int)(map[m].pass[x + y * map[m].xs]);
-}
+/* sl_intif_save: trampoline for the static-inline intif_save in map_char.h.
+ * Callers: src/game/scripting/pc_accessors.rs, src/game/map_server.rs */
+int sl_intif_save(void *sd) { return intif_save((USER *)sd); }
