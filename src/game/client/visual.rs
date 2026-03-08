@@ -11,7 +11,7 @@
 
 use std::os::raw::{c_char, c_float, c_int, c_uint};
 
-use crate::database::class_db;
+use crate::database::{board_db, class_db};
 use crate::ffi::session::{
     rust_session_available, rust_session_commit, rust_session_exists, rust_session_get_client_ip,
     rust_session_get_data, rust_session_get_eof, rust_session_increment, rust_session_rdata_ptr,
@@ -1535,4 +1535,1082 @@ pub unsafe extern "C" fn clif_sendmob_side(mob: *mut crate::game::mob::MobSpawnD
 
     // clif_send(buf, 16, &mob->bl, AREA_WOS=5)
     super::clif_send(buf.as_ptr(), 16, &mob.bl as *const _ as *mut _, 5)
+}
+
+// ─── clif_updatestate / broadcast_update_state ────────────────────────────────
+
+use crate::game::pc::{
+    BL_PC,
+    EQ_ARMOR, EQ_COAT, EQ_WEAP, EQ_SHIELD, EQ_HELM,
+    EQ_FACEACC, EQ_CROWN, EQ_FACEACCTWO, EQ_MANTLE, EQ_NECKLACE, EQ_BOOTS,
+    FLAG_HELM, FLAG_NECKLACE,
+    OPT_FLAG_STEALTH,
+};
+use crate::game::block::{foreach_in_area, AreaType};
+
+// optFlag_ghosts = 256 (c_src/map_server.h line 34). optFlags is c_ulong (64-bit on Linux).
+const OPT_FLAG_GHOSTS: u64 = 256;
+
+extern "C" {
+    // Use link_name to avoid conflicting with other per-module extern declarations.
+    #[link_name = "clif_isingroup"]
+    fn clif_isingroup_us(sd: *mut MapSessionData, tsd: *mut MapSessionData) -> c_int;
+    #[link_name = "clif_charspecific"]
+    fn clif_charspecific_us(sender: c_int, id: c_int) -> c_int;
+    #[link_name = "rust_itemdb_look"]
+    fn itemdb_look_us(id: c_uint) -> c_int;
+    #[link_name = "rust_itemdb_lookcolor"]
+    fn itemdb_lookcolor_us(id: c_uint) -> c_int;
+    #[link_name = "rust_pc_isequip"]
+    fn pc_isequip_us(sd: *mut MapSessionData, slot: c_int) -> c_int;
+}
+
+/// Write the state packet for `sd` (the player being viewed) into `src_sd`'s
+/// (the viewer's) write buffer.
+///
+/// In C terms: `sd` = `va_arg(ap, USER*)` (the player whose state is sent),
+/// `src_sd` = `(USER*)bl` (the viewer who receives the packet).
+///
+/// Mirrors the body of `clif_updatestate` from `c_src/sl_compat.c` (line 648).
+///
+/// # Safety
+/// Both `sd` and `src_sd` must be valid, non-null `MapSessionData` pointers.
+unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionData) {
+    let sd_r = &*sd;
+    let src_r = &*src_sd;
+
+    // Guard: bail if broadcaster's session is gone (matches C clif_updatestate).
+    if rust_session_exists(sd_r.fd) == 0 {
+        rust_session_set_eof(sd_r.fd, 8);
+        return;
+    }
+
+    let src_fd = src_r.fd;
+
+    rust_session_wfifohead(src_fd, 512);
+    let p = rust_session_wdata_ptr(src_fd, 0);
+    if p.is_null() {
+        return;
+    }
+
+    wb(p, 0, 0xAA);
+    wb(p, 3, 0x1D);
+    // WFIFOL(src_sd->fd, 5) = SWAP32(sd->bl.id)  — big-endian
+    wl_be(p, 5, sd_r.bl.id as u32);
+
+    if sd_r.status.state == 4 {
+        // Disguised state: compact packet with name only.
+        wb(p, 9, 1);
+        wb(p, 10, 15);
+        wb(p, 11, sd_r.status.state as u8);
+        // WFIFOW(src_sd->fd, 12) = SWAP16(sd->disguise + 32768)
+        ww_be(p, 12, sd_r.disguise.wrapping_add(32768));
+        wb(p, 14, sd_r.disguise_color as u8);
+
+        let name_ptr = sd_r.status.name.as_ptr() as *const std::os::raw::c_char;
+        let name_len = libc::strlen(name_ptr);
+
+        wb(p, 16, name_len as u8);
+        // len += strlen(name) + 1
+        let len = name_len + 1;
+        let dst = rust_session_wdata_ptr(src_fd, 17);
+        if !dst.is_null() {
+            std::ptr::copy_nonoverlapping(name_ptr as *const u8, dst, name_len);
+        }
+
+        // WFIFOW(src_sd->fd, 1) = SWAP16(len + 13)
+        ww_be(p, 1, (len + 13) as u16);
+        rust_session_commit(src_fd, encrypt(src_fd) as usize);
+    } else {
+        // Normal / stealth / invisible states.
+
+        // WFIFOW(src_sd->fd, 9) = SWAP16(sd->status.sex)
+        ww_be(p, 9, sd_r.status.sex as u16);
+
+        // Invisibility/stealth state: show invisible state (5) to GMs and group members;
+        // non-GMs see the raw state.
+        let invis_cond = (sd_r.status.state == 2
+            || (sd_r.optFlags & OPT_FLAG_STEALTH) != 0)
+            && sd_r.bl.id != src_r.bl.id
+            && (src_r.status.gm_level != 0
+                || clif_isingroup_us(src_sd, sd) != 0
+                || (sd_r.gfx.dye == src_r.gfx.dye
+                    && sd_r.gfx.dye != 0
+                    && src_r.gfx.dye != 0));
+
+        if invis_cond {
+            wb(p, 11, 5);
+        } else {
+            wb(p, 11, sd_r.status.state as u8);
+        }
+
+        // Stealth-without-state override: show as "invisible" state 2.
+        // Note: clif_charlook_sub has || bl.id == src_sd.bl.id; C original did not — that port may have an extra clause.
+        if (sd_r.optFlags & OPT_FLAG_STEALTH) != 0
+            && sd_r.status.state == 0
+            && src_r.status.gm_level == 0
+        {
+            wb(p, 11, 2);
+        }
+
+        // Disguise id.
+        if sd_r.status.state == 3 {
+            ww_be(p, 12, sd_r.disguise);
+        } else {
+            ww_be(p, 12, 0u16);
+        }
+
+        wb(p, 14, sd_r.speed as u8);
+        wb(p, 15, 0);
+        wb(p, 16, sd_r.status.face as u8);
+        wb(p, 17, sd_r.status.hair as u8);
+        wb(p, 18, sd_r.status.hair_color as u8);
+        wb(p, 19, sd_r.status.face_color as u8);
+        wb(p, 20, sd_r.status.skin_color as u8);
+
+        // armor / coat  (offsets 21–23)
+        if pc_isequip_us(sd, EQ_ARMOR) == 0 {
+            ww_be(p, 21, sd_r.status.sex as u16);
+        } else {
+            if sd_r.status.equip[EQ_ARMOR as usize].custom_look != 0 {
+                ww_be(p, 21, sd_r.status.equip[EQ_ARMOR as usize].custom_look as u16);
+            } else {
+                ww_be(p, 21, itemdb_look_us(pc_isequip_us(sd, EQ_ARMOR) as c_uint) as u16);
+            }
+            if sd_r.status.armor_color > 0 {
+                wb(p, 23, sd_r.status.armor_color as u8);
+            } else if sd_r.status.equip[EQ_ARMOR as usize].custom_look != 0 {
+                wb(p, 23, sd_r.status.equip[EQ_ARMOR as usize].custom_look_color as u8);
+            } else {
+                wb(p, 23, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_ARMOR) as c_uint) as u8);
+            }
+        }
+        if pc_isequip_us(sd, EQ_COAT) != 0 {
+            ww_be(p, 21, itemdb_look_us(pc_isequip_us(sd, EQ_COAT) as c_uint) as u16);
+            if sd_r.status.armor_color > 0 {
+                wb(p, 23, sd_r.status.armor_color as u8);
+            } else {
+                wb(p, 23, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_COAT) as c_uint) as u8);
+            }
+        }
+
+        // weapon  (offsets 24–26)
+        if pc_isequip_us(sd, EQ_WEAP) == 0 {
+            ww_be(p, 24, 0xFFFF);
+            wb(p, 26, 0x0);
+        } else if sd_r.status.equip[EQ_WEAP as usize].custom_look != 0 {
+            ww_be(p, 24, sd_r.status.equip[EQ_WEAP as usize].custom_look as u16);
+            wb(p, 26, sd_r.status.equip[EQ_WEAP as usize].custom_look_color as u8);
+        } else {
+            ww_be(p, 24, itemdb_look_us(pc_isequip_us(sd, EQ_WEAP) as c_uint) as u16);
+            wb(p, 26, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_WEAP) as c_uint) as u8);
+        }
+
+        // shield  (offsets 27–29)
+        if pc_isequip_us(sd, EQ_SHIELD) == 0 {
+            ww_be(p, 27, 0xFFFF);
+            wb(p, 29, 0);
+        } else if sd_r.status.equip[EQ_SHIELD as usize].custom_look != 0 {
+            ww_be(p, 27, sd_r.status.equip[EQ_SHIELD as usize].custom_look as u16);
+            wb(p, 29, sd_r.status.equip[EQ_SHIELD as usize].custom_look_color as u8);
+        } else {
+            ww_be(p, 27, itemdb_look_us(pc_isequip_us(sd, EQ_SHIELD) as c_uint) as u16);
+            wb(p, 29, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_SHIELD) as c_uint) as u8);
+        }
+
+        // helm  (offsets 30–32)
+        if pc_isequip_us(sd, EQ_HELM) == 0
+            || (sd_r.status.setting_flags & FLAG_HELM as u16) == 0
+            || itemdb_look_us(pc_isequip_us(sd, EQ_HELM) as c_uint) == -1
+        {
+            wb(p, 30, 0);
+            ww_be(p, 31, 0xFFFF);
+        } else {
+            wb(p, 30, 1);
+            if sd_r.status.equip[EQ_HELM as usize].custom_look != 0 {
+                wb(p, 31, sd_r.status.equip[EQ_HELM as usize].custom_look as u8);
+                wb(p, 32, sd_r.status.equip[EQ_HELM as usize].custom_look_color as u8);
+            } else {
+                wb(p, 31, itemdb_look_us(pc_isequip_us(sd, EQ_HELM) as c_uint) as u8);
+                wb(p, 32, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_HELM) as c_uint) as u8);
+            }
+        }
+
+        // face acc  (offsets 33–35)
+        if pc_isequip_us(sd, EQ_FACEACC) == 0 {
+            ww_be(p, 33, 0xFFFF);
+            wb(p, 35, 0x0);
+        } else {
+            ww_be(p, 33, itemdb_look_us(pc_isequip_us(sd, EQ_FACEACC) as c_uint) as u16);
+            wb(p, 35, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_FACEACC) as c_uint) as u8);
+        }
+
+        // crown  (offsets 36–38; also writes byte 30)
+        if pc_isequip_us(sd, EQ_CROWN) == 0 {
+            ww_be(p, 36, 0xFFFF);
+            wb(p, 38, 0x0);
+        } else {
+            wb(p, 30, 0); // crown overrides helm flag at byte 30
+            if sd_r.status.equip[EQ_CROWN as usize].custom_look != 0 {
+                ww_be(p, 36, sd_r.status.equip[EQ_CROWN as usize].custom_look as u16);
+                wb(p, 38, sd_r.status.equip[EQ_CROWN as usize].custom_look_color as u8);
+            } else {
+                ww_be(p, 36, itemdb_look_us(pc_isequip_us(sd, EQ_CROWN) as c_uint) as u16);
+                wb(p, 38, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_CROWN) as c_uint) as u8);
+            }
+        }
+
+        // face acc two  (offsets 39–41)
+        if pc_isequip_us(sd, EQ_FACEACCTWO) == 0 {
+            ww_be(p, 39, 0xFFFF);
+            wb(p, 41, 0x0);
+        } else {
+            ww_be(p, 39, itemdb_look_us(pc_isequip_us(sd, EQ_FACEACCTWO) as c_uint) as u16);
+            wb(p, 41, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_FACEACCTWO) as c_uint) as u8);
+        }
+
+        // mantle  (offsets 42–44)
+        if pc_isequip_us(sd, EQ_MANTLE) == 0 {
+            ww_be(p, 42, 0xFFFF);
+            wb(p, 44, 0xFF);
+        } else {
+            ww_be(p, 42, itemdb_look_us(pc_isequip_us(sd, EQ_MANTLE) as c_uint) as u16);
+            wb(p, 44, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_MANTLE) as c_uint) as u8);
+        }
+
+        // necklace  (offsets 45–47)
+        if pc_isequip_us(sd, EQ_NECKLACE) == 0
+            || (sd_r.status.setting_flags & FLAG_NECKLACE as u16) == 0
+            || itemdb_look_us(pc_isequip_us(sd, EQ_NECKLACE) as c_uint) == -1
+        {
+            ww_be(p, 45, 0xFFFF);
+            wb(p, 47, 0x0);
+        } else {
+            ww_be(p, 45, itemdb_look_us(pc_isequip_us(sd, EQ_NECKLACE) as c_uint) as u16);
+            wb(p, 47, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_NECKLACE) as c_uint) as u8);
+        }
+
+        // boots  (offsets 48–50)
+        if pc_isequip_us(sd, EQ_BOOTS) == 0 {
+            ww_be(p, 48, sd_r.status.sex as u16);
+            wb(p, 50, 0x0);
+        } else if sd_r.status.equip[EQ_BOOTS as usize].custom_look != 0 {
+            ww_be(p, 48, sd_r.status.equip[EQ_BOOTS as usize].custom_look as u16);
+            wb(p, 50, sd_r.status.equip[EQ_BOOTS as usize].custom_look_color as u8);
+        } else {
+            ww_be(p, 48, itemdb_look_us(pc_isequip_us(sd, EQ_BOOTS) as c_uint) as u16);
+            wb(p, 50, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_BOOTS) as c_uint) as u8);
+        }
+
+        // title/outline/color bytes 51–53
+        wb(p, 51, 0);
+        wb(p, 52, 128);
+        wb(p, 53, 0);
+
+        // Title color: hidden for invisible chars unless matching dye group.
+        if sd_r.gfx.dye != 0 && src_r.gfx.dye != 0
+            && src_r.gfx.dye != sd_r.gfx.dye
+            && sd_r.status.state == 2
+        {
+            wb(p, 51, 0);
+        } else if sd_r.gfx.dye != 0 {
+            wb(p, 51, sd_r.gfx.title_color);
+        } else {
+            wb(p, 51, 0);
+        }
+
+        // Name field (offset 54 = length, 55+ = name bytes).
+        let name_ptr = sd_r.status.name.as_ptr() as *const std::os::raw::c_char;
+        let name_len = libc::strlen(name_ptr);
+
+        // Clan and group color at byte 53.
+        if src_r.status.clan == sd_r.status.clan && src_r.status.clan > 0
+            && src_r.status.id != sd_r.status.id
+        {
+            wb(p, 53, 3);
+        }
+        if clif_isingroup_us(src_sd, sd) != 0 {
+            if sd_r.status.id != src_r.status.id {
+                wb(p, 53, 2);
+            }
+        }
+
+        let len = if sd_r.status.state != 5 && sd_r.status.state != 2 {
+            wb(p, 54, name_len as u8);
+            let dst = rust_session_wdata_ptr(src_fd, 55);
+            if !dst.is_null() {
+                std::ptr::copy_nonoverlapping(name_ptr as *const u8, dst, name_len);
+            }
+            name_len
+        } else {
+            wb(p, 54, 0);
+            0
+        };
+
+        // GM/clone gfx override: overwrite appearance fields.
+        if (sd_r.status.gm_level != 0 && sd_r.gfx.toggle != 0) || sd_r.clone != 0 {
+            let gfx = &sd_r.gfx;
+            wb(p, 16, gfx.face);
+            wb(p, 17, gfx.hair);
+            wb(p, 18, gfx.chair);
+            wb(p, 19, gfx.cface);
+            wb(p, 20, gfx.cskin);
+            ww_be(p, 21, gfx.armor);
+            if gfx.dye > 0 {
+                wb(p, 23, gfx.dye);
+            } else {
+                wb(p, 23, gfx.carmor);
+            }
+            ww_be(p, 24, gfx.weapon);
+            wb(p, 26, gfx.cweapon);
+            ww_be(p, 27, gfx.shield);
+            wb(p, 29, gfx.cshield);
+
+            if gfx.helm < 255 {
+                wb(p, 30, 1);
+            } else if gfx.crown < 65535 {
+                wb(p, 30, 0xFF);
+            } else {
+                wb(p, 30, 0);
+            }
+
+            wb(p, 31, gfx.helm as u8);
+            wb(p, 32, gfx.chelm);
+            ww_be(p, 33, gfx.face_acc);
+            wb(p, 35, gfx.cface_acc);
+            ww_be(p, 36, gfx.crown);
+            wb(p, 38, gfx.ccrown);
+            ww_be(p, 39, gfx.face_acc_t);
+            wb(p, 41, gfx.cface_acc_t);
+            ww_be(p, 42, gfx.mantle);
+            wb(p, 44, gfx.cmantle);
+            ww_be(p, 45, gfx.necklace);
+            wb(p, 47, gfx.cnecklace);
+            ww_be(p, 48, gfx.boots);
+            wb(p, 50, gfx.cboots);
+
+            // gfx name override.
+            let gfx_name_ptr = gfx.name.as_ptr() as *const std::os::raw::c_char;
+            let gfx_name_len = libc::strlen(gfx_name_ptr);
+            let visible = sd_r.status.state != 2 && sd_r.status.state != 5;
+            let gfx_name_empty = gfx_name_len == 0;
+            let final_len = if visible && !gfx_name_empty {
+                wb(p, 52, gfx_name_len as u8);
+                let dst = rust_session_wdata_ptr(src_fd, 53);
+                if !dst.is_null() {
+                    std::ptr::copy_nonoverlapping(gfx_name_ptr as *const u8, dst, gfx_name_len);
+                }
+                gfx_name_len
+            } else {
+                wb(p, 52, 0);
+                1
+            };
+
+            ww_be(p, 1, (final_len + 55 + 3) as u16);
+            rust_session_commit(src_fd, encrypt(src_fd) as usize);
+            // Fall through to ghost logic below.
+        } else {
+            ww_be(p, 1, (len + 55 + 3) as u16);
+            rust_session_commit(src_fd, encrypt(src_fd) as usize);
+        }
+    }
+
+    // Ghost logic — after the packet is sent, handle "show_ghosts" map setting.
+    {
+        let map_ptr = crate::ffi::map_db::map;
+        if !map_ptr.is_null() {
+            let sd_r = &*sd;
+            let src_r = &*src_sd;
+            let slot = &*map_ptr.add(sd_r.bl.m as usize);
+            if slot.show_ghosts != 0 && sd_r.status.state == 1
+                && src_r.bl.id != sd_r.bl.id
+            {
+                let src_fd = src_r.fd;
+                if src_r.status.state != 1
+                    && (src_r.optFlags as u64 & OPT_FLAG_GHOSTS) == 0
+                {
+                    // Send a 9-byte "ghost" packet to src_sd.
+                    // C re-used committed WFIFO without a new WFIFOHEAD; this explicit head is safer.
+                    rust_session_wfifohead(src_fd, 9);
+                    let p2 = rust_session_wdata_ptr(src_fd, 0);
+                    if !p2.is_null() {
+                        wb(p2, 0, 0xAA);
+                        wb(p2, 1, 0x00);
+                        wb(p2, 2, 0x06);
+                        wb(p2, 3, 0x0E);
+                        wb(p2, 4, 0x03);
+                        wl_be(p2, 5, sd_r.bl.id as u32);
+                        rust_session_commit(src_fd, encrypt(src_fd) as usize);
+                    }
+                } else {
+                    clif_charspecific_us(src_r.bl.id as c_int, sd_r.bl.id as c_int);
+                }
+            }
+        }
+    }
+}
+
+/// Broadcast `src`'s appearance state to all PCs in the area.
+///
+/// Replaces `sl_pc_updatestate` / `clif_updatestate` from `c_src/sl_compat.c`
+/// (lines 450–460 and 648–960). Called from Lua via the `#[no_mangle]` export.
+///
+/// # Safety
+/// `src` must be a valid, non-null pointer to an initialised [`MapSessionData`].
+#[no_mangle]
+pub unsafe extern "C" fn broadcast_update_state(src: *mut MapSessionData) {
+    if src.is_null() {
+        return;
+    }
+    let m = (*src).bl.m as i32;
+    let x = (*src).bl.x as i32;
+    let y = (*src).bl.y as i32;
+    foreach_in_area(m, x, y, AreaType::Area, BL_PC, |bl| {
+        // sd=src (player being shown), src_sd=bl (viewer receiving packet)
+        write_state_packet(src, bl as *mut MapSessionData);
+        0
+    });
+}
+
+// ─── clif_clickonplayer ───────────────────────────────────────────────────────
+
+use crate::database::map_db::BlockList;
+use crate::game::pc::{map_msg, FLAG_EXCHANGE, FLAG_GROUP};
+use crate::servers::char::charstatus::MAX_LEGENDS;
+
+extern "C" {
+    #[link_name = "map_id2sd"]
+    fn map_id2sd_cop(id: c_uint) -> *mut MapSessionData;
+    #[link_name = "rust_clandb_name"]
+    fn rust_clandb_name_cop(id: c_int) -> *const c_char;
+    #[link_name = "rust_classdb_name"]
+    fn rust_classdb_name_cop(id: c_int, rank: c_int) -> *mut c_char;
+    #[link_name = "rust_itemdb_name"]
+    fn rust_itemdb_name_cop(id: c_uint) -> *mut c_char;
+    #[link_name = "rust_itemdb_icon"]
+    fn rust_itemdb_icon_cop(id: c_uint) -> c_int;
+    #[link_name = "rust_itemdb_iconcolor"]
+    fn rust_itemdb_iconcolor_cop(id: c_uint) -> c_int;
+    #[link_name = "rust_itemdb_type"]
+    fn rust_itemdb_type_cop(id: c_uint) -> c_int;
+    #[link_name = "clif_isregistered"]
+    fn clif_isregistered_cop(id: c_uint) -> c_int;
+    #[link_name = "clif_getName"]
+    fn clif_getName_cop(id: c_uint) -> *mut c_char;
+}
+
+/// Replace first occurrence of `orig` in `src` with `rep`. Returns a pointer into
+/// a static 4096-byte buffer (matches C `replace_str` behaviour exactly).
+///
+/// # Safety
+/// All pointer arguments must be valid, null-terminated C strings for the duration
+/// of the call.  The returned pointer is valid until the next call.
+unsafe fn replace_str_rust(src: *const c_char, orig: &[u8], rep: *const c_char) -> *const c_char {
+    // Strip trailing NUL(s) from orig so orig_len is the actual string length.
+    // Callers may pass NUL-terminated byte literals (e.g. b"$player\0"); strstr
+    // needs the NUL excluded, and `tail` must point past the matched bytes only.
+    let orig_bytes = match orig.iter().position(|&b| b == 0) {
+        Some(n) => &orig[..n],
+        None => orig,
+    };
+    // Fast path: if orig is not present, return src unchanged.
+    let p = libc::strstr(src, orig_bytes.as_ptr() as *const c_char);
+    if p.is_null() {
+        return src;
+    }
+    // Static buffer — matches C semantics (not thread-safe, same as original).
+    static mut REPL_BUF: [u8; 4096] = [0u8; 4096];
+    let prefix_len = (p as usize) - (src as usize);
+    let rep_len = libc::strlen(rep);
+    let tail = p.add(orig_bytes.len()); // points past the matched orig bytes
+    // Copy prefix.
+    std::ptr::copy_nonoverlapping(src as *const u8, REPL_BUF.as_mut_ptr(), prefix_len.min(4095));
+    // Append rep.
+    let after_prefix = prefix_len.min(4095);
+    let copy_rep = rep_len.min(4095 - after_prefix);
+    std::ptr::copy_nonoverlapping(rep as *const u8, REPL_BUF.as_mut_ptr().add(after_prefix), copy_rep);
+    // Append tail.
+    let after_rep = after_prefix + copy_rep;
+    let tail_len = libc::strlen(tail).min(4095 - after_rep);
+    std::ptr::copy_nonoverlapping(tail as *const u8, REPL_BUF.as_mut_ptr().add(after_rep), tail_len);
+    REPL_BUF[after_rep + tail_len] = 0;
+    REPL_BUF.as_ptr() as *const c_char
+}
+
+/// Send the player inspection/profile packet to `sd` (viewer) for `bl` (target player).
+///
+/// Mirrors `clif_clickonplayer` in `c_src/sl_compat.c` (line 682).
+///
+/// # Safety
+/// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
+/// `bl` must be a valid, non-null pointer to a [`BlockList`] that belongs to a
+/// [`MapSessionData`] (i.e. `bl_type == BL_PC`), retrievable via `map_id2sd`.
+#[no_mangle]
+pub unsafe extern "C" fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) -> c_int {
+    if sd.is_null() || bl.is_null() {
+        return 0;
+    }
+
+    let tsd = map_id2sd_cop((*bl).id);
+    if tsd.is_null() {
+        return 0;
+    }
+
+    let fd = (*sd).fd;
+
+    if rust_session_exists(fd) == 0 {
+        rust_session_set_eof(fd, 8);
+        return 0;
+    }
+
+    // Reserve worst-case buffer: equip_status up to 255 bytes, profile data, etc.
+    rust_session_wfifohead(fd, 65535);
+    let p = rust_session_wdata_ptr(fd, 0);
+    if p.is_null() {
+        return 0;
+    }
+
+    wb(p, 0, 0xAA);
+    wb(p, 3, 0x34);
+
+    // `len` tracks the number of dynamic bytes written, starting after the 5-byte base header.
+    // All writes use absolute offset = len + 5  (for byte fields) or len + 6 (for data fields).
+    // This matches the C pattern: WFIFOB(fd, len+5)=count, WFIFOP(fd, len+6)=data, len+=n+1.
+    let mut len: usize = 0;
+
+    // ── Title ─────────────────────────────────────────────────────────────────
+    {
+        let title_ptr = (*tsd).status.title.as_ptr() as *const c_char;
+        let title_len = libc::strlen(title_ptr);
+        if title_len > 0 {
+            wb(p, len + 5, title_len as u8);
+            std::ptr::copy_nonoverlapping(title_ptr as *const u8, p.add(len + 6), title_len);
+            len += title_len + 1;
+        } else {
+            wb(p, len + 5, 0);
+            len += 1;
+        }
+    }
+
+    // ── Clan name ─────────────────────────────────────────────────────────────
+    {
+        if (*tsd).status.clan > 0 {
+            let clan_name = rust_clandb_name_cop((*tsd).status.clan as c_int);
+            if !clan_name.is_null() {
+                let clan_len = libc::strlen(clan_name);
+                wb(p, len + 5, clan_len as u8);
+                std::ptr::copy_nonoverlapping(clan_name as *const u8, p.add(len + 6), clan_len);
+                len += clan_len + 1;
+            } else {
+                wb(p, len + 5, 0);
+                len += 1;
+            }
+        } else {
+            wb(p, len + 5, 0);
+            len += 1;
+        }
+    }
+
+    // ── Clan title ────────────────────────────────────────────────────────────
+    {
+        let ctitle_ptr = (*tsd).status.clan_title.as_ptr() as *const c_char;
+        let ctitle_len = libc::strlen(ctitle_ptr);
+        if ctitle_len > 0 {
+            wb(p, len + 5, ctitle_len as u8);
+            std::ptr::copy_nonoverlapping(ctitle_ptr as *const u8, p.add(len + 6), ctitle_len);
+            len += ctitle_len + 1;
+        } else {
+            wb(p, len + 5, 0);
+            len += 1;
+        }
+    }
+
+    // ── Class name ────────────────────────────────────────────────────────────
+    {
+        let class_name = rust_classdb_name_cop(
+            (*tsd).status.class as c_int,
+            (*tsd).status.mark  as c_int,
+        );
+        if !class_name.is_null() {
+            let cn_len = libc::strlen(class_name);
+            wb(p, len + 5, cn_len as u8);
+            std::ptr::copy_nonoverlapping(class_name as *const u8, p.add(len + 6), cn_len);
+            len += cn_len + 1;
+        } else {
+            wb(p, len + 5, 0);
+            len += 1;
+        }
+    }
+
+    // ── Player name ───────────────────────────────────────────────────────────
+    {
+        let name_ptr = (*tsd).status.name.as_ptr() as *const c_char;
+        let name_len = libc::strlen(name_ptr);
+        wb(p, len + 5, name_len as u8);
+        std::ptr::copy_nonoverlapping(name_ptr as *const u8, p.add(len + 6), name_len);
+        len += name_len; // C: len += strlen(name)  (no +1 here, intentional)
+    }
+
+    // ── Fixed appearance fields (offsets relative to len+6 after name) ────────
+    // WFIFOW(fd, len+6) = SWAP16(sex)
+    ww_be(p, len + 6, (*tsd).status.sex as u16);
+    // WFIFOB(fd, len+8) = state
+    wb(p, len + 8, (*tsd).status.state as u8);
+    // WFIFOW(fd, len+9) = SWAP16(0)  — default (overridden below for disguise states)
+    ww_be(p, len + 9, 0);
+    // WFIFOB(fd, len+11) = speed
+    wb(p, len + 11, (*tsd).speed as u8);
+
+    if (*tsd).status.state == 3 {
+        ww_be(p, len + 9, (*tsd).disguise);
+    } else if (*tsd).status.state == 4 {
+        ww_be(p, len + 9, (*tsd).disguise.wrapping_add(32768));
+        wb(p, len + 11, (*tsd).disguise_color as u8);
+    }
+
+    wb(p, len + 12, 0);
+    wb(p, len + 13, (*tsd).status.face as u8);
+    wb(p, len + 14, (*tsd).status.hair as u8);
+    wb(p, len + 15, (*tsd).status.hair_color as u8);
+    wb(p, len + 16, (*tsd).status.face_color as u8);
+    wb(p, len + 17, (*tsd).status.skin_color as u8);
+
+    len += 14; // advances past the 14-byte fixed block (bytes 6..17 = 12 bytes + 2 for sw)
+
+    // ── Armor / coat slot (look + color) ──────────────────────────────────────
+    // Writes at len+4 (ww) and len+6 (wb), then len += 3.
+    if pc_isequip_us(tsd, EQ_ARMOR) == 0 {
+        ww_be(p, len + 4, (*tsd).status.sex as u16);
+    } else {
+        if (*tsd).status.equip[EQ_ARMOR as usize].custom_look != 0 {
+            ww_be(p, len + 4, (*tsd).status.equip[EQ_ARMOR as usize].custom_look as u16);
+        } else {
+            ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_ARMOR) as c_uint) as u16);
+        }
+        if (*tsd).status.armor_color > 0 {
+            wb(p, len + 6, (*tsd).status.armor_color as u8);
+        } else if (*tsd).status.equip[EQ_ARMOR as usize].custom_look != 0 {
+            wb(p, len + 6, (*tsd).status.equip[EQ_ARMOR as usize].custom_look_color as u8);
+        } else {
+            wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_ARMOR) as c_uint) as u8);
+        }
+    }
+    // EQ_COAT overrides armor look if equipped.
+    if pc_isequip_us(tsd, EQ_COAT) != 0 {
+        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_COAT) as c_uint) as u16);
+        if (*tsd).status.armor_color > 0 {
+            wb(p, len + 6, (*tsd).status.armor_color as u8);
+        } else {
+            wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_COAT) as c_uint) as u8);
+        }
+    }
+    len += 3;
+
+    // ── Weapon slot ───────────────────────────────────────────────────────────
+    if pc_isequip_us(tsd, EQ_WEAP) == 0 {
+        ww_be(p, len + 4, 0xFFFF);
+        wb(p, len + 6, 0);
+    } else if (*tsd).status.equip[EQ_WEAP as usize].custom_look != 0 {
+        ww_be(p, len + 4, (*tsd).status.equip[EQ_WEAP as usize].custom_look as u16);
+        wb(p, len + 6, (*tsd).status.equip[EQ_WEAP as usize].custom_look_color as u8);
+    } else {
+        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_WEAP) as c_uint) as u16);
+        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_WEAP) as c_uint) as u8);
+    }
+    len += 3;
+
+    // ── Shield slot ───────────────────────────────────────────────────────────
+    if pc_isequip_us(tsd, EQ_SHIELD) == 0 {
+        ww_be(p, len + 4, 0xFFFF);
+        wb(p, len + 6, 0);
+    } else if (*tsd).status.equip[EQ_SHIELD as usize].custom_look != 0 {
+        ww_be(p, len + 4, (*tsd).status.equip[EQ_SHIELD as usize].custom_look as u16);
+        wb(p, len + 6, (*tsd).status.equip[EQ_SHIELD as usize].custom_look_color as u8);
+    } else {
+        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_SHIELD) as c_uint) as u16);
+        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_SHIELD) as c_uint) as u8);
+    }
+    len += 3;
+
+    // ── Helm slot ─────────────────────────────────────────────────────────────
+    if pc_isequip_us(tsd, EQ_HELM) == 0
+        || ((*tsd).status.setting_flags & FLAG_HELM as u16) == 0
+        || itemdb_look_us(pc_isequip_us(tsd, EQ_HELM) as c_uint) == -1
+    {
+        wb(p, len + 4, 0);
+        ww_be(p, len + 5, 0xFFFF);
+    } else {
+        wb(p, len + 4, 1);
+        if (*tsd).status.equip[EQ_HELM as usize].custom_look != 0 {
+            // C writes customLook as byte (WFIFOB) and customLookColor as byte — helm uses bytes not words.
+            wb(p, len + 5, (*tsd).status.equip[EQ_HELM as usize].custom_look as u8);
+            wb(p, len + 6, (*tsd).status.equip[EQ_HELM as usize].custom_look_color as u8);
+        } else {
+            wb(p, len + 5, itemdb_look_us(pc_isequip_us(tsd, EQ_HELM) as c_uint) as u8);
+            wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_HELM) as c_uint) as u8);
+        }
+    }
+    len += 3;
+
+    // ── Face acc slot ─────────────────────────────────────────────────────────
+    if pc_isequip_us(tsd, EQ_FACEACC) == 0 {
+        ww_be(p, len + 4, 0xFFFF);
+        wb(p, len + 6, 0);
+    } else {
+        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_FACEACC) as c_uint) as u16);
+        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_FACEACC) as c_uint) as u8);
+    }
+    len += 3;
+
+    // ── Crown slot ────────────────────────────────────────────────────────────
+    if pc_isequip_us(tsd, EQ_CROWN) == 0 {
+        ww_be(p, len + 4, 0xFFFF);
+        wb(p, len + 6, 0);
+    } else {
+        wb(p, len, 0); // C: WFIFOB(fd, len) = 0 (extra byte written before the crown data)
+        if (*tsd).status.equip[EQ_CROWN as usize].custom_look != 0 {
+            ww_be(p, len + 4, (*tsd).status.equip[EQ_CROWN as usize].custom_look as u16);
+            wb(p, len + 6, (*tsd).status.equip[EQ_CROWN as usize].custom_look_color as u8);
+        } else {
+            ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_CROWN) as c_uint) as u16);
+            wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_CROWN) as c_uint) as u8);
+        }
+    }
+    len += 3;
+
+    // ── Face acc two slot ─────────────────────────────────────────────────────
+    if pc_isequip_us(tsd, EQ_FACEACCTWO) == 0 {
+        ww_be(p, len + 4, 0xFFFF);
+        wb(p, len + 6, 0);
+    } else {
+        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_FACEACCTWO) as c_uint) as u16);
+        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_FACEACCTWO) as c_uint) as u8);
+    }
+    len += 3;
+
+    // ── Mantle slot ───────────────────────────────────────────────────────────
+    if pc_isequip_us(tsd, EQ_MANTLE) == 0 {
+        ww_be(p, len + 4, 0xFFFF);
+        wb(p, len + 6, 0xFF);
+    } else {
+        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_MANTLE) as c_uint) as u16);
+        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_MANTLE) as c_uint) as u8);
+    }
+    len += 3;
+
+    // ── Necklace slot ─────────────────────────────────────────────────────────
+    if pc_isequip_us(tsd, EQ_NECKLACE) == 0
+        || ((*tsd).status.setting_flags & FLAG_NECKLACE as u16) == 0
+        || itemdb_look_us(pc_isequip_us(tsd, EQ_NECKLACE) as c_uint) == -1
+    {
+        ww_be(p, len + 4, 0xFFFF);
+        wb(p, len + 6, 0);
+    } else {
+        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_NECKLACE) as c_uint) as u16);
+        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_NECKLACE) as c_uint) as u8);
+    }
+    len += 3;
+
+    // ── Boots slot ────────────────────────────────────────────────────────────
+    if pc_isequip_us(tsd, EQ_BOOTS) == 0 {
+        ww_be(p, len + 4, (*tsd).status.sex as u16);
+        wb(p, len + 6, 0);
+    } else if (*tsd).status.equip[EQ_BOOTS as usize].custom_look != 0 {
+        ww_be(p, len + 4, (*tsd).status.equip[EQ_BOOTS as usize].custom_look as u16);
+        wb(p, len + 6, (*tsd).status.equip[EQ_BOOTS as usize].custom_look_color as u8);
+    } else {
+        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_BOOTS) as c_uint) as u16);
+        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_BOOTS) as c_uint) as u8);
+    }
+    len += 3;
+
+    // ── Equip slots 0..14: icon, real_name, db_name, dura ────────────────────
+    // Also builds the equip_status summary string for slot entries that have items.
+    let mut equip_status = [0u8; 65536];
+    let mut equip_status_len: usize = 0;
+
+    for x in 0..14usize {
+        let eq = &(*tsd).status.equip[x];
+        if eq.id > 0 {
+            // Icon
+            let icon_w: u16 = if eq.custom_icon != 0 {
+                (eq.custom_icon as u16).wrapping_add(49152)
+            } else {
+                rust_itemdb_icon_cop(eq.id) as u16
+            };
+            ww_be(p, len + 6, icon_w);
+            let icon_color: u8 = if eq.custom_icon != 0 {
+                eq.custom_icon_color as u8
+            } else {
+                rust_itemdb_iconcolor_cop(eq.id) as u8
+            };
+            wb(p, len + 8, icon_color);
+            len += 3;
+
+            // Real name (or DB name if no real name).
+            let name_ptr: *const u8 = if eq.real_name[0] != 0 {
+                eq.real_name.as_ptr() as *const u8
+            } else {
+                let n = rust_itemdb_name_cop(eq.id);
+                if n.is_null() { b"\0".as_ptr() } else { n as *const u8 }
+            };
+            let name_len = libc::strlen(name_ptr as *const c_char);
+            wb(p, len + 6, name_len as u8);
+            std::ptr::copy_nonoverlapping(name_ptr, p.add(len + 7), name_len);
+            len += name_len + 1;
+
+            // DB name (always from itemdb).
+            let dbname = rust_itemdb_name_cop(eq.id);
+            let dbname_ptr: *const u8 = if dbname.is_null() { b"\0".as_ptr() } else { dbname as *const u8 };
+            let dbname_len = libc::strlen(dbname_ptr as *const c_char);
+            wb(p, len + 6, dbname_len as u8);
+            std::ptr::copy_nonoverlapping(dbname_ptr, p.add(len + 7), dbname_len);
+            len += dbname_len + 1;
+
+            // Dura (u32 big-endian).
+            wl_be(p, len + 6, eq.dura as u32);
+            len += 5;
+
+            // Build equip_status summary string for weapon/armor item types (3..=16).
+            let item_type = rust_itemdb_type_cop(eq.id);
+            if item_type >= 3 && item_type <= 16 {
+                let nameof: *const c_char = if eq.real_name[0] != 0 {
+                    eq.real_name.as_ptr() as *const c_char
+                } else {
+                    rust_itemdb_name_cop(eq.id) as *const c_char
+                };
+                let msgnum = clif_mapmsgnum(tsd, x as c_int);
+                if msgnum >= 0 && nameof != std::ptr::null() {
+                    let mut buff = [0i8; 256];
+                    libc::snprintf(
+                        buff.as_mut_ptr(),
+                        buff.len(),
+                        map_msg[msgnum as usize].message.as_ptr(),
+                        nameof,
+                    );
+                    let buff_len = libc::strlen(buff.as_ptr());
+                    let remaining = equip_status.len().saturating_sub(equip_status_len + 2);
+                    let copy_len = buff_len.min(remaining);
+                    std::ptr::copy_nonoverlapping(
+                        buff.as_ptr() as *const u8,
+                        equip_status.as_mut_ptr().add(equip_status_len),
+                        copy_len,
+                    );
+                    equip_status_len += copy_len;
+                    // Append "\x0A" separator.
+                    if equip_status_len < equip_status.len() - 1 {
+                        equip_status[equip_status_len] = 0x0A;
+                        equip_status_len += 1;
+                    }
+                }
+            }
+        } else {
+            // Empty slot.
+            ww_be(p, len + 6, 0);
+            wb(p, len + 8, 0);
+            wb(p, len + 9, 0);
+            wb(p, len + 10, 0);
+            wl_be(p, len + 11, 0);
+            len += 10;
+        }
+    }
+
+    // ── Equip status summary string ───────────────────────────────────────────
+    if equip_status_len == 0 {
+        let no_items = b"No items equipped.\0";
+        equip_status_len = no_items.len() - 1;
+        equip_status[..equip_status_len].copy_from_slice(&no_items[..equip_status_len]);
+    }
+    let equip_len = equip_status_len.min(255);
+    equip_status[equip_len] = 0; // NUL-terminate at cap
+    wb(p, len + 6, equip_len as u8);
+    std::ptr::copy_nonoverlapping(equip_status.as_ptr(), p.add(len + 7), equip_len);
+    len += equip_len + 1;
+
+    // ── Target player ID ──────────────────────────────────────────────────────
+    wl_be(p, len + 6, (*bl).id as u32);
+    len += 4;
+
+    // ── Group / exchange / gender flags ───────────────────────────────────────
+    wb(p, len + 6, if ((*tsd).status.setting_flags & FLAG_GROUP as u16) != 0 { 1 } else { 0 });
+    wb(p, len + 7, if ((*tsd).status.setting_flags & FLAG_EXCHANGE as u16) != 0 { 1 } else { 0 });
+    wb(p, len + 8, (2u8).wrapping_sub((*tsd).status.sex as u8));
+    len += 3;
+
+    ww_be(p, len + 6, 0);
+    len += 2;
+
+    // ── Profile picture and profile data ──────────────────────────────────────
+    let ppic_size = (*tsd).profilepic_size as usize;
+    std::ptr::copy_nonoverlapping(
+        (*tsd).profilepic_data.as_ptr() as *const u8,
+        p.add(len + 6),
+        ppic_size,
+    );
+    len += ppic_size;
+
+    let prof_size = (*tsd).profile_size as usize;
+    std::ptr::copy_nonoverlapping(
+        (*tsd).profile_data.as_ptr() as *const u8,
+        p.add(len + 6),
+        prof_size,
+    );
+    len += prof_size;
+
+    // ── Legends ───────────────────────────────────────────────────────────────
+    let mut legend_count: u16 = 0;
+    for x in 0..MAX_LEGENDS {
+        let lg = &(*tsd).status.legends[x];
+        if lg.text[0] != 0 && lg.name[0] != 0 {
+            legend_count += 1;
+        }
+    }
+    ww_be(p, len + 6, legend_count);
+    len += 2;
+
+    for x in 0..MAX_LEGENDS {
+        let lg = &(*tsd).status.legends[x];
+        if lg.text[0] == 0 || lg.name[0] == 0 {
+            continue;
+        }
+        wb(p, len + 6, lg.icon as u8);
+        wb(p, len + 7, lg.color as u8);
+
+        if lg.tchaid > 0 {
+            let char_name = clif_getName_cop(lg.tchaid);
+            let text_ptr  = lg.text.as_ptr() as *const c_char;
+            let bff = replace_str_rust(text_ptr, b"$player\0", char_name as *const c_char);
+            let bff_len = if bff.is_null() { 0 } else { libc::strlen(bff) };
+            wb(p, len + 8, bff_len as u8);
+            if !bff.is_null() && bff_len > 0 {
+                std::ptr::copy_nonoverlapping(bff as *const u8, p.add(len + 9), bff_len);
+            }
+            len += bff_len + 3;
+        } else {
+            let text_len = libc::strlen(lg.text.as_ptr() as *const c_char);
+            wb(p, len + 8, text_len as u8);
+            std::ptr::copy_nonoverlapping(lg.text.as_ptr() as *const u8, p.add(len + 9), text_len);
+            len += text_len + 3;
+        }
+    }
+
+    // ── Gender byte + registered flag ─────────────────────────────────────────
+    wb(p, len + 6, (3u8).wrapping_sub((*tsd).status.sex as u8));
+    wb(p, len + 7, if clif_isregistered_cop((*tsd).status.id) > 0 { 1 } else { 0 });
+    len += 5;
+
+    // ── Packet size field ─────────────────────────────────────────────────────
+    ww_be(p, 1, (len + 3) as u16);
+    rust_session_commit(fd, encrypt(fd) as usize);
+
+    // ── Lua onClick hook ──────────────────────────────────────────────────────
+    {
+        use crate::game::scripting::doscript_blargs;
+        let onclick = b"onClick\0".as_ptr() as *const c_char;
+        let args: [*mut BlockList; 2] = [&mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList];
+        doscript_blargs(onclick, std::ptr::null(), &args);
+    }
+
+    0
+}
+
+// ─── Board list packet ────────────────────────────────────────────────────────
+
+/// Sends the filtered board list to a player.
+///
+/// Ported from `clif_showboards` in `c_src/sl_compat.c` (Task 1.8).
+///
+/// Iterates all 256 sort-order slots and, for each slot, finds the first board
+/// (id 0..256) whose `sort`, `level`, `gmlevel`, `path`, and `clan` match the
+/// player's character status.  The matching board's id and name are appended to
+/// the packet in big-endian order, mirroring the original `SWAP16` / `strcpy`
+/// sequence.
+///
+/// ## Packet layout (relative offsets)
+/// ```text
+/// [0]    0xAA  opcode
+/// [1..2] len+3 big-endian (written last)
+/// [3]    0x31
+/// [4]    3
+/// [5]    1
+/// [6]    13
+/// [7..16] "YuriBoards\0"   (10 chars + null)
+/// [20]   b_count           (written after loop)
+/// for each matched board (len starts at 15):
+///   [len+6..len+7]  board_id big-endian (SWAP16)
+///   [len+8]         name byte length
+///   [len+9..]       name bytes (no null terminator written)
+///   len += strlen(name) + 3
+/// ```
+///
+/// # Safety
+/// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
+#[no_mangle]
+pub unsafe extern "C" fn clif_showboards(sd: *mut MapSessionData) -> c_int {
+    let sd_ref = &*sd;
+    let fd = sd_ref.fd;
+
+    if rust_session_exists(fd) == 0 {
+        rust_session_set_eof(fd, 8);
+        return 0;
+    }
+
+    rust_session_wfifohead(fd, 65535);
+    let p = rust_session_wdata_ptr(fd, 0);
+    if p.is_null() {
+        return 0;
+    }
+
+    // Fixed header.
+    wb(p, 0, 0xAA);
+    wb(p, 3, 0x31);
+    wb(p, 4, 3);
+    wb(p, 5, 1);
+    wb(p, 6, 13);
+    // "YuriBoards" + null at pos 7.
+    let label = b"YuriBoards\0";
+    std::ptr::copy_nonoverlapping(label.as_ptr(), p.add(7), label.len());
+
+    let mut len: usize = 15;
+    let mut b_count: u8 = 0;
+
+    let player_level   = sd_ref.status.level as i32;
+    let player_gmlevel = sd_ref.status.gm_level as i32;
+    let player_path    = sd_ref.status.class as i32;
+    let player_clan    = sd_ref.status.clan as i32;
+
+    // Mirrors the C double-loop: outer = sort order 0..256, inner = board id 0..256.
+    // Uses `searchexist` (returns null for missing ids) so no new API is needed.
+    for sort_order in 0..256_i32 {
+        for x in 0..256_i32 {
+            let bp = board_db::searchexist(x);
+            if bp.is_null() {
+                continue;
+            }
+            let b = &*bp;
+            if b.sort   == sort_order
+                && b.level    <= player_level
+                && b.gmlevel  <= player_gmlevel
+                && (b.path == player_path || b.path == 0)
+                && (b.clan == player_clan  || b.clan == 0)
+            {
+                let name_len = libc::strlen(b.name.as_ptr());
+                // board id (big-endian u16) — mirrors WFIFOW(fd, len+6) = SWAP16(x).
+                ww_be(p, len + 6, x as u16);
+                // name byte-length at len+8; name bytes starting at len+9.
+                wb(p, len + 8, name_len as u8);
+                std::ptr::copy_nonoverlapping(b.name.as_ptr() as *const u8, p.add(len + 9), name_len);
+                len += name_len + 3;
+                b_count += 1;
+                break; // only first matching board per sort-order slot
+            }
+        }
+    }
+
+    // Board count at fixed offset 20; packet length at bytes 1-2.
+    wb(p, 20, b_count);
+    ww_be(p, 1, (len + 3) as u16);
+
+    rust_session_commit(fd, encrypt(fd) as usize);
+    0
 }

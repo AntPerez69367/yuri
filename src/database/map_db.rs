@@ -120,15 +120,15 @@ pub struct MapData {
 
 /// Tile arrays parsed from a single .map file. Raw pointers are independently
 /// heap-allocated — no aliases — so safe to move across threads.
-struct ParsedTiles {
-    xs: c_ushort,
-    ys: c_ushort,
-    bxs: c_ushort,
-    bys: c_ushort,
-    tile: *mut c_ushort,
-    pass: *mut c_ushort,
-    obj: *mut c_ushort,
-    map: *mut c_uchar,
+pub(crate) struct ParsedTiles {
+    pub(crate) xs: c_ushort,
+    pub(crate) ys: c_ushort,
+    pub(crate) bxs: c_ushort,
+    pub(crate) bys: c_ushort,
+    pub(crate) tile: *mut c_ushort,
+    pub(crate) pass: *mut c_ushort,
+    pub(crate) obj: *mut c_ushort,
+    pub(crate) map: *mut c_uchar,
 }
 // Each pointer is a uniquely-owned allocation with no aliases.
 unsafe impl Send for ParsedTiles {}

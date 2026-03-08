@@ -50,7 +50,7 @@ use crate::game::map_parse::items::{
 };
 use crate::game::map_parse::trading::{clif_handitem, clif_handgold, clif_parse_exchange};
 use crate::game::map_parse::groups::{clif_groupstatus, clif_addgroup, clif_parseparcel, clif_huntertoggle, clif_sendhunternote};
-use crate::game::map_parse::events::{clif_sendRewardInfo, clif_getReward};
+use crate::game::map_parse::events::{clif_sendRewardInfo, clif_getReward, clif_parseranking as rust_clif_parseranking};
 use crate::game::map_parse::player_state::{clif_mystaytus, clif_refresh};
 use crate::game::map_parse::dialogs::{clif_parsenpcdialog, clif_handle_clickgetinfo, clif_closeit};
 
@@ -86,9 +86,6 @@ extern "C" {
     fn clif_debug(buf: *const u8, len: u16);
     fn itemdb_thrownconfirm(id: c_uint) -> c_int;
     fn pc_warp(sd: *mut MapSessionData, map_id: u16, x: u16, y: u16);
-
-    // Ranking (still in C; extern declared in events.rs but also needed here)
-    fn clif_parseranking(sd: *mut MapSessionData, fd: c_int);
 
     // Drop/post items (still in C)
     fn clif_parsedropitem(sd: *mut MapSessionData);
@@ -483,7 +480,7 @@ pub unsafe extern "C" fn clif_parse(fd: c_int) -> c_int {
             match rfifob(fd, 5) {
                 5 => { clif_sendRewardInfo(sd, fd); }
                 6 => { clif_getReward(sd, fd); }
-                _ => { clif_parseranking(sd, fd); }
+                _ => { rust_clif_parseranking(sd, fd); }
             }
         }
         0x82 => {

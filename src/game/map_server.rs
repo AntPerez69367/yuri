@@ -36,17 +36,14 @@ extern "C" {
     // encrypt — C function in net_crypt.c
     fn encrypt(fd: c_int) -> c_int;
 
-    // sl_doscript_blargs — Lua call from C
-    fn sl_doscript_blargs(
-        root: *const c_char,
-        method: *const c_char,
-        n: c_int,
-        ...
-    ) -> c_int;
-
     // boarddb helpers — declared in board_db.h, implemented in Rust
     fn rust_boarddb_script(id: c_int) -> c_int;
     fn rust_boarddb_yname(id: c_int) -> *mut c_char;
+
+    // shutdown / session helpers used by map_reset_timer
+    fn rust_session_call_parse(fd: c_int);
+    fn rust_session_rfifoflush(fd: c_int) -> c_int;
+    fn rust_request_shutdown();
 
     // game-global registry reader — ported to map_server.rs
 
@@ -497,13 +494,19 @@ pub unsafe extern "C" fn rust_map_cronjob(_id: c_int, _n: c_int) -> c_int {
     0
 }
 
+/// Dispatch a Lua event with a single block_list argument.
+#[cfg(not(test))]
+#[allow(dead_code)]
+unsafe fn sl_doscript_simple(root: *const c_char, method: *const c_char, bl: *mut crate::database::map_db::BlockList) -> c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
+}
+
 #[inline]
 unsafe fn cron(name: &[u8]) {
-    crate::game::scripting::sl_doscript_blargs_vec(
+    crate::game::scripting::doscript_blargs(
         name.as_ptr() as *const c_char,
         std::ptr::null(),
-        0,
-        std::ptr::null(),
+        &[],
     );
 }
 
@@ -579,13 +582,12 @@ pub unsafe extern "C" fn mmo_setonline(id: c_uint, val: c_int) {
         println!("[map] [login] name={} addr={}",
             std::ffi::CStr::from_ptr(name_ptr).to_string_lossy(), addr);
 
-        // Fire "login" Lua hook: sl_doscript_blargs("login", NULL, 1, &sd->bl)
-        let bl_ptr = std::ptr::addr_of_mut!((*sd).bl) as *mut c_void;
-        crate::game::scripting::sl_doscript_blargs_vec(
+        // Fire "login" Lua hook: doscript_blargs("login", NULL, &[bl])
+        let bl_ptr = std::ptr::addr_of_mut!((*sd).bl);
+        crate::game::scripting::doscript_blargs(
             b"login\0".as_ptr() as *const std::ffi::c_char,
             std::ptr::null(),
-            1,
-            &bl_ptr as *const *mut c_void,
+            &[bl_ptr],
         );
     }
 
@@ -875,12 +877,7 @@ pub unsafe extern "C" fn boards_showposts(
         (*sd).board = board;
         if rust_boarddb_script(board) != 0 {
             let yname = rust_boarddb_yname(board);
-            sl_doscript_blargs(
-                yname,
-                b"check\0".as_ptr() as *const c_char,
-                1,
-                std::ptr::addr_of_mut!((*sd).bl),
-            );
+            sl_doscript_simple(yname, b"check\0".as_ptr() as *const c_char, std::ptr::addr_of_mut!((*sd).bl));
         } else {
             (*sd).board_canwrite = 1;
         }
@@ -946,12 +943,7 @@ pub unsafe extern "C" fn boards_readpost(
         (*sd).board = board;
         if rust_boarddb_script(board) != 0 {
             let yname = rust_boarddb_yname(board);
-            sl_doscript_blargs(
-                yname,
-                b"check\0".as_ptr() as *const c_char,
-                1,
-                std::ptr::addr_of_mut!((*sd).bl),
-            );
+            sl_doscript_simple(yname, b"check\0".as_ptr() as *const c_char, std::ptr::addr_of_mut!((*sd).bl));
         } else {
             (*sd).board_canwrite = 1;
         }
@@ -1355,12 +1347,7 @@ pub unsafe extern "C" fn nmail_write(sd: *mut MapSessionData) -> c_int {
             messagelen.min((*sd).mail.len()),
         );
         (*sd).luaexec = 0;
-        sl_doscript_blargs(
-            b"canRunLuaMail\0".as_ptr() as *const c_char,
-            std::ptr::null(),
-            1,
-            std::ptr::addr_of_mut!((*sd).bl),
-        );
+        sl_doscript_simple(b"canRunLuaMail\0".as_ptr() as *const c_char, std::ptr::null(), std::ptr::addr_of_mut!((*sd).bl));
         if (*sd).status.gm_level == 99 || (*sd).luaexec != 0 {
             nmail_luascript(sd, tolen as c_int, topiclen as c_int, messagelen as c_int);
             nmail_sendmessage(
@@ -2714,8 +2701,8 @@ pub unsafe extern "C" fn map_id2name(id: c_uint) -> *mut c_char {
 pub unsafe extern "C" fn map_weather(_id: c_int, _n: c_int) -> c_int {
     if old_time != cur_time {
         old_time = cur_time;
-        crate::game::scripting::sl_doscript_blargs_vec(
-            c"mapWeather".as_ptr(), std::ptr::null(), 0, std::ptr::null(),
+        crate::game::scripting::doscript_blargs(
+            c"mapWeather".as_ptr(), std::ptr::null(), &[],
         );
     }
     0
@@ -2727,7 +2714,7 @@ pub unsafe extern "C" fn map_weather(_id: c_int, _n: c_int) -> c_int {
 #[no_mangle]
 pub unsafe extern "C" fn map_savechars(_none: c_int, _nonetoo: c_int) -> c_int {
     use crate::ffi::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof};
-    extern "C" { fn sl_intif_save(sd: *mut c_void) -> c_int; }
+    extern "C" { #[link_name = "rust_sl_intif_save"] fn sl_intif_save(sd: *mut c_void) -> c_int; }
     for x in 0..fd_max {
         if rust_session_exists(x) == 0 { continue; }
         if rust_session_get_eof(x) != 0 { continue; }
@@ -2899,4 +2886,212 @@ pub unsafe extern "C" fn map_do_term() {
     crate::ffi::magic_db::rust_magicdb_term();
     crate::ffi::class_db::rust_classdb_term();
     println!("[map] Map Server Shutdown");
+}
+
+// ---------------------------------------------------------------------------
+// Globals ported from c_src/map_server_stubs.c (Task 2.3)
+//
+// These were previously C globals in map_server_stubs.c. They are now Rust
+// #[no_mangle] statics so C code that references them via extern declarations
+// in map_server.h / mmo.h continues to link.
+// ---------------------------------------------------------------------------
+
+/// Mob search DBMap — was used by mob search lookups. No Rust callers found;
+/// kept as a null pointer stub for C ABI compatibility in case any C code links
+/// against this symbol. Previously: `DBMap* mobsearch_db;` in map_server_stubs.c.
+#[no_mangle]
+pub static mut mobsearch_db: *mut std::ffi::c_void = std::ptr::null_mut();
+
+/// Party/group member ID table. Flat 2-D: groups[MAX_GROUPS][MAX_GROUP_MEMBERS]
+/// = groups[256][256]. Rust code accesses this via `#[link_name = "groups"]`.
+/// Previously defined in map_server_stubs.c (moved there from sl_compat.c).
+/// 256 * 256 = 65536 elements.
+#[no_mangle]
+pub static mut groups: [c_uint; 65536] = [0u32; 65536];
+
+/// File descriptor for the logging socket (unused in current build; kept for ABI).
+/// Previously: `int log_fd;` in map_server_stubs.c.
+#[no_mangle]
+pub static mut log_fd: c_int = 0;
+
+/// Maximum map ID seen during load; used by map scan loops.
+/// Previously: `int map_max = 0;` in map_server_stubs.c.
+#[no_mangle]
+pub static mut map_max: c_int = 0;
+
+/// Map server public IP string (dotted-decimal, e.g. "127.0.0.1").
+/// Previously: `char map_ip_s[16];` in map_server_stubs.c.
+#[no_mangle]
+pub static mut map_ip_s: [u8; 16] = [0u8; 16];
+
+/// Logging server IP string (dotted-decimal).
+/// Previously: `char log_ip_s[16];` in map_server_stubs.c.
+#[no_mangle]
+pub static mut log_ip_s: [u8; 16] = [0u8; 16];
+
+/// Hour value from the previous cron-job tick; used to detect hour changes.
+/// Previously: `int oldHour;` in map_server_stubs.c.
+#[no_mangle]
+pub static mut oldHour: c_int = 0;
+
+/// Minute value from the previous cron-job tick; used to detect minute changes.
+/// Previously: `int oldMinute;` in map_server_stubs.c.
+#[no_mangle]
+pub static mut oldMinute: c_int = 0;
+
+/// Timer ID returned by timer_insert for the cron-job callback.
+/// Previously: `int cronjobtimer;` in map_server_stubs.c.
+#[no_mangle]
+pub static mut cronjobtimer: c_int = 0;
+
+/// Current count of block-list entries being iterated. Used by the block-grid
+/// sweep to avoid re-entrant modification. Previously: `int bl_list_count = 0;`
+/// in map_server_stubs.c (with `#define BL_LIST_MAX 32768` guarding it).
+#[no_mangle]
+pub static mut bl_list_count: c_int = 0;
+
+// ---------------------------------------------------------------------------
+// Task 2.1: map_reload — ported from c_src/map_server_stubs.c
+//
+// Reloads all map data by calling rust_map_reload(), then iterates every
+// loaded map and calls sl_updatepeople on every BL_PC entity via
+// foreach_in_area(SameMap). sl_updatepeople_impl is currently a no-op but
+// will be filled in once map_parse.c is fully ported.
+//
+// Called from C (gm_command.rs extern "C" block at line 63), so must be
+// #[no_mangle] extern "C".
+// ---------------------------------------------------------------------------
+
+/// Reload all map data (tile, registry) and notify all online players.
+///
+/// Replaces `map_reload` in `c_src/map_server_stubs.c`.
+///
+/// # Safety
+/// Must be called on the game thread. `maps_dir` and `serverid` must be valid
+/// C globals (provided by `src/ffi/config_globals.rs`).
+#[no_mangle]
+pub unsafe extern "C" fn map_reload() -> c_int {
+    // maps_dir and serverid are extern "C" statics declared in config_globals.rs
+    // and accessible via the extern "C" block added below.
+    extern "C" {
+        static maps_dir: *const c_char;
+    }
+    use crate::ffi::map_db::rust_map_reload;
+
+    if rust_map_reload(maps_dir, serverid) != 0 {
+        tracing::error!("[map] rust_map_reload failed");
+        return -1;
+    }
+
+    let n = crate::ffi::map_db::map_n as usize;
+    // Map IDs are sparse — must iterate all slots, not just 0..map_n.
+    for i in 0..crate::database::map_db::MAP_SLOTS {
+        // map_isloaded(i): registry pointer is non-null iff the map was loaded.
+        let slot = &*crate::ffi::map_db::map.add(i);
+        if !slot.registry.is_null() {
+            crate::game::block::foreach_in_area(
+                i as i32,
+                0,
+                0,
+                crate::game::block::AreaType::SameMap,
+                crate::game::mob::BL_PC,
+                |bl| {
+                    crate::game::scripting::sl_updatepeople_impl(
+                        bl as *mut std::ffi::c_void,
+                        std::ptr::null_mut(),
+                    )
+                },
+            );
+        }
+    }
+
+    tracing::info!("[map] Map reload finished. {} maps loaded", n);
+    0
+}
+
+// ---------------------------------------------------------------------------
+// Task 2.2: map_reset_timer — ported from c_src/map_server_stubs.c
+//
+// Countdown broadcast/disconnect function. Called every 250 ms by timer_insert
+// (set up in gm_command.rs shutdown handler). Uses two module-level statics
+// to replace C's `static int reset` and `static int diff` local statics.
+//
+// Called from C (gm_command.rs extern "C" block at line 167), so must be
+// #[no_mangle] extern "C".
+// ---------------------------------------------------------------------------
+
+/// Running countdown value (milliseconds remaining until shutdown).
+/// Replaces `static int reset` inside `map_reset_timer` in C.
+static mut RESET_TIMER_REMAINING: c_int = 0;
+
+/// Accumulated elapsed ms since the last broadcast.
+/// Replaces `static int diff` inside `map_reset_timer` in C.
+static mut RESET_TIMER_DIFF: c_int = 0;
+
+/// Shutdown countdown timer callback.
+///
+/// `v1` — initial countdown in ms (only used on first call when `reset == 0`).
+/// `v2` — elapsed ms since the last call (timer interval, typically 250).
+///
+/// Returns 1 when shutdown is triggered, 0 otherwise.
+///
+/// Replaces `map_reset_timer` in `c_src/map_server_stubs.c`.
+///
+/// # Safety
+/// Must be called on the game thread. Accesses the global session table and
+/// `fd_max`. Both are single-threaded game globals.
+#[no_mangle]
+pub unsafe extern "C" fn map_reset_timer(v1: c_int, v2: c_int) -> c_int {
+    if RESET_TIMER_REMAINING == 0 {
+        RESET_TIMER_REMAINING = v1;
+    }
+
+    RESET_TIMER_REMAINING -= v2;
+    RESET_TIMER_DIFF      += v2;
+
+    if RESET_TIMER_REMAINING <= 250 {
+        let msg = c"Chaos is rising up. Please re-enter in a few seconds.";
+        crate::game::map_parse::chat::clif_broadcast(msg.as_ptr(), -1);
+    }
+
+    if RESET_TIMER_REMAINING <= 0 {
+        // Disconnect all active sessions, then request shutdown.
+        for x in 0..fd_max {
+            if rust_session_exists(x) != 0 {
+                let sd = rust_session_get_data(x);
+                if !sd.is_null() && rust_session_get_eof(x) == 0 {
+                    crate::game::client::handlers::clif_handle_disconnect(sd);
+                    rust_session_call_parse(x);
+                    rust_session_rfifoflush(x);
+                    rust_session_set_eof(x, 1);
+                }
+            }
+        }
+        rust_request_shutdown();
+        RESET_TIMER_REMAINING = 0;
+        RESET_TIMER_DIFF      = 0;
+        return 1;
+    }
+
+    if RESET_TIMER_REMAINING <= 60_000 {
+        if RESET_TIMER_DIFF >= 10_000 {
+            let msg = format!("Reset in {} seconds\0", RESET_TIMER_REMAINING / 1000);
+            crate::game::map_parse::chat::clif_broadcast(msg.as_ptr() as *const c_char, -1);
+            RESET_TIMER_DIFF = 0;
+        }
+    } else if RESET_TIMER_REMAINING <= 3_600_000 {
+        if RESET_TIMER_DIFF >= 300_000 {
+            let msg = format!("Reset in {} minutes\0", RESET_TIMER_REMAINING / 60_000);
+            crate::game::map_parse::chat::clif_broadcast(msg.as_ptr() as *const c_char, -1);
+            RESET_TIMER_DIFF = 0;
+        }
+    } else if RESET_TIMER_REMAINING > 3_600_000 {
+        if RESET_TIMER_DIFF >= 3_600_000 {
+            let msg = format!("Reset in {} hours\0", RESET_TIMER_REMAINING / 3_600_000);
+            crate::game::map_parse::chat::clif_broadcast(msg.as_ptr() as *const c_char, -1);
+            RESET_TIMER_DIFF = 0;
+        }
+    }
+
+    0
 }

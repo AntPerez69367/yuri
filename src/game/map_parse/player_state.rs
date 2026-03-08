@@ -35,6 +35,34 @@ use super::packet::{
 const OUT_STATUS: u8 = 0x08; // packet id for clif_sendstatus
 const BL_ALL:  c_int = 0x0F;  // all block-list types
 
+// ─── Local helpers ────────────────────────────────────────────────────────────
+
+/// Replace the first occurrence of `orig` (NUL-terminated) in `src` with
+/// `rep` (NUL-terminated).  Uses a 4096-byte module-local static buffer —
+/// identical semantics to the deleted C `replace_str` in sl_compat.c.
+/// Not thread-safe (single-threaded map server loop).
+unsafe fn replace_str_local(src: *const c_char, orig: &[u8], rep: *const c_char) -> *const c_char {
+    let orig_bytes = match orig.iter().position(|&b| b == 0) {
+        Some(n) => &orig[..n],
+        None => orig,
+    };
+    let p = libc::strstr(src, orig_bytes.as_ptr() as *const c_char);
+    if p.is_null() { return src; }
+    static mut REPL_BUF: [u8; 4096] = [0u8; 4096];
+    let prefix_len = (p as usize).saturating_sub(src as usize);
+    let rep_len = libc::strlen(rep);
+    let tail = p.add(orig_bytes.len());
+    std::ptr::copy_nonoverlapping(src as *const u8, REPL_BUF.as_mut_ptr(), prefix_len.min(4095));
+    let after_prefix = prefix_len.min(4095);
+    let copy_rep = rep_len.min(4095 - after_prefix);
+    std::ptr::copy_nonoverlapping(rep as *const u8, REPL_BUF.as_mut_ptr().add(after_prefix), copy_rep);
+    let after_rep = after_prefix + copy_rep;
+    let tail_len = libc::strlen(tail).min(4095 - after_rep);
+    std::ptr::copy_nonoverlapping(tail as *const u8, REPL_BUF.as_mut_ptr().add(after_rep), tail_len);
+    REPL_BUF[after_rep + tail_len] = 0;
+    REPL_BUF.as_ptr() as *const c_char
+}
+
 // ─── External C globals ──────────────────────────────────────────────────────
 
 extern "C" {
@@ -60,9 +88,6 @@ extern "C" {
 
     // clif_getName — static-char SQL lookup, still in C.
     fn clif_getName(id: c_uint) -> *mut c_char;
-
-    // replace_str — static-buffer string replace, still in C.
-    fn replace_str(s: *mut c_char, orig: *mut c_char, rep: *mut c_char) -> *mut c_char;
 
     // clif_sendweather — sends weather packet, still in C.
     fn clif_sendweather(sd: *mut MapSessionData) -> c_int;
@@ -864,9 +889,6 @@ pub unsafe extern "C" fn clif_mystaytus(sd: *mut MapSessionData) -> c_int {
     wfifow(fd, 9  + len, count.swap_bytes());
     len += 3;
 
-    // NUL-terminated legend text substitution strings reused between iterations.
-    let player_sub = b"$player\0".as_ptr() as *mut c_char;
-
     for x in 0..MAX_LEGENDS {
         let lg = &(*sd).status.legends[x];
         if lg.text[0] == 0 || lg.name[0] == 0 { continue; }
@@ -876,8 +898,8 @@ pub unsafe extern "C" fn clif_mystaytus(sd: *mut MapSessionData) -> c_int {
 
         if lg.tchaid > 0 {
             let char_name = clif_getName(lg.tchaid);
-            let text_ptr  = lg.text.as_ptr() as *mut c_char;
-            let buff      = replace_str(text_ptr, player_sub, char_name);
+            let text_ptr  = lg.text.as_ptr() as *const c_char;
+            let buff      = replace_str_local(text_ptr, b"$player\0", char_name);
             let buff_ptr  = buff as *const u8;
             let buff_len  = if buff.is_null() { 0 } else { cstr_len(buff_ptr) };
             wfifob(fd, 10 + len, buff_len as u8);

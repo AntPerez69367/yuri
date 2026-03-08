@@ -197,19 +197,7 @@ extern "C" {
     // Declared in map_parse.h; implemented in Rust (src/game/map_parse/chat.rs).
     // Returns 1 if communication is ALLOWED, 0 if blocked by ignore list.
     fn clif_isignore(src: *mut c_void, dst: *mut c_void) -> c_int;
-
-    // Non-variadic trampoline: calls map_foreachinarea(clif_send_sub, ...).
-    // Defined as a static helper in sl_compat.c.
-    fn clif_send_area(
-        m: c_int,
-        x: c_int,
-        y: c_int,
-        area_type: c_int,
-        send_type: c_int,
-        buf: *const c_uchar,
-        len: c_int,
-        src_bl: *mut BlockList,
-    );
+    // clif_send_area — ported to Rust (send_to_area / clif_send_area below, Task 1.9).
 }
 
 // ─── Send-type constants (from map_parse.h) ───────────────────────────────────
@@ -479,6 +467,236 @@ unsafe fn send_to_fd(fd: c_int, buf: *const c_uchar, len: c_int) {
         std::ptr::copy_nonoverlapping(buf, wptr, len as usize);
     }
     rust_session_commit(fd, encrypt(fd) as usize);
+}
+
+// ─── clif_send_area / clif_send_sub (ported from sl_compat.c, Task 1.9) ──────
+
+/// Channel registry: (global_reg name, channel byte value).
+///
+/// When a 0x0D packet carries one of these channel byte values, the player must
+/// have the corresponding global_reg set ≥ 1 to receive it.  The channel byte is
+/// temporarily zeroed out while writing to the session buffer, then restored.
+const CHANNEL_REGS: &[(&str, u8)] = &[
+    ("chann_en", 10),
+    ("chann_es", 11),
+    ("chann_fr", 12),
+    ("chann_cn", 13),
+    ("chann_pt", 14),
+    ("chann_id", 15),
+];
+
+/// Decide whether the packet in `buf` should be sent to the target session `sd`,
+/// given that the source is `src_bl` and the send type is `send_type`.
+///
+/// Returns `true` if the packet should be delivered.
+///
+/// Mirrors `clif_send_sub` filtering logic from `sl_compat.c`, excluding the
+/// channel-write and WFIFO operations (those live in `send_to_area`).
+///
+/// # Safety
+/// - `sd` must be a valid, initialized `MapSessionData`.
+/// - `src_bl` must be a valid `BlockList` pointer. It may be a `MapSessionData`
+///   when `bl_type == BL_PC`.
+/// - `buf` must point to at least `len` readable bytes.
+#[inline]
+unsafe fn should_send_to(
+    sd: *mut MapSessionData,
+    src_bl: *mut BlockList,
+    send_type: c_int,
+    buf: *const c_uchar,
+    len: c_int,
+) -> bool {
+    use crate::game::pc::{OPT_FLAG_STEALTH, OPT_FLAG_GHOSTS};
+    use crate::ffi::map_db::map;
+    use crate::database::map_db::MAP_SLOTS;
+
+    if sd.is_null() || src_bl.is_null() {
+        return false;
+    }
+
+    // Derive tsd: source player (non-null only when src_bl is BL_PC).
+    let tsd: *mut MapSessionData = if (*src_bl).bl_type == BL_PC {
+        src_bl as *mut MapSessionData
+    } else {
+        std::ptr::null_mut()
+    };
+
+    // ── Stealth filter ────────────────────────────────────────────────────────
+    // If source is stealthed, only send to GMs or to the source themselves.
+    if !tsd.is_null() {
+        if ((*tsd).optFlags & OPT_FLAG_STEALTH) != 0
+            && (*sd).status.gm_level == 0
+            && (*sd).status.id != (*tsd).status.id
+        {
+            return false;
+        }
+
+        // ── Ghost filter ──────────────────────────────────────────────────────
+        // If the map shows ghosts and the source is a ghost (state==1), only
+        // send to other ghosts or to players that opted into ghost visibility.
+        let m_idx = (*tsd).bl.m as usize;
+        if !map.is_null() && m_idx < MAP_SLOTS {
+            let map_slot = &*map.add(m_idx);
+            if map_slot.show_ghosts != 0
+                && (*tsd).status.state == 1
+                && (*tsd).bl.id != (*sd).bl.id
+                && (*sd).status.state != 1
+                && ((*sd).optFlags & OPT_FLAG_GHOSTS) == 0
+            {
+                return false;
+            }
+        }
+    }
+
+    // ── Ignore-list filter (whisper-like packets, opcode 0x0D) ───────────────
+    if !tsd.is_null() && len >= 4 && !buf.is_null() && *buf.add(3) == 0x0D {
+        if clif_isignore(tsd as *mut c_void, sd as *mut c_void) == 0 {
+            return false;
+        }
+    }
+
+    // ── WOS (without self) filter ─────────────────────────────────────────────
+    match send_type {
+        AREA_WOS | SAMEAREA_WOS => {
+            if src_bl == &mut (*sd).bl as *mut BlockList {
+                return false;
+            }
+        }
+        _ => {}
+    }
+
+    // ── Session liveness ──────────────────────────────────────────────────────
+    if rust_session_exists((*sd).fd) == 0 {
+        rust_session_set_eof((*sd).fd, 8);
+        return false;
+    }
+
+    true
+}
+
+/// Send `buf[0..len]` to all players in the spatial area defined by `area` around
+/// `(x, y)` on map `m`, applying the filtering logic from `clif_send_sub`.
+///
+/// For channel packets (opcode 0x0D with byte 5 >= 10), the channel byte is
+/// temporarily set to 0 before writing to each player's session buffer and
+/// restored afterwards (mirrors the C behaviour).
+///
+/// # Safety
+/// - `buf` must be a valid, writable pointer to at least `len` bytes.
+///   The function temporarily mutates `buf[5]` for channel packets and restores it.
+/// - `src_bl` must be a valid `BlockList` pointer.
+/// - The `map` global and block grid must be initialized.
+unsafe fn send_to_area(
+    m: c_int,
+    x: c_int,
+    y: c_int,
+    area: crate::game::block::AreaType,
+    buf: *mut c_uchar,
+    len: c_int,
+    src_bl: *mut BlockList,
+    send_type: c_int,
+) {
+    use crate::game::block::{foreach_in_area, AreaType};
+    use crate::game::mob::BL_PC as BL_PC_I32;
+
+    if buf.is_null() || src_bl.is_null() || len <= 0 {
+        return;
+    }
+
+    // Determine if this is a channel packet: opcode 0x0D (byte 3) and channel byte (byte 5) >= 10.
+    let is_channel_pkt = len >= 6 && *buf.add(3) == 0x0D && *buf.add(5) >= 10;
+
+    foreach_in_area(m, x, y, area, BL_PC_I32, |bl| {
+        let sd = bl as *mut MapSessionData;
+        if !should_send_to(sd, src_bl, send_type, buf as *const c_uchar, len) {
+            return 0;
+        }
+
+        let fd = (*sd).fd;
+
+        if is_channel_pkt {
+            // Channel packet: check if the player has the matching channel reg.
+            let ch_byte = *buf.add(5);
+            let mut matched = false;
+            for &(reg_name, ch_val) in CHANNEL_REGS {
+                if ch_byte == ch_val {
+                    // Check if player has this channel enabled (global_reg >= 1).
+                    let reg_cstr = std::ffi::CString::new(reg_name).unwrap_or_default();
+                    let v = crate::game::pc::rust_pc_readglobalreg(
+                        sd,
+                        reg_cstr.as_ptr() as *const i8,
+                    );
+                    if v >= 1 {
+                        // Temporarily zero out channel byte, write, restore.
+                        *buf.add(5) = 0;
+                        rust_session_wfifohead(fd, (len as usize) + 3);
+                        let wptr = rust_session_wdata_ptr(fd, 0);
+                        if !wptr.is_null() {
+                            std::ptr::copy_nonoverlapping(buf, wptr, len as usize);
+                        }
+                        rust_session_commit(fd, encrypt(fd) as usize);
+                        *buf.add(5) = ch_byte;
+                        matched = true;
+                    }
+                    break;
+                }
+            }
+            // If channel byte doesn't match any known channel, send normally.
+            if !matched && !CHANNEL_REGS.iter().any(|&(_, v)| v == ch_byte) {
+                rust_session_wfifohead(fd, (len as usize) + 3);
+                let wptr = rust_session_wdata_ptr(fd, 0);
+                if !wptr.is_null() {
+                    std::ptr::copy_nonoverlapping(buf, wptr, len as usize);
+                }
+                rust_session_commit(fd, encrypt(fd) as usize);
+            }
+        } else {
+            // Normal packet: write directly.
+            rust_session_wfifohead(fd, (len as usize) + 3);
+            let wptr = rust_session_wdata_ptr(fd, 0);
+            if !wptr.is_null() {
+                std::ptr::copy_nonoverlapping(buf, wptr, len as usize);
+            }
+            rust_session_commit(fd, encrypt(fd) as usize);
+        }
+
+        0
+    });
+}
+
+/// Rust replacement for `clif_send_area` in `c_src/sl_compat.c` (Task 1.9).
+///
+/// Non-variadic wrapper around `send_to_area` that is callable from C with the
+/// same signature as the old C function. `area_type` selects the spatial search
+/// shape (AREA=4, SAMEAREA=6, CORNER=8); `send_type` is the send-type constant
+/// (AREA_WOS=5, SAMEAREA_WOS=7, etc.) passed to the per-player filter.
+///
+/// # Safety
+/// - `buf` must be a valid, writable pointer to at least `len` bytes.
+/// - `src_bl` must be a valid `BlockList` pointer.
+#[no_mangle]
+pub unsafe extern "C" fn clif_send_area(
+    m: c_int,
+    x: c_int,
+    y: c_int,
+    area_type: c_int,
+    send_type: c_int,
+    buf: *const c_uchar,
+    len: c_int,
+    src_bl: *mut BlockList,
+) {
+    use crate::game::block::AreaType;
+
+    let area = match area_type {
+        AREA      => AreaType::Area,
+        SAMEAREA  => AreaType::SameArea,
+        CORNER    => AreaType::Corner,
+        _         => AreaType::Area,
+    };
+
+    // Cast away const: send_to_area temporarily mutates buf[5] for channel packets
+    // and restores it before returning. The caller's buffer is logically unchanged.
+    send_to_area(m, x, y, area, buf as *mut c_uchar, len, src_bl, send_type);
 }
 
 // ─── Dual-login check ─────────────────────────────────────────────────────────

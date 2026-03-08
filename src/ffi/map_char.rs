@@ -3,6 +3,7 @@
 // after startup via set_map_state(). Before that, calls are silently dropped.
 
 use std::ffi::c_char;
+use std::os::raw::c_int;
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Handle;
 use crate::servers::map::{MapState, packet};
@@ -105,6 +106,103 @@ pub unsafe extern "C" fn rust_intif_savequit(data: *const u8, len: u32) {
     if data.is_null() || len < 6 { return; }
     let pkt = std::slice::from_raw_parts(data, len as usize).to_vec();
     send(pkt);
+}
+
+// ─── Rust ports of intif_save / intif_savequit C static-inlines ──────────────
+//
+// These replace the C trampolines in c_src/rust_shims_map.c.
+// They replicate the logic from the static-inline intif_save / intif_savequit
+// in c_src/map_char.h:
+//   1. Update sd->status positional/cosmetic fields from the live session state.
+//   2. zlib-compress sd->status (the mmo_charstatus blob).
+//   3. Prepend a 6-byte packet header (cmd LE + u32 total_len LE).
+//   4. Forward the raw packet bytes to rust_intif_save / rust_intif_savequit.
+//
+// These symbols must be behind #[cfg(feature = "map-game")] because they
+// reference MapSessionData which only exists in that feature's compilation unit.
+#[cfg(feature = "map-game")]
+mod intif_save_impl {
+    use super::*;
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+    use std::io::Write as _;
+    use crate::game::pc::MapSessionData;
+    use crate::game::block::map_is_loaded;
+
+    /// Helper: compress `sd->status` with zlib level-1 and build a packet.
+    /// `cmd` is the 2-byte little-endian command word (0x3004 or 0x3007).
+    /// Returns the packet bytes on success, None on failure.
+    unsafe fn compress_status(sd: *mut MapSessionData, cmd: u16) -> Option<Vec<u8>> {
+        if sd.is_null() { return None; }
+        // Raw bytes of the mmo_charstatus POD struct
+        let status_ptr = &(*sd).status as *const _ as *const u8;
+        let status_len = std::mem::size_of_val(&(*sd).status);
+        let raw = std::slice::from_raw_parts(status_ptr, status_len);
+
+        let mut enc = ZlibEncoder::new(Vec::new(), Compression::fast());
+        enc.write_all(raw).ok()?;
+        let compressed = enc.finish().ok()?;
+
+        let total: u32 = (6 + compressed.len()) as u32;
+        let mut pkt = Vec::with_capacity(total as usize);
+        // 2-byte command (LE)
+        pkt.push((cmd & 0xff) as u8);
+        pkt.push((cmd >> 8) as u8);
+        // 4-byte total length (LE)
+        pkt.extend_from_slice(&total.to_le_bytes());
+        pkt.extend_from_slice(&compressed);
+        Some(pkt)
+    }
+
+    /// `int sl_intif_save(void *sd)` — Rust replacement for the C shim.
+    ///
+    /// Mirrors `intif_save` in `c_src/map_char.h`:
+    ///   sets last_pos from bl, copies disguise fields, compresses, sends 0x3004.
+    #[no_mangle]
+    pub unsafe extern "C" fn rust_sl_intif_save(sd: *mut std::ffi::c_void) -> c_int {
+        let sd = sd as *mut MapSessionData;
+        if sd.is_null() { return -1; }
+        (*sd).status.last_pos.m = (*sd).bl.m;
+        (*sd).status.last_pos.x = (*sd).bl.x;
+        (*sd).status.last_pos.y = (*sd).bl.y;
+        (*sd).status.disguise       = (*sd).disguise;
+        (*sd).status.disguise_color = (*sd).disguise_color;
+        match compress_status(sd, 0x3004) {
+            Some(pkt) => { rust_intif_save(pkt.as_ptr(), pkt.len() as u32); 0 }
+            None      => -1,
+        }
+    }
+
+    /// `int sl_intif_savequit(void *sd)` — Rust replacement for the C shim.
+    ///
+    /// Mirrors `intif_savequit` in `c_src/map_char.h`:
+    ///   updates last_pos (preferring dest_pos if it's on an unloaded map),
+    ///   copies disguise fields, compresses, sends 0x3007.
+    #[no_mangle]
+    pub unsafe extern "C" fn rust_sl_intif_savequit(sd: *mut std::ffi::c_void) -> c_int {
+        let sd = sd as *mut MapSessionData;
+        if sd.is_null() { return -1; }
+        if !map_is_loaded((*sd).status.dest_pos.m as i32) {
+            if (*sd).status.dest_pos.m == 0 {
+                (*sd).status.dest_pos.m = (*sd).bl.m;
+                (*sd).status.dest_pos.x = (*sd).bl.x;
+                (*sd).status.dest_pos.y = (*sd).bl.y;
+            }
+            (*sd).status.last_pos.m = (*sd).status.dest_pos.m;
+            (*sd).status.last_pos.x = (*sd).status.dest_pos.x;
+            (*sd).status.last_pos.y = (*sd).status.dest_pos.y;
+        } else {
+            (*sd).status.last_pos.m = (*sd).bl.m;
+            (*sd).status.last_pos.x = (*sd).bl.x;
+            (*sd).status.last_pos.y = (*sd).bl.y;
+        }
+        (*sd).status.disguise       = (*sd).disguise;
+        (*sd).status.disguise_color = (*sd).disguise_color;
+        match compress_status(sd, 0x3007) {
+            Some(pkt) => { rust_intif_savequit(pkt.as_ptr(), pkt.len() as u32); 0 }
+            None      => -1,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -323,6 +323,18 @@ exclude = [
   # visual.rs Task 19: mob-broadcast function ported from sl_compat.c.
   "clif_sendmob_side",
 
+  # visual.rs Task 1.6: clif_updatestate area-broadcast ported from sl_compat.c.
+  # Declared in c_src/map_parse.h — exclude to prevent duplicate cbindgen output.
+  "broadcast_update_state",
+
+  # visual.rs Task 1.7: clif_clickonplayer ported from sl_compat.c.
+  # Declared in c_src/map_parse.h — exclude to prevent duplicate cbindgen output.
+  "clif_clickonplayer",
+
+  # visual.rs Task 1.8: clif_showboards ported from sl_compat.c.
+  # Declared in c_src/map_parse.h — exclude to prevent duplicate cbindgen output.
+  "clif_showboards",
+
   # network/crypt.rs: encrypt/decrypt ported from sl_compat.c / net_crypt.c.
   # Already declared in c_src/net_crypt.h — exclude to prevent duplicate symbol.
   "encrypt",

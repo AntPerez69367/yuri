@@ -551,7 +551,7 @@ extern "C" {
     fn sl_pc_getunknownspells(sd: *mut c_void, out: *mut c_int, max: c_int) -> c_int;
     fn sl_pc_getlegend(sd: *mut c_void, name: *const c_char) -> *const c_char;
     fn sl_pc_givexp(sd: *mut c_void, amount: c_int);
-    fn sl_pc_updatestate(sd: *mut c_void);
+    fn broadcast_update_state(sd: *mut crate::game::pc::MapSessionData);
     fn sl_pc_addmagic(sd: *mut c_void, amount: c_int);
     fn sl_pc_addmanaextend(sd: *mut c_void, amount: c_int);
     fn sl_pc_settimevalues(sd: *mut c_void);
@@ -1783,7 +1783,7 @@ impl UserData for PcObject {
 
         // ── Combat ───────────────────────────────────────────────────────────────
         methods.add_method("giveXP",        |_, this, amount: c_int| { unsafe { sl_pc_givexp(this.ptr, amount) }; Ok(()) });
-        methods.add_method("updateState",   |_, this, ()| { unsafe { sl_pc_updatestate(this.ptr) }; Ok(()) });
+        methods.add_method("updateState",   |_, this, ()| { unsafe { broadcast_update_state(this.ptr as *mut crate::game::pc::MapSessionData) }; Ok(()) });
         methods.add_method("addMagic",      |_, this, amount: c_int| { unsafe { sl_pc_addmagic(this.ptr, amount) }; Ok(()) });
         methods.add_method("addManaExtend", |_, this, amount: c_int| { unsafe { sl_pc_addmanaextend(this.ptr, amount) }; Ok(()) });
         methods.add_method("setTimeValues", |_, this, ()| { unsafe { sl_pc_settimevalues(this.ptr) }; Ok(()) });

@@ -4,6 +4,7 @@
 pub mod async_coro;
 pub mod ffi;
 pub mod globals;
+pub mod object_collect;
 pub mod pc_accessors;
 pub mod map_globals;
 pub mod types;
@@ -320,6 +321,7 @@ unsafe fn call_lua(
     method: *const c_char,
     args: mlua::MultiValue,
 ) -> bool {
+    if root.is_null() { return false; }
     let lua = sl_state();
     let root_s = match CStr::from_ptr(root).to_str() { Ok(s) => s, Err(_) => return false };
 
@@ -342,6 +344,66 @@ unsafe fn call_lua(
     true
 }
 
+/// Dispatch a Lua script call with block_list pointer arguments (slice API).
+///
+/// Replaces the C variadic `sl_doscript_blargs` + `rust_sl_doscript_blargs_vec` chain.
+/// Each pointer in `args` may be null (mapped to Lua nil) or a valid `*mut BlockList`.
+///
+/// # Safety
+/// Every non-null pointer in `args` must be a valid `*mut BlockList` for the
+/// duration of this call.  Null pointers are accepted and mapped to Lua nil.
+pub unsafe fn doscript_blargs(
+    root: *const c_char,
+    method: *const c_char,
+    args: &[*mut BlockList],
+) -> c_int {
+    if args.is_empty() {
+        return call_lua(root, method, mlua::MultiValue::new()) as c_int;
+    }
+    let lua = sl_state();
+    let mut mv = mlua::MultiValue::new();
+    for &bl in args {
+        let val = if bl.is_null() {
+            mlua::Value::Nil
+        } else {
+            bl_to_lua(lua, bl as *mut c_void).unwrap_or(mlua::Value::Nil)
+        };
+        mv.push_back(val);
+    }
+    call_lua(root, method, mv) as c_int
+}
+
+/// Dispatch a Lua script call with C string arguments (slice API).
+///
+/// Replaces the C variadic `sl_doscript_strings` + `rust_sl_doscript_strings_vec` chain.
+/// Each pointer in `args` may be null (mapped to Lua nil) or a valid nul-terminated
+/// C string.
+///
+/// # Safety
+/// Every non-null pointer in `args` must be a valid nul-terminated C string for
+/// the duration of this call.
+pub unsafe fn doscript_strings(
+    root: *const c_char,
+    method: *const c_char,
+    args: &[*const c_char],
+) -> c_int {
+    if args.is_empty() {
+        return call_lua(root, method, mlua::MultiValue::new()) as c_int;
+    }
+    let lua = sl_state();
+    let mut mv = mlua::MultiValue::new();
+    for &p in args {
+        let val = if p.is_null() {
+            mlua::Value::Nil
+        } else {
+            let s = CStr::from_ptr(p).to_string_lossy().into_owned();
+            lua.pack(s).unwrap_or(mlua::Value::Nil)
+        };
+        mv.push_back(val);
+    }
+    call_lua(root, method, mv) as c_int
+}
+
 /// # Safety
 /// `args` must point to an array of at least `nargs` valid (or null) block-list
 /// pointers.  `nargs` must be non-negative and accurate; the caller owns the
@@ -355,18 +417,8 @@ pub unsafe fn sl_doscript_blargs_vec(
     if nargs <= 0 || args.is_null() {
         return call_lua(root, method, mlua::MultiValue::new()) as c_int;
     }
-    let lua = sl_state();
-    let slice = std::slice::from_raw_parts(args, nargs as usize);
-    let mut mv = mlua::MultiValue::new();
-    for &bl in slice {
-        let val = if bl.is_null() {
-            mlua::Value::Nil
-        } else {
-            bl_to_lua(lua, bl).unwrap_or(mlua::Value::Nil)
-        };
-        mv.push_back(val);
-    }
-    call_lua(root, method, mv) as c_int
+    let slice = std::slice::from_raw_parts(args as *const *mut BlockList, nargs as usize);
+    doscript_blargs(root, method, slice)
 }
 
 pub unsafe fn sl_doscript_strings_vec(
@@ -376,19 +428,8 @@ pub unsafe fn sl_doscript_strings_vec(
     if nargs <= 0 || args.is_null() {
         return call_lua(root, method, mlua::MultiValue::new()) as c_int;
     }
-    let lua = sl_state();
-    let mut mv = mlua::MultiValue::new();
-    for i in 0..nargs as usize {
-        let p = *args.add(i);
-        let val = if p.is_null() {
-            mlua::Value::Nil
-        } else {
-            let s = CStr::from_ptr(p).to_string_lossy().into_owned();
-            lua.pack(s).unwrap_or(mlua::Value::Nil)
-        };
-        mv.push_back(val);
-    }
-    call_lua(root, method, mv) as c_int
+    let slice = std::slice::from_raw_parts(args, nargs as usize);
+    doscript_strings(root, method, slice)
 }
 
 pub unsafe fn sl_doscript_stackargs(

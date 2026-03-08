@@ -40,9 +40,8 @@ extern "C" {
     pub fn rust_mob_readglobalreg(mob: *mut c_void, attrname: *const c_char) -> c_int;
     pub fn rust_mob_setglobalreg(mob: *mut c_void, attrname: *const c_char, val: c_int) -> c_int;
 
-    // Map registries — helpers in sl_compat.c extract bl.m from USER*
-    pub fn map_readglobalreg_sd(sd: *mut c_void, attrname: *const c_char) -> c_int;
-    pub fn map_setglobalreg_sd(sd: *mut c_void, attrname: *const c_char, val: c_int) -> c_int;
+    // Map registries (sd-based) — ported to map_globals.rs; call directly as
+    //   map_globals::map_readglobalreg_sd / map_globals::map_setglobalreg_sd
 
     // Map-indexed registries (direct map slot, not from USER*)
     pub fn map_setglobalreg(m: c_int, attrname: *const c_char, val: c_int) -> c_int;

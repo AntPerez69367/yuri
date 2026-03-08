@@ -650,8 +650,8 @@ extern "C" {
     /// `int clif_send_aether(USER* sd, int id, int val)`
     pub fn clif_send_aether(sd: *mut MapSessionData, id: c_int, val: c_int) -> c_int;
 
-    /// `int clif_updatestate(struct block_list* bl, va_list ap)`
-    pub fn clif_updatestate(bl: *mut BlockList, ...) -> c_int;
+    /// Broadcast player appearance to nearby PCs (Rust impl in src/game/client/visual.rs).
+    pub fn broadcast_update_state(sd: *mut MapSessionData);
 
     /// `int clif_broadcast(const char* msg, int m)`
     pub fn clif_broadcast(msg: *const c_char, m: c_int) -> c_int;
@@ -890,12 +890,7 @@ extern "C" {
     #[link_name = "clif_lookgone"]
     pub fn clif_lookgone_pc(bl: *mut BlockList);
 
-    // ── scripting — re-declared for pc.rs use (defined in mob.rs but not pub-use) ──
-    /// `int sl_doscript_blargs(const char* root, const char* method, int nargs, ...)`
-    #[link_name = "sl_doscript_blargs"]
-    pub fn sl_doscript_blargs_pc(
-        yname: *const c_char, event: *const c_char, nargs: c_int, ...
-    ) -> c_int;
+    // (sl_doscript_blargs_pc variadic shim removed; use helpers below)
 
     // ── magic db — re-declared for pc.rs use ─────────────────────────────────
     /// `char* magicdb_yname(int id)` — redirects to rust_magicdb_yname.
@@ -925,6 +920,20 @@ extern "C" {
     /// `int encrypt(int fd)` — encrypts the WFIFO buffer and returns the encrypted length.
     #[link_name = "encrypt"]
     pub fn encrypt_fd(fd: c_int) -> c_int;
+}
+
+// ─── Lua dispatch helpers (replace sl_doscript_blargs variadic shim) ──────────
+
+/// Dispatch a Lua event with a single block_list argument.
+#[cfg(not(test))]
+unsafe fn sl_doscript_simple_pc(root: *const c_char, method: *const c_char, bl: *mut BlockList) -> c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
+}
+
+/// Dispatch a Lua event with two block_list arguments.
+#[cfg(not(test))]
+unsafe fn sl_doscript_2_pc(root: *const c_char, method: *const c_char, bl1: *mut BlockList, bl2: *mut BlockList) -> c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
 }
 
 // ─── Timer functions (ported from c_src/pc.c and c_src/map_parse.c) ──────────
@@ -1088,22 +1097,14 @@ pub unsafe extern "C" fn rust_bl_duratimer(id: c_int, _none: c_int) -> c_int {
     // while_passive: each learned spell fires once per second
     for x in 0..52usize {
         if (*sd).status.skill[x] > 0 {
-            sl_doscript_blargs_pc(
-                magicdb_yname_pc((*sd).status.skill[x] as c_int),
-                c"while_passive".as_ptr(),
-                1i32, &mut (*sd).bl as *mut BlockList,
-            );
+            sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.skill[x] as c_int), c"while_passive".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
     // while_equipped: each worn item fires once per second
     for x in 0..14usize {
         if (*sd).status.equip[x].id > 0 {
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.equip[x].id),
-                c"while_equipped".as_ptr(),
-                1i32, &mut (*sd).bl as *mut BlockList,
-            );
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.equip[x].id), c"while_equipped".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -1129,16 +1130,10 @@ pub unsafe extern "C" fn rust_bl_duratimer(id: c_int, _none: c_int) -> c_int {
                         0
                     };
                     if health > 0 || (*tbl).bl_type as c_int == BL_PC {
-                        sl_doscript_blargs_pc(
-                            magicdb_yname_pc(mid), c"while_cast".as_ptr(),
-                            2i32, &mut (*sd).bl as *mut BlockList, tbl,
-                        );
+                        sl_doscript_2_pc(magicdb_yname_pc(mid), c"while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
                     }
                 } else {
-                    sl_doscript_blargs_pc(
-                        magicdb_yname_pc(mid), c"while_cast".as_ptr(),
-                        1i32, &mut (*sd).bl as *mut BlockList,
-                    );
+                    sl_doscript_simple_pc(magicdb_yname_pc(mid), c"while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
 
                 if (*sd).status.dura_aether[x].duration <= 0 {
@@ -1167,15 +1162,9 @@ pub unsafe extern "C" fn rust_bl_duratimer(id: c_int, _none: c_int) -> c_int {
                     }
 
                     if !tbl.is_null() {
-                        sl_doscript_blargs_pc(
-                            magicdb_yname_pc(mid), c"uncast".as_ptr(),
-                            2i32, &mut (*sd).bl as *mut BlockList, tbl,
-                        );
+                        sl_doscript_2_pc(magicdb_yname_pc(mid), c"uncast".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
                     } else {
-                        sl_doscript_blargs_pc(
-                            magicdb_yname_pc(mid), c"uncast".as_ptr(),
-                            1i32, &mut (*sd).bl as *mut BlockList,
-                        );
+                        sl_doscript_simple_pc(magicdb_yname_pc(mid), c"uncast".as_ptr(), &mut (*sd).bl as *mut BlockList);
                     }
                 }
             }
@@ -1210,21 +1199,13 @@ pub unsafe extern "C" fn rust_bl_secondduratimer(id: c_int, _none: c_int) -> c_i
 
     for x in 0..52usize {
         if (*sd).status.skill[x] > 0 {
-            sl_doscript_blargs_pc(
-                magicdb_yname_pc((*sd).status.skill[x] as c_int),
-                c"while_passive_250".as_ptr(),
-                1i32, &mut (*sd).bl as *mut BlockList,
-            );
+            sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.skill[x] as c_int), c"while_passive_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
     for x in 0..14usize {
         if (*sd).status.equip[x].id > 0 {
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.equip[x].id),
-                c"while_equipped_250".as_ptr(),
-                1i32, &mut (*sd).bl as *mut BlockList,
-            );
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.equip[x].id), c"while_equipped_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -1245,18 +1226,10 @@ pub unsafe extern "C" fn rust_bl_secondduratimer(id: c_int, _none: c_int) -> c_i
                         0
                     };
                     if health > 0 || (*tbl).bl_type as c_int == BL_PC {
-                        sl_doscript_blargs_pc(
-                            magicdb_yname_pc((*sd).status.dura_aether[x].id as c_int),
-                            c"while_cast_250".as_ptr(),
-                            2i32, &mut (*sd).bl as *mut BlockList, tbl,
-                        );
+                        sl_doscript_2_pc(magicdb_yname_pc((*sd).status.dura_aether[x].id as c_int), c"while_cast_250".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
                     }
                 } else {
-                    sl_doscript_blargs_pc(
-                        magicdb_yname_pc((*sd).status.dura_aether[x].id as c_int),
-                        c"while_cast_250".as_ptr(),
-                        1i32, &mut (*sd).bl as *mut BlockList,
-                    );
+                    sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.dura_aether[x].id as c_int), c"while_cast_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
         }
@@ -1276,21 +1249,13 @@ pub unsafe extern "C" fn rust_bl_thirdduratimer(id: c_int, _none: c_int) -> c_in
 
     for x in 0..52usize {
         if (*sd).status.skill[x] > 0 {
-            sl_doscript_blargs_pc(
-                magicdb_yname_pc((*sd).status.skill[x] as c_int),
-                c"while_passive_500".as_ptr(),
-                1i32, &mut (*sd).bl as *mut BlockList,
-            );
+            sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.skill[x] as c_int), c"while_passive_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
     for x in 0..14usize {
         if (*sd).status.equip[x].id > 0 {
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.equip[x].id),
-                c"while_equipped_500".as_ptr(),
-                1i32, &mut (*sd).bl as *mut BlockList,
-            );
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.equip[x].id), c"while_equipped_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -1311,18 +1276,10 @@ pub unsafe extern "C" fn rust_bl_thirdduratimer(id: c_int, _none: c_int) -> c_in
                         0
                     };
                     if health > 0 || (*tbl).bl_type as c_int == BL_PC {
-                        sl_doscript_blargs_pc(
-                            magicdb_yname_pc((*sd).status.dura_aether[x].id as c_int),
-                            c"while_cast_500".as_ptr(),
-                            2i32, &mut (*sd).bl as *mut BlockList, tbl,
-                        );
+                        sl_doscript_2_pc(magicdb_yname_pc((*sd).status.dura_aether[x].id as c_int), c"while_cast_500".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
                     }
                 } else {
-                    sl_doscript_blargs_pc(
-                        magicdb_yname_pc((*sd).status.dura_aether[x].id as c_int),
-                        c"while_cast_500".as_ptr(),
-                        1i32, &mut (*sd).bl as *mut BlockList,
-                    );
+                    sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.dura_aether[x].id as c_int), c"while_cast_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
         }
@@ -1342,21 +1299,13 @@ pub unsafe extern "C" fn rust_bl_fourthduratimer(id: c_int, _none: c_int) -> c_i
 
     for x in 0..52usize {
         if (*sd).status.skill[x] > 0 {
-            sl_doscript_blargs_pc(
-                magicdb_yname_pc((*sd).status.skill[x] as c_int),
-                c"while_passive_1500".as_ptr(),
-                1i32, &mut (*sd).bl as *mut BlockList,
-            );
+            sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.skill[x] as c_int), c"while_passive_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
     for x in 0..14usize {
         if (*sd).status.equip[x].id > 0 {
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.equip[x].id),
-                c"while_equipped_1500".as_ptr(),
-                1i32, &mut (*sd).bl as *mut BlockList,
-            );
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.equip[x].id), c"while_equipped_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -1377,18 +1326,10 @@ pub unsafe extern "C" fn rust_bl_fourthduratimer(id: c_int, _none: c_int) -> c_i
                         0
                     };
                     if health > 0 || (*tbl).bl_type as c_int == BL_PC {
-                        sl_doscript_blargs_pc(
-                            magicdb_yname_pc((*sd).status.dura_aether[x].id as c_int),
-                            c"while_cast_1500".as_ptr(),
-                            2i32, &mut (*sd).bl as *mut BlockList, tbl,
-                        );
+                        sl_doscript_2_pc(magicdb_yname_pc((*sd).status.dura_aether[x].id as c_int), c"while_cast_1500".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
                     }
                 } else {
-                    sl_doscript_blargs_pc(
-                        magicdb_yname_pc((*sd).status.dura_aether[x].id as c_int),
-                        c"while_cast_1500".as_ptr(),
-                        1i32, &mut (*sd).bl as *mut BlockList,
-                    );
+                    sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.dura_aether[x].id as c_int), c"while_cast_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
         }
@@ -1408,21 +1349,13 @@ pub unsafe extern "C" fn rust_bl_fifthduratimer(id: c_int, _none: c_int) -> c_in
 
     for x in 0..52usize {
         if (*sd).status.skill[x] > 0 {
-            sl_doscript_blargs_pc(
-                magicdb_yname_pc((*sd).status.skill[x] as c_int),
-                c"while_passive_3000".as_ptr(),
-                1i32, &mut (*sd).bl as *mut BlockList,
-            );
+            sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.skill[x] as c_int), c"while_passive_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
     for x in 0..14usize {
         if (*sd).status.equip[x].id > 0 {
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.equip[x].id),
-                c"while_equipped_3000".as_ptr(),
-                1i32, &mut (*sd).bl as *mut BlockList,
-            );
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.equip[x].id), c"while_equipped_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -1443,18 +1376,10 @@ pub unsafe extern "C" fn rust_bl_fifthduratimer(id: c_int, _none: c_int) -> c_in
                         0
                     };
                     if health > 0 || (*tbl).bl_type as c_int == BL_PC {
-                        sl_doscript_blargs_pc(
-                            magicdb_yname_pc((*sd).status.dura_aether[x].id as c_int),
-                            c"while_cast_3000".as_ptr(),
-                            2i32, &mut (*sd).bl as *mut BlockList, tbl,
-                        );
+                        sl_doscript_2_pc(magicdb_yname_pc((*sd).status.dura_aether[x].id as c_int), c"while_cast_3000".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
                     }
                 } else {
-                    sl_doscript_blargs_pc(
-                        magicdb_yname_pc((*sd).status.dura_aether[x].id as c_int),
-                        c"while_cast_3000".as_ptr(),
-                        1i32, &mut (*sd).bl as *mut BlockList,
-                    );
+                    sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.dura_aether[x].id as c_int), c"while_cast_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
         }
@@ -1589,16 +1514,10 @@ pub unsafe extern "C" fn rust_pc_scripttimer(id: c_int, _none: c_int) -> c_int {
     (*sd).deathflag = 0;
     (*sd).scripttick += 1;
 
-    sl_doscript_blargs_pc(
-        c"pc_timer".as_ptr(), c"tick".as_ptr(),
-        1i32, &mut (*sd).bl as *mut BlockList,
-    );
+    sl_doscript_simple_pc(c"pc_timer".as_ptr(), c"tick".as_ptr(), &mut (*sd).bl as *mut BlockList);
 
     if (*sd).status.setting_flags & FLAG_ADVICE as u16 != 0 {
-        sl_doscript_blargs_pc(
-            c"pc_timer".as_ptr(), c"advice".as_ptr(),
-            1i32, &mut (*sd).bl as *mut BlockList,
-        );
+        sl_doscript_simple_pc(c"pc_timer".as_ptr(), c"advice".as_ptr(), &mut (*sd).bl as *mut BlockList);
     }
 
     0
@@ -1629,10 +1548,7 @@ pub unsafe extern "C" fn rust_pc_disptimertick(id: c_int, _none: c_int) -> c_int
     }
 
     if (*sd).disptimertick == 0 {
-        sl_doscript_blargs_pc(
-            c"pc_timer".as_ptr(), c"display_timer".as_ptr(),
-            1i32, &mut (*sd).bl as *mut BlockList,
-        );
+        sl_doscript_simple_pc(c"pc_timer".as_ptr(), c"display_timer".as_ptr(), &mut (*sd).bl as *mut BlockList);
         timer_remove((*sd).disptimer as c_int);
         (*sd).disptimertype = 0;
         (*sd).disptimer = 0;
@@ -1745,12 +1661,7 @@ pub unsafe extern "C" fn rust_pc_checklevel(sd: *mut MapSessionData) -> c_int {
     for x in (*sd).status.level as c_int..99 {
         let lvlxp = classdb_level(path, x);
         if (*sd).status.exp >= lvlxp {
-            sl_doscript_blargs_pc(
-                c"onLevel".as_ptr(),
-                std::ptr::null(),
-                1i32,
-                &mut (*sd).bl as *mut BlockList,
-            );
+            sl_doscript_simple_pc(c"onLevel".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -1946,10 +1857,7 @@ pub unsafe extern "C" fn rust_pc_calcstat(sd: *mut MapSessionData) -> c_int {
         if (*sd).status.gm_level == 0 {
             if (*sd).speed < 40 { (*sd).speed = 40; }
         }
-        sl_doscript_blargs_pc(
-            c"remount".as_ptr(), std::ptr::null(),
-            1i32, &mut (*sd).bl as *mut BlockList,
-        );
+        sl_doscript_simple_pc(c"remount".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
     } else {
         (*sd).speed = 90;
     }
@@ -1962,21 +1870,10 @@ pub unsafe extern "C" fn rust_pc_calcstat(sd: *mut MapSessionData) -> c_int {
             if p.id > 0 && p.duration > 0 {
                 let tsd = map_id2sd_pc(p.caster_id);
                 if !tsd.is_null() {
-                    sl_doscript_blargs_pc(
-                        magicdb_yname_pc(p.id as c_int),
-                        c"recast".as_ptr(),
-                        2i32,
-                        &mut (*sd).bl as *mut BlockList,
-                        &mut (*tsd).bl as *mut BlockList,
-                    );
+                    sl_doscript_2_pc(magicdb_yname_pc(p.id as c_int), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList);
                 } else {
                     // sl_doscript_simple(magicdb_yname(p->id), "recast", &sd->bl)
-                    sl_doscript_blargs_pc(
-                        magicdb_yname_pc(p.id as c_int),
-                        c"recast".as_ptr(),
-                        1i32,
-                        &mut (*sd).bl as *mut BlockList,
-                    );
+                    sl_doscript_simple_pc(magicdb_yname_pc(p.id as c_int), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
         }
@@ -1984,24 +1881,14 @@ pub unsafe extern "C" fn rust_pc_calcstat(sd: *mut MapSessionData) -> c_int {
         // Passive skills
         for x in 0..52usize {
             if (*sd).status.skill[x] > 0 {
-                sl_doscript_blargs_pc(
-                    magicdb_yname_pc((*sd).status.skill[x] as c_int),
-                    c"passive".as_ptr(),
-                    1i32,
-                    &mut (*sd).bl as *mut BlockList,
-                );
+                sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.skill[x] as c_int), c"passive".as_ptr(), &mut (*sd).bl as *mut BlockList);
             }
         }
 
         // Re-equip scripts
         for x in 0..14usize {
             if (*sd).status.equip[x].id > 0 {
-                sl_doscript_blargs_pc(
-                    itemdb_yname((*sd).status.equip[x].id),
-                    c"re_equip".as_ptr(),
-                    1i32,
-                    &mut (*sd).bl as *mut BlockList,
-                );
+                sl_doscript_simple_pc(itemdb_yname((*sd).status.equip[x].id), c"re_equip".as_ptr(), &mut (*sd).bl as *mut BlockList);
             }
         }
     }
@@ -2914,10 +2801,7 @@ pub unsafe extern "C" fn rust_pc_addtocurrent(
         } else {
             (*fl).data.amount += 1;
         }
-        sl_doscript_blargs_pc(
-            c"characterLog".as_ptr(), c"dropWrite".as_ptr(),
-            2i32, &mut (*sd).bl as *mut BlockList, &mut (*fl).bl as *mut BlockList,
-        );
+        sl_doscript_2_pc(c"characterLog".as_ptr(), c"dropWrite".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*fl).bl as *mut BlockList);
         *def = (*fl).bl.id as c_int;
     }
     0
@@ -3304,10 +3188,7 @@ pub unsafe extern "C" fn rust_pc_dropitemmap(
 
     if def[0] == 0 {
         map_additem_pc(&mut (*fl).bl);
-        sl_doscript_blargs_pc(
-            c"characterLog".as_ptr(), c"dropWrite".as_ptr(),
-            2i32, &mut (*sd).bl as *mut BlockList, &mut (*fl).bl as *mut BlockList,
-        );
+        sl_doscript_2_pc(c"characterLog".as_ptr(), c"dropWrite".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*fl).bl as *mut BlockList);
         map_foreachinarea_pc(
             clif_object_look_sub2,
             (*sd).bl.m as c_int,
@@ -3476,12 +3357,8 @@ pub unsafe extern "C" fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd as *mut c_void);
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.inventory[id_u].id),
-                c"use".as_ptr(), 1i32, &mut (*sd).bl as *mut BlockList,
-            );
-            sl_doscript_blargs_pc(c"use".as_ptr(), std::ptr::null(), 1i32,
-                &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
             rust_pc_delitem(sd, id, 1, 2);
         }
         t if t == ITM_USE => {
@@ -3491,12 +3368,8 @@ pub unsafe extern "C" fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd as *mut c_void);
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.inventory[id_u].id),
-                c"use".as_ptr(), 1i32, &mut (*sd).bl as *mut BlockList,
-            );
-            sl_doscript_blargs_pc(c"use".as_ptr(), std::ptr::null(), 1i32,
-                &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
             rust_pc_delitem(sd, id, 1, 6);
         }
         t if t == ITM_USESPC => {
@@ -3506,12 +3379,8 @@ pub unsafe extern "C" fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd as *mut c_void);
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.inventory[id_u].id),
-                c"use".as_ptr(), 1i32, &mut (*sd).bl as *mut BlockList,
-            );
-            sl_doscript_blargs_pc(c"use".as_ptr(), std::ptr::null(), 1i32,
-                &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
             // No auto-delete for USESPC — script decides.
         }
         t if t == ITM_BAG => {
@@ -3521,12 +3390,8 @@ pub unsafe extern "C" fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd as *mut c_void);
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.inventory[id_u].id),
-                c"use".as_ptr(), 1i32, &mut (*sd).bl as *mut BlockList,
-            );
-            sl_doscript_blargs_pc(c"use".as_ptr(), std::ptr::null(), 1i32,
-                &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_MAP => {
             if !can_use!() {
@@ -3535,12 +3400,8 @@ pub unsafe extern "C" fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd as *mut c_void);
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.inventory[id_u].id),
-                c"use".as_ptr(), 1i32, &mut (*sd).bl as *mut BlockList,
-            );
-            sl_doscript_blargs_pc(c"maps".as_ptr(), c"use".as_ptr(), 1i32,
-                &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(c"maps".as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_QUIVER => {
             if !can_use!() {
@@ -3557,12 +3418,8 @@ pub unsafe extern "C" fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd as *mut c_void);
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.inventory[id_u].id),
-                c"use".as_ptr(), 1i32, &mut (*sd).bl as *mut BlockList,
-            );
-            sl_doscript_blargs_pc(c"onMountItem".as_ptr(), std::ptr::null(), 1i32,
-                &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(c"onMountItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_FACE => {
             if !can_use!() {
@@ -3571,12 +3428,8 @@ pub unsafe extern "C" fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd as *mut c_void);
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.inventory[id_u].id),
-                c"use".as_ptr(), 1i32, &mut (*sd).bl as *mut BlockList,
-            );
-            sl_doscript_blargs_pc(c"useFace".as_ptr(), std::ptr::null(), 1i32,
-                &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(c"useFace".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_SET => {
             if !can_use!() {
@@ -3585,12 +3438,8 @@ pub unsafe extern "C" fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd as *mut c_void);
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.inventory[id_u].id),
-                c"use".as_ptr(), 1i32, &mut (*sd).bl as *mut BlockList,
-            );
-            sl_doscript_blargs_pc(c"useSetItem".as_ptr(), std::ptr::null(), 1i32,
-                &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(c"useSetItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_SKIN => {
             if !can_use!() {
@@ -3599,12 +3448,8 @@ pub unsafe extern "C" fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd as *mut c_void);
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.inventory[id_u].id),
-                c"use".as_ptr(), 1i32, &mut (*sd).bl as *mut BlockList,
-            );
-            sl_doscript_blargs_pc(c"useSkinItem".as_ptr(), std::ptr::null(), 1i32,
-                &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(c"useSkinItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_HAIR_DYE => {
             if !can_use!() {
@@ -3613,12 +3458,8 @@ pub unsafe extern "C" fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd as *mut c_void);
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.inventory[id_u].id),
-                c"use".as_ptr(), 1i32, &mut (*sd).bl as *mut BlockList,
-            );
-            sl_doscript_blargs_pc(c"useHairDye".as_ptr(), std::ptr::null(), 1i32,
-                &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(c"useHairDye".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_FACEACCTWO => {
             if !can_use!() {
@@ -3627,12 +3468,8 @@ pub unsafe extern "C" fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd as *mut c_void);
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.inventory[id_u].id),
-                c"use".as_ptr(), 1i32, &mut (*sd).bl as *mut BlockList,
-            );
-            sl_doscript_blargs_pc(c"useBeardItem".as_ptr(), std::ptr::null(), 1i32,
-                &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(c"useBeardItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_SMOKE => {
             if !can_smoke!() {
@@ -3641,12 +3478,8 @@ pub unsafe extern "C" fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd as *mut c_void);
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.inventory[id_u].id),
-                c"use".as_ptr(), 1i32, &mut (*sd).bl as *mut BlockList,
-            );
-            sl_doscript_blargs_pc(c"use".as_ptr(), std::ptr::null(), 1i32,
-                &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
             (*sd).status.inventory[id_u].dura -= 1;
             if (*sd).status.inventory[id_u].dura == 0 {
                 rust_pc_delitem(sd, id, 1, 3);
@@ -3671,12 +3504,8 @@ pub unsafe extern "C" fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd as *mut c_void);
-            sl_doscript_blargs_pc(
-                itemdb_yname((*sd).status.inventory[id_u].id),
-                c"use".as_ptr(), 1i32, &mut (*sd).bl as *mut BlockList,
-            );
-            sl_doscript_blargs_pc(c"use".as_ptr(), std::ptr::null(), 1i32,
-                &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         _ => {}
     }
@@ -3702,10 +3531,7 @@ pub unsafe extern "C" fn rust_pc_runfloor_sub(sd: *mut MapSessionData) -> c_int 
 
     if (*nd).bl.subtype == 2 {
         sl_async_freeco(sd as *mut c_void);
-        sl_doscript_blargs_pc(
-            (*nd).name.as_ptr(), c"click".as_ptr(),
-            2i32, &mut (*sd).bl as *mut BlockList, &mut (*nd).bl as *mut BlockList,
-        );
+        sl_doscript_2_pc((*nd).name.as_ptr(), c"click".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*nd).bl as *mut BlockList);
     }
     0
 }
@@ -3971,15 +3797,8 @@ pub unsafe extern "C" fn rust_pc_equipitem(
     (*sd).invslot = id as u8;
 
     // Fire the Lua equip hooks.
-    sl_doscript_blargs_pc(
-        c"onEquip".as_ptr(), std::ptr::null(),
-        1i32, &mut (*sd).bl as *mut BlockList,
-    );
-    sl_doscript_blargs_pc(
-        itemdb_yname((*sd).status.inventory[id_u].id),
-        c"onEquip".as_ptr(),
-        1i32, &mut (*sd).bl as *mut BlockList,
-    );
+    sl_doscript_simple_pc(c"onEquip".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+    sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"onEquip".as_ptr(), &mut (*sd).bl as *mut BlockList);
 
     0
 }
@@ -4047,15 +3866,8 @@ pub unsafe extern "C" fn rust_pc_equipscript(sd: *mut MapSessionData) -> c_int {
         (*sd).target   = (*sd).bl.id as c_int;
         (*sd).attacker = (*sd).bl.id;
         (*sd).takeoffid = ret as i8;
-        sl_doscript_blargs_pc(
-            c"onUnequip".as_ptr(), std::ptr::null(),
-            1i32, &mut (*sd).bl as *mut BlockList,
-        );
-        sl_doscript_blargs_pc(
-            itemdb_yname((*sd).equipid),
-            c"equip".as_ptr(),
-            1i32, &mut (*sd).bl as *mut BlockList,
-        );
+        sl_doscript_simple_pc(c"onUnequip".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc(itemdb_yname((*sd).equipid), c"equip".as_ptr(), &mut (*sd).bl as *mut BlockList);
         (*sd).equipid = 0;
         return 0;
     }
@@ -4069,11 +3881,7 @@ pub unsafe extern "C" fn rust_pc_equipscript(sd: *mut MapSessionData) -> c_int {
     );
 
     rust_pc_delitem(sd, invslot as c_int, 1, 6);
-    sl_doscript_blargs_pc(
-        itemdb_yname((*sd).equipid),
-        c"equip".as_ptr(),
-        1i32, &mut (*sd).bl as *mut BlockList,
-    );
+    sl_doscript_simple_pc(itemdb_yname((*sd).equipid), c"equip".as_ptr(), &mut (*sd).bl as *mut BlockList);
     (*sd).equipid = 0;
 
     // If a two-handed weapon was equipped, reset enchantment.
@@ -4089,12 +3897,7 @@ pub unsafe extern "C" fn rust_pc_equipscript(sd: *mut MapSessionData) -> c_int {
 
     rust_pc_calcstat(sd);
     clif_sendupdatestatus_onequip(sd);
-    map_foreachinarea_pc(
-        clif_updatestate,
-        (*sd).bl.m as c_int, (*sd).bl.x as c_int, (*sd).bl.y as c_int,
-        AREA, BL_PC,
-        sd as *mut MapSessionData,
-    );
+    broadcast_update_state(sd);
 
     0
 }
@@ -4116,10 +3919,7 @@ pub unsafe extern "C" fn rust_pc_unequip(
     if (*sd).status.equip[type_ as usize].id == 0 { return 1; }
 
     (*sd).takeoffid = type_ as i8;
-    sl_doscript_blargs_pc(
-        c"onUnequip".as_ptr(), std::ptr::null(),
-        1i32, &mut (*sd).bl as *mut BlockList,
-    );
+    sl_doscript_simple_pc(c"onUnequip".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
     0
 }
 
@@ -4192,21 +3992,12 @@ pub unsafe extern "C" fn rust_pc_unequipscript(sd: *mut MapSessionData) -> c_int
     }
 
     // Fire the item's unequip Lua hook.
-    sl_doscript_blargs_pc(
-        itemdb_yname(takeoff),
-        c"unequip".as_ptr(),
-        1i32, &mut (*sd).bl as *mut BlockList,
-    );
+    sl_doscript_simple_pc(itemdb_yname(takeoff), c"unequip".as_ptr(), &mut (*sd).bl as *mut BlockList);
 
     (*sd).takeoffid = -1i8;
     rust_pc_calcstat(sd);
     clif_sendupdatestatus_onequip(sd);
-    map_foreachinarea_pc(
-        clif_updatestate,
-        (*sd).bl.m as c_int, (*sd).bl.x as c_int, (*sd).bl.y as c_int,
-        AREA, BL_PC,
-        sd as *mut MapSessionData,
-    );
+    broadcast_update_state(sd);
 
     0
 }
@@ -4424,34 +4215,20 @@ pub unsafe extern "C" fn rust_pc_warp(
 
     // Fire map-leave hooks when changing maps.
     if m != oldmap {
-        sl_doscript_blargs_pc(
-            c"mapLeave".as_ptr(), std::ptr::null(),
-            1i32, &mut (*sd).bl as *mut BlockList,
-        );
+        sl_doscript_simple_pc(c"mapLeave".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         if can_mount == 0 {
-            sl_doscript_blargs_pc(
-                c"onDismount".as_ptr(), std::ptr::null(),
-                1i32, &mut (*sd).bl as *mut BlockList,
-            );
+            sl_doscript_simple_pc(c"onDismount".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
     // Fire passive_before_warp for each known spell.
     for i in 0..MAX_SPELLS {
-        sl_doscript_blargs_pc(
-            magicdb_yname_pc((*sd).status.skill[i] as c_int),
-            c"passive_before_warp".as_ptr(),
-            1i32, &mut (*sd).bl as *mut BlockList,
-        );
+        sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.skill[i] as c_int), c"passive_before_warp".as_ptr(), &mut (*sd).bl as *mut BlockList);
     }
 
     // Fire before_warp_while_cast for each active aether timer.
     for i in 0..MAX_MAGIC_TIMERS {
-        sl_doscript_blargs_pc(
-            magicdb_yname_pc((*sd).status.dura_aether[i].id as c_int),
-            c"before_warp_while_cast".as_ptr(),
-            1i32, &mut (*sd).bl as *mut BlockList,
-        );
+        sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.dura_aether[i].id as c_int), c"before_warp_while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
     }
 
     // Perform the actual move.
@@ -4463,28 +4240,17 @@ pub unsafe extern "C" fn rust_pc_warp(
 
     // Fire map-enter hooks when changing maps.
     if m != oldmap {
-        sl_doscript_blargs_pc(
-            c"mapEnter".as_ptr(), std::ptr::null(),
-            1i32, &mut (*sd).bl as *mut BlockList,
-        );
+        sl_doscript_simple_pc(c"mapEnter".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
     }
 
     // Fire passive_on_warp for each known spell.
     for i in 0..MAX_SPELLS {
-        sl_doscript_blargs_pc(
-            magicdb_yname_pc((*sd).status.skill[i] as c_int),
-            c"passive_on_warp".as_ptr(),
-            1i32, &mut (*sd).bl as *mut BlockList,
-        );
+        sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.skill[i] as c_int), c"passive_on_warp".as_ptr(), &mut (*sd).bl as *mut BlockList);
     }
 
     // Fire on_warp_while_cast for each active aether timer.
     for i in 0..MAX_MAGIC_TIMERS {
-        sl_doscript_blargs_pc(
-            magicdb_yname_pc((*sd).status.dura_aether[i].id as c_int),
-            c"on_warp_while_cast".as_ptr(),
-            1i32, &mut (*sd).bl as *mut BlockList,
-        );
+        sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.dura_aether[i].id as c_int), c"on_warp_while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
     }
 
     0
@@ -4527,22 +4293,11 @@ pub unsafe extern "C" fn rust_pc_magic_startup(sd: *mut MapSessionData) -> c_int
                 if !tsd.is_null() {
                     (*sd).target   = p.caster_id as c_int;
                     (*sd).attacker = p.caster_id;
-                    sl_doscript_blargs_pc(
-                        magicdb_yname_pc(p.id as c_int),
-                        c"recast".as_ptr(),
-                        2i32,
-                        &mut (*sd).bl as *mut BlockList,
-                        &mut (*tsd).bl as *mut BlockList,
-                    );
+                    sl_doscript_2_pc(magicdb_yname_pc(p.id as c_int), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList);
                 } else {
                     (*sd).target   = (*sd).status.id as c_int;
                     (*sd).attacker = (*sd).status.id;
-                    sl_doscript_blargs_pc(
-                        magicdb_yname_pc(p.id as c_int),
-                        c"recast".as_ptr(),
-                        1i32,
-                        &mut (*sd).bl as *mut BlockList,
-                    );
+                    sl_doscript_simple_pc(magicdb_yname_pc(p.id as c_int), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
 
@@ -4577,10 +4332,7 @@ pub unsafe extern "C" fn rust_pc_reload_aether(sd: *mut MapSessionData) -> c_int
 #[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn rust_pc_die(sd: *mut MapSessionData) -> c_int {
-    sl_doscript_blargs_pc(
-        c"onDeathPlayer".as_ptr(), std::ptr::null(),
-        1i32, &mut (*sd).bl as *mut BlockList,
-    );
+    sl_doscript_simple_pc(c"onDeathPlayer".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
     0
 }
 
@@ -4653,20 +4405,9 @@ pub unsafe extern "C" fn rust_pc_diescript(sd: *mut MapSessionData) -> c_int {
         };
 
         if !caster_bl.is_null() {
-            sl_doscript_blargs_pc(
-                magicdb_yname_pc(id as c_int),
-                c"uncast".as_ptr(),
-                2i32,
-                &mut (*sd).bl as *mut BlockList,
-                caster_bl,
-            );
+            sl_doscript_2_pc(magicdb_yname_pc(id as c_int), c"uncast".as_ptr(), &mut (*sd).bl as *mut BlockList, caster_bl);
         } else {
-            sl_doscript_blargs_pc(
-                magicdb_yname_pc(id as c_int),
-                c"uncast".as_ptr(),
-                1i32,
-                &mut (*sd).bl as *mut BlockList,
-            );
+            sl_doscript_simple_pc(magicdb_yname_pc(id as c_int), c"uncast".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -4711,12 +4452,7 @@ pub unsafe extern "C" fn rust_pc_diescript(sd: *mut MapSessionData) -> c_int {
     (*sd).dmgshield  = 0.0_f32;
 
     rust_pc_calcstat(sd);
-    map_foreachinarea_pc(
-        clif_updatestate,
-        (*sd).bl.m as c_int, (*sd).bl.x as c_int, (*sd).bl.y as c_int,
-        AREA, BL_PC,
-        sd as *mut MapSessionData,
-    );
+    broadcast_update_state(sd);
 
     0
 }
@@ -4753,5 +4489,36 @@ pub unsafe extern "C" fn rust_pc_uncast(sd: *mut MapSessionData) -> c_int {
 #[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn rust_pc_checkformail(sd: *mut MapSessionData) -> c_int {
+    0
+}
+
+// ─── Kill-registry helpers ────────────────────────────────────────────────────
+
+/// Increment the kill-count for `mob` in `sd`'s kill registry, or add a new
+/// entry if the mob is not yet present.  Faithfully ported from the C
+/// `addtokillreg` in `c_src/sl_compat.c`.
+///
+/// # Safety
+/// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
+#[no_mangle]
+pub unsafe extern "C" fn addtokillreg(sd: *mut MapSessionData, mob: c_int) -> c_int {
+    use crate::servers::char::charstatus::MAX_KILLREG;
+    if sd.is_null() { return 0; }
+    let mob_u = mob as u32;
+    // First pass: increment existing entry.
+    for x in 0..MAX_KILLREG {
+        if (*sd).status.killreg[x].mob_id == mob_u {
+            (*sd).status.killreg[x].amount = (*sd).status.killreg[x].amount.wrapping_add(1);
+            return 0;
+        }
+    }
+    // Second pass: claim first empty slot.
+    for x in 0..MAX_KILLREG {
+        if (*sd).status.killreg[x].mob_id == 0 {
+            (*sd).status.killreg[x].mob_id = mob_u;
+            (*sd).status.killreg[x].amount = 1;
+            return 0;
+        }
+    }
     0
 }

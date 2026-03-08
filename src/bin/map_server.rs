@@ -13,10 +13,7 @@ extern "C" {
     fn npc_init();
     fn warp_init() -> i32;
     fn rust_sl_init();
-    fn rust_sl_doscript_blargs_vec(
-        root: *const i8, method: *const i8,
-        nargs: i32, args: *const *mut std::ffi::c_void,
-    ) -> i32;
+    // (rust_sl_doscript_blargs_vec removed; use yuri::game::scripting::doscript_blargs)
     fn map_loadgameregistry() -> i32;
     fn clif_timeout(fd: i32) -> i32;
     fn map_do_term(); // impl in src/game/map_server.rs
@@ -219,7 +216,7 @@ async fn main() -> Result<()> {
 
                 // Timers from the old do_init — restored here after do_init was removed.
                 let startup = std::ffi::CString::new("startup").unwrap();
-                rust_sl_doscript_blargs_vec(startup.as_ptr(), std::ptr::null(), 0, std::ptr::null());
+                yuri::game::scripting::doscript_blargs(startup.as_ptr(), std::ptr::null(), &[]);
                 yuri::ffi::timer::timer_insert(50,   50,   Some(rust_mob_timer_spawns), 0, 0);
                 yuri::ffi::timer::timer_insert(100,  100,  Some(npc_runtimers),    0, 0);
                 yuri::ffi::timer::timer_insert(1000, 1000, Some(yuri::game::map_server::rust_map_cronjob), 0, 0);

@@ -175,8 +175,6 @@ extern "C" {
     #[link_name = "rust_pc_isequip"]
     fn pc_isequip(sd: *mut MapSessionData, slot: c_int) -> c_uint;
 
-    #[link_name = "sl_doscript_blargs"]
-    fn sl_doscript_blargs(yname: *const c_char, event: *const c_char, nargs: c_int, ...) -> c_int;
 
     fn clif_isingroup(src_sd: *mut MapSessionData, sd: *mut MapSessionData) -> c_int;
 
@@ -189,6 +187,21 @@ extern "C" {
     #[link_name = "rust_magicdb_yname"]
     fn magicdb_yname(id: c_int) -> *mut c_char;
 }
+
+/// Dispatch a Lua event with a single block_list argument.
+#[cfg(not(test))]
+#[allow(dead_code)]
+unsafe fn sl_doscript_simple(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
+}
+
+/// Dispatch a Lua event with two block_list arguments.
+#[cfg(not(test))]
+#[allow(dead_code)]
+unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
+}
+
 
 // ─── Inline map-data helpers (mirrors C read_tile/read_pass/read_obj macros) ──
 
@@ -684,9 +697,7 @@ pub unsafe extern "C" fn clif_parsewalk(sd: *mut MapSessionData) -> c_int {
 
     // Dismount on non-mount maps
     if md.can_mount == 0 && (*sd).status.state == PC_MOUNTED && (*sd).status.gm_level == 0 {
-        sl_doscript_blargs(
-            c"onDismount".as_ptr(), ptr::null(), 1i32, &mut (*sd).bl as *mut BlockList,
-        );
+        sl_doscript_simple(c"onDismount".as_ptr(), ptr::null(), &mut (*sd).bl as *mut BlockList);
     }
 
     let direction = rfifob(fd, 5);
@@ -844,9 +855,7 @@ pub unsafe extern "C" fn clif_parsewalk(sd: *mut MapSessionData) -> c_int {
         if (*sd).status.equip[i].id > 0 {
             let yn = itemdb_yname((*sd).status.equip[i].id);
             if !yn.is_null() {
-                sl_doscript_blargs(
-                    yn, c"on_walk".as_ptr(), 1i32, &mut (*sd).bl as *mut BlockList,
-                );
+                sl_doscript_simple(yn, c"on_walk".as_ptr(), &mut (*sd).bl as *mut BlockList);
             }
         }
     }
@@ -856,9 +865,7 @@ pub unsafe extern "C" fn clif_parsewalk(sd: *mut MapSessionData) -> c_int {
         if (*sd).status.skill[i] > 0 {
             let yn = magicdb_yname((*sd).status.skill[i] as c_int);
             if !yn.is_null() {
-                sl_doscript_blargs(
-                    yn, c"on_walk_passive".as_ptr(), 1i32, &mut (*sd).bl as *mut BlockList,
-                );
+                sl_doscript_simple(yn, c"on_walk_passive".as_ptr(), &mut (*sd).bl as *mut BlockList);
             }
         }
     }
@@ -868,14 +875,12 @@ pub unsafe extern "C" fn clif_parsewalk(sd: *mut MapSessionData) -> c_int {
         if (*sd).status.dura_aether[i].id > 0 && (*sd).status.dura_aether[i].duration > 0 {
             let yn = magicdb_yname((*sd).status.dura_aether[i].id as c_int);
             if !yn.is_null() {
-                sl_doscript_blargs(
-                    yn, c"on_walk_while_cast".as_ptr(), 1i32, &mut (*sd).bl as *mut BlockList,
-                );
+                sl_doscript_simple(yn, c"on_walk_while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
             }
         }
     }
 
-    sl_doscript_blargs(c"onScriptedTile".as_ptr(), ptr::null(), 1i32, &mut (*sd).bl as *mut BlockList);
+    sl_doscript_simple(c"onScriptedTile".as_ptr(), ptr::null(), &mut (*sd).bl as *mut BlockList);
     crate::game::pc::rust_pc_runfloor_sub(sd);
 
     // Warp check
@@ -922,9 +927,7 @@ pub unsafe extern "C" fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -
 
     // Dismount on non-mount maps
     if md.can_mount == 0 && (*sd).status.state == PC_MOUNTED && (*sd).status.gm_level == 0 {
-        sl_doscript_blargs(
-            c"onDismount".as_ptr(), ptr::null(), 1i32, &mut (*sd).bl as *mut BlockList,
-        );
+        sl_doscript_simple(c"onDismount".as_ptr(), ptr::null(), &mut (*sd).bl as *mut BlockList);
     }
 
     let direction = (*sd).status.side as c_int;
@@ -1077,7 +1080,7 @@ pub unsafe extern "C" fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -
         map_foreachinblock(clif_charlook_sub, m, x0, y0, x0+(x1-1), y0+(y1-1), BL_PC,  LOOK_SEND, sd);
     }
 
-    sl_doscript_blargs(c"onScriptedTile".as_ptr(), ptr::null(), 1i32, &mut (*sd).bl as *mut BlockList);
+    sl_doscript_simple(c"onScriptedTile".as_ptr(), ptr::null(), &mut (*sd).bl as *mut BlockList);
     crate::game::pc::rust_pc_runfloor_sub(sd);
 
     do_warp_check(sd);
@@ -1175,9 +1178,7 @@ pub unsafe extern "C" fn clif_sendmapdata(
 
     // Blackout map: delegate to Lua
     if map_readglobalreg(m, c"blackout".as_ptr()) != 0 {
-        sl_doscript_blargs(
-            c"sendMapData".as_ptr(), ptr::null(), 1i32, &mut (*sd).bl as *mut BlockList,
-        );
+        sl_doscript_simple(c"sendMapData".as_ptr(), ptr::null(), &mut (*sd).bl as *mut BlockList);
         return 0;
     }
 
@@ -1319,7 +1320,7 @@ pub unsafe extern "C" fn clif_parseside(sd: *mut MapSessionData) -> c_int {
     let fd = (*sd).fd;
     (*sd).status.side = rfifob(fd, 5) as i8;
     clif_sendside(&mut (*sd).bl);
-    sl_doscript_blargs(c"onTurn".as_ptr(), ptr::null(), 1i32, &mut (*sd).bl as *mut BlockList);
+    sl_doscript_simple(c"onTurn".as_ptr(), ptr::null(), &mut (*sd).bl as *mut BlockList);
     0
 }
 
@@ -1531,7 +1532,7 @@ pub unsafe extern "C" fn clif_parseviewchange(sd: *mut MapSessionData) -> c_int 
 pub unsafe extern "C" fn clif_parselookat_sub(bl: *mut BlockList, mut ap: ...) -> c_int {
     let sd = ap.arg::<*mut MapSessionData>();
     if bl.is_null() || sd.is_null() { return 0; }
-    sl_doscript_blargs(c"onLook".as_ptr(), std::ptr::null(), 2, &raw mut (*sd).bl, bl);
+    sl_doscript_2(c"onLook".as_ptr(), std::ptr::null(), &raw mut (*sd).bl, bl);
     0
 }
 

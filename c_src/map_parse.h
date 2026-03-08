@@ -190,7 +190,8 @@ int clif_parsemagic(USER *);
 int clif_mystaytus(USER *);
 int clif_send_aether(USER *, int, int);
 int clif_pc_damage(USER *, USER *);
-int clif_updatestate(struct block_list *, va_list);
+/* clif_updatestate — ported; use broadcast_update_state() from libyuri */
+void broadcast_update_state(USER *src);
 int clif_sendtowns(USER *);
 int clif_sendheartbeat(int, int);
 int clif_sendnpcsay(struct block_list *, va_list);
@@ -245,7 +246,6 @@ int clif_send_duration(USER *sd, int id, int time, USER *tsd);
 int clif_deductduraequip(USER *sd);
 int clif_checkinvbod(USER *sd);
 int clif_sendscriptsay(USER *sd, const char *msg, int msglen, int type);
-int getclifslotfromequiptype(int equipType);
 int clif_selldialog(USER *sd, unsigned int id, const char *dialog, int item[],
                     int count);
 int clif_input(USER *sd, int id, const char *dialog, const char *item);

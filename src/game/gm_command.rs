@@ -74,7 +74,7 @@ extern "C" {
     fn clif_getchararea(sd: *mut MapSessionData);
     fn clif_sendstatus(sd: *mut MapSessionData, flags: c_int);
     fn clif_mystaytus(sd: *mut MapSessionData);
-    fn clif_updatestate(bl: *mut BlockList, ...) -> c_int;
+    fn broadcast_update_state(sd: *mut MapSessionData);
     fn clif_sendanimation(bl: *mut BlockList, ...) -> c_int;
     fn clif_lookgone(bl: *mut BlockList);
     fn clif_playsound(bl: *mut BlockList, sound: c_int);
@@ -110,7 +110,6 @@ extern "C" {
     fn sl_fixmem();
     #[link_name = "rust_sl_luasize"]
     fn sl_luasize(sd: *mut c_void) -> c_int;
-    fn sl_doscript_blargs(name: *const c_char, method: *const c_char, argc: c_int, ...) -> c_int;
 
     // db reloads — Rust implementations under rust_* names
     #[link_name = "rust_itemdb_init"]
@@ -167,6 +166,14 @@ extern "C" {
     // shutdown timer callback (from map_server.c)
     fn map_reset_timer(v1: c_int, v2: c_int) -> c_int;
 }
+
+/// Dispatch a Lua event with a single block_list argument.
+#[cfg(not(test))]
+#[allow(dead_code)]
+unsafe fn sl_doscript_simple(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
+}
+
 
 // No-ops: these were inlines returning 0 in C headers (class_db.h, magic_db.h).
 // magicdb_read: magic_db.h says callers must use magicdb_init() instead.
@@ -495,13 +502,11 @@ unsafe fn command_disguise(sd: *mut MapSessionData, line: *mut c_char, _s: *mut 
     let (d, e) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     let os = (*sd).status.state;
     (*sd).status.state = 0;
-    map_foreachinarea(clif_updatestate, (*sd).bl.m as c_int, (*sd).bl.x as c_int,
-                      (*sd).bl.y as c_int, AREA, BL_PC, sd);
+    broadcast_update_state(sd);
     (*sd).status.state = os;
     (*sd).disguise = d as u16;
     (*sd).disguise_color = e as u16;
-    map_foreachinarea(clif_updatestate, (*sd).bl.m as c_int, (*sd).bl.x as c_int,
-                      (*sd).bl.y as c_int, AREA, BL_PC, sd);
+    broadcast_update_state(sd);
     0
 }
 unsafe fn command_warp(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
@@ -539,8 +544,7 @@ unsafe fn command_state(sd: *mut MapSessionData, line: *mut c_char, _lua_state: 
         pc_res(sd);
     } else {
         (*sd).status.state = (state_val % 5) as i8;
-        map_foreachinarea(clif_updatestate, (*sd).bl.m as c_int, (*sd).bl.x as c_int,
-                          (*sd).bl.y as c_int, AREA, BL_PC, sd);
+        broadcast_update_state(sd);
     }
     0
 }
@@ -594,8 +598,7 @@ unsafe fn command_magicreload(sd: *mut MapSessionData, _line: *mut c_char, _s: *
 unsafe fn command_lua(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() || line.is_null() { return 0; }
     (*sd).luaexec = 0;
-    sl_doscript_blargs(b"canRunLuaTalk\0".as_ptr() as *const c_char,
-                       std::ptr::null(), 1, &mut (*sd).bl as *mut BlockList);
+    sl_doscript_simple(b"canRunLuaTalk\0".as_ptr() as *const c_char, std::ptr::null(), &mut (*sd).bl as *mut BlockList);
     if (*sd).luaexec != 0 {
         sl_exec(sd as *mut c_void, line);
     }

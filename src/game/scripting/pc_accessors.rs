@@ -284,7 +284,9 @@ extern "C" {
     fn clif_sendstatus(sd: *mut MapSessionData, flags: c_int) -> c_int;
     fn clif_sendupdatestatus_onequip(sd: *mut MapSessionData) -> c_int;
     fn clif_send_pc_health(sd: *mut MapSessionData, damage: c_int, critical: c_int) -> c_int;
+    #[link_name = "rust_sl_async_freeco"]
     fn sl_async_freeco(sd: *mut c_void);
+    #[link_name = "rust_sl_intif_save"]
     fn sl_intif_save(sd: *mut c_void) -> c_int;
 
     // pc_* — all Rust (rust_pc_*) accessed via link_name
@@ -300,9 +302,11 @@ extern "C" {
     #[link_name = "rust_pc_unequipscript"]  fn pc_unequipscript(sd: *mut MapSessionData) -> c_int;
     #[link_name = "rust_pc_loadmagic"]      fn pc_loadmagic(sd: *mut MapSessionData) -> c_int;
     #[link_name = "rust_pc_checklevel"]     fn pc_checklevel(sd: *mut MapSessionData) -> c_int;
+    #[link_name = "rust_pc_delitem"]
     fn pc_delitem(sd: *mut MapSessionData, idx: c_int, amount: c_int, flag: c_int) -> c_int;
     #[link_name = "rust_pc_dropitemmap"]
     fn pc_dropitemmap(sd: *mut MapSessionData, id: c_int, all: c_int) -> c_int;
+    #[link_name = "rust_pc_isinvenspace"]
     fn pc_isinvenspace(sd: *mut MapSessionData, id: c_int, owner: c_int,
         engrave: *const c_char, cl: c_uint, clc: c_uint, ci: c_uint, cic: c_uint) -> c_int;
 
@@ -2294,8 +2298,7 @@ extern "C" {
     #[link_name = "rust_itemdb_name"] fn itemdb_name_item(id: c_uint) -> *mut c_char;
     #[link_name = "rust_itemdb_time"] fn itemdb_time_item(id: c_uint) -> c_int;
     #[link_name = "rust_pc_unequip"]  fn pc_unequip_slot(sd: *mut MapSessionData, slot: c_int) -> c_int;
-    #[link_name = "sl_doscript_blargs"]
-    fn sl_doscript_blargs_acc(root: *const c_char, method: *const c_char, nargs: c_int, ...) -> c_int;
+    // (sl_doscript_blargs_acc variadic shim removed; use doscript_blargs directly)
 }
 
 // ─── Parcel removal ───────────────────────────────────────────────────────────
@@ -2418,15 +2421,14 @@ pub unsafe extern "C" fn sl_pc_addhealth2(sd_ptr: *mut c_void, amount: c_int, _t
     if sd.is_null() { return; }
     let bl_ptr = map_id2bl_acc((*sd).attacker) as *mut crate::database::map_db::BlockList;
     if !bl_ptr.is_null() && amount > 0 {
-        sl_doscript_blargs_acc(
-            c"player_combat".as_ptr(), c"on_healed".as_ptr(), 2,
-            &mut (*sd).bl as *mut crate::database::map_db::BlockList,
-            bl_ptr,
+        crate::game::scripting::doscript_blargs(
+            c"player_combat".as_ptr(), c"on_healed".as_ptr(),
+            &[&mut (*sd).bl as *mut _ as *mut _, bl_ptr as *mut _],
         );
     } else if amount > 0 {
-        sl_doscript_blargs_acc(
-            c"player_combat".as_ptr(), c"on_healed".as_ptr(), 1,
-            &mut (*sd).bl as *mut crate::database::map_db::BlockList,
+        crate::game::scripting::doscript_blargs(
+            c"player_combat".as_ptr(), c"on_healed".as_ptr(),
+            &[&mut (*sd).bl as *mut _ as *mut _],
         );
     }
     clif_send_pc_healthscript(sd, -amount, 0);

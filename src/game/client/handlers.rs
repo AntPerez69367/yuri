@@ -42,21 +42,17 @@ extern "C" {
     fn timer_remove(handle: c_int) -> c_int;
     #[link_name = "rust_sl_async_freeco"]
     fn sl_async_freeco(sd: *mut c_void);
-    /// Trampoline for the static-inline `intif_savequit` in `c_src/map_char.h`.
-    /// Provided by `c_src/rust_shims_map.c`.
+    /// Rust implementation of intif_savequit logic (replaces C shim).
+    #[link_name = "rust_sl_intif_savequit"]
     fn sl_intif_savequit(sd: *mut c_void) -> c_int;
-    fn sl_doscript_blargs(
-        root:   *const c_char,
-        method: *const c_char,
-        nargs:  c_int,
-        ...
-    ) -> c_int;
     fn clif_showboards(sd: *mut MapSessionData) -> c_int;
     fn rust_boarddb_yname(id: c_int) -> *mut c_char;
 
     fn addtokillreg(sd: *mut MapSessionData, mob: c_int) -> c_int;
+    #[link_name = "rust_pc_readglobalreg"]
     fn pc_readglobalreg(sd: *mut MapSessionData, reg: *const c_char) -> c_int;
     fn clif_sendaction(bl: *mut crate::database::map_db::BlockList, a: c_int, b: c_int, c: c_int) -> c_int;
+    #[link_name = "rust_itemdb_droppable"]
     fn itemdb_droppable(id: c_uint) -> c_int;
     #[link_name = "rust_pc_dropitemmap"]
     fn pc_dropitemmap(sd: *mut MapSessionData, id: c_int, all: c_int) -> c_int;
@@ -79,6 +75,21 @@ extern "C" {
     #[link_name = "rust_pc_setpos"]
     fn pc_setpos(sd: *mut MapSessionData, m: c_int, x: c_int, y: c_int) -> c_int;
 }
+
+/// Dispatch a Lua event with a single block_list argument.
+#[cfg(not(test))]
+#[allow(dead_code)]
+unsafe fn sl_doscript_simple(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
+}
+
+/// Dispatch a Lua event with two block_list arguments.
+#[cfg(not(test))]
+#[allow(dead_code)]
+unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
+}
+
 
 // ─── Map data read helper ─────────────────────────────────────────────────────
 
@@ -165,7 +176,7 @@ pub unsafe extern "C" fn clif_handle_disconnect(sd: *mut MapSessionData) -> c_in
     sl_async_freeco(sd as *mut c_void);
     clif_leavegroup(sd);
     clif_stoptimers(sd);
-    sl_doscript_blargs(c"logout".as_ptr(), std::ptr::null::<c_char>(), 1, &raw mut (*sd).bl);
+    sl_doscript_simple(c"logout".as_ptr(), std::ptr::null::<c_char>(), &raw mut (*sd).bl);
     sl_intif_savequit(sd as *mut c_void);
     clif_quit(sd);
     map_deliddb(&raw mut (*sd).bl);
@@ -241,15 +252,9 @@ pub unsafe extern "C" fn clif_handle_powerboards(sd: *mut MapSessionData) -> c_i
     }
 
     if !tsd.is_null() {
-        sl_doscript_blargs(
-            c"powerBoard".as_ptr(), std::ptr::null::<c_char>(), 2,
-            &raw mut (*sd).bl, &raw mut (*tsd).bl,
-        );
+        sl_doscript_2(c"powerBoard".as_ptr(), std::ptr::null::<c_char>(), &raw mut (*sd).bl, &raw mut (*tsd).bl);
     } else {
-        sl_doscript_blargs(
-            c"powerBoard".as_ptr(), std::ptr::null::<c_char>(), 2,
-            &raw mut (*sd).bl, std::ptr::null_mut::<BlockList>(),
-        );
+        sl_doscript_2(c"powerBoard".as_ptr(), std::ptr::null::<c_char>(), &raw mut (*sd).bl, std::ptr::null_mut::<BlockList>());
     }
     0
 }
@@ -310,9 +315,7 @@ pub unsafe extern "C" fn clif_handle_boards(sd: *mut MapSessionData) -> c_int {
         8 => {
             // C fallthrough: case 8 runs the Lua write script, then falls into case 9.
             let board = rword_be((*sd).fd, 6) as c_int;
-            sl_doscript_blargs(
-                rust_boarddb_yname(board), c"write".as_ptr(), 1, &raw mut (*sd).bl,
-            );
+            sl_doscript_simple(rust_boarddb_yname(board), c"write".as_ptr(), &raw mut (*sd).bl);
             (*sd).bcount = 0;
             boards_showposts(sd, 0);
         }
@@ -582,7 +585,7 @@ pub unsafe extern "C" fn clif_runfloor_sub(bl: *mut crate::database::map_db::Blo
     if (*bl).subtype as c_int != FLOOR as c_int { return 0; }
     let nd = bl as *mut NpcData;
     sl_async_freeco(sd as *mut c_void);
-    sl_doscript_blargs((*nd).name.as_ptr(), c"click2".as_ptr(), 2, &raw mut (*sd).bl, &raw mut (*nd).bl);
+    sl_doscript_2((*nd).name.as_ptr(), c"click2".as_ptr(), &raw mut (*sd).bl, &raw mut (*nd).bl);
     0
 }
 
@@ -638,18 +641,15 @@ pub unsafe extern "C" fn clif_parsedropitem(sd: *mut MapSessionData) -> c_int {
     }
     clif_sendaction(&raw mut (*sd).bl, 5, 20, 0);
     (*sd).invslot = id as u8;
-    sl_doscript_blargs(
-        itemdb_yname((*sd).status.inventory[id as usize].id as c_uint),
-        c"on_drop".as_ptr(), 1, &raw mut (*sd).bl,
-    );
+    sl_doscript_simple(itemdb_yname((*sd).status.inventory[id as usize].id as c_uint), c"on_drop".as_ptr(), &raw mut (*sd).bl);
     for x in 0..MAX_MAGIC_TIMERS {
         if (*sd).status.dura_aether[x].id > 0 && (*sd).status.dura_aether[x].duration > 0 {
-            sl_doscript_blargs(magicdb_yname((*sd).status.dura_aether[x].id as c_int), c"on_drop_while_cast".as_ptr(), 1, &raw mut (*sd).bl);
+            sl_doscript_simple(magicdb_yname((*sd).status.dura_aether[x].id as c_int), c"on_drop_while_cast".as_ptr(), &raw mut (*sd).bl);
         }
     }
     for x in 0..MAX_MAGIC_TIMERS {
         if (*sd).status.dura_aether[x].id > 0 && (*sd).status.dura_aether[x].aether > 0 {
-            sl_doscript_blargs(magicdb_yname((*sd).status.dura_aether[x].id as c_int), c"on_drop_while_aether".as_ptr(), 1, &raw mut (*sd).bl);
+            sl_doscript_simple(magicdb_yname((*sd).status.dura_aether[x].id as c_int), c"on_drop_while_aether".as_ptr(), &raw mut (*sd).bl);
         }
     }
     if (*sd).fakeDrop != 0 { return 0; }
@@ -956,7 +956,7 @@ pub unsafe extern "C" fn clif_changestatus(sd: *mut MapSessionData, type_: c_int
                     1 => { clif_sendminitext(sd, c"Spirits can't do that.".as_ptr()); }
                     2 => { clif_sendminitext(sd, c"Good try, but there is nothing here that you can ride.".as_ptr()); }
                     3 => {
-                        sl_doscript_blargs(c"onDismount".as_ptr(), std::ptr::null(), 1, &raw mut (*sd).bl);
+                        sl_doscript_simple(c"onDismount".as_ptr(), std::ptr::null(), &raw mut (*sd).bl);
                     }
                     4 => { clif_sendminitext(sd, c"You cannot do that while transformed.".as_ptr()); }
                     _ => {}
@@ -1174,9 +1174,9 @@ pub unsafe extern "C" fn createdb_start(sd: *mut c_void) -> c_int {
 
     sl_async_freeco(sd as *mut c_void);
 
-    let bl_ptr = &mut (*sd).bl as *mut BlockList as *mut c_void;
-    crate::game::scripting::sl_doscript_blargs_vec(
-        c"itemCreation".as_ptr(), std::ptr::null(), 1, &bl_ptr,
+    let bl_ptr = &mut (*sd).bl as *mut BlockList;
+    crate::game::scripting::doscript_blargs(
+        c"itemCreation".as_ptr(), std::ptr::null(), &[bl_ptr],
     );
     0
 }

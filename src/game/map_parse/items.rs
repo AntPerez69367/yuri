@@ -62,7 +62,7 @@ extern "C" {
     fn clif_sendmsg(sd: *mut MapSessionData, t: c_int, msg: *const c_char) -> c_int;
     fn clif_sendminitext(sd: *mut MapSessionData, msg: *const c_char) -> c_int;
     fn clif_getequiptype(val: c_int) -> c_int;
-    fn clif_updatestate(bl: *mut BlockList, ...) -> c_int;
+    fn broadcast_update_state(sd: *mut MapSessionData);
     fn clif_sendaction(bl: *mut BlockList, action: c_int, unused: c_int, extra: c_int) -> c_int;
     fn clif_object_look_sub2(bl: *mut BlockList, ...) -> c_int;
     fn clif_object_canmove(m: c_int, x: c_int, y: c_int, dir: c_int) -> c_int;
@@ -70,13 +70,8 @@ extern "C" {
     fn map_id2name(id: c_uint) -> *mut c_char;
     fn map_additem(bl: *mut BlockList);
     // read_pass — inlined below; no longer an extern "C" call
+    #[link_name = "rust_pc_readglobalreg"]
     fn pc_readglobalreg(sd: *mut MapSessionData, reg: *const c_char) -> c_int;
-    fn sl_doscript_blargs(
-        script: *const c_char,
-        func: *const c_char,
-        n: c_int,
-        ...
-    ) -> c_int;
 
     // rust_ variants for static-inline wrappers
     fn rust_itemdb_name(id: c_uint) -> *mut c_char;
@@ -98,6 +93,22 @@ extern "C" {
     fn rust_pc_loadmagic(sd: *mut MapSessionData) -> c_int;
     fn rust_pc_reload_aether(sd: *mut MapSessionData) -> c_int;
     fn rust_pc_addtocurrent(bl: *mut BlockList, ...) -> c_int;
+}
+
+// ─── Lua dispatch helpers ─────────────────────────────────────────────────────
+
+/// Dispatch a Lua event with a single block_list argument.
+#[cfg(not(test))]
+#[allow(dead_code)]
+unsafe fn sl_doscript_simple(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl: *mut BlockList) -> std::ffi::c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
+}
+
+/// Dispatch a Lua event with two block_list arguments.
+#[cfg(not(test))]
+#[allow(dead_code)]
+unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl1: *mut BlockList, bl2: *mut BlockList) -> std::ffi::c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
 }
 
 // ─── libc helpers ─────────────────────────────────────────────────────────────
@@ -167,12 +178,7 @@ pub unsafe extern "C" fn clif_checkinvbod(sd: *mut MapSessionData) -> c_int {
                 );
                 clif_sendstatus(sd, SFLAG_FULLSTATS | SFLAG_HPMP);
                 clif_sendmsg(sd, 5, buf.as_ptr());
-                sl_doscript_blargs(
-                    b"characterLog\0".as_ptr().cast(),
-                    b"invRestore\0".as_ptr().cast(),
-                    1,
-                    &raw mut (*sd).bl,
-                );
+                sl_doscript_simple(b"characterLog\0".as_ptr().cast(), b"invRestore\0".as_ptr().cast(), &raw mut (*sd).bl);
                 return 0;
             }
 
@@ -193,25 +199,20 @@ pub unsafe extern "C" fn clif_checkinvbod(sd: *mut MapSessionData) -> c_int {
                 b"Your %s was destroyed!\0".as_ptr().cast(),
                 rust_itemdb_name(id),
             );
-            sl_doscript_blargs(
-                b"characterLog\0".as_ptr().cast(),
-                b"invBreak\0".as_ptr().cast(),
-                1,
-                &raw mut (*sd).bl,
-            );
+            sl_doscript_simple(b"characterLog\0".as_ptr().cast(), b"invBreak\0".as_ptr().cast(), &raw mut (*sd).bl);
 
             (*sd).breakid = id;
-            sl_doscript_blargs(b"onBreak\0".as_ptr().cast(), std::ptr::null(), 1, &raw mut (*sd).bl);
-            sl_doscript_blargs(rust_itemdb_yname(id), b"on_break\0".as_ptr().cast(), 1, &raw mut (*sd).bl);
+            sl_doscript_simple(b"onBreak\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl);
+            sl_doscript_simple(rust_itemdb_yname(id), b"on_break\0".as_ptr().cast(), &raw mut (*sd).bl);
 
             rust_pc_delitem(sd, x as c_int, 1, 9);
             clif_sendmsg(sd, 5, buf.as_ptr());
         }
 
-        map_foreachinarea(clif_updatestate, (*sd).bl.m as c_int, (*sd).bl.x as c_int, (*sd).bl.y as c_int, AREA, BL_PC, sd);
+        broadcast_update_state(sd);
     }
 
-    sl_doscript_blargs(b"characterLog\0".as_ptr().cast(), b"bodLog\0".as_ptr().cast(), 1, &raw mut (*sd).bl);
+    sl_doscript_simple(b"characterLog\0".as_ptr().cast(), b"bodLog\0".as_ptr().cast(), &raw mut (*sd).bl);
     (*sd).boditems.bod_count = 0;
 
     0
@@ -630,13 +631,8 @@ pub unsafe extern "C" fn clif_parsegetitem(sd: *mut MapSessionData) -> c_int {
 
     if (*sd).status.state == 2 {
         (*sd).status.state = 0;
-        sl_doscript_blargs(
-            b"invis_rogue\0".as_ptr().cast(),
-            b"uncast\0".as_ptr().cast(),
-            1,
-            &raw mut (*sd).bl,
-        );
-        map_foreachinarea(clif_updatestate, (*sd).bl.m as c_int, (*sd).bl.x as c_int, (*sd).bl.y as c_int, AREA, BL_PC, sd);
+        sl_doscript_simple(b"invis_rogue\0".as_ptr().cast(), b"uncast\0".as_ptr().cast(), &raw mut (*sd).bl);
+        broadcast_update_state(sd);
     }
 
     clif_sendaction(&raw mut (*sd).bl, 4, 40, 0);
@@ -647,16 +643,11 @@ pub unsafe extern "C" fn clif_parsegetitem(sd: *mut MapSessionData) -> c_int {
         if (*sd).status.dura_aether[x].id > 0
             && (*sd).status.dura_aether[x].duration > 0
         {
-            sl_doscript_blargs(
-                rust_magicdb_yname((*sd).status.dura_aether[x].id as c_int),
-                b"on_pickup_while_cast\0".as_ptr().cast(),
-                1,
-                &raw mut (*sd).bl,
-            );
+            sl_doscript_simple(rust_magicdb_yname((*sd).status.dura_aether[x].id as c_int), b"on_pickup_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl);
         }
     }
 
-    sl_doscript_blargs(b"onPickUp\0".as_ptr().cast(), std::ptr::null(), 1, &raw mut (*sd).bl);
+    sl_doscript_simple(b"onPickUp\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl);
 
     0
 }
@@ -835,25 +826,13 @@ pub unsafe extern "C" fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint)
 
     (*sd).fakeDrop = 0;
 
-    sl_doscript_blargs(
-        b"on_drop_gold\0".as_ptr().cast(),
-        std::ptr::null(),
-        2,
-        &raw mut (*sd).bl,
-        &raw mut (*fl).bl,
-    );
+    sl_doscript_2(b"on_drop_gold\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl, &raw mut (*fl).bl);
 
     for x in 0..MAX_MAGIC_TIMERS {
         if (*sd).status.dura_aether[x].id > 0
             && (*sd).status.dura_aether[x].duration > 0
         {
-            sl_doscript_blargs(
-                rust_magicdb_yname((*sd).status.dura_aether[x].id as c_int),
-                b"on_drop_gold_while_cast\0".as_ptr().cast(),
-                2,
-                &raw mut (*sd).bl,
-                &raw mut (*fl).bl,
-            );
+            sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as c_int), b"on_drop_gold_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
         }
     }
 
@@ -861,13 +840,7 @@ pub unsafe extern "C" fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint)
         if (*sd).status.dura_aether[x].id > 0
             && (*sd).status.dura_aether[x].aether > 0
         {
-            sl_doscript_blargs(
-                rust_magicdb_yname((*sd).status.dura_aether[x].id as c_int),
-                b"on_drop_gold_while_aether\0".as_ptr().cast(),
-                2,
-                &raw mut (*sd).bl,
-                &raw mut (*fl).bl,
-            );
+            sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as c_int), b"on_drop_gold_while_aether\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
         }
     }
 
@@ -877,6 +850,7 @@ pub unsafe extern "C" fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint)
     extern "C" {
         fn snprintf(s: *mut c_char, n: usize, fmt: *const c_char, ...) -> c_int;
     }
+
     snprintf(
         mini.as_mut_ptr(), 64,
         b"You dropped %d coins\0".as_ptr().cast(),
@@ -895,25 +869,13 @@ pub unsafe extern "C" fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint)
     if def[0] == 0 {
         map_additem(&raw mut (*fl).bl);
 
-        sl_doscript_blargs(
-            b"after_drop_gold\0".as_ptr().cast(),
-            std::ptr::null(),
-            2,
-            &raw mut (*sd).bl,
-            &raw mut (*fl).bl,
-        );
+        sl_doscript_2(b"after_drop_gold\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl, &raw mut (*fl).bl);
 
         for x in 0..MAX_MAGIC_TIMERS {
             if (*sd).status.dura_aether[x].id > 0
                 && (*sd).status.dura_aether[x].duration > 0
             {
-                sl_doscript_blargs(
-                    rust_magicdb_yname((*sd).status.dura_aether[x].id as c_int),
-                    b"after_drop_gold_while_cast\0".as_ptr().cast(),
-                    2,
-                    &raw mut (*sd).bl,
-                    &raw mut (*fl).bl,
-                );
+                sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as c_int), b"after_drop_gold_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
             }
         }
 
@@ -921,23 +883,11 @@ pub unsafe extern "C" fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint)
             if (*sd).status.dura_aether[x].id > 0
                 && (*sd).status.dura_aether[x].aether > 0
             {
-                sl_doscript_blargs(
-                    rust_magicdb_yname((*sd).status.dura_aether[x].id as c_int),
-                    b"after_drop_gold_while_aether\0".as_ptr().cast(),
-                    2,
-                    &raw mut (*sd).bl,
-                    &raw mut (*fl).bl,
-                );
+                sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as c_int), b"after_drop_gold_while_aether\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
             }
         }
 
-        sl_doscript_blargs(
-            b"characterLog\0".as_ptr().cast(),
-            b"dropWrite\0".as_ptr().cast(),
-            2,
-            &raw mut (*sd).bl,
-            &raw mut (*fl).bl,
-        );
+        sl_doscript_2(b"characterLog\0".as_ptr().cast(), b"dropWrite\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
 
         map_foreachinarea(
             clif_object_look_sub2,
@@ -964,7 +914,7 @@ pub unsafe extern "C" fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint)
 #[no_mangle]
 pub unsafe extern "C" fn clif_open_sub(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
-    sl_doscript_blargs(b"onOpen\0".as_ptr().cast(), std::ptr::null(), 1, &raw mut (*sd).bl);
+    sl_doscript_simple(b"onOpen\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl);
     0
 }
 
@@ -1053,13 +1003,7 @@ pub unsafe extern "C" fn clif_throwitem_sub(
     (*sd).throwx = x as u16;
     (*sd).throwy = y as u16;
 
-    sl_doscript_blargs(
-        b"onThrow\0".as_ptr().cast(),
-        std::ptr::null(),
-        2,
-        &raw mut (*sd).bl,
-        &raw mut (*fl).bl,
-    );
+    sl_doscript_2(b"onThrow\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl, &raw mut (*fl).bl);
 
     0
 }

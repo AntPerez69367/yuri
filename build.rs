@@ -27,17 +27,7 @@ fn main() {
         "-Wno-return-type",
     ];
 
-    // Compile config.c (common_nocore) — config globals referenced by Rust FFI.
-    let mut config_build = cc::Build::new();
-    config_build
-        .file("c_src/config.c")
-        .include("c_src")
-        .include("c_deps")
-        .include("/usr/include/mysql");
-    for flag in base_flags {
-        config_build.flag(flag);
-    }
-    config_build.compile("config_c");
+    // config.c removed — all globals ported to src/ffi/config_globals.rs as #[no_mangle] statics.
 
     // Compile c_deps/*.c (db, timer, showmsg, strlib, etc.)
     let mut deps_build = cc::Build::new();
@@ -60,22 +50,22 @@ fn main() {
     }
     deps_build.compile("deps_c");
 
-    // Compile map_game C files (sl_compat.c, map_server_stubs.c) — game logic that
-    // Rust map_server links against. Needs LuaJIT and MySQL headers.
+    // rust_shims.c deleted (Task 3.1): all shim symbols removed; Rust callers now
+    // use #[link_name = "rust_*"] to reach the real Rust implementations directly.
+    // rust_shims_map.c deleted (Task 3.2): sl_intif_save / sl_intif_savequit
+    // ported to Rust in src/ffi/map_char.rs as rust_sl_intif_save / rust_sl_intif_savequit.
+    //
     // map_server.c has been deleted; its globals (sql_handle, char_fd, map_fd,
     // userlist, auth_n) now live in src/game/map_server.rs as #[no_mangle] statics.
-    // map_server_stubs.c contains the remaining live C functions (Phase 3 TODO items).
-    let mut map_game_build = cc::Build::new();
-    map_game_build
-        .files(&["c_src/map_server_stubs.c", "c_src/sl_compat.c", "c_src/rust_shims.c", "c_src/rust_shims_map.c"])
-        .include("c_src")
-        .include("c_deps")
-        .include("/usr/include/mysql")
-        .include("/usr/include/luajit-2.1");
-    for flag in base_flags {
-        map_game_build.flag(flag);
-    }
-    map_game_build.compile("map_game_c");
+    // sl_compat.c has been deleted; its globals (groups[]) moved to Rust (Task 1.11).
+    // map_server_stubs.c has been deleted (Task 2.3); all its functions and globals
+    // (map_reload, map_reset_timer, groups[], log_fd, map_max, map_ip_s, log_ip_s,
+    //  oldHour, oldMinute, cronjobtimer, bl_list_count, mobsearch_db) now live in
+    //  src/game/map_server.rs as #[no_mangle] statics/functions.
+    //
+    // All C source in c_src/ has been eliminated. The map_game_c archive is no
+    // longer needed; remove the linker group args below if this section is empty.
+    // (We keep the compile step absent — nothing to compile.)
 
     // Link the cc-compiled C archives in a group to handle circular dependencies
     // between the three C archives and libyuri (the Rust rlib, linked automatically
@@ -85,9 +75,8 @@ fn main() {
     // cc::Build::compile() already emits `cargo:rustc-link-lib=static=<name>` for
     // each archive, which causes them to be linked. We wrap them in --start-group
     // /--end-group to handle any circular refs within the C archives themselves.
+    // Note: libmap_game_c.a removed (Tasks 3.1+3.2) — only libdeps_c.a remains.
     println!("cargo:rustc-link-arg-bin=map_server=-Wl,--start-group");
-    println!("cargo:rustc-link-arg-bin=map_server=-Wl,{}/libmap_game_c.a", out_dir);
-    println!("cargo:rustc-link-arg-bin=map_server=-Wl,{}/libconfig_c.a", out_dir);
     println!("cargo:rustc-link-arg-bin=map_server=-Wl,{}/libdeps_c.a", out_dir);
     println!("cargo:rustc-link-arg-bin=map_server=-Wl,--end-group");
 
@@ -101,11 +90,9 @@ fn main() {
 
     // Re-run triggers
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=c_src/config.c");
-    println!("cargo:rerun-if-changed=c_src/map_server_stubs.c");
-    println!("cargo:rerun-if-changed=c_src/sl_compat.c");
-    println!("cargo:rerun-if-changed=c_src/rust_shims.c");
-    println!("cargo:rerun-if-changed=c_src/rust_shims_map.c");
+    // map_server_stubs.c deleted (Task 2.3) — trigger removed.
+    // rust_shims.c deleted (Task 3.1) — trigger removed.
+    // rust_shims_map.c deleted (Task 3.2) — trigger removed.
     println!("cargo:rerun-if-changed=c_deps/db_mysql.c");
     println!("cargo:rerun-if-changed=c_deps/db.c");
     println!("cargo:rerun-if-changed=c_deps/ers.c");

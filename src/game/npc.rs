@@ -146,14 +146,17 @@ extern "C" {
     pub fn clif_npc_move(bl: *mut BlockList, ...) -> c_int;
     /// Returns USER* (opaque — the USER struct has BlockList as its first field).
     pub fn map_id2sd(id: c_uint) -> *mut std::ffi::c_void;
-    /// Fires a Lua script event on an NPC by name.
-    /// Variadic — caller passes `nargs` positional block_list* arguments after `nargs`.
-    pub fn sl_doscript_blargs(
-        name:  *const c_char,
-        func:  *const c_char,
-        nargs: c_int,
-        ...
-    ) -> c_int;
+    // (sl_doscript_blargs variadic shim removed; use helpers below)
+}
+
+/// Dispatch a Lua event with a single block_list argument.
+unsafe fn sl_doscript_simple(root: *const c_char, method: *const c_char, bl: *mut BlockList) -> c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
+}
+
+/// Dispatch a Lua event with two block_list arguments.
+unsafe fn sl_doscript_2(root: *const c_char, method: *const c_char, bl1: *mut BlockList, bl2: *mut BlockList) -> c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
 }
 
 /// Enum value for `AREA` as defined in `c_src/map_parse.h`:
@@ -391,20 +394,9 @@ pub unsafe fn npc_action(nd: *mut NpcData) -> c_int {
             // SAFETY: map_id2sd returns *mut map_sessiondata whose first field `bl`
             // (struct block_list) is at byte offset 0. Casting to *mut BlockList is
             // equivalent to &tsd->bl as used in C npc_action.
-            sl_doscript_blargs(
-                nd.name.as_ptr(),
-                b"action\0".as_ptr() as *const c_char,
-                2 as c_int,
-                &raw mut nd.bl,
-                tsd as *mut BlockList,
-            );
+            sl_doscript_2(nd.name.as_ptr(), b"action\0".as_ptr() as *const c_char, &raw mut nd.bl, tsd as *mut BlockList);
         } else {
-            sl_doscript_blargs(
-                nd.name.as_ptr(),
-                b"action\0".as_ptr() as *const c_char,
-                1 as c_int,
-                &raw mut nd.bl,
-            );
+            sl_doscript_simple(nd.name.as_ptr(), b"action\0".as_ptr() as *const c_char, &raw mut nd.bl);
         }
     }
     0
@@ -434,20 +426,9 @@ pub unsafe fn npc_movetime(nd: *mut NpcData) -> c_int {
         nd.movetimer = 0;
         if !tsd.is_null() {
             // SAFETY: see npc_action — map_sessiondata.bl is at offset 0.
-            sl_doscript_blargs(
-                nd.name.as_ptr(),
-                b"move\0".as_ptr() as *const c_char,
-                2 as c_int,
-                &raw mut nd.bl,
-                tsd as *mut BlockList,
-            );
+            sl_doscript_2(nd.name.as_ptr(), b"move\0".as_ptr() as *const c_char, &raw mut nd.bl, tsd as *mut BlockList);
         } else {
-            sl_doscript_blargs(
-                nd.name.as_ptr(),
-                b"move\0".as_ptr() as *const c_char,
-                1 as c_int,
-                &raw mut nd.bl,
-            );
+            sl_doscript_simple(nd.name.as_ptr(), b"move\0".as_ptr() as *const c_char, &raw mut nd.bl);
         }
     }
     0
@@ -477,20 +458,9 @@ pub unsafe fn npc_duration(nd: *mut NpcData) -> c_int {
         nd.duratime = 0;
         if !tsd.is_null() {
             // SAFETY: see npc_action — map_sessiondata.bl is at offset 0.
-            sl_doscript_blargs(
-                nd.name.as_ptr(),
-                b"endAction\0".as_ptr() as *const c_char,
-                2 as c_int,
-                &raw mut nd.bl,
-                tsd as *mut BlockList,
-            );
+            sl_doscript_2(nd.name.as_ptr(), b"endAction\0".as_ptr() as *const c_char, &raw mut nd.bl, tsd as *mut BlockList);
         } else {
-            sl_doscript_blargs(
-                nd.name.as_ptr(),
-                b"endAction\0".as_ptr() as *const c_char,
-                1 as c_int,
-                &raw mut nd.bl,
-            );
+            sl_doscript_simple(nd.name.as_ptr(), b"endAction\0".as_ptr() as *const c_char, &raw mut nd.bl);
         }
     }
     0

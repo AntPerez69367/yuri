@@ -46,12 +46,26 @@ extern "C" {
     fn rust_classdb_chat(id: c_int) -> c_int;
     fn rust_is_command(sd: *mut MapSessionData, p: *const c_char, len: c_int) -> c_int;
     fn rust_magicdb_yname(id: c_int) -> *mut c_char;
-    fn sl_doscript_blargs(script: *const c_char, func: *const c_char, n: c_int, ...) -> c_int;
-    fn sl_doscript_strings(root: *const c_char, method: *const c_char, nargs: c_int, ...) -> c_int;
+    #[link_name = "rust_sl_async_freeco"]
     fn sl_async_freeco(sd: *mut c_void) -> c_int;
     fn Sql_EscapeString(handle: *mut c_void, out: *mut c_char, src: *const c_char);
     fn clif_Hacker(name: *mut c_char, reason: *const c_char) -> c_int;
 }
+
+/// Dispatch a Lua event with a single block_list argument.
+#[cfg(not(test))]
+#[allow(dead_code)]
+unsafe fn sl_doscript_simple(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
+}
+
+/// Dispatch a Lua event with two block_list arguments.
+#[cfg(not(test))]
+#[allow(dead_code)]
+unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
+}
+
 
 use crate::game::map_server::sql_handle;
 
@@ -947,13 +961,7 @@ pub unsafe extern "C" fn clif_parsewisp(sd: *mut MapSessionData) -> c_int {
             let m = b"You are not in a clan\0";
             clif_sendbluemessage(sd, m.as_ptr() as *mut c_char);
         } else if (*sd).status.clan_chat != 0 {
-            sl_doscript_strings(
-                b"characterLog\0".as_ptr() as *const c_char,
-                b"clanChatLog\0".as_ptr() as *const c_char,
-                2,
-                (*sd).status.name.as_ptr(),
-                msg_c,
-            );
+            crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const c_char, b"clanChatLog\0".as_ptr() as *const c_char, &[(*sd).status.name.as_ptr(), msg_c]);
             clif_sendclanmessage(sd, rfifop((*sd).fd, 7 + dstlen) as *mut u8, msglen as c_int);
         } else {
             let m = b"Clan chat is off.\0";
@@ -965,25 +973,13 @@ pub unsafe extern "C" fn clif_parsewisp(sd: *mut MapSessionData) -> c_int {
             let m = b"You are not in a group\0";
             clif_sendbluemessage(sd, m.as_ptr() as *mut c_char);
         } else {
-            sl_doscript_strings(
-                b"characterLog\0".as_ptr() as *const c_char,
-                b"groupChatLog\0".as_ptr() as *const c_char,
-                2,
-                (*sd).status.name.as_ptr(),
-                msg_c,
-            );
+            crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const c_char, b"groupChatLog\0".as_ptr() as *const c_char, &[(*sd).status.name.as_ptr(), msg_c]);
             clif_sendgroupmessage(sd, rfifop((*sd).fd, 7 + dstlen) as *mut u8, msglen as c_int);
         }
     // "@" → subpath chat
     } else if dst_name[0] == b'@' && dst_name[1] == 0 {
         if rust_classdb_chat((*sd).status.class as c_int) != 0 {
-            sl_doscript_strings(
-                b"characterLog\0".as_ptr() as *const c_char,
-                b"subPathChatLog\0".as_ptr() as *const c_char,
-                2,
-                (*sd).status.name.as_ptr(),
-                msg_c,
-            );
+            crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const c_char, b"subPathChatLog\0".as_ptr() as *const c_char, &[(*sd).status.name.as_ptr(), msg_c]);
             clif_sendsubpathmessage(sd, rfifop((*sd).fd, 7 + dstlen) as *mut u8, msglen as c_int);
         } else {
             let m = b"You cannot do that.\0";
@@ -993,26 +989,14 @@ pub unsafe extern "C" fn clif_parsewisp(sd: *mut MapSessionData) -> c_int {
     } else if dst_name[0] == b'?' && dst_name[1] == 0 {
         if (*sd).status.tutor == 0 && (*sd).status.gm_level == 0 {
             if (*sd).status.level < 99 {
-                sl_doscript_strings(
-                    b"characterLog\0".as_ptr() as *const c_char,
-                    b"noviceChatLog\0".as_ptr() as *const c_char,
-                    2,
-                    (*sd).status.name.as_ptr(),
-                    msg_c,
-                );
+                crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const c_char, b"noviceChatLog\0".as_ptr() as *const c_char, &[(*sd).status.name.as_ptr(), msg_c]);
                 clif_sendnovicemessage(sd, rfifop((*sd).fd, 7 + dstlen) as *mut u8, msglen as c_int);
             } else {
                 let m = b"You cannot do that.\0";
                 clif_sendbluemessage(sd, m.as_ptr() as *mut c_char);
             }
         } else {
-            sl_doscript_strings(
-                b"characterLog\0".as_ptr() as *const c_char,
-                b"noviceChatLog\0".as_ptr() as *const c_char,
-                2,
-                (*sd).status.name.as_ptr(),
-                msg_c,
-            );
+            crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const c_char, b"noviceChatLog\0".as_ptr() as *const c_char, &[(*sd).status.name.as_ptr(), msg_c]);
             clif_sendnovicemessage(sd, rfifop((*sd).fd, 7 + dstlen) as *mut u8, msglen as c_int);
         }
     // named whisper
@@ -1027,14 +1011,7 @@ pub unsafe extern "C" fn clif_parsewisp(sd: *mut MapSessionData) -> c_int {
                 let afk_msg = std::ffi::CStr::from_ptr((*dst_sd).afkmessage.as_ptr());
                 let has_afk_msg = !afk_msg.to_bytes().is_empty();
 
-                sl_doscript_strings(
-                    b"characterLog\0".as_ptr() as *const c_char,
-                    b"whisperLog\0".as_ptr() as *const c_char,
-                    3,
-                    (*dst_sd).status.name.as_ptr(),
-                    (*sd).status.name.as_ptr(),
-                    msg_c,
-                );
+                crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const c_char, b"whisperLog\0".as_ptr() as *const c_char, &[(*dst_sd).status.name.as_ptr(), (*sd).status.name.as_ptr(), msg_c]);
 
                 clif_sendwisp(dst_sd, (*sd).status.name.as_ptr() as *const c_char, msg_c);
                 clif_sendwisp(dst_sd, (*dst_sd).status.name.as_ptr() as *const c_char, (*dst_sd).afkmessage.as_ptr() as *const c_char);
@@ -1047,14 +1024,7 @@ pub unsafe extern "C" fn clif_parsewisp(sd: *mut MapSessionData) -> c_int {
                 }
                 let _ = has_afk_msg;
             } else {
-                sl_doscript_strings(
-                    b"characterLog\0".as_ptr() as *const c_char,
-                    b"whisperLog\0".as_ptr() as *const c_char,
-                    3,
-                    (*dst_sd).status.name.as_ptr(),
-                    (*sd).status.name.as_ptr(),
-                    msg_c,
-                );
+                crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const c_char, b"whisperLog\0".as_ptr() as *const c_char, &[(*dst_sd).status.name.as_ptr(), (*sd).status.name.as_ptr(), msg_c]);
 
                 clif_sendwisp(dst_sd, (*sd).status.name.as_ptr() as *const c_char, msg_c);
 
@@ -1103,10 +1073,10 @@ pub unsafe extern "C" fn clif_sendsay(
     for i in 0..MAX_SPELLS {
         if (*sd).status.skill[i] > 0 {
             let yname = rust_magicdb_yname((*sd).status.skill[i] as c_int);
-            sl_doscript_blargs(yname, b"on_say\0".as_ptr() as *const c_char, 1, &raw mut (*sd).bl);
+            sl_doscript_simple(yname, b"on_say\0".as_ptr() as *const c_char, &raw mut (*sd).bl);
         }
     }
-    sl_doscript_blargs(b"onSay\0".as_ptr() as *const c_char, std::ptr::null(), 1, &raw mut (*sd).bl);
+    sl_doscript_simple(b"onSay\0".as_ptr() as *const c_char, std::ptr::null(), &raw mut (*sd).bl);
     0
 }
 
@@ -1248,13 +1218,7 @@ pub unsafe extern "C" fn clif_sendnpcsay(bl: *mut BlockList, mut ap: ...) -> c_i
     if clif_distance(bl, &raw mut (*sd_arg).bl) <= 10 {
         (*sd_arg).last_click = (*bl).id;
         sl_async_freeco(sd_arg as *mut c_void);
-        sl_doscript_blargs(
-            (*nd).name.as_ptr() as *const c_char,
-            b"onSayClick\0".as_ptr() as *const c_char,
-            2,
-            &raw mut (*sd_arg).bl,
-            bl,
-        );
+        sl_doscript_2((*nd).name.as_ptr() as *const c_char, b"onSayClick\0".as_ptr() as *const c_char, &raw mut (*sd_arg).bl, bl);
     }
     0
 }
@@ -1290,13 +1254,7 @@ pub unsafe extern "C" fn clif_sendnpcyell(bl: *mut BlockList, mut ap: ...) -> c_
     if clif_distance(bl, &raw mut (*sd_arg).bl) <= 20 {
         (*sd_arg).last_click = (*bl).id;
         sl_async_freeco(sd_arg as *mut c_void);
-        sl_doscript_blargs(
-            (*nd).name.as_ptr() as *const c_char,
-            b"onSayClick\0".as_ptr() as *const c_char,
-            2,
-            &raw mut (*sd_arg).bl,
-            bl,
-        );
+        sl_doscript_2((*nd).name.as_ptr() as *const c_char, b"onSayClick\0".as_ptr() as *const c_char, &raw mut (*sd_arg).bl, bl);
     }
     0
 }
@@ -1414,10 +1372,10 @@ pub unsafe extern "C" fn clif_parsesay(sd: *mut MapSessionData) -> c_int {
     for i in 0..MAX_SPELLS {
         if (*sd).status.skill[i] > 0 {
             let yname = rust_magicdb_yname((*sd).status.skill[i] as c_int);
-            sl_doscript_blargs(yname, b"on_say\0".as_ptr() as *const c_char, 1, &raw mut (*sd).bl);
+            sl_doscript_simple(yname, b"on_say\0".as_ptr() as *const c_char, &raw mut (*sd).bl);
         }
     }
-    sl_doscript_blargs(b"onSay\0".as_ptr() as *const c_char, std::ptr::null(), 1, &raw mut (*sd).bl);
+    sl_doscript_simple(b"onSay\0".as_ptr() as *const c_char, std::ptr::null(), &raw mut (*sd).bl);
     0
 }
 

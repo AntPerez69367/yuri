@@ -3,6 +3,7 @@ use std::os::raw::c_void;
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
 use crate::game::scripting::ffi as sffi;
+use crate::game::scripting::map_globals;
 
 pub struct RegObject       { pub ptr: *mut c_void }
 pub struct RegStringObject { pub ptr: *mut c_void }
@@ -225,7 +226,7 @@ impl UserData for MapRegObject {
                 return Err(mlua::Error::external("MapRegObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            let val = unsafe { sffi::map_readglobalreg_sd(this.ptr, ckey.as_ptr()) };
+            let val = unsafe { map_globals::map_readglobalreg_sd(this.ptr, ckey.as_ptr()) };
             Ok(val)
         });
         methods.add_meta_method(MetaMethod::NewIndex, |_, this, (key, val): (String, mlua::Value)| {
@@ -233,7 +234,7 @@ impl UserData for MapRegObject {
                 return Err(mlua::Error::external("MapRegObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            unsafe { sffi::map_setglobalreg_sd(this.ptr, ckey.as_ptr(), val_to_int(&val)?); }
+            unsafe { map_globals::map_setglobalreg_sd(this.ptr, ckey.as_ptr(), val_to_int(&val)?); }
             Ok(())
         });
     }

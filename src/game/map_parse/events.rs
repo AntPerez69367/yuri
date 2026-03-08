@@ -5,12 +5,14 @@
 
 #![allow(non_snake_case, clippy::wildcard_imports, clippy::too_many_lines)]
 
-use std::ffi::{c_char, c_int, c_uint, c_ulong, c_void};
+use std::ffi::{c_char, c_int, c_uint, c_ulong};
+
+use crate::database::{blocking_run, get_pool};
 
 use crate::game::pc::{
     MapSessionData,
-    Sql, SqlStmt, SqlDataType,
-    SQL_ERROR, SQL_SUCCESS,
+    Sql,
+    SQL_ERROR,
 };
 
 use super::packet::{
@@ -26,27 +28,6 @@ use crate::game::map_server::sql_handle;
 extern "C" {
     // SQL
     fn Sql_Query(handle: *mut Sql, fmt: *const c_char, ...) -> c_int;
-    fn Sql_NextRow(handle: *mut Sql) -> c_int;
-    fn Sql_FreeResult(handle: *mut Sql);
-    fn SqlStmt_Malloc(handle: *mut Sql) -> *mut SqlStmt;
-    // SqlStmt_ShowDebug(stmt) C macro → SqlStmt_ShowDebug_(stmt, file, line).
-    // We use a fixed file/line for the Rust call site.
-    #[link_name = "SqlStmt_ShowDebug_"]
-    fn SqlStmt_ShowDebug(stmt: *mut SqlStmt, file: *const c_char, line: c_ulong);
-    fn SqlStmt_Free(stmt: *mut SqlStmt);
-    fn SqlStmt_Prepare(stmt: *mut SqlStmt, query: *const c_char, ...) -> c_int;
-    fn SqlStmt_Execute(stmt: *mut SqlStmt) -> c_int;
-    fn SqlStmt_BindColumn(
-        stmt: *mut SqlStmt,
-        idx: usize,
-        buf_type: SqlDataType,
-        buf: *mut c_void,
-        buf_len: usize,
-        out_len: *mut c_ulong,
-        is_null: *mut c_int,
-    ) -> c_int;
-    fn SqlStmt_NextRow(stmt: *mut SqlStmt) -> c_int;
-    fn SqlStmt_NumRows(stmt: *mut SqlStmt) -> u64;
     fn Sql_EscapeString(handle: *mut Sql, out_to: *mut c_char, from: *const c_char) -> usize;
     fn Sql_ShowDebug_(self_: *mut Sql, file: *const c_char, line: c_ulong);
 
@@ -66,8 +47,9 @@ extern "C" {
         body: *const c_char,
     ) -> c_int;
 
-    // ranking UI (stays in C for now; used from clif_getReward)
-    fn clif_parseranking(sd: *mut MapSessionData, fd: c_int) -> c_int;
+    // global registry (needed by canusepowerboards)
+    #[link_name = "rust_pc_readglobalreg"]
+    fn pc_readglobalreg(sd: *mut MapSessionData, reg: *const c_char) -> c_int;
 
     // chat
     fn clif_sendmsg(sd: *mut MapSessionData, kind: c_int, msg: *const c_char) -> c_int;
@@ -106,6 +88,94 @@ unsafe fn wfifow_be(fd: c_int, pos: usize, val: u16) {
 unsafe fn wfifol_be(fd: c_int, pos: usize, val: u32) {
     let p = rust_session_wdata_ptr(fd, pos) as *mut u32;
     if !p.is_null() { p.write_unaligned(val.to_be()); }
+}
+
+// ─── sqlx row structs ─────────────────────────────────────────────────────────
+
+/// Row struct for clif_getReward: all columns from RankingEvents used by that function.
+#[derive(sqlx::FromRow)]
+struct EventRewardRow {
+    #[sqlx(rename = "EventName")]              event_name:  String,
+    #[sqlx(rename = "EventLegend")]            event_legend: String,
+    #[sqlx(rename = "EventRewardRanks_Display")] reward_ranks: i32,
+    #[sqlx(rename = "EventLegendIcon1")]       icon1:        i32,
+    #[sqlx(rename = "EventLegendIcon1Color")]  icon1_color:  i32,
+    #[sqlx(rename = "EventLegendIcon2")]       icon2:        i32,
+    #[sqlx(rename = "EventLegendIcon2Color")]  icon2_color:  i32,
+    #[sqlx(rename = "EventLegendIcon3")]       icon3:        i32,
+    #[sqlx(rename = "EventLegendIcon3Color")]  icon3_color:  i32,
+    #[sqlx(rename = "EventLegendIcon4")]       icon4:        i32,
+    #[sqlx(rename = "EventLegendIcon4Color")]  icon4_color:  i32,
+    #[sqlx(rename = "EventLegendIcon5")]       icon5:        i32,
+    #[sqlx(rename = "EventLegendIcon5Color")]  icon5_color:  i32,
+    // int(10) unsigned columns — must be u32 or sqlx decode fails silently
+    #[sqlx(rename = "1stPlaceReward1_ItmId")]  r1_itm1:      u32,
+    #[sqlx(rename = "1stPlaceReward1_Amount")] r1_amt1:      u32,
+    #[sqlx(rename = "1stPlaceReward2_ItmId")]  r1_itm2:      u32,
+    #[sqlx(rename = "1stPlaceReward2_Amount")] r1_amt2:      u32,
+    #[sqlx(rename = "2ndPlaceReward1_ItmId")]  r2_itm1:      u32,
+    #[sqlx(rename = "2ndPlaceReward1_Amount")] r2_amt1:      u32,
+    #[sqlx(rename = "2ndPlaceReward2_ItmId")]  r2_itm2:      u32,
+    #[sqlx(rename = "2ndPlaceReward2_Amount")] r2_amt2:      u32,
+    #[sqlx(rename = "3rdPlaceReward1_ItmId")]  r3_itm1:      u32,
+    #[sqlx(rename = "3rdPlaceReward1_Amount")] r3_amt1:      u32,
+    #[sqlx(rename = "3rdPlaceReward2_ItmId")]  r3_itm2:      u32,
+    #[sqlx(rename = "3rdPlaceReward2_Amount")] r3_amt2:      u32,
+    #[sqlx(rename = "4thPlaceReward1_ItmId")]  r4_itm1:      u32,
+    #[sqlx(rename = "4thPlaceReward1_Amount")] r4_amt1:      u32,
+    #[sqlx(rename = "4thPlaceReward2_ItmId")]  r4_itm2:      u32,
+    #[sqlx(rename = "4thPlaceReward2_Amount")] r4_amt2:      u32,
+    #[sqlx(rename = "5thPlaceReward1_ItmId")]  r5_itm1:      u32,
+    #[sqlx(rename = "5thPlaceReward1_Amount")] r5_amt1:      u32,
+    #[sqlx(rename = "5thPlaceReward2_ItmId")]  r5_itm2:      u32,
+    #[sqlx(rename = "5thPlaceReward2_Amount")] r5_amt2:      u32,
+}
+
+/// Row struct for clif_parseranking: same columns minus EventName.
+#[derive(sqlx::FromRow)]
+struct RankingEventRow {
+    #[sqlx(rename = "EventRewardRanks_Display")] reward_ranks: i32,
+    #[sqlx(rename = "EventLegend")]            event_legend: String,
+    #[sqlx(rename = "EventLegendIcon1")]       icon1:        i32,
+    #[sqlx(rename = "EventLegendIcon1Color")]  icon1_color:  i32,
+    #[sqlx(rename = "EventLegendIcon2")]       icon2:        i32,
+    #[sqlx(rename = "EventLegendIcon2Color")]  icon2_color:  i32,
+    #[sqlx(rename = "EventLegendIcon3")]       icon3:        i32,
+    #[sqlx(rename = "EventLegendIcon3Color")]  icon3_color:  i32,
+    #[sqlx(rename = "EventLegendIcon4")]       icon4:        i32,
+    #[sqlx(rename = "EventLegendIcon4Color")]  icon4_color:  i32,
+    #[sqlx(rename = "EventLegendIcon5")]       icon5:        i32,
+    #[sqlx(rename = "EventLegendIcon5Color")]  icon5_color:  i32,
+    // int(10) unsigned columns — must be u32 or sqlx decode fails silently
+    #[sqlx(rename = "1stPlaceReward1_ItmId")]  r1_itm1:      u32,
+    #[sqlx(rename = "1stPlaceReward1_Amount")] r1_amt1:      u32,
+    #[sqlx(rename = "1stPlaceReward2_ItmId")]  r1_itm2:      u32,
+    #[sqlx(rename = "1stPlaceReward2_Amount")] r1_amt2:      u32,
+    #[sqlx(rename = "2ndPlaceReward1_ItmId")]  r2_itm1:      u32,
+    #[sqlx(rename = "2ndPlaceReward1_Amount")] r2_amt1:      u32,
+    #[sqlx(rename = "2ndPlaceReward2_ItmId")]  r2_itm2:      u32,
+    #[sqlx(rename = "2ndPlaceReward2_Amount")] r2_amt2:      u32,
+    #[sqlx(rename = "3rdPlaceReward1_ItmId")]  r3_itm1:      u32,
+    #[sqlx(rename = "3rdPlaceReward1_Amount")] r3_amt1:      u32,
+    #[sqlx(rename = "3rdPlaceReward2_ItmId")]  r3_itm2:      u32,
+    #[sqlx(rename = "3rdPlaceReward2_Amount")] r3_amt2:      u32,
+    #[sqlx(rename = "4thPlaceReward1_ItmId")]  r4_itm1:      u32,
+    #[sqlx(rename = "4thPlaceReward1_Amount")] r4_amt1:      u32,
+    #[sqlx(rename = "4thPlaceReward2_ItmId")]  r4_itm2:      u32,
+    #[sqlx(rename = "4thPlaceReward2_Amount")] r4_amt2:      u32,
+    #[sqlx(rename = "5thPlaceReward1_ItmId")]  r5_itm1:      u32,
+    #[sqlx(rename = "5thPlaceReward1_Amount")] r5_amt1:      u32,
+    #[sqlx(rename = "5thPlaceReward2_ItmId")]  r5_itm2:      u32,
+    #[sqlx(rename = "5thPlaceReward2_Amount")] r5_amt2:      u32,
+}
+
+/// Row struct for retrieveEventDates.
+#[derive(sqlx::FromRow)]
+struct EventDates {
+    #[sqlx(rename = "FromDate")] from_date: i32,
+    #[sqlx(rename = "FromTime")] from_time: i32,
+    #[sqlx(rename = "ToDate")]   to_date:   i32,
+    #[sqlx(rename = "ToTime")]   to_time:   i32,
 }
 
 // ─── clif_intcheck ────────────────────────────────────────────────────────────
@@ -148,9 +218,6 @@ pub unsafe extern "C" fn sendRewardParcel(
 ) -> c_int {
     let _ = eventid; // used in reward message only (via sprintf); not in SQL directly
 
-    let mut pos: c_int = -1;
-    let mut newest: c_int = -1;
-
     let receiver = (*sd).status.id as c_uint;
     let rewarditem_u = rewarditem as c_uint;
 
@@ -180,46 +247,19 @@ pub unsafe extern "C" fn sendRewardParcel(
     let owner:  c_uint = 0;
     let npcflag: c_int = 1;
 
-    let stmt = SqlStmt_Malloc(sql_handle);
-    if stmt.is_null() {
-        SqlStmt_ShowDebug(stmt, c"events.rs".as_ptr(), line!() as c_ulong);
-        return 1;
-    }
-
-    // Find highest existing position for this receiver
-    if SQL_ERROR == SqlStmt_Prepare(
-        stmt,
-        b"SELECT `ParPosition` FROM `Parcels` WHERE `ParChaIdDestination` = '%u'\0"
-            .as_ptr() as *const c_char,
-        receiver,
-    ) || SQL_ERROR == SqlStmt_Execute(stmt)
-      || SQL_ERROR == SqlStmt_BindColumn(
-            stmt, 0,
-            SqlDataType::SqlDtInt,
-            &mut pos as *mut c_int as *mut c_void,
-            0,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
+    // Find highest existing position for this receiver.
+    // ParPosition is int(10) unsigned — query_scalar must use u32.
+    let newest: c_int = (blocking_run(async move {
+        sqlx::query_scalar::<_, Option<u32>>(
+            "SELECT MAX(`ParPosition`) FROM `Parcels` WHERE `ParChaIdDestination` = ?"
         )
-    {
-        SqlStmt_ShowDebug(stmt, c"events.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return 1;
-    }
-
-    if SqlStmt_NumRows(stmt) > 0 {
-        let num_rows = SqlStmt_NumRows(stmt);
-        let mut i: u64 = 0;
-        while i < num_rows && SQL_SUCCESS == SqlStmt_NextRow(stmt) {
-            if pos > newest {
-                newest = pos;
-            }
-            i += 1;
-        }
-    }
-
-    newest += 1;
-    SqlStmt_Free(stmt);
+        .bind(receiver)
+        .fetch_one(get_pool())
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0) as i32
+    })) + 1;
 
     // Escapes `engrave` into `escape` buffer — but INSERT uses `engrave` (unescaped).
     // Pre-existing C bug: the escaped buffer is computed but never used in the query.
@@ -278,7 +318,6 @@ pub unsafe extern "C" fn clif_getReward(sd: *mut MapSessionData, fd: c_int) -> c
     let mut reward1amount = 0i32; let mut reward2amount = 0i32;
     let mut reward1item = 0i32;   let mut reward2item = 0i32;
     let mut rewardranks = 0i32;
-    let mut rank = 0i32;
 
     let mut _1stPlaceReward1_ItmId = 0i32;    let mut _1stPlaceReward1_Amount = 0i32;
     let mut _1stPlaceReward2_ItmId = 0i32;    let mut _1stPlaceReward2_Amount = 0i32;
@@ -297,118 +336,94 @@ pub unsafe extern "C" fn clif_getReward(sd: *mut MapSessionData, fd: c_int) -> c
     let mut msg: [i8; 4000]        = [0; 4000];
     let mut topic: [i8; 52]        = [0; 52];
 
-    let stmt = SqlStmt_Malloc(sql_handle);
-    if stmt.is_null() {
-        SqlStmt_ShowDebug(stmt, c"events.rs".as_ptr(), line!() as c_ulong);
-        return 0;
-    }
-
     // Query 1: event metadata + per-rank rewards
-    if SQL_ERROR == SqlStmt_Prepare(
-        stmt,
-        b"SELECT `EventName`, `EventLegend`, `EventRewardRanks_Display`, \
-`EventLegend`, `EventLegendIcon1`, `EventLegendIcon1Color`, \
-`EventLegendIcon2`, `EventLegendIcon2Color`, \
-`EventLegendIcon3`, `EventLegendIcon3Color`, \
-`EventLegendIcon4`, `EventLegendIcon4Color`, \
-`EventLegendIcon5`, `EventLegendIcon5Color`, \
-`1stPlaceReward1_ItmId`, `1stPlaceReward1_Amount`, \
-`1stPlaceReward2_ItmId`, `1stPlaceReward2_Amount`, \
-`2ndPlaceReward1_ItmId`, `2ndPlaceReward1_Amount`, \
-`2ndPlaceReward2_ItmId`, `2ndPlaceReward2_Amount`, \
-`3rdPlaceReward1_ItmId`, `3rdPlaceReward1_Amount`, \
-`3rdPlaceReward2_ItmId`, `3rdPlaceReward2_Amount`, \
-`4thPlaceReward1_ItmId`, `4thPlaceReward1_Amount`, \
-`4thPlaceReward2_ItmId`, `4thPlaceReward2_Amount`, \
-`5thPlaceReward1_ItmId`, `5thPlaceReward1_Amount`, \
-`5thPlaceReward2_ItmId`, `5thPlaceReward2_Amount` \
-FROM `RankingEvents` WHERE `EventId` = '%u'\0"
-            .as_ptr() as *const c_char,
-        eventid as c_uint,
-    ) || SQL_ERROR == SqlStmt_Execute(stmt)
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  0, SqlDataType::SqlDtString,   eventname.as_mut_ptr() as *mut c_void, std::mem::size_of_val(&eventname), std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  1, SqlDataType::SqlDtString,   legend.as_mut_ptr() as *mut c_void,    std::mem::size_of_val(&legend),    std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  2, SqlDataType::SqlDtInt,      &mut rewardranks as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  3, SqlDataType::SqlDtString,   legend.as_mut_ptr() as *mut c_void,    std::mem::size_of_val(&legend),    std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  4, SqlDataType::SqlDtInt,      &mut legendicon1       as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  5, SqlDataType::SqlDtInt,      &mut legendicon1color  as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  6, SqlDataType::SqlDtInt,      &mut legendicon2       as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  7, SqlDataType::SqlDtInt,      &mut legendicon2color  as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  8, SqlDataType::SqlDtInt,      &mut legendicon3       as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  9, SqlDataType::SqlDtInt,      &mut legendicon3color  as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 10, SqlDataType::SqlDtInt,      &mut legendicon4       as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 11, SqlDataType::SqlDtInt,      &mut legendicon4color  as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 12, SqlDataType::SqlDtInt,      &mut legendicon5       as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 13, SqlDataType::SqlDtInt,      &mut legendicon5color  as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 14, SqlDataType::SqlDtInt,      &mut _1stPlaceReward1_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 15, SqlDataType::SqlDtInt,      &mut _1stPlaceReward1_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 16, SqlDataType::SqlDtInt,      &mut _1stPlaceReward2_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 17, SqlDataType::SqlDtInt,      &mut _1stPlaceReward2_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 18, SqlDataType::SqlDtInt,      &mut _2ndPlaceReward1_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 19, SqlDataType::SqlDtInt,      &mut _2ndPlaceReward1_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 20, SqlDataType::SqlDtInt,      &mut _2ndPlaceReward2_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 21, SqlDataType::SqlDtInt,      &mut _2ndPlaceReward2_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 22, SqlDataType::SqlDtInt,      &mut _3rdPlaceReward1_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 23, SqlDataType::SqlDtInt,      &mut _3rdPlaceReward1_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 24, SqlDataType::SqlDtInt,      &mut _3rdPlaceReward2_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 25, SqlDataType::SqlDtInt,      &mut _3rdPlaceReward2_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 26, SqlDataType::SqlDtInt,      &mut _4thPlaceReward1_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 27, SqlDataType::SqlDtInt,      &mut _4thPlaceReward1_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 28, SqlDataType::SqlDtInt,      &mut _4thPlaceReward2_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 29, SqlDataType::SqlDtInt,      &mut _4thPlaceReward2_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 30, SqlDataType::SqlDtInt,      &mut _5thPlaceReward1_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 31, SqlDataType::SqlDtInt,      &mut _5thPlaceReward1_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 32, SqlDataType::SqlDtInt,      &mut _5thPlaceReward2_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 33, SqlDataType::SqlDtInt,      &mut _5thPlaceReward2_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-    {
-        SqlStmt_ShowDebug(stmt, c"events.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return 0;
-    }
-
-    if SQL_SUCCESS != SqlStmt_NextRow(stmt) {
-        SqlStmt_ShowDebug(stmt, c"events.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return 0;
-    }
-
-    SqlStmt_Free(stmt);
-
-    // Query 2: player's rank for this event (reuse stmt slot — re-malloc is needed since stmt was freed)
-    let stmt2 = SqlStmt_Malloc(sql_handle);
-    if stmt2.is_null() {
-        SqlStmt_ShowDebug(stmt2, c"events.rs".as_ptr(), line!() as c_ulong);
-        return 0;
-    }
-
-    if SQL_ERROR == SqlStmt_Prepare(
-        stmt2,
-        b"SELECT `Rank` FROM `RankingScores` WHERE `ChaId` = '%i' AND `EventId` = '%i'\0"
-            .as_ptr() as *const c_char,
-        (*sd).status.id,
-        eventid,
-    ) || SQL_ERROR == SqlStmt_Execute(stmt2)
-      || SQL_ERROR == SqlStmt_BindColumn(
-            stmt2, 0,
-            SqlDataType::SqlDtInt,
-            &mut rank as *mut c_int as *mut c_void,
-            0,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
+    let event_id_u = eventid as u32;
+    let Some(er) = blocking_run(async move {
+        sqlx::query_as::<_, EventRewardRow>(
+            "SELECT `EventName`, `EventLegend`, `EventRewardRanks_Display`, \
+             `EventLegendIcon1`, `EventLegendIcon1Color`, \
+             `EventLegendIcon2`, `EventLegendIcon2Color`, \
+             `EventLegendIcon3`, `EventLegendIcon3Color`, \
+             `EventLegendIcon4`, `EventLegendIcon4Color`, \
+             `EventLegendIcon5`, `EventLegendIcon5Color`, \
+             `1stPlaceReward1_ItmId`, `1stPlaceReward1_Amount`, \
+             `1stPlaceReward2_ItmId`, `1stPlaceReward2_Amount`, \
+             `2ndPlaceReward1_ItmId`, `2ndPlaceReward1_Amount`, \
+             `2ndPlaceReward2_ItmId`, `2ndPlaceReward2_Amount`, \
+             `3rdPlaceReward1_ItmId`, `3rdPlaceReward1_Amount`, \
+             `3rdPlaceReward2_ItmId`, `3rdPlaceReward2_Amount`, \
+             `4thPlaceReward1_ItmId`, `4thPlaceReward1_Amount`, \
+             `4thPlaceReward2_ItmId`, `4thPlaceReward2_Amount`, \
+             `5thPlaceReward1_ItmId`, `5thPlaceReward1_Amount`, \
+             `5thPlaceReward2_ItmId`, `5thPlaceReward2_Amount` \
+             FROM `RankingEvents` WHERE `EventId` = ?"
         )
+        .bind(event_id_u)
+        .fetch_optional(get_pool())
+        .await
+        .ok()
+        .flatten()
+    }) else { return 0; };
+
+    // Copy fields from row into local variables
     {
-        SqlStmt_ShowDebug(stmt2, c"events.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt2);
-        return 0;
+        let name_bytes = er.event_name.as_bytes();
+        let copy_len = name_bytes.len().min(eventname.len() - 1);
+        std::ptr::copy_nonoverlapping(name_bytes.as_ptr() as *const i8, eventname.as_mut_ptr(), copy_len);
+        eventname[copy_len] = 0;
     }
-
-    if SQL_SUCCESS != SqlStmt_NextRow(stmt2) {
-        SqlStmt_ShowDebug(stmt2, c"events.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt2);
-        return 0;
+    {
+        let leg_bytes = er.event_legend.as_bytes();
+        let copy_len = leg_bytes.len().min(legend.len() - 1);
+        std::ptr::copy_nonoverlapping(leg_bytes.as_ptr() as *const i8, legend.as_mut_ptr(), copy_len);
+        legend[copy_len] = 0;
     }
+    rewardranks        = er.reward_ranks;
+    legendicon1        = er.icon1;
+    legendicon1color   = er.icon1_color;
+    legendicon2        = er.icon2;
+    legendicon2color   = er.icon2_color;
+    legendicon3        = er.icon3;
+    legendicon3color   = er.icon3_color;
+    legendicon4        = er.icon4;
+    legendicon4color   = er.icon4_color;
+    legendicon5        = er.icon5;
+    legendicon5color   = er.icon5_color;
+    _1stPlaceReward1_ItmId  = er.r1_itm1 as i32;
+    _1stPlaceReward1_Amount = er.r1_amt1 as i32;
+    _1stPlaceReward2_ItmId  = er.r1_itm2 as i32;
+    _1stPlaceReward2_Amount = er.r1_amt2 as i32;
+    _2ndPlaceReward1_ItmId  = er.r2_itm1 as i32;
+    _2ndPlaceReward1_Amount = er.r2_amt1 as i32;
+    _2ndPlaceReward2_ItmId  = er.r2_itm2 as i32;
+    _2ndPlaceReward2_Amount = er.r2_amt2 as i32;
+    _3rdPlaceReward1_ItmId  = er.r3_itm1 as i32;
+    _3rdPlaceReward1_Amount = er.r3_amt1 as i32;
+    _3rdPlaceReward2_ItmId  = er.r3_itm2 as i32;
+    _3rdPlaceReward2_Amount = er.r3_amt2 as i32;
+    _4thPlaceReward1_ItmId  = er.r4_itm1 as i32;
+    _4thPlaceReward1_Amount = er.r4_amt1 as i32;
+    _4thPlaceReward2_ItmId  = er.r4_itm2 as i32;
+    _4thPlaceReward2_Amount = er.r4_amt2 as i32;
+    _5thPlaceReward1_ItmId  = er.r5_itm1 as i32;
+    _5thPlaceReward1_Amount = er.r5_amt1 as i32;
+    _5thPlaceReward2_ItmId  = er.r5_itm2 as i32;
+    _5thPlaceReward2_Amount = er.r5_amt2 as i32;
 
-    SqlStmt_Free(stmt2);
+    // Query 2: player's rank for this event
+    // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
+    let cha_id = (*sd).status.id as i32;
+    let Some(rank) = blocking_run(async move {
+        sqlx::query_scalar::<_, i32>(
+            "SELECT `Rank` FROM `RankingScores` WHERE `ChaId` = ? AND `EventId` = ?"
+        )
+        .bind(cha_id)
+        .bind(event_id_u)
+        .fetch_optional(get_pool())
+        .await
+        .ok()
+        .flatten()
+    }) else { return 0; };
 
     // Determine season string
     if cur_season == 1 { libc::strcpy(season.as_mut_ptr(), b"Winter\0".as_ptr() as *const c_char); }
@@ -597,23 +612,22 @@ You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewar
     clif_sendmsg(sd, 0, msg.as_ptr());
 
     if sent_parcel_success >= 1 {
-        if SQL_ERROR == Sql_Query(
-            sql_handle,
-            b"UPDATE `RankingScores` SET `EventClaim` = 2 WHERE `EventId` = '%u' AND `ChaId` = '%u'\0"
-                .as_ptr() as *const c_char,
-            eventid as c_uint,
-            (*sd).status.id,
-        ) {
-            Sql_ShowDebug_(sql_handle, c"events.rs".as_ptr(), line!() as c_ulong);
-            return -1;
-        }
-        if SQL_SUCCESS != Sql_NextRow(sql_handle) {
-            Sql_FreeResult(sql_handle);
-            clif_parseranking(sd, fd);
-            return 0;
-        }
+        // EventId is int(10) signed — i32 bind is correct
+        let eventid_i32 = eventid;
+        // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
+        let cha_id_i32  = (*sd).status.id as i32;
+        let _ = blocking_run(async move {
+            sqlx::query(
+                "UPDATE `RankingScores` SET `EventClaim` = 2 WHERE `EventId` = ? AND `ChaId` = ?"
+            )
+            .bind(eventid_i32)
+            .bind(cha_id_i32)
+            .execute(get_pool())
+            .await
+        });
     }
 
+    clif_parseranking(sd, fd);
     0
 }
 
@@ -670,80 +684,71 @@ pub unsafe extern "C" fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: c_int)
     let mut _5thPlaceReward1_ItmId = 0i32;    let mut _5thPlaceReward1_Amount = 0i32;
     let mut _5thPlaceReward2_ItmId = 0i32;    let mut _5thPlaceReward2_Amount = 0i32;
 
-    let stmt = SqlStmt_Malloc(sql_handle);
-    if stmt.is_null() {
-        SqlStmt_ShowDebug(stmt, c"events.rs".as_ptr(), line!() as c_ulong);
-        return 0;
-    }
+    let Some(rr) = blocking_run(async move {
+        sqlx::query_as::<_, RankingEventRow>(
+            "SELECT `EventRewardRanks_Display`, `EventLegend`, \
+             `EventLegendIcon1`, `EventLegendIcon1Color`, \
+             `EventLegendIcon2`, `EventLegendIcon2Color`, \
+             `EventLegendIcon3`, `EventLegendIcon3Color`, \
+             `EventLegendIcon4`, `EventLegendIcon4Color`, \
+             `EventLegendIcon5`, `EventLegendIcon5Color`, \
+             `1stPlaceReward1_ItmId`, `1stPlaceReward1_Amount`, \
+             `1stPlaceReward2_ItmId`, `1stPlaceReward2_Amount`, \
+             `2ndPlaceReward1_ItmId`, `2ndPlaceReward1_Amount`, \
+             `2ndPlaceReward2_ItmId`, `2ndPlaceReward2_Amount`, \
+             `3rdPlaceReward1_ItmId`, `3rdPlaceReward1_Amount`, \
+             `3rdPlaceReward2_ItmId`, `3rdPlaceReward2_Amount`, \
+             `4thPlaceReward1_ItmId`, `4thPlaceReward1_Amount`, \
+             `4thPlaceReward2_ItmId`, `4thPlaceReward2_Amount`, \
+             `5thPlaceReward1_ItmId`, `5thPlaceReward1_Amount`, \
+             `5thPlaceReward2_ItmId`, `5thPlaceReward2_Amount` \
+             FROM `RankingEvents` WHERE `EventId` = ?"
+        )
+        .bind(eventid as u32)
+        .fetch_optional(get_pool())
+        .await
+        .ok()
+        .flatten()
+    }) else { return 0; };
 
-    if SQL_ERROR == SqlStmt_Prepare(
-        stmt,
-        b"SELECT `EventRewardRanks_Display`, `EventLegend`, \
-`EventLegendIcon1`, `EventLegendIcon1Color`, \
-`EventLegendIcon2`, `EventLegendIcon2Color`, \
-`EventLegendIcon3`, `EventLegendIcon3Color`, \
-`EventLegendIcon4`, `EventLegendIcon4Color`, \
-`EventLegendIcon5`, `EventLegendIcon5Color`, \
-`1stPlaceReward1_ItmId`, `1stPlaceReward1_Amount`, \
-`1stPlaceReward2_ItmId`, `1stPlaceReward2_Amount`, \
-`2ndPlaceReward1_ItmId`, `2ndPlaceReward1_Amount`, \
-`2ndPlaceReward2_ItmId`, `2ndPlaceReward2_Amount`, \
-`3rdPlaceReward1_ItmId`, `3rdPlaceReward1_Amount`, \
-`3rdPlaceReward2_ItmId`, `3rdPlaceReward2_Amount`, \
-`4thPlaceReward1_ItmId`, `4thPlaceReward1_Amount`, \
-`4thPlaceReward2_ItmId`, `4thPlaceReward2_Amount`, \
-`5thPlaceReward1_ItmId`, `5thPlaceReward1_Amount`, \
-`5thPlaceReward2_ItmId`, `5thPlaceReward2_Amount` \
-FROM `RankingEvents` WHERE `EventId` = '%u'\0"
-            .as_ptr() as *const c_char,
-        eventid,
-    ) || SQL_ERROR == SqlStmt_Execute(stmt)
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  0, SqlDataType::SqlDtInt,    &mut rewardranks         as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  1, SqlDataType::SqlDtString, legend.as_mut_ptr() as *mut c_void, std::mem::size_of_val(&legend), std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  2, SqlDataType::SqlDtInt,    &mut legendicon1         as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  3, SqlDataType::SqlDtInt,    &mut legendicon1color    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  4, SqlDataType::SqlDtInt,    &mut legendicon2         as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  5, SqlDataType::SqlDtInt,    &mut legendicon2color    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  6, SqlDataType::SqlDtInt,    &mut legendicon3         as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  7, SqlDataType::SqlDtInt,    &mut legendicon3color    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  8, SqlDataType::SqlDtInt,    &mut legendicon4         as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt,  9, SqlDataType::SqlDtInt,    &mut legendicon4color    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 10, SqlDataType::SqlDtInt,    &mut legendicon5         as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 11, SqlDataType::SqlDtInt,    &mut legendicon5color    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 12, SqlDataType::SqlDtInt,    &mut _1stPlaceReward1_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 13, SqlDataType::SqlDtInt,    &mut _1stPlaceReward1_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 14, SqlDataType::SqlDtInt,    &mut _1stPlaceReward2_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 15, SqlDataType::SqlDtInt,    &mut _1stPlaceReward2_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 16, SqlDataType::SqlDtInt,    &mut _2ndPlaceReward1_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 17, SqlDataType::SqlDtInt,    &mut _2ndPlaceReward1_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 18, SqlDataType::SqlDtInt,    &mut _2ndPlaceReward2_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 19, SqlDataType::SqlDtInt,    &mut _2ndPlaceReward2_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 20, SqlDataType::SqlDtInt,    &mut _3rdPlaceReward1_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 21, SqlDataType::SqlDtInt,    &mut _3rdPlaceReward1_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 22, SqlDataType::SqlDtInt,    &mut _3rdPlaceReward2_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 23, SqlDataType::SqlDtInt,    &mut _3rdPlaceReward2_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 24, SqlDataType::SqlDtInt,    &mut _4thPlaceReward1_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 25, SqlDataType::SqlDtInt,    &mut _4thPlaceReward1_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 26, SqlDataType::SqlDtInt,    &mut _4thPlaceReward2_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 27, SqlDataType::SqlDtInt,    &mut _4thPlaceReward2_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 28, SqlDataType::SqlDtInt,    &mut _5thPlaceReward1_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 29, SqlDataType::SqlDtInt,    &mut _5thPlaceReward1_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 30, SqlDataType::SqlDtInt,    &mut _5thPlaceReward2_ItmId    as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 31, SqlDataType::SqlDtInt,    &mut _5thPlaceReward2_Amount   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
+    // Copy fields from row into local variables
+    rewardranks       = rr.reward_ranks;
     {
-        SqlStmt_ShowDebug(stmt, c"events.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return 0;
+        let leg_bytes = rr.event_legend.as_bytes();
+        let copy_len = leg_bytes.len().min(legend.len() - 1);
+        std::ptr::copy_nonoverlapping(leg_bytes.as_ptr() as *const i8, legend.as_mut_ptr(), copy_len);
+        legend[copy_len] = 0;
     }
-
-    if SQL_SUCCESS != SqlStmt_NextRow(stmt) {
-        SqlStmt_ShowDebug(stmt, c"events.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        rewardranks = 0;
-        return 0;
-    }
-
-    SqlStmt_Free(stmt);
+    legendicon1       = rr.icon1;
+    legendicon1color  = rr.icon1_color;
+    legendicon2       = rr.icon2;
+    legendicon2color  = rr.icon2_color;
+    legendicon3       = rr.icon3;
+    legendicon3color  = rr.icon3_color;
+    legendicon4       = rr.icon4;
+    legendicon4color  = rr.icon4_color;
+    legendicon5       = rr.icon5;
+    legendicon5color  = rr.icon5_color;
+    _1stPlaceReward1_ItmId  = rr.r1_itm1 as i32;
+    _1stPlaceReward1_Amount = rr.r1_amt1 as i32;
+    _1stPlaceReward2_ItmId  = rr.r1_itm2 as i32;
+    _1stPlaceReward2_Amount = rr.r1_amt2 as i32;
+    _2ndPlaceReward1_ItmId  = rr.r2_itm1 as i32;
+    _2ndPlaceReward1_Amount = rr.r2_amt1 as i32;
+    _2ndPlaceReward2_ItmId  = rr.r2_itm2 as i32;
+    _2ndPlaceReward2_Amount = rr.r2_amt2 as i32;
+    _3rdPlaceReward1_ItmId  = rr.r3_itm1 as i32;
+    _3rdPlaceReward1_Amount = rr.r3_amt1 as i32;
+    _3rdPlaceReward2_ItmId  = rr.r3_itm2 as i32;
+    _3rdPlaceReward2_Amount = rr.r3_amt2 as i32;
+    _4thPlaceReward1_ItmId  = rr.r4_itm1 as i32;
+    _4thPlaceReward1_Amount = rr.r4_amt1 as i32;
+    _4thPlaceReward2_ItmId  = rr.r4_itm2 as i32;
+    _4thPlaceReward2_Amount = rr.r4_amt2 as i32;
+    _5thPlaceReward1_ItmId  = rr.r5_itm1 as i32;
+    _5thPlaceReward1_Amount = rr.r5_amt1 as i32;
+    _5thPlaceReward2_ItmId  = rr.r5_itm2 as i32;
+    _5thPlaceReward2_Amount = rr.r5_amt2 as i32;
 
     // If rewardranks == 0, goto end (blank page)
     if rewardranks == 0 {
@@ -879,45 +884,22 @@ FROM `RankingEvents` WHERE `EventId` = '%u'\0"
 /// C line 4900.
 #[no_mangle]
 pub unsafe extern "C" fn retrieveEventDates(eventid: c_int, pos: c_int, fd: c_int) {
-    let mut from_date = 0i32;
-    let mut from_time = 0i32;
-    let mut to_date   = 0i32;
-    let mut to_time   = 0i32;
+    let event_id_u = eventid as u32;
+    let Some(dates) = blocking_run(async move {
+        sqlx::query_as::<_, EventDates>(
+            "SELECT `FromDate`, `FromTime`, `ToDate`, `ToTime` FROM `RankingEvents` WHERE `EventId` = ?"
+        )
+        .bind(event_id_u)
+        .fetch_optional(get_pool())
+        .await
+        .ok()
+        .flatten()
+    }) else { return; };
 
-    let stmt = SqlStmt_Malloc(sql_handle);
-    if stmt.is_null() {
-        SqlStmt_ShowDebug(stmt, c"events.rs".as_ptr(), line!() as c_ulong);
-        return;
-    }
-
-    if SQL_ERROR == SqlStmt_Prepare(
-        stmt,
-        b"SELECT `FromDate`, `FromTime`, `ToDate`, `ToTime` FROM `RankingEvents` WHERE `EventId` = '%u'\0"
-            .as_ptr() as *const c_char,
-        eventid as c_uint,
-    ) || SQL_ERROR == SqlStmt_Execute(stmt)
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 0, SqlDataType::SqlDtInt, &mut from_date as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 1, SqlDataType::SqlDtInt, &mut from_time as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 2, SqlDataType::SqlDtInt, &mut to_date   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-      || SQL_ERROR == SqlStmt_BindColumn(stmt, 3, SqlDataType::SqlDtInt, &mut to_time   as *mut c_int as *mut c_void, 0, std::ptr::null_mut(), std::ptr::null_mut())
-    {
-        SqlStmt_ShowDebug(stmt, c"events.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return;
-    }
-
-    if SQL_SUCCESS != SqlStmt_NextRow(stmt) {
-        SqlStmt_ShowDebug(stmt, c"events.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return;
-    }
-
-    SqlStmt_Free(stmt);
-
-    clif_intcheck(from_date, pos + 7,  fd);
-    clif_intcheck(from_time, pos + 11, fd);
-    clif_intcheck(to_date,   pos + 15, fd);
-    clif_intcheck(to_time,   pos + 19, fd);
+    clif_intcheck(dates.from_date, pos + 7,  fd);
+    clif_intcheck(dates.from_time, pos + 11, fd);
+    clif_intcheck(dates.to_date,   pos + 15, fd);
+    clif_intcheck(dates.to_time,   pos + 19, fd);
 }
 
 // ─── checkPlayerScore ─────────────────────────────────────────────────────────
@@ -927,42 +909,22 @@ pub unsafe extern "C" fn retrieveEventDates(eventid: c_int, pos: c_int, fd: c_in
 /// C line 4951.
 #[no_mangle]
 pub unsafe extern "C" fn checkPlayerScore(eventid: c_int, sd: *mut MapSessionData) -> c_int {
-    let mut score = 0i32;
-
-    let stmt = SqlStmt_Malloc(sql_handle);
-    if stmt.is_null() {
-        SqlStmt_ShowDebug(stmt, c"events.rs".as_ptr(), line!() as c_ulong);
-        return 0;
-    }
-
-    if SQL_ERROR == SqlStmt_Prepare(
-        stmt,
-        b"SELECT `Score` FROM `RankingScores` WHERE `EventId` = '%u' AND `ChaId` = '%u'\0"
-            .as_ptr() as *const c_char,
-        eventid as c_uint,
-        (*sd).status.id,
-    ) || SQL_ERROR == SqlStmt_Execute(stmt)
-      || SQL_ERROR == SqlStmt_BindColumn(
-            stmt, 0,
-            SqlDataType::SqlDtInt,
-            &mut score as *mut c_int as *mut c_void,
-            0,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
+    // EventId is int(10) signed — i32 bind is correct
+    let event_id_i = eventid;
+    // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
+    let cha_id = (*sd).status.id as i32;
+    blocking_run(async move {
+        sqlx::query_scalar::<_, i32>(
+            "SELECT `Score` FROM `RankingScores` WHERE `EventId` = ? AND `ChaId` = ?"
         )
-    {
-        SqlStmt_ShowDebug(stmt, c"events.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return 0;
-    }
-
-    if SQL_SUCCESS != SqlStmt_NextRow(stmt) {
-        SqlStmt_Free(stmt);
-        return 0;
-    }
-
-    SqlStmt_Free(stmt);
-    score
+        .bind(event_id_i)
+        .bind(cha_id)
+        .fetch_optional(get_pool())
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0)
+    })
 }
 
 // ─── updateRanks ──────────────────────────────────────────────────────────────
@@ -973,42 +935,18 @@ pub unsafe extern "C" fn checkPlayerScore(eventid: c_int, sd: *mut MapSessionDat
 /// C line 4983.
 #[no_mangle]
 pub unsafe extern "C" fn updateRanks(eventid: c_int) {
-    let stmt = SqlStmt_Malloc(sql_handle);
-    if stmt.is_null() {
-        SqlStmt_ShowDebug(stmt, c"events.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return;
-    }
-
-    if SQL_ERROR == SqlStmt_Prepare(
-        stmt,
-        b"SELECT `Rank` FROM `RankingScores` WHERE `EventId` = '%i' ORDER BY `Score` DESC\0"
-            .as_ptr() as *const c_char,
-        eventid,
-    ) || SQL_ERROR == SqlStmt_Execute(stmt)
-    {
-        SqlStmt_ShowDebug(stmt, c"events.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return;
-    }
-
-    SqlStmt_Free(stmt);
-
-    if SQL_ERROR == Sql_Query(sql_handle, b"SET @r=0\0".as_ptr() as *const c_char) {
-        Sql_ShowDebug_(sql_handle, c"events.rs".as_ptr(), line!() as c_ulong);
-        Sql_FreeResult(sql_handle);
-        return;
-    }
-
-    if SQL_ERROR == Sql_Query(
-        sql_handle,
-        b"UPDATE `RankingScores` SET `Rank`= @r:= (@r+1) WHERE `EventId` = '%i' ORDER BY `Score` DESC\0"
-            .as_ptr() as *const c_char,
-        eventid,
-    ) {
-        Sql_ShowDebug_(sql_handle, c"events.rs".as_ptr(), line!() as c_ulong);
-        Sql_FreeResult(sql_handle);
-    }
+    // EventId is int(10) signed — i32 bind is correct
+    // The vestigial SELECT is dropped; just run the rank-update pair.
+    blocking_run(async move {
+        let pool = get_pool();
+        let _ = sqlx::query("SET @r=0").execute(pool).await;
+        let _ = sqlx::query(
+            "UPDATE `RankingScores` SET `Rank` = @r := (@r+1) WHERE `EventId` = ? ORDER BY `Score` DESC"
+        )
+        .bind(eventid)
+        .execute(pool)
+        .await;
+    });
 }
 
 // ─── checkPlayerRank ──────────────────────────────────────────────────────────
@@ -1018,38 +956,302 @@ pub unsafe extern "C" fn updateRanks(eventid: c_int) {
 /// C line 5018.
 #[no_mangle]
 pub unsafe extern "C" fn checkPlayerRank(eventid: c_int, sd: *mut MapSessionData) -> c_int {
-    let mut rank = 0i32;
-
-    let stmt = SqlStmt_Malloc(sql_handle);
-    if stmt.is_null() {
-        SqlStmt_ShowDebug(stmt, c"events.rs".as_ptr(), line!() as c_ulong);
-        return 0;
-    }
-
-    if SQL_ERROR == SqlStmt_Prepare(
-        stmt,
-        b"SELECT `Rank` FROM `RankingScores` WHERE `EventId` = '%u' AND `ChaId` = '%i'\0"
-            .as_ptr() as *const c_char,
-        eventid as c_uint,
-        (*sd).status.id,
-    ) || SQL_ERROR == SqlStmt_Execute(stmt)
-      || SQL_ERROR == SqlStmt_BindColumn(
-            stmt, 0,
-            SqlDataType::SqlDtInt,
-            &mut rank as *mut c_int as *mut c_void,
-            0,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
+    // EventId is int(10) signed — i32 bind is correct
+    let event_id_i = eventid;
+    // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
+    let cha_id = (*sd).status.id as i32;
+    blocking_run(async move {
+        sqlx::query_scalar::<_, i32>(
+            "SELECT `Rank` FROM `RankingScores` WHERE `EventId` = ? AND `ChaId` = ?"
         )
-    {
-        SqlStmt_Free(stmt);
-        return 0;
+        .bind(event_id_i)
+        .bind(cha_id)
+        .fetch_optional(get_pool())
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(0)
+    })
+}
+
+// ─── checkevent_claim ─────────────────────────────────────────────────────────
+
+/// Return the `EventClaim` value for a player/event pair.
+/// Returns the column value on success, or 2 if no row is found.
+///
+/// SQL: SELECT EventClaim FROM RankingScores WHERE EventId=? AND ChaId=?
+/// C: sl_compat.c line ~642.
+#[no_mangle]
+pub unsafe extern "C" fn checkevent_claim(eventid: c_int, _fd: c_int, sd: *mut MapSessionData) -> c_int {
+    // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
+    let cha_id = (*sd).status.id as i32;
+    // EventId is int(10) signed — i32 bind is correct
+    let event_id = eventid;
+
+    blocking_run(async move {
+        sqlx::query_scalar::<_, i32>(
+            "SELECT `EventClaim` FROM `RankingScores` WHERE `EventId` = ? AND `ChaId` = ?"
+        )
+        .bind(event_id)
+        .bind(cha_id)
+        .fetch_optional(get_pool())
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or(2) // 2 = "not found / not claimed"
+    })
+}
+
+// ─── dateevent_block ──────────────────────────────────────────────────────────
+
+/// Write a date-event block into the WFIFO at position `pos`.
+///
+/// Writes the event header bytes and delegates date fields to `retrieveEventDates`,
+/// then appends the claim byte at pos+20.
+///
+/// C: sl_compat.c line ~667.
+#[no_mangle]
+pub unsafe extern "C" fn dateevent_block(pos: c_int, eventid: c_int, fd: c_int, sd: *mut MapSessionData) {
+    wfifob(fd, pos as usize,       0);
+    wfifob(fd, pos as usize + 1,   eventid as u8);
+    wfifob(fd, pos as usize + 2,   142);
+    wfifob(fd, pos as usize + 3,   227);
+    retrieveEventDates(eventid, pos, fd);
+    wfifob(fd, pos as usize + 20,  checkevent_claim(eventid, fd, sd) as u8);
+}
+
+// ─── filler_block ─────────────────────────────────────────────────────────────
+
+/// Write the "filler" event block into the WFIFO at position `pos`.
+///
+/// Writes player rank / score / claim bytes for the chosen event.
+/// C: sl_compat.c line ~676.
+#[no_mangle]
+pub unsafe extern "C" fn filler_block(pos: c_int, eventid: c_int, fd: c_int, sd: *mut MapSessionData) {
+    let player_score = checkPlayerScore(eventid, sd);
+    let player_rank  = checkPlayerRank(eventid, sd);
+
+    wfifob(fd, pos as usize + 1,  rfifob(fd, 7));
+    wfifob(fd, pos as usize + 2,  142);
+    wfifob(fd, pos as usize + 3,  227);
+    wfifob(fd, pos as usize + 4,  1);
+    clif_intcheck(player_rank,  pos + 8,  fd);
+    clif_intcheck(player_score, pos + 12, fd);
+    wfifob(fd, pos as usize + 13, checkevent_claim(eventid, fd, sd) as u8);
+}
+
+// ─── gettotalscores ───────────────────────────────────────────────────────────
+
+/// Return the number of score rows for `eventid` in `RankingScores`.
+///
+/// SQL: SELECT COUNT(*) FROM RankingScores WHERE EventId=?
+/// C: sl_compat.c line ~689.
+#[no_mangle]
+pub unsafe extern "C" fn gettotalscores(eventid: c_int) -> c_int {
+    let event_id = eventid as u32;
+    blocking_run(async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM `RankingScores` WHERE `EventId` = ?"
+        )
+        .bind(event_id)
+        .fetch_one(get_pool())
+        .await
+        .unwrap_or(0) as c_int
+    })
+}
+
+// ─── getevents ────────────────────────────────────────────────────────────────
+
+/// Return the number of rows in `RankingEvents`.
+///
+/// SQL: SELECT COUNT(*) FROM RankingEvents
+/// C: sl_compat.c line ~709.
+#[no_mangle]
+pub unsafe extern "C" fn getevents() -> c_int {
+    blocking_run(async {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM `RankingEvents`"
+        )
+        .fetch_one(get_pool())
+        .await
+        .unwrap_or(0) as c_int
+    })
+}
+
+// ─── getevent_name ────────────────────────────────────────────────────────────
+
+/// Query all event names from `RankingEvents`, write a `dateevent_block` for each,
+/// then write the name length byte + name bytes into WFIFO.
+///
+/// Returns updated `pos` after writing all blocks.
+/// SQL: SELECT EventName FROM RankingEvents
+/// C: sl_compat.c line ~725.
+#[no_mangle]
+pub unsafe extern "C" fn getevent_name(mut pos: c_int, fd: c_int, sd: *mut MapSessionData) -> c_int {
+    // EventId is int(10) signed — i32 bind is correct
+    struct EventRow { event_id: i32, name: String }
+    impl sqlx::FromRow<'_, sqlx::mysql::MySqlRow> for EventRow {
+        fn from_row(row: &sqlx::mysql::MySqlRow) -> sqlx::Result<Self> {
+            use sqlx::Row;
+            Ok(EventRow {
+                event_id: row.try_get(0).unwrap_or(0),
+                name:     row.try_get(1).unwrap_or_default(),
+            })
+        }
     }
 
-    if SQL_SUCCESS != SqlStmt_NextRow(stmt) {
-        SqlStmt_Free(stmt);
-        return 0;
+    let rows: Vec<EventRow> = blocking_run(async {
+        sqlx::query_as::<_, EventRow>("SELECT `EventId`, `EventName` FROM `RankingEvents`")
+            .fetch_all(get_pool())
+            .await
+            .unwrap_or_default()
+    });
+
+    for row in rows.iter() {
+        dateevent_block(pos, row.event_id as c_int, fd, sd);
+        pos += 21;
+        let name_bytes = row.name.as_bytes();
+        let name_len   = name_bytes.len();
+        wfifob(fd, pos as usize, name_len as u8);
+        pos += 1;
+        wfifop_copy(fd, pos as usize, name_bytes.as_ptr(), name_len);
+        pos += name_len as c_int;
     }
 
-    rank
+    pos
+}
+
+// ─── getevent_playerscores ────────────────────────────────────────────────────
+
+/// Query the top-10 player scores for `eventid` (with optional offset) and write
+/// them into the WFIFO. Adjusts the row-count byte when fewer than 10 rows exist.
+///
+/// SQL: SELECT ChaName, Score, Rank FROM RankingScores WHERE EventId=? ORDER BY Rank ASC LIMIT 10 [OFFSET ?]
+/// C: sl_compat.c line ~755.
+#[no_mangle]
+pub unsafe extern "C" fn getevent_playerscores(
+    eventid:     c_int,
+    totalscores: c_int,
+    mut pos:     c_int,
+    fd:          c_int,
+) -> c_int {
+    // The C code reads an offset byte from RFIFO position 17 and subtracts 10.
+    let offset: i64 = rfifob(fd, 17) as i64 - 10;
+
+    struct ScoreRow { name: String, score: i32, rank: i32 }
+    impl sqlx::FromRow<'_, sqlx::mysql::MySqlRow> for ScoreRow {
+        fn from_row(row: &sqlx::mysql::MySqlRow) -> sqlx::Result<Self> {
+            use sqlx::Row;
+            Ok(ScoreRow {
+                name:  row.try_get(0).unwrap_or_default(),
+                score: row.try_get(1).unwrap_or(0),
+                rank:  row.try_get(2).unwrap_or(0),
+            })
+        }
+    }
+
+    let event_id = eventid as u32;
+    let rows: Vec<ScoreRow> = blocking_run(async move {
+        if totalscores > 10 {
+            sqlx::query_as::<_, ScoreRow>(
+                "SELECT `ChaName`, `Score`, `Rank` FROM `RankingScores` \
+                 WHERE `EventId` = ? ORDER BY `Rank` ASC LIMIT 10 OFFSET ?"
+            )
+            .bind(event_id)
+            .bind(offset)
+            .fetch_all(get_pool())
+            .await
+            .unwrap_or_default()
+        } else {
+            sqlx::query_as::<_, ScoreRow>(
+                "SELECT `ChaName`, `Score`, `Rank` FROM `RankingScores` \
+                 WHERE `EventId` = ? ORDER BY `Rank` ASC LIMIT 10"
+            )
+            .bind(event_id)
+            .fetch_all(get_pool())
+            .await
+            .unwrap_or_default()
+        }
+    });
+
+    // If fewer than 10 rows, patch the count byte written just before `pos`
+    if (rows.len() as c_int) < 10 {
+        wfifob(fd, (pos - 1) as usize, rows.len() as u8);
+    }
+
+    for row in &rows {
+        let name_bytes = row.name.as_bytes();
+        let name_len   = name_bytes.len();
+        wfifob(fd, pos as usize, name_len as u8);
+        pos += 1;
+        wfifop_copy(fd, pos as usize, name_bytes.as_ptr(), name_len);
+        pos += name_len as c_int;
+        pos += 3; // 3 padding bytes (matches C)
+        wfifob(fd, pos as usize, row.rank as u8);
+        pos += 4; // rank byte + 3 more padding bytes
+        clif_intcheck(row.score, pos, fd);
+        pos += 1;
+    }
+
+    pos
+}
+
+// ─── clif_parseranking ────────────────────────────────────────────────────────
+
+/// Build and send the ranking packet (0xAA/0x02) to the client.
+///
+/// Assembles: event count, event name/date blocks, filler block, score list,
+/// total score count, encrypts and sends.
+///
+/// C: sl_compat.c line ~808.
+#[no_mangle]
+pub unsafe extern "C" fn clif_parseranking(sd: *mut MapSessionData, fd: c_int) -> c_int {
+    wfifohead(fd, 0);
+    wfifob(fd, 0, 0xAA);
+    wfifob(fd, 1, 0x02);
+    wfifob(fd, 3, 0x7D);
+    wfifob(fd, 5, 0x03);
+    wfifob(fd, 6, 0);
+
+    // Zero out bytes 8..1500
+    for i in 8..1500usize {
+        wfifob(fd, i, 0);
+    }
+
+    wfifob(fd, 7, getevents() as u8);
+    let chosen_event = rfifob(fd, 7) as c_int;
+
+    updateRanks(chosen_event);
+
+    let mut pos: c_int = 8;
+    pos = getevent_name(pos, fd, sd);
+    filler_block(pos, chosen_event, fd, sd);
+    pos += 15;
+    wfifob(fd, pos as usize, 10);
+    let totalscores = gettotalscores(chosen_event);
+    pos += 1;
+    pos = getevent_playerscores(chosen_event, totalscores, pos, fd);
+    pos += 3;
+    wfifob(fd, pos as usize, totalscores as u8);
+    pos += 1;
+
+    wfifob(fd, 2, (pos - 3) as u8);
+    wfifoset(fd, encrypt(fd) as usize);
+
+    0
+}
+
+// ─── canusepowerboards ────────────────────────────────────────────────────────
+
+/// Return 1 if the player is allowed to use power boards, 0 otherwise.
+///
+/// Allowed when: GM, or has `carnagehost` global reg set, and map id is 2001..=2099.
+///
+/// Pure logic — no SQL. C: sl_compat.c line ~841.
+#[no_mangle]
+pub unsafe extern "C" fn canusepowerboards(sd: *mut MapSessionData) -> c_int {
+    if (*sd).status.gm_level != 0 { return 1; }
+    if pc_readglobalreg(sd, c"carnagehost".as_ptr()) == 0 { return 0; }
+    if (*sd).bl.m >= 2001 && (*sd).bl.m <= 2099 { return 1; }
+    0
 }

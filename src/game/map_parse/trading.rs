@@ -49,9 +49,13 @@ extern "C" {
     fn map_id2sd(id: c_uint) -> *mut MapSessionData;
     fn map_id2mob(id: c_uint) -> *mut MobSpawnData;
     fn map_id2npc(id: c_uint) -> *mut std::ffi::c_void;
+    #[link_name = "rust_pc_additem"]
     fn pc_additem(sd: *mut MapSessionData, it: *const crate::servers::char::charstatus::Item) -> c_int;
+    #[link_name = "rust_pc_additemnolog"]
     fn pc_additemnolog(sd: *mut MapSessionData, it: *const crate::servers::char::charstatus::Item) -> c_int;
+    #[link_name = "rust_pc_delitem"]
     fn pc_delitem(sd: *mut MapSessionData, id: c_int, amount: c_int, kind: c_int) -> c_int;
+    #[link_name = "rust_pc_isinvenspace"]
     fn pc_isinvenspace(
         sd: *mut MapSessionData,
         id: c_int,
@@ -62,23 +66,35 @@ extern "C" {
         custom_icon: c_uint,
         custom_icon_color: c_uint,
     ) -> c_int;
+    #[link_name = "rust_pc_readglobalreg"]
     fn pc_readglobalreg(sd: *mut MapSessionData, reg: *const c_char) -> c_int;
+    #[link_name = "rust_itemdb_exchangeable"]
     fn itemdb_exchangeable(id: c_uint) -> c_int;
+    #[link_name = "rust_itemdb_droppable"]
     fn itemdb_droppable(id: c_uint) -> c_int;
+    #[link_name = "rust_itemdb_name"]
     fn itemdb_name(id: c_uint) -> *mut c_char;
+    #[link_name = "rust_itemdb_text"]
     fn itemdb_text(id: c_uint) -> *mut c_char;
+    #[link_name = "rust_itemdb_type"]
     fn itemdb_type(id: c_uint) -> c_int;
+    #[link_name = "rust_itemdb_icon"]
     fn itemdb_icon(id: c_uint) -> c_int;
+    #[link_name = "rust_itemdb_iconcolor"]
     fn itemdb_iconcolor(id: c_uint) -> c_int;
+    #[link_name = "rust_itemdb_dura"]
     fn itemdb_dura(id: c_uint) -> c_int;
+    #[link_name = "rust_classdb_name"]
     fn classdb_name(id: c_int, rank: c_int) -> *mut c_char;
-    fn sl_doscript_blargs(
-        script: *const c_char,
-        func: *const c_char,
-        n: c_int,
-        ...
-    ) -> c_int;
 }
+
+/// Dispatch a Lua event with two block_list arguments.
+#[cfg(not(test))]
+#[allow(dead_code)]
+unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
+}
+
 
 // SFLAG_XPMONEY (from map_server.h)
 const SFLAG_XPMONEY: c_int = 4;
@@ -166,7 +182,7 @@ pub unsafe extern "C" fn clif_exchange_finalize(
     {
         let script = b"characterLog\0".as_ptr() as *const c_char;
         let func   = b"exchangeLogWrite\0".as_ptr() as *const c_char;
-        sl_doscript_blargs(script, func, 2, &mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList);
+        sl_doscript_2(script, func, &mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList);
     }
 
     // Transfer sd's items to tsd
@@ -905,13 +921,7 @@ pub unsafe extern "C" fn clif_handitem(sd: *mut MapSessionData) -> c_int {
 
         if (*nd_min).receive_item == 1 {
             let func = b"handItem\0".as_ptr() as *const c_char;
-            sl_doscript_blargs(
-                (*nd_min).name.as_ptr(),
-                func,
-                2,
-                &mut (*sd).bl as *mut BlockList,
-                &mut (*nd_min).bl as *mut BlockList,
-            );
+            sl_doscript_2((*nd_min).name.as_ptr(), func, &mut (*sd).bl as *mut BlockList, &mut (*nd_min).bl as *mut BlockList);
         } else {
             let item_name = itemdb_name(inv_id);
             let mut msg = [0i8; 128];

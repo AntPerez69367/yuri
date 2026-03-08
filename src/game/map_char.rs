@@ -50,11 +50,6 @@ extern "C" {
     // forwards to this symbol.
     fn rust_crypt_populate_table(name: *const c_char, table: *mut i8, len: c_int) -> *mut i8;
 
-    // map_isloaded is a C macro: `#define map_isloaded(m) (map[m].registry)`.
-    // sl_compat.c exposes a thin function wrapper:
-    //   int sl_map_isloaded(int m) { return map_isloaded(m); }
-    fn sl_map_isloaded(m: c_int) -> c_int;
-
     // PC game functions — remain in C until pc.c is further ported.
     fn rust_pc_setpos(sd: *mut MapSessionData, m: c_int, x: c_int, y: c_int) -> c_int;
     fn rust_pc_loadmagic(sd: *mut MapSessionData) -> c_int;
@@ -76,7 +71,7 @@ extern "C" {
 
     // Callbacks passed to map_foreachinarea — remain in C (map_parse.c).
     fn clif_object_look_sub(bl: *mut BlockList, ...) -> c_int;
-    fn clif_updatestate(bl: *mut BlockList, ...) -> c_int;
+    fn broadcast_update_state(sd: *mut MapSessionData);
 
     fn rust_pc_loaditem(sd: *mut MapSessionData) -> c_int;
     fn rust_pc_loadequip(sd: *mut MapSessionData) -> c_int;
@@ -179,7 +174,7 @@ pub unsafe extern "C" fn intif_mmo_tosd(fd: c_int, p: *const MmoCharStatus) -> c
     }
 
     // Fall back to map 0 / spawn point if the target map is not loaded.
-    if sl_map_isloaded((*sd).status.last_pos.m as c_int) == 0 {
+    if !crate::game::block::map_is_loaded((*sd).status.last_pos.m as i32) {
         (*sd).status.last_pos.m = 0;
         (*sd).status.last_pos.x = 8;
         (*sd).status.last_pos.y = 7;
@@ -266,15 +261,7 @@ pub unsafe extern "C" fn intif_mmo_tosd(fd: c_int, p: *const MmoCharStatus) -> c
 
     // Send our state to all PCs in the area.
     tracing::info!("[map] [login] fd={} step=updatestate", fd);
-    map_foreachinarea(
-        clif_updatestate,
-        (*sd).bl.m as c_int,
-        (*sd).bl.x as c_int,
-        (*sd).bl.y as c_int,
-        AREA,
-        BL_PC,
-        sd,
-    );
+    broadcast_update_state(sd);
 
     tracing::info!("[map] [login] fd={} step=retrieveprofile", fd);
     clif_retrieveprofile(sd);

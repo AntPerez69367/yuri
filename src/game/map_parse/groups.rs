@@ -68,13 +68,6 @@ extern "C" {
     #[link_name = "rust_pc_isequip"]
     fn pc_isequip(sd: *mut MapSessionData, slot: c_int) -> c_uint;
 
-    #[link_name = "sl_doscript_blargs"]
-    fn sl_doscript_blargs(
-        script: *const c_char,
-        func: *const c_char,
-        n: c_int,
-        ...
-    ) -> c_int;
 
     // SQL
     fn Sql_Query(handle: *mut Sql, fmt: *const c_char, ...) -> c_int;
@@ -102,6 +95,14 @@ extern "C" {
     #[link_name = "groups"]
     static mut groups_raw: [c_uint; 65536]; // 256 * 256
 }
+
+/// Dispatch a Lua event with two block_list arguments.
+#[cfg(not(test))]
+#[allow(dead_code)]
+unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
+}
+
 
 // ─── inline helper: groups array access ──────────────────────────────────────
 
@@ -600,13 +601,7 @@ pub unsafe extern "C" fn clif_findmount(sd: *mut MapSessionData) -> c_int {
         return 0;
     }
 
-    sl_doscript_blargs(
-        b"onMount\0".as_ptr() as *const c_char,
-        std::ptr::null(),
-        2,
-        &mut (*sd).bl as *mut BlockList,
-        &mut (*mob).bl as *mut BlockList,
-    );
+    sl_doscript_2(b"onMount\0".as_ptr() as *const c_char, std::ptr::null(), &mut (*sd).bl as *mut BlockList, &mut (*mob).bl as *mut BlockList);
     0
 }
 

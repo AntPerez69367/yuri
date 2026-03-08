@@ -55,8 +55,6 @@ extern "C" {
     fn map_id2bl(id: c_uint) -> *mut BlockList;
     fn clif_sendminitext(sd: *mut MapSessionData, msg: *const c_char) -> c_int;
     fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) -> c_int;
-    fn sl_doscript_blargs(root: *const c_char, method: *const c_char,
-                          nargs: c_int, ...) -> c_int;
     fn rust_sl_resumedialog(choice: c_uint, sd: *mut c_void);
     fn rust_sl_resumemenuseq(choice: c_uint, menu: c_int, sd: *mut c_void);
     fn rust_sl_resumeinputseq(choice: c_uint, input: *const c_char, sd: *mut c_void);
@@ -73,6 +71,21 @@ extern "C" {
     fn rust_itemdb_level(id: c_uint) -> c_int;
     fn rust_classdb_name(id: c_int, rank: c_int) -> *mut c_char;
 }
+
+/// Dispatch a Lua event with a single block_list argument.
+#[cfg(not(test))]
+#[allow(dead_code)]
+unsafe fn sl_doscript_simple(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
+}
+
+/// Dispatch a Lua event with two block_list arguments.
+#[cfg(not(test))]
+#[allow(dead_code)]
+unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
+}
+
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -1010,12 +1023,7 @@ pub unsafe extern "C" fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> c_
                     || (tsd_ref.optFlags & 64 == 0      // !optFlag_noclick
                         && tsd_ref.optFlags & 32 == 0)  // !optFlag_stealth
                 {
-                    sl_doscript_blargs(
-                        b"onClick\0".as_ptr() as *const c_char,
-                        std::ptr::null(),
-                        1,
-                        &sd_ref.bl as *const _ as *mut BlockList,
-                    );
+                    sl_doscript_simple(b"onClick\0".as_ptr() as *const c_char, std::ptr::null(), &sd_ref.bl as *const _ as *mut BlockList);
                 }
             }
         }
@@ -1045,13 +1053,7 @@ pub unsafe extern "C" fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> c_
                 }
             }
 
-            sl_doscript_blargs(
-                (*nd).name.as_ptr() as *const c_char,
-                b"click\0".as_ptr() as *const c_char,
-                2,
-                &sd_ref.bl as *const _ as *mut BlockList,
-                bl,
-            );
+            sl_doscript_2((*nd).name.as_ptr() as *const c_char, b"click\0".as_ptr() as *const c_char, &sd_ref.bl as *const _ as *mut BlockList, bl);
         }
     } else if bl_type == BL_MOB {
         // cast block_list* → MobSpawnData* (bl is always first field)
@@ -1069,21 +1071,9 @@ pub unsafe extern "C" fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> c_
         {
             (*sd).last_click = (*bl).id;
             rust_sl_async_freeco(sd as *mut c_void);
-            sl_doscript_blargs(
-                b"onLook\0".as_ptr() as *const c_char,
-                std::ptr::null(),
-                2,
-                &sd_ref.bl as *const _ as *mut BlockList,
-                bl,
-            );
+            sl_doscript_2(b"onLook\0".as_ptr() as *const c_char, std::ptr::null(), &sd_ref.bl as *const _ as *mut BlockList, bl);
             if !(*mob).data.is_null() {
-                sl_doscript_blargs(
-                    (*(*mob).data).yname.as_ptr() as *const c_char,
-                    b"click\0".as_ptr() as *const c_char,
-                    2,
-                    &sd_ref.bl as *const _ as *mut BlockList,
-                    bl,
-                );
+                sl_doscript_2((*(*mob).data).yname.as_ptr() as *const c_char, b"click\0".as_ptr() as *const c_char, &sd_ref.bl as *const _ as *mut BlockList, bl);
             }
         }
     }

@@ -19,6 +19,7 @@ pub mod map_char;
 pub mod class_db;
 pub mod clan_db;
 pub mod config;
+pub mod config_globals;
 pub mod core;
 pub mod crypt;
 pub mod database;

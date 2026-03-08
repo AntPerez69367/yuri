@@ -8,6 +8,7 @@ use crate::database::map_db::{BlockList, GlobalReg, WarpList};
 use crate::database::mob_db::MobDbData;
 #[cfg(not(test))]
 use crate::ffi::map_db::{get_map_ptr as ffi_get_map_ptr, map_is_loaded as ffi_map_is_loaded};
+#[cfg(not(test))]
 use crate::game::pc::MapSessionData;
 use crate::game::types::GfxViewer;
 use crate::servers::char::charstatus::{Item, SkillInfo};
@@ -254,13 +255,7 @@ extern "C" {
     #[link_name = "groups"]
     pub static groups_mob: [c_uint; 65536];
 
-    // scripting
-    pub fn sl_doscript_blargs(
-        yname: *const c_char,
-        event: *const c_char,
-        nargs: c_int,
-        ...
-    ) -> c_int;
+    // (sl_doscript_blargs variadic shim removed; use doscript_blargs() below)
 
     // magic db lookup — static inline in C, redirect to actual Rust symbols
     #[link_name = "rust_magicdb_yname"]
@@ -286,14 +281,26 @@ extern "C" {
     static serverid: c_int;
 }
 
-// sl_doscript_simple is a C macro; replicate it as an inline Rust helper.
+/// Dispatch a Lua event with a single block_list argument.
+/// Wraps `crate::game::scripting::doscript_blargs` for the common 1-arg case.
 #[cfg(not(test))]
 unsafe fn sl_doscript_simple(
     yname: *const c_char,
     event: *const c_char,
     bl: *mut BlockList,
 ) -> c_int {
-    sl_doscript_blargs(yname, event, 1, bl)
+    crate::game::scripting::doscript_blargs(yname, event, &[bl as *mut _])
+}
+
+/// Dispatch a Lua event with two block_list arguments.
+#[cfg(not(test))]
+unsafe fn sl_doscript_2(
+    root: *const c_char,
+    event: *const c_char,
+    bl1: *mut BlockList,
+    bl2: *mut BlockList,
+) -> c_int {
+    crate::game::scripting::doscript_blargs(root, event, &[bl1 as *mut _, bl2 as *mut _])
 }
 
 // ─── Mob ID management ────────────────────────────────────────────────────────
@@ -580,21 +587,10 @@ pub unsafe fn mob_duratimer(mob: *mut MobSpawnData) -> c_int {
                     0
                 };
                 if health > 0 || (*tbl).bl_type as c_int == BL_PC {
-                    sl_doscript_blargs(
-                        magicdb_yname(id),
-                        c"while_cast".as_ptr(),
-                        2,
-                        &raw mut (*mob).bl,
-                        tbl,
-                    );
+                    sl_doscript_2(magicdb_yname(id), c"while_cast".as_ptr(), &raw mut (*mob).bl, tbl);
                 }
             } else {
-                sl_doscript_blargs(
-                    magicdb_yname(id),
-                    c"while_cast".as_ptr(),
-                    1,
-                    &raw mut (*mob).bl,
-                );
+                sl_doscript_simple(magicdb_yname(id), c"while_cast".as_ptr(), &raw mut (*mob).bl);
             }
 
             if (*mob).da[x].duration <= 0 {
@@ -614,20 +610,9 @@ pub unsafe fn mob_duratimer(mob: *mut MobSpawnData) -> c_int {
                 );
                 (*mob).da[x].animation = 0;
                 if !tbl.is_null() {
-                    sl_doscript_blargs(
-                        magicdb_yname(id),
-                        c"uncast".as_ptr(),
-                        2,
-                        &raw mut (*mob).bl,
-                        tbl,
-                    );
+                    sl_doscript_2(magicdb_yname(id), c"uncast".as_ptr(), &raw mut (*mob).bl, tbl);
                 } else {
-                    sl_doscript_blargs(
-                        magicdb_yname(id),
-                        c"uncast".as_ptr(),
-                        1,
-                        &raw mut (*mob).bl,
-                    );
+                    sl_doscript_simple(magicdb_yname(id), c"uncast".as_ptr(), &raw mut (*mob).bl);
                 }
             }
         }
@@ -657,10 +642,10 @@ unsafe fn dura_tick(mob: *mut MobSpawnData, event: *const c_char) {
                     0
                 };
                 if health > 0 || (*tbl).bl_type as c_int == BL_PC {
-                    sl_doscript_blargs(magicdb_yname(id), event, 2, &raw mut (*mob).bl, tbl);
+                    sl_doscript_2(magicdb_yname(id), event, &raw mut (*mob).bl, tbl);
                 }
             } else {
-                sl_doscript_blargs(magicdb_yname(id), event, 1, &raw mut (*mob).bl);
+                sl_doscript_simple(magicdb_yname(id), event, &raw mut (*mob).bl);
             }
         }
     }
@@ -723,15 +708,9 @@ pub unsafe fn mob_flushmagic(mob: *mut MobSpawnData) -> c_int {
             std::ptr::null_mut()
         };
         if !bl.is_null() {
-            sl_doscript_blargs(
-                magicdb_yname(id),
-                c"uncast".as_ptr(),
-                2,
-                &raw mut (*mob).bl,
-                bl,
-            );
+            sl_doscript_2(magicdb_yname(id), c"uncast".as_ptr(), &raw mut (*mob).bl, bl);
         } else {
-            sl_doscript_blargs(magicdb_yname(id), c"uncast".as_ptr(), 1, &raw mut (*mob).bl);
+            sl_doscript_simple(magicdb_yname(id), c"uncast".as_ptr(), &raw mut (*mob).bl);
         }
     }
     0
@@ -784,13 +763,7 @@ pub unsafe fn mob_calcstat(mob: *mut MobSpawnData) -> c_int {
             if id > 0 && p.duration > 0 {
                 let tsd = map_id2sd_mob(p.caster_id) as *mut BlockList;
                 if !tsd.is_null() {
-                    sl_doscript_blargs(
-                        magicdb_yname(id),
-                        c"recast".as_ptr(),
-                        2,
-                        &raw mut (*mob).bl,
-                        tsd,
-                    );
+                    sl_doscript_2(magicdb_yname(id), c"recast".as_ptr(), &raw mut (*mob).bl, tsd);
                 } else {
                     sl_doscript_simple(magicdb_yname(id), c"recast".as_ptr(), &raw mut (*mob).bl);
                 }
@@ -818,19 +791,9 @@ pub unsafe fn mob_respawn_nousers(mob: *mut MobSpawnData) -> c_int {
     }
     (*mob).state = MOB_ALIVE;
     mob_respawn_getstats(mob);
-    sl_doscript_blargs(
-        c"on_spawn".as_ptr(),
-        std::ptr::null(),
-        1,
-        &raw mut (*mob).bl,
-    );
+    sl_doscript_simple(c"on_spawn".as_ptr(), std::ptr::null(), &raw mut (*mob).bl);
     if !(*mob).data.is_null() {
-        sl_doscript_blargs(
-            (*(*mob).data).yname.as_ptr(),
-            c"on_spawn".as_ptr(),
-            1,
-            &raw mut (*mob).bl,
-        );
+        sl_doscript_simple((*(*mob).data).yname.as_ptr(), c"on_spawn".as_ptr(), &raw mut (*mob).bl);
     }
     0
 }
@@ -895,19 +858,9 @@ pub unsafe fn mob_respawn(mob: *mut MobSpawnData) -> c_int {
             );
         }
     }
-    sl_doscript_blargs(
-        c"on_spawn".as_ptr(),
-        std::ptr::null(),
-        1,
-        &raw mut (*mob).bl,
-    );
+    sl_doscript_simple(c"on_spawn".as_ptr(), std::ptr::null(), &raw mut (*mob).bl);
     if !(*mob).data.is_null() {
-        sl_doscript_blargs(
-            (*(*mob).data).yname.as_ptr(),
-            c"on_spawn".as_ptr(),
-            1,
-            &raw mut (*mob).bl,
-        );
+        sl_doscript_simple((*(*mob).data).yname.as_ptr(), c"on_spawn".as_ptr(), &raw mut (*mob).bl);
     }
     0
 }
@@ -1171,7 +1124,7 @@ unsafe fn dispatch_ai(mob: *mut MobSpawnData, bl: *mut BlockList, event: *const 
         5 => c"mob_ai_ghost".as_ptr(),
         _ => return,
     };
-    sl_doscript_blargs(script, event, 2, &raw mut (*mob).bl, bl);
+    sl_doscript_2(script, event, &raw mut (*mob).bl, bl);
 }
 
 // ─── mob_trap_look (va_list callback) ────────────────────────────────────────
@@ -1201,13 +1154,7 @@ pub unsafe extern "C" fn mob_trap_look_ffi(bl: *mut BlockList, mut ap: ...) -> c
         if !def.is_null() {
             *def = 1;
         }
-        sl_doscript_blargs(
-            (*nd).name.as_ptr(),
-            c"click".as_ptr(),
-            2,
-            &raw mut (*mob).bl,
-            &raw mut (*nd).bl,
-        );
+        sl_doscript_2((*nd).name.as_ptr(), c"click".as_ptr(), &raw mut (*mob).bl, &raw mut (*nd).bl);
     }
     0
 }
@@ -2010,13 +1957,7 @@ pub unsafe extern "C" fn rust_mob_dropitem(
 #[cfg(not(test))]
 pub unsafe fn mobdb_drops(mob: *mut MobSpawnData, sd: *mut std::ffi::c_void) -> c_int {
     // sd->bl is the first field — cast gives the block_list* for sl_doscript_blargs
-    sl_doscript_blargs(
-        c"mobDrops".as_ptr(),
-        std::ptr::null(),
-        2,
-        sd as *mut BlockList,
-        &raw mut (*mob).bl,
-    );
+    sl_doscript_2(c"mobDrops".as_ptr(), std::ptr::null(), sd as *mut BlockList, &raw mut (*mob).bl);
     let sd_typed = sd as *mut MapSessionData;
     for i in 0..MAX_INVENTORY {
         let slot = &(*mob).inventory[i];
@@ -2152,59 +2093,23 @@ pub unsafe extern "C" fn rust_mob_attack(mob: *mut MobSpawnData, id: c_int) -> c
         }
     }
     if !sd.is_null() {
-        sl_doscript_blargs(
-            c"hitCritChance".as_ptr(),
-            std::ptr::null(),
-            2,
-            &raw mut (*mob).bl,
-            &raw mut (*sd).bl,
-        );
+        sl_doscript_2(c"hitCritChance".as_ptr(), std::ptr::null(), &raw mut (*mob).bl, &raw mut (*sd).bl);
     } else if !tmob.is_null() {
-        sl_doscript_blargs(
-            c"hitCritChance".as_ptr(),
-            std::ptr::null(),
-            2,
-            &raw mut (*mob).bl,
-            &raw mut (*tmob).bl,
-        );
+        sl_doscript_2(c"hitCritChance".as_ptr(), std::ptr::null(), &raw mut (*mob).bl, &raw mut (*tmob).bl);
     }
     if (*mob).critchance != 0 {
         if !sd.is_null() {
-            sl_doscript_blargs(
-                c"swingDamage".as_ptr(),
-                std::ptr::null(),
-                2,
-                &raw mut (*mob).bl,
-                &raw mut (*sd).bl,
-            );
+            sl_doscript_2(c"swingDamage".as_ptr(), std::ptr::null(), &raw mut (*mob).bl, &raw mut (*sd).bl);
             for x in 0..MAX_MAGIC_TIMERS {
                 if (*mob).da[x].id > 0 && (*mob).da[x].duration > 0 {
-                    sl_doscript_blargs(
-                        magicdb_yname((*mob).da[x].id as c_int),
-                        c"on_hit_while_cast".as_ptr(),
-                        2,
-                        &raw mut (*mob).bl,
-                        &raw mut (*sd).bl,
-                    );
+                    sl_doscript_2(magicdb_yname((*mob).da[x].id as c_int), c"on_hit_while_cast".as_ptr(), &raw mut (*mob).bl, &raw mut (*sd).bl);
                 }
             }
         } else if !tmob.is_null() {
-            sl_doscript_blargs(
-                c"swingDamage".as_ptr(),
-                std::ptr::null(),
-                2,
-                &raw mut (*mob).bl,
-                &raw mut (*tmob).bl,
-            );
+            sl_doscript_2(c"swingDamage".as_ptr(), std::ptr::null(), &raw mut (*mob).bl, &raw mut (*tmob).bl);
             for x in 0..MAX_MAGIC_TIMERS {
                 if (*mob).da[x].id > 0 && (*mob).da[x].duration > 0 {
-                    sl_doscript_blargs(
-                        magicdb_yname((*mob).da[x].id as c_int),
-                        c"on_hit_while_cast".as_ptr(),
-                        2,
-                        &raw mut (*mob).bl,
-                        &raw mut (*tmob).bl,
-                    );
+                    sl_doscript_2(magicdb_yname((*mob).da[x].id as c_int), c"on_hit_while_cast".as_ptr(), &raw mut (*mob).bl, &raw mut (*tmob).bl);
                 }
             }
         }
@@ -2398,7 +2303,7 @@ pub unsafe extern "C" fn sl_mob_addhealth(mob: *mut MobSpawnData, damage: c_int)
             5 => c"mob_ai_ghost".as_ptr(),
             _ => (*data).yname.as_ptr(),
         };
-        sl_doscript_blargs(yname, c"on_healed".as_ptr(), 2, &raw mut (*mob).bl, bl);
+        sl_doscript_2(yname, c"on_healed".as_ptr(), &raw mut (*mob).bl, bl);
     } else if !data.is_null() && damage > 0 {
         let yname = match (*data).subtype {
             0 => c"mob_ai_basic".as_ptr(),
@@ -2408,7 +2313,7 @@ pub unsafe extern "C" fn sl_mob_addhealth(mob: *mut MobSpawnData, damage: c_int)
             5 => c"mob_ai_ghost".as_ptr(),
             _ => (*data).yname.as_ptr(),
         };
-        sl_doscript_blargs(yname, c"on_healed".as_ptr(), 1, &raw mut (*mob).bl);
+        sl_doscript_simple(yname, c"on_healed".as_ptr(), &raw mut (*mob).bl);
     }
     clif_send_mob_healthscript(mob, -damage, 0);
 }
@@ -2504,9 +2409,9 @@ pub unsafe extern "C" fn sl_mob_callbase(mob: *mut MobSpawnData, script: *const 
     let bl = map_id2bl((*mob).attacker);
     let yname = (*(*mob).data).yname.as_ptr();
     if !bl.is_null() {
-        sl_doscript_blargs(yname, script, 2, &raw mut (*mob).bl, bl);
+        sl_doscript_2(yname, script, &raw mut (*mob).bl, bl);
     } else {
-        sl_doscript_blargs(yname, script, 2, &raw mut (*mob).bl, &raw mut (*mob).bl);
+        sl_doscript_2(yname, script, &raw mut (*mob).bl, &raw mut (*mob).bl);
     }
     1
 }
@@ -2567,8 +2472,8 @@ pub unsafe extern "C" fn sl_mob_setduration(
                               AREA, BL_PC, (*mob).da[x].animation as c_int, &raw mut (*mob).bl, -1i32);
             (*mob).da[x].animation = 0;
             let bl = if saved_caster_id != (*mob).bl.id { map_id2bl(saved_caster_id) } else { std::ptr::null_mut() };
-            if !bl.is_null() { sl_doscript_blargs(magicdb_yname(mid), c"uncast".as_ptr(), 2, &raw mut (*mob).bl, bl); }
-            else             { sl_doscript_blargs(magicdb_yname(mid), c"uncast".as_ptr(), 1, &raw mut (*mob).bl); }
+            if !bl.is_null() { sl_doscript_2(magicdb_yname(mid), c"uncast".as_ptr(), &raw mut (*mob).bl, bl); }
+            else             { sl_doscript_simple(magicdb_yname(mid), c"uncast".as_ptr(), &raw mut (*mob).bl); }
             return;
         } else if (*mob).da[x].id as c_int == id && (*mob).da[x].caster_id == caster_id
                 && ((*mob).da[x].duration > time || recast == 1) && alreadycast == 1 {
@@ -2601,8 +2506,8 @@ pub unsafe extern "C" fn sl_mob_flushduration(mob: *mut MobSpawnData, dis: c_int
             (*mob).da[x].animation = 0; (*mob).da[x].id = 0;
             let bl = map_id2bl((*mob).da[x].caster_id);
             (*mob).da[x].caster_id = 0;
-            if !bl.is_null() { sl_doscript_blargs(magicdb_yname(id), c"uncast".as_ptr(), 2, &raw mut (*mob).bl, bl); }
-            else             { sl_doscript_blargs(magicdb_yname(id), c"uncast".as_ptr(), 1, &raw mut (*mob).bl); }
+            if !bl.is_null() { sl_doscript_2(magicdb_yname(id), c"uncast".as_ptr(), &raw mut (*mob).bl, bl); }
+            else             { sl_doscript_simple(magicdb_yname(id), c"uncast".as_ptr(), &raw mut (*mob).bl); }
         }
     }
 }

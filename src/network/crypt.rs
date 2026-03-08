@@ -188,6 +188,7 @@ pub fn tk_crypt_static(buff: &mut [u8], xor_key: &[u8]) {
 ///
 /// # Safety
 /// `fd` must be a valid session fd with pending write data staged by `rust_session_wfifohead`.
+#[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn encrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int {
     use crate::ffi::config::config;
@@ -243,6 +244,7 @@ pub unsafe extern "C" fn encrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int
 /// The read buffer is C-allocated session memory; the `*const u8 → *mut u8` cast for
 /// in-place XOR mirrors the C `RFIFOP(fd, 0)` usage and is safe here because
 /// packet dispatch is single-threaded and no other thread aliases this buffer.
+#[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn decrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int {
     use crate::ffi::config::config;
@@ -286,6 +288,7 @@ pub unsafe extern "C" fn decrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int
 // `send_metalist` are exported C symbols called from map_parse.c dispatch and
 // sl_g_sendmeta() respectively.
 
+#[cfg(not(test))]
 unsafe fn metacrc_path(path: &str) -> u32 {
     use flate2::Crc;
     let data = std::fs::read(path).unwrap_or_default();
@@ -294,6 +297,7 @@ unsafe fn metacrc_path(path: &str) -> u32 {
     crc.sum()
 }
 
+#[cfg(not(test))]
 unsafe fn send_metafile_impl(fd: std::os::raw::c_int, file: &str) {
     use flate2::write::ZlibEncoder;
     use flate2::Compression;
@@ -362,6 +366,7 @@ unsafe fn send_metafile_impl(fd: std::os::raw::c_int, file: &str) {
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`crate::game::pc::MapSessionData`].
+#[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn send_meta(sd: *mut crate::game::pc::MapSessionData) -> std::os::raw::c_int {
     use crate::ffi::session::rust_session_rdata_ptr;
@@ -382,6 +387,7 @@ pub unsafe extern "C" fn send_meta(sd: *mut crate::game::pc::MapSessionData) -> 
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`crate::game::pc::MapSessionData`].
+#[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn send_metalist(sd: *mut crate::game::pc::MapSessionData) -> std::os::raw::c_int {
     use flate2::Crc;

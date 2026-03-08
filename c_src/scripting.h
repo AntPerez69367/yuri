@@ -38,8 +38,9 @@ static inline int sl_reload(lua_State *L) {
     (void)L; return rust_sl_reload();
 }
 
-extern int   sl_doscript_blargs(const char *root, const char *method, int nargs, ...);
-extern int   sl_doscript_strings(const char *root, const char *method, int nargs, ...);
+/* sl_doscript_blargs and sl_doscript_strings (variadic C functions) were deleted
+ * from sl_compat.c and replaced by rust_sl_doscript_blargs_vec /
+ * rust_sl_doscript_strings_vec declared above. */
 
 #define sl_doscript_stackargs(r,m,n)   rust_sl_doscript_stackargs(r,m,n)
 extern int   sl_updatepeople(struct block_list *bl, void *ap);
@@ -51,7 +52,10 @@ extern int   sl_updatepeople(struct block_list *bl, void *ap);
 #define sl_resumeinput(tag, inp, sd)   rust_sl_resumeinput(tag, inp, sd)
 #define sl_resumesell(id, sd)          rust_sl_resumesell(id, sd)
 #define sl_async_freeco(u)             rust_sl_async_freeco(u)
-#define sl_doscript_simple(root,method,bl) sl_doscript_blargs(root, method, 1, bl)
+/* sl_doscript_simple: call rust_sl_doscript_blargs_vec via a local 1-element array.
+ * sl_doscript_blargs (variadic) was deleted (Task 1.2); rust_shims.c was deleted (Task 3.1). */
+#define sl_doscript_simple(root,method,bl) \
+    ({ void *_sds_args[1] = { (bl) }; rust_sl_doscript_blargs_vec((root), (method), 1, _sds_args); })
 #pragma message("sl_runfunc is a no-op until Phase 3 — search scripting.h to track sl_runfunc call sites")
 #define sl_runfunc(r,bl)               ((void)0)
 #define sl_exec(u,c)                   rust_sl_exec(u,c)
