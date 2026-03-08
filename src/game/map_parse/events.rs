@@ -5,14 +5,12 @@
 
 #![allow(non_snake_case, clippy::wildcard_imports, clippy::too_many_lines)]
 
-use std::ffi::{c_char, c_int, c_uint, c_ulong};
+use std::ffi::{c_char, c_int, c_uint};
 
 use crate::database::{blocking_run, get_pool};
 
 use crate::game::pc::{
     MapSessionData,
-    Sql,
-    SQL_ERROR,
 };
 
 use super::packet::{
@@ -23,14 +21,7 @@ use super::packet::{
 
 // ─── C FFI declarations ───────────────────────────────────────────────────────
 
-use crate::game::map_server::sql_handle;
-
 extern "C" {
-    // SQL
-    fn Sql_Query(handle: *mut Sql, fmt: *const c_char, ...) -> c_int;
-    fn Sql_EscapeString(handle: *mut Sql, out_to: *mut c_char, from: *const c_char) -> usize;
-    fn Sql_ShowDebug_(self_: *mut Sql, file: *const c_char, line: c_ulong);
-
     // item db (static inline wrappers are `rust_*` underneath — call directly)
     #[link_name = "rust_itemdb_name"]
     fn itemdb_name(id: c_uint) -> *mut c_char;
@@ -261,26 +252,31 @@ pub unsafe extern "C" fn sendRewardParcel(
         .unwrap_or(0) as i32
     })) + 1;
 
-    // Escapes `engrave` into `escape` buffer — but INSERT uses `engrave` (unescaped).
-    // Pre-existing C bug: the escaped buffer is computed but never used in the query.
-    Sql_EscapeString(sql_handle, escape.as_mut_ptr(), engrave.as_ptr());
+    // engrave is item name (up to 30 chars); use it directly in parameterized query
+    let engrave_str = std::ffi::CStr::from_ptr(engrave.as_ptr())
+        .to_str()
+        .unwrap_or("")
+        .to_owned();
 
-    if SQL_ERROR == Sql_Query(
-        sql_handle,
-        b"INSERT INTO `Parcels` (`ParChaIdDestination`, `ParSender`, `ParItmId`, \
+    let ok = blocking_run(async move {
+        sqlx::query(
+            "INSERT INTO `Parcels` (`ParChaIdDestination`, `ParSender`, `ParItmId`, \
 `ParAmount`, `ParChaIdOwner`, `ParEngrave`, `ParPosition`, `ParNpc`) \
-VALUES ('%u', '%u', '%u', '%u', '%u', '%s', '%d', '%d')\0"
-            .as_ptr() as *const c_char,
-        receiver,
-        sender,
-        rewarditem as c_uint,
-        rewardamount as c_uint,
-        owner,
-        engrave.as_ptr(),
-        newest,
-        npcflag,
-    ) {
-        Sql_ShowDebug_(sql_handle, c"events.rs".as_ptr(), line!() as c_ulong);
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(receiver)
+        .bind(sender)
+        .bind(rewarditem as u32)
+        .bind(rewardamount as u32)
+        .bind(owner)
+        .bind(engrave_str)
+        .bind(newest)
+        .bind(npcflag)
+        .execute(get_pool())
+        .await
+        .is_ok()
+    });
+    if !ok {
         return 1;
     }
 

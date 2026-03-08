@@ -683,3 +683,351 @@ town:
         std::fs::remove_file(temp_file).ok();
     }
 }
+
+// ─── FFI exports ─────────────────────────────────────────────────────────────
+// Content moved from src/ffi/config.rs
+
+use std::ffi::{CStr, CString};
+use std::net::Ipv4Addr;
+use std::os::raw::{c_char, c_int};
+use std::ptr;
+use std::sync::OnceLock;
+
+/// Global config instance
+static CONFIG: OnceLock<ServerConfig> = OnceLock::new();
+
+fn get_config() -> Option<&'static ServerConfig> {
+    CONFIG.get()
+}
+
+/// Public accessor for the loaded config — used by game modules (e.g. scripting).
+pub fn config() -> &'static ServerConfig {
+    CONFIG.get().expect("config not loaded — rust_config_read must be called first")
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rust_config_read(cfg_file: *const c_char) -> c_int {
+    if cfg_file.is_null() {
+        eprintln!("[rust_config_read] Error: cfg_file is null");
+        return -1;
+    }
+
+    let c_str = unsafe { CStr::from_ptr(cfg_file) };
+    let file_path = match c_str.to_str() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[rust_config_read] Error: Invalid UTF-8 in path: {}", e);
+            return -1;
+        }
+    };
+
+    match ServerConfig::from_file(file_path) {
+        Ok(config) => {
+            println!("[rust_config_read] Successfully loaded config from: {}", file_path);
+
+            if CONFIG.set(config).is_err() {
+                eprintln!("[rust_config_read] Error: Config already loaded");
+                return -1;
+            }
+
+            unsafe { rust_config_populate_c_globals(); }
+            0
+        }
+        Err(e) => {
+            eprintln!("[rust_config_read] Error loading config: {}", e);
+            -1
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_sql_ip() -> *const c_char {
+    match get_config() {
+        Some(cfg) => match CString::new(cfg.sql_ip.clone()) {
+            Ok(s) => s.into_raw(),
+            Err(_) => ptr::null(),
+        },
+        None => ptr::null(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_sql_port() -> u16 {
+    get_config().map(|c| c.sql_port).unwrap_or(3306)
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_sql_id() -> *const c_char {
+    match get_config() {
+        Some(cfg) => match CString::new(cfg.sql_id.clone()) {
+            Ok(s) => s.into_raw(),
+            Err(_) => ptr::null(),
+        },
+        None => ptr::null(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_sql_pw() -> *const c_char {
+    match get_config() {
+        Some(cfg) => match CString::new(cfg.sql_pw.clone()) {
+            Ok(s) => s.into_raw(),
+            Err(_) => ptr::null(),
+        },
+        None => ptr::null(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_sql_db() -> *const c_char {
+    match get_config() {
+        Some(cfg) => match CString::new(cfg.sql_db.clone()) {
+            Ok(s) => s.into_raw(),
+            Err(_) => ptr::null(),
+        },
+        None => ptr::null(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_map_ip() -> u32 {
+    match get_config() {
+        Some(cfg) => {
+            if let Ok(addr) = cfg.map_ip.parse::<std::net::Ipv4Addr>() {
+                u32::from(addr)
+            } else { 0 }
+        }
+        None => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_map_port() -> u16 {
+    get_config().map(|c| c.map_port).unwrap_or(2001)
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_char_ip() -> u32 {
+    match get_config() {
+        Some(cfg) => {
+            if let Ok(addr) = cfg.char_ip.parse::<std::net::Ipv4Addr>() {
+                u32::from(addr)
+            } else { 0 }
+        }
+        None => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_char_port() -> u16 {
+    get_config().map(|c| c.char_port).unwrap_or(2005)
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_login_ip() -> u32 {
+    match get_config() {
+        Some(cfg) => {
+            if let Ok(addr) = cfg.login_ip.parse::<std::net::Ipv4Addr>() {
+                u32::from(addr)
+            } else { 0 }
+        }
+        None => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_login_port() -> u16 {
+    get_config().map(|c| c.login_port).unwrap_or(2000)
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_xor_key() -> *const c_char {
+    match get_config() {
+        Some(cfg) => match CString::new(cfg.xor_key.clone()) {
+            Ok(s) => s.into_raw(),
+            Err(_) => ptr::null(),
+        },
+        None => ptr::null(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_start_point() -> Point {
+    get_config().map(|c| c.start_point).unwrap_or(Point::new(0, 0, 0))
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_server_id() -> c_int {
+    get_config().map(|c| c.server_id).unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_meta_count() -> c_int {
+    get_config().map(|c| c.meta.len() as c_int).unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_meta_file(index: c_int) -> *const c_char {
+    match get_config() {
+        Some(cfg) => {
+            if index >= 0 && (index as usize) < cfg.meta.len() {
+                match CString::new(cfg.meta[index as usize].clone()) {
+                    Ok(s) => s.into_raw(),
+                    Err(_) => ptr::null(),
+                }
+            } else { ptr::null() }
+        }
+        None => ptr::null(),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_town_count() -> c_int {
+    get_config().map(|c| c.town.len() as c_int).unwrap_or(0)
+}
+
+#[no_mangle]
+pub extern "C" fn rust_config_get_town_name(index: c_int) -> *const c_char {
+    match get_config() {
+        Some(cfg) => {
+            if index >= 0 && (index as usize) < cfg.town.len() {
+                match CString::new(cfg.town[index as usize].clone()) {
+                    Ok(s) => s.into_raw(),
+                    Err(_) => ptr::null(),
+                }
+            } else { ptr::null() }
+        }
+        None => ptr::null(),
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rust_config_free_string(ptr: *mut c_char) {
+    if !ptr.is_null() {
+        unsafe { let _ = CString::from_raw(ptr); }
+    }
+}
+
+/// C town_data struct (matches the C definition)
+#[repr(C)]
+struct TownDataFfi {
+    name: [c_char; 32],
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rust_config_populate_c_globals() {
+    extern "C" {
+        static mut sql_id: [c_char; 32];
+        static mut sql_pw: [c_char; 32];
+        static mut sql_ip: [c_char; 32];
+        static mut sql_db: [c_char; 32];
+        static mut sql_port: c_int;
+        static mut login_id: [c_char; 33];
+        static mut login_pw: [c_char; 33];
+        static mut char_id: [c_char; 33];
+        static mut char_pw: [c_char; 33];
+        static mut login_ip: c_int;
+        static mut login_port: c_int;
+        static mut char_ip: c_int;
+        static mut char_port: c_int;
+        static mut map_ip: u32;
+        static mut map_port: u32;
+        static mut xor_key: [c_char; 10];
+        static mut start_pos: Point;
+        static mut serverid: c_int;
+        static mut require_reg: c_int;
+        static mut nex_version: c_int;
+        static mut nex_deep: c_int;
+        static mut save_time: c_int;
+        static mut xp_rate: c_int;
+        static mut d_rate: c_int;
+        static mut meta_file: [[c_char; 256]; 20];
+        static mut metamax: c_int;
+        static mut towns: [TownDataFfi; 255];
+        static mut town_n: c_int;
+    }
+
+    unsafe fn copy_string_to_buffer<const N: usize>(ptr: *const c_char, buffer_ptr: *mut [c_char; N]) {
+        if !ptr.is_null() {
+            let cstr = CStr::from_ptr(ptr);
+            let bytes = cstr.to_bytes();
+            let len = bytes.len().min(N - 1);
+            ptr::copy_nonoverlapping(bytes.as_ptr(), buffer_ptr as *mut u8, len);
+            (*(buffer_ptr as *mut [c_char; N]))[len] = 0;
+            rust_config_free_string(ptr as *mut c_char);
+        }
+    }
+
+    unsafe {
+        copy_string_to_buffer(rust_config_get_sql_id(), ptr::addr_of_mut!(sql_id));
+        copy_string_to_buffer(rust_config_get_sql_pw(), ptr::addr_of_mut!(sql_pw));
+        copy_string_to_buffer(rust_config_get_sql_ip(), ptr::addr_of_mut!(sql_ip));
+        copy_string_to_buffer(rust_config_get_sql_db(), ptr::addr_of_mut!(sql_db));
+        sql_port = rust_config_get_sql_port() as c_int;
+
+        let cfg = get_config();
+        if let Some(config) = cfg {
+            if let Ok(s) = CString::new(config.login_id.clone()) {
+                copy_string_to_buffer(s.into_raw(), ptr::addr_of_mut!(login_id));
+            }
+            if let Ok(s) = CString::new(config.login_pw.clone()) {
+                copy_string_to_buffer(s.into_raw(), ptr::addr_of_mut!(login_pw));
+            }
+            login_port = config.login_port as c_int;
+            if let Ok(addr) = config.login_ip.parse::<Ipv4Addr>() {
+                login_ip = u32::from_le_bytes(addr.octets()) as c_int;
+            }
+
+            if let Ok(s) = CString::new(config.char_id.clone()) {
+                copy_string_to_buffer(s.into_raw(), ptr::addr_of_mut!(char_id));
+            }
+            if let Ok(s) = CString::new(config.char_pw.clone()) {
+                copy_string_to_buffer(s.into_raw(), ptr::addr_of_mut!(char_pw));
+            }
+            char_port = config.char_port as c_int;
+            if let Ok(addr) = config.char_ip.parse::<Ipv4Addr>() {
+                char_ip = u32::from_le_bytes(addr.octets()) as c_int;
+            }
+
+            map_port = config.map_port as u32;
+            if let Ok(addr) = config.map_ip.parse::<Ipv4Addr>() {
+                map_ip = u32::from_le_bytes(addr.octets());
+            }
+
+            if let Ok(s) = CString::new(config.xor_key.clone()) {
+                copy_string_to_buffer(s.into_raw(), ptr::addr_of_mut!(xor_key));
+            }
+
+            start_pos = config.start_point;
+            serverid = config.server_id as c_int;
+            require_reg = config.require_reg as c_int;
+            nex_version = config.version as c_int;
+            nex_deep = config.deep as c_int;
+            save_time = (config.save_time * 1000) as c_int;
+            xp_rate = config.xprate as c_int;
+            d_rate = config.droprate as c_int;
+
+            metamax = config.meta.len().min(20) as c_int;
+            for (i, meta) in config.meta.iter().take(20).enumerate() {
+                if let Ok(s) = CString::new(meta.clone()) {
+                    let bytes = s.as_bytes_with_nul();
+                    let len = bytes.len().min(256);
+                    let dest = ptr::addr_of_mut!(meta_file[i]) as *mut u8;
+                    ptr::copy_nonoverlapping(bytes.as_ptr(), dest, len);
+                }
+            }
+
+            town_n = config.town.len().min(255) as c_int;
+            for (i, town) in config.town.iter().take(255).enumerate() {
+                if let Ok(s) = CString::new(town.clone()) {
+                    let bytes = s.as_bytes();
+                    let len = bytes.len().min(31);
+                    let dest = ptr::addr_of_mut!(towns[i].name) as *mut u8;
+                    ptr::copy_nonoverlapping(bytes.as_ptr(), dest, len);
+                    let name_ptr = ptr::addr_of_mut!(towns[i].name) as *mut c_char;
+                    *name_ptr.add(len) = 0;
+                }
+            }
+        }
+    }
+}

@@ -51,7 +51,7 @@ fn get_ddos() -> &'static Mutex<DdosState> {
 pub fn add_ip_lockout(ip_net: u32) {
     let ip = u32::from_be(ip_net);
     #[cfg(not(test))]
-    let tick = unsafe { crate::ffi::timer::gettick() };
+    let tick = unsafe { crate::timer::gettick() };
     #[cfg(test)]
     let tick: u32 = 0;
     let mut state = get_ddos().lock().unwrap();
@@ -85,7 +85,7 @@ pub fn is_ip_locked(ip_net: u32) -> bool {
 /// Returns the number of remaining entries (matches C's return value).
 pub fn connect_check_clear() -> i32 {
     #[cfg(not(test))]
-    let tick = unsafe { crate::ffi::timer::gettick() };
+    let tick = unsafe { crate::timer::gettick() };
     #[cfg(test)]
     let tick: u32 = u32::MAX; // expire everything in tests
     let mut state = get_ddos().lock().unwrap();

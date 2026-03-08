@@ -1605,7 +1605,7 @@ pub unsafe extern "C" fn sl_pc_getequippeddura(sd: *mut c_void, id: c_uint, slot
 /// Return map[m].spell (1 = spell-disabled), or 0 if map not loaded.
 #[no_mangle]
 pub unsafe extern "C" fn sl_map_spell(m: c_int) -> c_int {
-    let ptr = crate::ffi::map_db::get_map_ptr(m as u16);
+    let ptr = crate::database::map_db::get_map_ptr(m as u16);
     if ptr.is_null() || (*ptr).xs == 0 { return 0; }
     (*ptr).spell as c_int
 }
@@ -1851,8 +1851,8 @@ pub unsafe extern "C" fn sl_pc_additem(
     fl.id     = id;
     fl.amount = amount as i32;
     fl.owner  = owner;
-    fl.dura   = if dura != 0 { dura } else { crate::ffi::item_db::rust_itemdb_dura(id) };
-    fl.protected = crate::ffi::item_db::rust_itemdb_protected(id) as u32;
+    fl.dura   = if dura != 0 { dura } else { crate::database::item_db::rust_itemdb_dura(id) };
+    fl.protected = crate::database::item_db::rust_itemdb_protected(id) as u32;
     if !engrave.is_null() && *engrave != 0 {
         libc::strncpy(fl.real_name.as_mut_ptr(), engrave, fl.real_name.len() - 1);
     }
@@ -1892,7 +1892,7 @@ pub unsafe extern "C" fn sl_pc_removeitemdura(
 ) {
     let sd = sd_ptr as *mut MapSessionData;
     if sd.is_null() { return; }
-    let max_dura = crate::ffi::item_db::rust_itemdb_dura(id);
+    let max_dura = crate::database::item_db::rust_itemdb_dura(id);
     let maxinv = (*sd).status.maxinv as usize;
     for x in 0..maxinv {
         if amount == 0 { break; }
@@ -1913,7 +1913,7 @@ pub unsafe extern "C" fn sl_pc_hasitemdura(
 ) -> c_int {
     let sd = sd_ptr as *mut MapSessionData;
     if sd.is_null() { return amount as c_int; }
-    let max_dura = crate::ffi::item_db::rust_itemdb_dura(id);
+    let max_dura = crate::database::item_db::rust_itemdb_dura(id);
     let maxinv = (*sd).status.maxinv as usize;
     for x in 0..maxinv {
         if amount == 0 { break; }
@@ -2028,7 +2028,7 @@ pub unsafe extern "C" fn sl_pc_givexp(sd: *mut c_void, amount: c_uint) {
 pub unsafe extern "C" fn sl_pc_getclanitems(sd: *mut c_void, slot: c_int) -> c_int {
     let sd = sd as *mut MapSessionData;
     if sd.is_null() { return 0; }
-    let clan = crate::ffi::clan_db::rust_clandb_search((*sd).status.clan as c_int);
+    let clan = crate::database::clan_db::rust_clandb_search((*sd).status.clan as c_int);
     if clan.is_null() || (*clan).clanbanks.is_null() { return 0; }
     if slot < 0 || slot >= 255 { return 0; }
     (*(*clan).clanbanks.add(slot as usize)).item_id as c_int
@@ -2038,7 +2038,7 @@ pub unsafe extern "C" fn sl_pc_getclanitems(sd: *mut c_void, slot: c_int) -> c_i
 pub unsafe extern "C" fn sl_pc_getclanamounts(sd: *mut c_void, slot: c_int) -> c_int {
     let sd = sd as *mut MapSessionData;
     if sd.is_null() { return 0; }
-    let clan = crate::ffi::clan_db::rust_clandb_search((*sd).status.clan as c_int);
+    let clan = crate::database::clan_db::rust_clandb_search((*sd).status.clan as c_int);
     if clan.is_null() || (*clan).clanbanks.is_null() { return 0; }
     if slot < 0 || slot >= 255 { return 0; }
     (*(*clan).clanbanks.add(slot as usize)).amount as c_int
@@ -2050,7 +2050,7 @@ pub unsafe extern "C" fn sl_pc_checkclankitemamounts(
 ) -> c_int {
     let sd = sd as *mut MapSessionData;
     if sd.is_null() { return 0; }
-    let clan = crate::ffi::clan_db::rust_clandb_search((*sd).status.clan as c_int);
+    let clan = crate::database::clan_db::rust_clandb_search((*sd).status.clan as c_int);
     if clan.is_null() || (*clan).clanbanks.is_null() { return 0; }
     let mut total: u32 = 0;
     for x in 0..255usize {
@@ -2068,7 +2068,7 @@ pub unsafe extern "C" fn sl_pc_getcreationitems(
 ) -> c_int {
     let sd = sd as *mut MapSessionData;
     if sd.is_null() || out.is_null() { return 0; }
-    let curitem = (*crate::ffi::session::rust_session_rdata_ptr((*sd).fd, len as usize)) as i32 - 1;
+    let curitem = (*crate::session::rust_session_rdata_ptr((*sd).fd, len as usize)) as i32 - 1;
     let maxinv = (*sd).status.maxinv as i32;
     if curitem >= 0 && curitem < maxinv && (*sd).status.inventory[curitem as usize].id != 0 {
         *out = (*sd).status.inventory[curitem as usize].id;
@@ -2083,9 +2083,9 @@ pub unsafe extern "C" fn sl_pc_getcreationamounts(
 ) -> c_int {
     let sd = sd as *mut MapSessionData;
     if sd.is_null() { return 1; }
-    let t = crate::ffi::item_db::rust_itemdb_type(item_id);
+    let t = crate::database::item_db::rust_itemdb_type(item_id);
     if t < 3 || t > 17 {
-        (*crate::ffi::session::rust_session_rdata_ptr((*sd).fd, len as usize)) as c_int
+        (*crate::session::rust_session_rdata_ptr((*sd).fd, len as usize)) as c_int
     } else {
         1
     }

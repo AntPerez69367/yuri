@@ -188,11 +188,11 @@ pub fn tk_crypt_static(buff: &mut [u8], xor_key: &[u8]) {
 ///
 /// # Safety
 /// `fd` must be a valid session fd with pending write data staged by `rust_session_wfifohead`.
-#[cfg(not(test))]
+#[cfg(all(feature = "map-game", not(test)))]
 #[no_mangle]
 pub unsafe extern "C" fn encrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int {
-    use crate::ffi::config::config;
-    use crate::ffi::session::{rust_session_get_data, rust_session_wdata_ptr};
+    use crate::config::config;
+    use crate::session::{rust_session_get_data, rust_session_wdata_ptr};
     use crate::game::pc::MapSessionData;
 
     let sd = rust_session_get_data(fd) as *const MapSessionData;
@@ -244,11 +244,11 @@ pub unsafe extern "C" fn encrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int
 /// The read buffer is C-allocated session memory; the `*const u8 → *mut u8` cast for
 /// in-place XOR mirrors the C `RFIFOP(fd, 0)` usage and is safe here because
 /// packet dispatch is single-threaded and no other thread aliases this buffer.
-#[cfg(not(test))]
+#[cfg(all(feature = "map-game", not(test)))]
 #[no_mangle]
 pub unsafe extern "C" fn decrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int {
-    use crate::ffi::config::config;
-    use crate::ffi::session::{rust_session_available, rust_session_get_data, rust_session_rdata_ptr};
+    use crate::config::config;
+    use crate::session::{rust_session_available, rust_session_get_data, rust_session_rdata_ptr};
     use crate::game::pc::MapSessionData;
 
     let sd = rust_session_get_data(fd) as *const MapSessionData;
@@ -288,7 +288,7 @@ pub unsafe extern "C" fn decrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int
 // `send_metalist` are exported C symbols called from map_parse.c dispatch and
 // sl_g_sendmeta() respectively.
 
-#[cfg(not(test))]
+#[cfg(all(feature = "map-game", not(test)))]
 unsafe fn metacrc_path(path: &str) -> u32 {
     use flate2::Crc;
     let data = std::fs::read(path).unwrap_or_default();
@@ -297,13 +297,13 @@ unsafe fn metacrc_path(path: &str) -> u32 {
     crc.sum()
 }
 
-#[cfg(not(test))]
+#[cfg(all(feature = "map-game", not(test)))]
 unsafe fn send_metafile_impl(fd: std::os::raw::c_int, file: &str) {
     use flate2::write::ZlibEncoder;
     use flate2::Compression;
     use std::io::Write;
-    use crate::ffi::config::config;
-    use crate::ffi::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
+    use crate::config::config;
+    use crate::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
 
     let cfg = config();
     let path = format!("{}{}", cfg.meta_dir, file);
@@ -366,10 +366,10 @@ unsafe fn send_metafile_impl(fd: std::os::raw::c_int, file: &str) {
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`crate::game::pc::MapSessionData`].
-#[cfg(not(test))]
+#[cfg(all(feature = "map-game", not(test)))]
 #[no_mangle]
 pub unsafe extern "C" fn send_meta(sd: *mut crate::game::pc::MapSessionData) -> std::os::raw::c_int {
-    use crate::ffi::session::rust_session_rdata_ptr;
+    use crate::session::rust_session_rdata_ptr;
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
     let name_len = *rust_session_rdata_ptr(fd, 6) as usize;
@@ -387,12 +387,12 @@ pub unsafe extern "C" fn send_meta(sd: *mut crate::game::pc::MapSessionData) -> 
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`crate::game::pc::MapSessionData`].
-#[cfg(not(test))]
+#[cfg(all(feature = "map-game", not(test)))]
 #[no_mangle]
 pub unsafe extern "C" fn send_metalist(sd: *mut crate::game::pc::MapSessionData) -> std::os::raw::c_int {
     use flate2::Crc;
-    use crate::ffi::config::config;
-    use crate::ffi::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
+    use crate::config::config;
+    use crate::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
 
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
@@ -496,4 +496,104 @@ mod tests {
         tk_crypt_dynamic(&mut packet, key); // XOR twice = identity
         assert_eq!(&packet[5..], original);
     }
+}
+
+// ─── FFI bridge (moved from src/ffi/crypt.rs) ─────────────────────────────
+
+use std::ffi::CStr;
+use std::os::raw::{c_char, c_int, c_uchar};
+use std::slice;
+
+use crate::session::{RFIFO_SIZE, WFIFO_SIZE};
+
+/// Whether the opcode uses dynamic encryption (client-side check).
+#[no_mangle]
+pub extern "C" fn rust_crypt_is_key_client(opcode: c_int) -> bool {
+    is_key_client(opcode as u8)
+}
+
+/// Whether the opcode uses dynamic encryption (server-side check).
+#[no_mangle]
+pub extern "C" fn rust_crypt_is_key_server(opcode: c_int) -> bool {
+    is_key_server(opcode as u8)
+}
+
+/// Generates an MD5 hex digest of `name` into `buffer` (must be ≥33 bytes).
+#[no_mangle]
+pub unsafe extern "C" fn rust_crypt_generate_hashvalues(
+    name: *const c_char,
+    buffer: *mut c_char,
+    buflen: c_int,
+) -> *mut c_char {
+    if name.is_null() || buffer.is_null() || buflen < 33 {
+        return std::ptr::null_mut();
+    }
+    let name_bytes = CStr::from_ptr(name).to_bytes();
+    let buf = slice::from_raw_parts_mut(buffer as *mut u8, buflen as usize);
+    if generate_hashvalues(name_bytes, buf) { buffer } else { std::ptr::null_mut() }
+}
+
+/// Builds the 1025-byte encryption lookup table from `name`.
+#[no_mangle]
+pub unsafe extern "C" fn rust_crypt_populate_table(
+    name: *const c_char,
+    table: *mut c_char,
+    tablelen: c_int,
+) -> *mut c_char {
+    if name.is_null() || table.is_null() || tablelen < 0x401 {
+        return std::ptr::null_mut();
+    }
+    let name_bytes = CStr::from_ptr(name).to_bytes();
+    let buf = slice::from_raw_parts_mut(table as *mut u8, tablelen as usize);
+    if populate_table(name_bytes, buf) { table } else { std::ptr::null_mut() }
+}
+
+/// Appends 3 index bytes to `packet` and updates its length field.
+#[no_mangle]
+pub unsafe extern "C" fn rust_crypt_set_packet_indexes(packet: *mut c_uchar) -> c_int {
+    if packet.is_null() { return 0; }
+    let psize = ((*packet.add(1) as usize) << 8) | (*packet.add(2) as usize);
+    if psize == 0 || psize + 6 > WFIFO_SIZE { return 0; }
+    let buf_size = psize + 3 + 3;
+    let buf = slice::from_raw_parts_mut(packet, buf_size);
+    set_packet_indexes(buf) as c_int
+}
+
+/// Derives a 9-byte session key into `keyout[0..10]` (NUL at [9]).
+#[no_mangle]
+pub unsafe extern "C" fn rust_crypt_generate_key2(
+    packet: *mut c_uchar,
+    table: *const c_char,
+    keyout: *mut c_char,
+    fromclient: c_int,
+) -> *mut c_char {
+    if packet.is_null() || table.is_null() || keyout.is_null() {
+        return std::ptr::null_mut();
+    }
+    let psize = ((*packet.add(1) as usize) << 8) | (*packet.add(2) as usize);
+    if psize == 0 || psize + 3 > RFIFO_SIZE { return std::ptr::null_mut(); }
+    let packet_buf = slice::from_raw_parts(packet, psize + 3);
+    let table_buf = slice::from_raw_parts(table as *const u8, 0x401);
+    let mut key = [0u8; 10];
+    generate_key2(packet_buf, table_buf, &mut key, fromclient != 0);
+    let out = slice::from_raw_parts_mut(keyout as *mut u8, 10);
+    out.copy_from_slice(&key);
+    keyout
+}
+
+/// XOR-encrypts/decrypts `buff` in-place using a 9-byte `key`.
+#[no_mangle]
+pub unsafe extern "C" fn rust_crypt_dynamic(buff: *mut c_uchar, key: *const c_char) {
+    if buff.is_null() || key.is_null() { return; }
+    let total = ((*buff.add(1) as usize) << 8) | (*buff.add(2) as usize);
+    if total < 5 || total > RFIFO_SIZE { return; }
+    let buf = slice::from_raw_parts_mut(buff, total);
+    let key_bytes = slice::from_raw_parts(key as *const u8, 9);
+    tk_crypt_dynamic(buf, key_bytes);
+}
+
+/// XOR-encrypts/decrypts `buff` using the static xor_key (passed from C config global).
+#[no_mangle]
+pub unsafe extern "C" fn rust_crypt_static(buff: *mut c_uchar, xor_key: *const c_char) {
+    rust_crypt_dynamic(buff, xor_key);
 }

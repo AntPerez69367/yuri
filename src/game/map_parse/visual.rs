@@ -23,7 +23,7 @@ use super::packet::{
     encrypt, wfifob, wfifohead, wfifol, wfifoset, wfifow, wfifoheader,
     AREA_WOS,
 };
-use crate::ffi::session::{rust_session_exists, rust_session_set_eof};
+use crate::session::{rust_session_exists, rust_session_set_eof};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -734,7 +734,7 @@ pub unsafe extern "C" fn clif_cnpclook_sub(bl: *mut BlockList, mut ap: ...) -> c
 
     if (*nd).state != 2 {
         wfifob((*sd).fd, 59, name_len as u8);
-        let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 60);
+        let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 60);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(name_ptr as *const u8, dst, name_len);
         }
@@ -794,7 +794,7 @@ pub unsafe extern "C" fn clif_cnpclook_sub(bl: *mut BlockList, mut ap: ...) -> c
         let gfx_name_empty = gfx_name_len == 0 || *gfx_name_ptr == 0;
         if !gfx_name_empty {
             wfifob((*sd).fd, 59, gfx_name_len as u8);
-            let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 60);
+            let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 60);
             if !dst.is_null() {
                 std::ptr::copy_nonoverlapping(gfx_name_ptr as *const u8, dst, gfx_name_len);
             }
@@ -1000,7 +1000,7 @@ pub unsafe extern "C" fn clif_cmoblook_sub(bl: *mut BlockList, mut ap: ...) -> c
 
     if (*mob).state != 2 {
         wfifob((*sd).fd, 59, name_len as u8);
-        let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 60);
+        let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 60);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(name_ptr as *const u8, dst, name_len);
         }
@@ -1060,7 +1060,7 @@ pub unsafe extern "C" fn clif_cmoblook_sub(bl: *mut BlockList, mut ap: ...) -> c
         let gfx_name_empty = gfx_name_len == 0 || *gfx_name_ptr == 0;
         if !gfx_name_empty {
             wfifob((*sd).fd, 59, gfx_name_len as u8);
-            let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 60);
+            let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 60);
             if !dst.is_null() {
                 std::ptr::copy_nonoverlapping(gfx_name_ptr as *const u8, dst, gfx_name_len);
             }
@@ -1119,7 +1119,7 @@ pub unsafe extern "C" fn clif_charlook_sub(bl: *mut BlockList, mut ap: ...) -> c
 
     // Ghost visibility check (mirrors C: `if (map[sd->bl.m].show_ghosts && ...)`)
     {
-        let slot = crate::ffi::map_db::get_map_ptr((*sd).bl.m);
+        let slot = crate::database::map_db::get_map_ptr((*sd).bl.m);
         if !slot.is_null()
             && (*slot).show_ghosts != 0
             && (*sd).status.state == 1
@@ -1374,7 +1374,7 @@ pub unsafe extern "C" fn clif_charlook_sub(bl: *mut BlockList, mut ap: ...) -> c
     // name field
     if (*sd).status.state != 2 && (*sd).status.state != 5 {
         wfifob((*src_sd).fd, 59, name_len as u8);
-        let dst = crate::ffi::session::rust_session_wdata_ptr((*src_sd).fd, 60);
+        let dst = crate::session::rust_session_wdata_ptr((*src_sd).fd, 60);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(name_ptr as *const u8, dst, name_len);
         }
@@ -1444,7 +1444,7 @@ pub unsafe extern "C" fn clif_charlook_sub(bl: *mut BlockList, mut ap: ...) -> c
         let visible = (*sd).status.state != 2 && (*sd).status.state != 5;
         if visible && !gfx_name_empty {
             wfifob((*src_sd).fd, 59, gfx_name_len as u8);
-            let dst = crate::ffi::session::rust_session_wdata_ptr((*src_sd).fd, 60);
+            let dst = crate::session::rust_session_wdata_ptr((*src_sd).fd, 60);
             if !dst.is_null() {
                 std::ptr::copy_nonoverlapping(gfx_name_ptr as *const u8, dst, gfx_name_len);
             }

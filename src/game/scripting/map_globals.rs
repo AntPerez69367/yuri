@@ -8,9 +8,9 @@ use std::ffi::{c_char, c_int, c_uchar, c_void};
 use std::os::raw::c_uint;
 
 use crate::database::map_db::{BlockList, WarpList, BLOCK_SIZE, MAX_MAPREG};
-use crate::ffi::block::map_delblock;
-use crate::ffi::map_db::get_map_ptr;
-use crate::ffi::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof};
+use crate::game::block::map_delblock;
+use crate::database::map_db::get_map_ptr;
+use crate::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof};
 use crate::game::block::{map_is_loaded, foreach_in_area, foreach_in_cell, AreaType};
 use crate::game::client::visual::clif_sendweather;
 use crate::game::map_server::{map_deliddb, map_id2sd, map_readglobalreg, map_setglobalreg};
@@ -312,8 +312,8 @@ pub unsafe extern "C" fn sl_g_dropitem(bl_ptr: *mut c_void, item_id: c_int, amou
     let bl = bl_ptr as *mut BlockList;
     let id = item_id as c_uint;
     let sd = if owner != 0 { map_id2sd(owner as c_uint) as *mut MapSessionData } else { std::ptr::null_mut() };
-    let dura = crate::ffi::item_db::rust_itemdb_dura(id);
-    let prot = crate::ffi::item_db::rust_itemdb_protected(id);
+    let dura = crate::database::item_db::rust_itemdb_dura(id);
+    let prot = crate::database::item_db::rust_itemdb_protected(id);
     crate::game::mob::rust_mob_dropitem(
         (*bl).id as c_uint, id, amount, dura, prot, 0,
         (*bl).m as c_int, (*bl).x as c_int, (*bl).y as c_int, sd,
@@ -332,8 +332,8 @@ pub unsafe extern "C" fn sl_g_dropitemxy(
 ) {
     let id = item_id as c_uint;
     let sd = if owner != 0 { map_id2sd(owner as c_uint) as *mut MapSessionData } else { std::ptr::null_mut() };
-    let dura = crate::ffi::item_db::rust_itemdb_dura(id);
-    let prot = crate::ffi::item_db::rust_itemdb_protected(id);
+    let dura = crate::database::item_db::rust_itemdb_dura(id);
+    let prot = crate::database::item_db::rust_itemdb_protected(id);
     crate::game::mob::rust_mob_dropitem(0, id, amount, dura, prot, 0, m, x, y, sd);
 }
 
@@ -354,8 +354,8 @@ pub unsafe extern "C" fn sl_g_sendparcel(
     };
     let receiver_u = receiver as u32;
     let item_u = item as u32;
-    let dura = crate::ffi::item_db::rust_itemdb_dura(item_u) as i32;
-    let prot = crate::ffi::item_db::rust_itemdb_protected(item_u) as i32;
+    let dura = crate::database::item_db::rust_itemdb_dura(item_u) as i32;
+    let prot = crate::database::item_db::rust_itemdb_protected(item_u) as i32;
     let _ = crate::database::blocking_run(async move {
         let newest: i32 = sqlx::query_scalar::<_, i32>(
             "SELECT COALESCE(MAX(`ParPosition`), -1) FROM `Parcels` WHERE `ParChaIdDestination`=?"
@@ -723,7 +723,7 @@ pub unsafe extern "C" fn sl_g_setmap(
 ) -> c_int {
     use std::ffi::c_ushort;
     use crate::database::map_db::{GlobalReg, parse_map_file};
-    use crate::ffi::map_db::rust_map_loadregistry;
+    use crate::database::map_db::rust_map_loadregistry;
 
     if mapfile.is_null() { return -1; }
     let path = match std::ffi::CStr::from_ptr(mapfile).to_str() {
@@ -862,7 +862,7 @@ pub unsafe extern "C" fn sl_g_setmap(
     // ── Registry + client update ────────────────────────────────────────────
     rust_map_loadregistry(m);
     foreach_in_area(m, 0, 0, AreaType::SameMap, BL_PC_TYPE, |bl| {
-        crate::ffi::scripting::sl_updatepeople(bl as *mut c_void, std::ptr::null_mut())
+        crate::game::scripting::sl_updatepeople(bl as *mut c_void, std::ptr::null_mut())
     });
 
     0

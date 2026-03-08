@@ -19,7 +19,7 @@ use crate::game::pc::{
     EQ_FACEACC, EQ_CROWN, EQ_FACEACCTWO, EQ_MANTLE, EQ_NECKLACE, EQ_BOOTS,
 };
 use crate::servers::char::charstatus::Item;
-use crate::ffi::session::{rust_session_exists, rust_session_set_eof};
+use crate::session::{rust_session_exists, rust_session_set_eof};
 
 use super::packet::{
     encrypt, wfifob, wfifohead, wfifol, wfifoset, wfifow,
@@ -321,7 +321,7 @@ pub unsafe extern "C" fn clif_closeit(sd: *mut MapSessionData) -> c_int {
     wfifow(fd, 11, swap16(9));
     // copy xor_key (9 chars + null) into WFIFOP(sd->fd, 13)
     libc::strcpy(
-        crate::ffi::session::rust_session_wdata_ptr(fd, 13) as *mut c_char,
+        crate::session::rust_session_wdata_ptr(fd, 13) as *mut c_char,
         xor_key.as_ptr(),
     );
     let mut len = 11usize;
@@ -329,7 +329,7 @@ pub unsafe extern "C" fn clif_closeit(sd: *mut MapSessionData) -> c_int {
     let name_len = cstrlen(name_ptr as *const c_char);
     wfifob(fd, len + 11, name_len as u8);
     libc::strcpy(
-        crate::ffi::session::rust_session_wdata_ptr(fd, len + 12) as *mut c_char,
+        crate::session::rust_session_wdata_ptr(fd, len + 12) as *mut c_char,
         name_ptr as *const c_char,
     );
     len += name_len + 1;
@@ -370,7 +370,7 @@ pub unsafe extern "C" fn clif_sendtowns(sd: *mut MapSessionData) -> c_int {
         wfifob(fd, len + 10, x as u8);
         wfifob(fd, len + 11, name_len as u8);
         libc::strcpy(
-            crate::ffi::session::rust_session_wdata_ptr(fd, len + 12) as *mut c_char,
+            crate::session::rust_session_wdata_ptr(fd, len + 12) as *mut c_char,
             name_ptr as *const c_char,
         );
         len += name_len + 2;
@@ -502,7 +502,7 @@ pub unsafe extern "C" fn clif_scriptmes(
             wfifob(fd, 25, next as u8);
             wfifow(fd, 26, swap16(msg_len as u16));
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, 28) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, 28) as *mut c_char,
                 msg,
             );
             wfifow(fd, 1, swap16((msg_len + 25) as u16));
@@ -521,7 +521,7 @@ pub unsafe extern "C" fn clif_scriptmes(
             wfifob(fd, 63, next as u8);
             wfifow(fd, 64, swap16(msg_len as u16));
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, 66) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, 66) as *mut c_char,
                 msg,
             );
             wfifow(fd, 1, swap16((msg_len + 63) as u16));
@@ -538,7 +538,7 @@ pub unsafe extern "C" fn clif_scriptmes(
             wfifob(fd, 63, next as u8);
             wfifow(fd, 64, swap16(msg_len as u16));
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, 66) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, 66) as *mut c_char,
                 msg,
             );
             wfifow(fd, 1, swap16((msg_len + 63) as u16));
@@ -602,7 +602,7 @@ pub unsafe extern "C" fn clif_scriptmenu(
             wfifob(fd, 19, color as u8);
             wfifow(fd, 20, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, 22) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, 22) as *mut c_char,
                 dialog as *const c_char,
             );
             wfifob(fd, dialog_len + 22, size as u8);
@@ -612,7 +612,7 @@ pub unsafe extern "C" fn clif_scriptmenu(
                 let entry_len = cstrlen(entry as *const c_char);
                 wfifob(fd, len + 23, entry_len as u8);
                 libc::strcpy(
-                    crate::ffi::session::rust_session_wdata_ptr(fd, len + 24) as *mut c_char,
+                    crate::session::rust_session_wdata_ptr(fd, len + 24) as *mut c_char,
                     entry as *const c_char,
                 );
                 len += entry_len + 1;
@@ -629,7 +629,7 @@ pub unsafe extern "C" fn clif_scriptmenu(
             wfifob(fd, 57, color as u8);
             wfifow(fd, 58, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, 60) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, 60) as *mut c_char,
                 dialog as *const c_char,
             );
             wfifob(fd, dialog_len + 60, size as u8);
@@ -639,7 +639,7 @@ pub unsafe extern "C" fn clif_scriptmenu(
                 let entry_len = cstrlen(entry as *const c_char);
                 wfifob(fd, len + 61, entry_len as u8);
                 libc::strcpy(
-                    crate::ffi::session::rust_session_wdata_ptr(fd, len + 62) as *mut c_char,
+                    crate::session::rust_session_wdata_ptr(fd, len + 62) as *mut c_char,
                     entry as *const c_char,
                 );
                 len += entry_len + 1;
@@ -656,7 +656,7 @@ pub unsafe extern "C" fn clif_scriptmenu(
             wfifob(fd, 57, color as u8);
             wfifow(fd, 58, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, 60) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, 60) as *mut c_char,
                 dialog as *const c_char,
             );
             wfifob(fd, dialog_len + 60, size as u8);
@@ -666,7 +666,7 @@ pub unsafe extern "C" fn clif_scriptmenu(
                 let entry_len = cstrlen(entry as *const c_char);
                 wfifob(fd, len + 61, entry_len as u8);
                 libc::strcpy(
-                    crate::ffi::session::rust_session_wdata_ptr(fd, len + 62) as *mut c_char,
+                    crate::session::rust_session_wdata_ptr(fd, len + 62) as *mut c_char,
                     entry as *const c_char,
                 );
                 len += entry_len + 1;
@@ -741,7 +741,7 @@ pub unsafe extern "C" fn clif_scriptmenuseq(
             wfifob(fd, 25, next as u8);
             wfifow(fd, 26, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, 28) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, 28) as *mut c_char,
                 dialog,
             );
             let mut len = dialog_len + 1;
@@ -752,7 +752,7 @@ pub unsafe extern "C" fn clif_scriptmenuseq(
                 let entry_len = cstrlen(entry);
                 wfifob(fd, len + 27, entry_len as u8);
                 libc::strcpy(
-                    crate::ffi::session::rust_session_wdata_ptr(fd, len + 28) as *mut c_char,
+                    crate::session::rust_session_wdata_ptr(fd, len + 28) as *mut c_char,
                     entry,
                 );
                 len += entry_len + 1;
@@ -773,7 +773,7 @@ pub unsafe extern "C" fn clif_scriptmenuseq(
             wfifob(fd, 65, next as u8);
             wfifow(fd, 66, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, 68) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, 68) as *mut c_char,
                 dialog,
             );
             let mut len = dialog_len + 68;
@@ -784,7 +784,7 @@ pub unsafe extern "C" fn clif_scriptmenuseq(
                 let entry_len = cstrlen(entry);
                 wfifob(fd, len, entry_len as u8);
                 libc::strcpy(
-                    crate::ffi::session::rust_session_wdata_ptr(fd, len + 1) as *mut c_char,
+                    crate::session::rust_session_wdata_ptr(fd, len + 1) as *mut c_char,
                     entry,
                 );
                 len += entry_len + 1;
@@ -860,7 +860,7 @@ pub unsafe extern "C" fn clif_scriptmenuseq(
             wfifob(fd, 65, next as u8);
             wfifow(fd, 66, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, 68) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, 68) as *mut c_char,
                 dialog,
             );
             let mut len = dialog_len + 68;
@@ -871,7 +871,7 @@ pub unsafe extern "C" fn clif_scriptmenuseq(
                 let entry_len = cstrlen(entry);
                 wfifob(fd, len, entry_len as u8);
                 libc::strcpy(
-                    crate::ffi::session::rust_session_wdata_ptr(fd, len + 1) as *mut c_char,
+                    crate::session::rust_session_wdata_ptr(fd, len + 1) as *mut c_char,
                     entry,
                 );
                 len += entry_len + 1;
@@ -948,14 +948,14 @@ pub unsafe extern "C" fn clif_inputseq(
 
     wfifow(fd, 26, swap16(dialog_len as u16));
     libc::strcpy(
-        crate::ffi::session::rust_session_wdata_ptr(fd, 28) as *mut c_char,
+        crate::session::rust_session_wdata_ptr(fd, 28) as *mut c_char,
         dialog,
     );
     let mut len = dialog_len + 28;
 
     wfifob(fd, len, dialog2_len as u8);
     libc::strcpy(
-        crate::ffi::session::rust_session_wdata_ptr(fd, len + 1) as *mut c_char,
+        crate::session::rust_session_wdata_ptr(fd, len + 1) as *mut c_char,
         dialog2,
     );
     len += dialog2_len + 1;
@@ -964,7 +964,7 @@ pub unsafe extern "C" fn clif_inputseq(
     len += 1;
     wfifob(fd, len, dialog3_len as u8);
     libc::strcpy(
-        crate::ffi::session::rust_session_wdata_ptr(fd, len + 1) as *mut c_char,
+        crate::session::rust_session_wdata_ptr(fd, len + 1) as *mut c_char,
         dialog3,
     );
     len += dialog3_len + 3;
@@ -1127,7 +1127,7 @@ pub unsafe extern "C" fn clif_buydialog(
 
         wfifow(fd, 20, swap16(dialog_len as u16));
         libc::strcpy(
-            crate::ffi::session::rust_session_wdata_ptr(fd, 22) as *mut c_char,
+            crate::session::rust_session_wdata_ptr(fd, 22) as *mut c_char,
             dialog,
         );
         let mut len = dialog_len;
@@ -1179,7 +1179,7 @@ pub unsafe extern "C" fn clif_buydialog(
             let name_len = libc::strlen(name_buf.as_ptr() as *const c_char);
             wfifob(fd, len + 22, name_len as u8);
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, len + 23) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, len + 23) as *mut c_char,
                 name_buf.as_ptr() as *const c_char,
             );
             len += name_len + 1;
@@ -1211,7 +1211,7 @@ pub unsafe extern "C" fn clif_buydialog(
             let buff_len = libc::strlen(buff_buf.as_ptr() as *const c_char);
             wfifob(fd, len + 22, buff_len as u8);
             libc::memcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, len + 23) as *mut c_void,
+                crate::session::rust_session_wdata_ptr(fd, len + 23) as *mut c_void,
                 buff_buf.as_ptr() as *const c_void,
                 buff_len,
             );
@@ -1235,7 +1235,7 @@ pub unsafe extern "C" fn clif_buydialog(
 
         wfifow(fd, 60, swap16(dialog_len as u16));
         libc::strcpy(
-            crate::ffi::session::rust_session_wdata_ptr(fd, 62) as *mut c_char,
+            crate::session::rust_session_wdata_ptr(fd, 62) as *mut c_char,
             dialog,
         );
         let mut len = dialog_len;
@@ -1282,7 +1282,7 @@ pub unsafe extern "C" fn clif_buydialog(
             let name_len = libc::strlen(name_buf.as_ptr() as *const c_char);
             wfifob(fd, len + 62, name_len as u8);
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, len + 63) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, len + 63) as *mut c_char,
                 name_buf.as_ptr() as *const c_char,
             );
             len += name_len + 1;
@@ -1313,7 +1313,7 @@ pub unsafe extern "C" fn clif_buydialog(
             let buff_len = libc::strlen(buff_buf.as_ptr() as *const c_char);
             wfifob(fd, len + 62, buff_len as u8);
             libc::memcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, len + 63) as *mut c_void,
+                crate::session::rust_session_wdata_ptr(fd, len + 63) as *mut c_void,
                 buff_buf.as_ptr() as *const c_void,
                 buff_len,
             );
@@ -1391,7 +1391,7 @@ pub unsafe extern "C" fn clif_selldialog(
 
         wfifow(fd, 20, swap16(dialog_len as u16));
         libc::strcpy(
-            crate::ffi::session::rust_session_wdata_ptr(fd, 22) as *mut c_char,
+            crate::session::rust_session_wdata_ptr(fd, 22) as *mut c_char,
             dialog,
         );
         let mut len = dialog_len + 2;
@@ -1416,7 +1416,7 @@ pub unsafe extern "C" fn clif_selldialog(
 
         wfifow(fd, 60, swap16(dialog_len as u16));
         libc::strcpy(
-            crate::ffi::session::rust_session_wdata_ptr(fd, 62) as *mut c_char,
+            crate::session::rust_session_wdata_ptr(fd, 62) as *mut c_char,
             dialog,
         );
         let mut len = dialog_len;
@@ -1499,14 +1499,14 @@ pub unsafe extern "C" fn clif_input(
 
             wfifow(fd, 20, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, 22) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, 22) as *mut c_char,
                 dialog,
             );
             let mut len = dialog_len;
             wfifob(fd, len + 22, item_len as u8);
             len += 1;
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, len + 23) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, len + 23) as *mut c_char,
                 item,
             );
             len += item_len + 1;
@@ -1524,14 +1524,14 @@ pub unsafe extern "C" fn clif_input(
             wfifob(fd, 57, color as u8);
             wfifow(fd, 58, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, 60) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, 60) as *mut c_char,
                 dialog,
             );
             let mut len = dialog_len;
             wfifob(fd, len + 60, item_len as u8);
             len += 1;
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, len + 61) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, len + 61) as *mut c_char,
                 item,
             );
             len += item_len + 1;
@@ -1549,14 +1549,14 @@ pub unsafe extern "C" fn clif_input(
             wfifob(fd, 57, color as u8);
             wfifow(fd, 58, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, 60) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, 60) as *mut c_char,
                 dialog,
             );
             let mut len = dialog_len;
             wfifob(fd, len + 60, item_len as u8);
             len += 1;
             libc::strcpy(
-                crate::ffi::session::rust_session_wdata_ptr(fd, len + 61) as *mut c_char,
+                crate::session::rust_session_wdata_ptr(fd, len + 61) as *mut c_char,
                 item,
             );
             len += item_len + 1;

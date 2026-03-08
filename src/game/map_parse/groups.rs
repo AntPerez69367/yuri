@@ -9,19 +9,19 @@
 
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
-use std::ffi::{c_char, c_int, c_uint, c_ulong, c_void};
+use std::ffi::{c_char, c_int, c_uint};
 
 use crate::database::map_db::BlockList;
-use crate::ffi::map_db::{get_map_ptr, map_is_loaded};
-use crate::ffi::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr};
+use crate::database::map_db::{get_map_ptr, map_is_loaded};
+use crate::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr};
 use crate::game::mob::MobSpawnData;
+use crate::database::{blocking_run, get_pool};
+
 use crate::game::pc::{
     MapSessionData,
     BL_MOB, BL_NPC, BL_PC,
     EQ_HELM, EQ_FACEACC, EQ_CROWN, EQ_FACEACCTWO,
     MAX_GROUP_MEMBERS,
-    Sql, SqlStmt, SqlDataType,
-    SQL_ERROR, SQL_SUCCESS,
     OPT_FLAG_STEALTH, OPT_FLAG_GHOSTS,
     FLAG_GROUP,
 };
@@ -33,8 +33,6 @@ use super::packet::{
     map_foreachinarea, map_foreachincell,
     SAMEMAP,
 };
-
-use crate::game::map_server::sql_handle;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -68,27 +66,6 @@ extern "C" {
     #[link_name = "rust_pc_isequip"]
     fn pc_isequip(sd: *mut MapSessionData, slot: c_int) -> c_uint;
 
-
-    // SQL
-    fn Sql_Query(handle: *mut Sql, fmt: *const c_char, ...) -> c_int;
-    fn SqlStmt_Malloc(handle: *mut Sql) -> *mut SqlStmt;
-    #[link_name = "SqlStmt_ShowDebug_"]
-    fn SqlStmt_ShowDebug(stmt: *mut SqlStmt, file: *const c_char, line: c_ulong);
-    fn SqlStmt_Free(stmt: *mut SqlStmt);
-    fn SqlStmt_Prepare(stmt: *mut SqlStmt, query: *const c_char, ...) -> c_int;
-    fn SqlStmt_Execute(stmt: *mut SqlStmt) -> c_int;
-    fn SqlStmt_BindColumn(
-        stmt: *mut SqlStmt,
-        idx: usize,
-        buf_type: SqlDataType,
-        buf: *mut c_void,
-        buf_len: usize,
-        out_len: *mut c_ulong,
-        is_null: *mut c_int,
-    ) -> c_int;
-    fn SqlStmt_NextRow(stmt: *mut SqlStmt) -> c_int;
-    /// `void Sql_ShowDebug_(Sql* self, const char* file, unsigned long line)`
-    fn Sql_ShowDebug_(self_: *mut Sql, file: *const c_char, line: c_ulong);
 
     // groups global: extern unsigned int groups[MAX_GROUPS][MAX_GROUP_MEMBERS]
     // Declared in pc.rs but re-accessed here via a raw link
@@ -903,33 +880,29 @@ pub unsafe extern "C" fn clif_huntertoggle(sd: *mut MapSessionData) -> c_int {
         std::ptr::copy_nonoverlapping(src, hunter_tag.as_mut_ptr() as *mut u8, tag_len.min(39));
     }
 
-    let stmt = SqlStmt_Malloc(sql_handle);
-    if stmt.is_null() {
-        SqlStmt_ShowDebug(stmt, c"groups.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return 0;
-    }
+    let hunter_val = (*sd).hunter;
+    let char_id = (*sd).status.id as i32;
+    let hunter_tag_str = std::ffi::CStr::from_ptr(hunter_tag.as_ptr())
+        .to_str()
+        .unwrap_or("")
+        .to_owned();
 
-    if SQL_ERROR == Sql_Query(
-        sql_handle,
-        b"UPDATE `Character` SET `ChaHunter` = '%i', `ChaHunterNote` = '%s' WHERE `ChaId` = '%d'\0"
-            .as_ptr() as *const c_char,
-        (*sd).hunter,
-        hunter_tag.as_ptr(),
-        (*sd).status.id,
-    ) {
-        Sql_ShowDebug_(sql_handle, c"groups.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return 0;
-    }
+    blocking_run(async move {
+        sqlx::query(
+            "UPDATE `Character` SET `ChaHunter` = ?, `ChaHunterNote` = ? WHERE `ChaId` = ?"
+        )
+        .bind(hunter_val)
+        .bind(hunter_tag_str)
+        .bind(char_id)
+        .execute(get_pool())
+        .await
+        .ok();
+    });
 
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
-        SqlStmt_Free(stmt);
         return 0;
     }
-
-    SqlStmt_Free(stmt);
     wfifohead((*sd).fd, 5);
     wfifob((*sd).fd, 0, 0xAA);
     wfifob((*sd).fd, 3, 0x83);
@@ -958,40 +931,31 @@ pub unsafe extern "C" fn clif_sendhunternote(sd: *mut MapSessionData) -> c_int {
         return 1;
     }
 
-    let stmt = SqlStmt_Malloc(sql_handle);
-    if stmt.is_null() {
-        SqlStmt_ShowDebug(stmt, c"groups.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return 0;
-    }
+    let hunter_name_str = std::ffi::CStr::from_ptr(huntername.as_ptr())
+        .to_str()
+        .unwrap_or("")
+        .to_owned();
 
-    let mut hunternote = [0i8; 41];
-
-    if SQL_ERROR == SqlStmt_Prepare(
-        stmt,
-        b"SELECT `ChaHunterNote` FROM `Character` WHERE `ChaName` = '%s'\0".as_ptr() as *const c_char,
-        huntername.as_ptr(),
-    ) || SQL_ERROR == SqlStmt_Execute(stmt)
-      || SQL_ERROR == SqlStmt_BindColumn(
-            stmt, 0,
-            SqlDataType::SqlDtString,
-            hunternote.as_mut_ptr() as *mut c_void,
-            hunternote.len(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
+    let note_result = blocking_run(async move {
+        sqlx::query_scalar::<_, String>(
+            "SELECT `ChaHunterNote` FROM `Character` WHERE `ChaName` = ?"
         )
-    {
-        SqlStmt_ShowDebug(stmt, c"groups.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return 1;
-    }
+        .bind(hunter_name_str)
+        .fetch_optional(get_pool())
+        .await
+        .ok()
+        .flatten()
+        .unwrap_or_default()
+    });
 
-    if SqlStmt_NextRow(stmt) == SQL_SUCCESS {
-        SqlStmt_Free(stmt);
+    // Copy note into fixed-size buffer for packet building
+    let mut hunternote = [0i8; 41];
+    for (i, b) in note_result.bytes().take(40).enumerate() {
+        hunternote[i] = b as i8;
     }
 
     // If empty note, skip sending
-    if libc::strcmp(hunternote.as_ptr(), b"\0".as_ptr() as *const c_char) == 0 {
+    if hunternote[0] == 0 {
         return 1;
     }
 

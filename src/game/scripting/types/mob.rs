@@ -4,7 +4,7 @@ use std::os::raw::c_void;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use crate::database::map_db::{BlockList, MapData};
-use crate::ffi::map_db::get_map_ptr;
+use crate::database::map_db::get_map_ptr;
 use crate::database::mob_db::MobDbData;
 use crate::game::mob::{
     mob_calcstat, mob_warp, move_mob, move_mob_ignore_object, move_mob_intent, moveghost_mob,

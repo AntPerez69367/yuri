@@ -141,7 +141,7 @@ pub fn searchexist(id: u32) -> *mut RecipeData {
     }
 }
 
-pub fn searchname(s: *const c_char) -> *mut RecipeData {
+pub unsafe fn searchname(s: *const c_char) -> *mut RecipeData {
     if s.is_null() { return null_mut(); }
     let target = unsafe { CStr::from_ptr(s) }.to_string_lossy().to_lowercase();
     let map = db().lock().unwrap();
@@ -157,4 +157,24 @@ pub fn searchname(s: *const c_char) -> *mut RecipeData {
         }
     }
     null_mut()
+}
+
+// ─── FFI bridge (moved from src/ffi/recipe_db.rs) ─────────────────────────
+
+#[no_mangle]
+pub extern "C" fn rust_recipedb_init() -> c_int { ffi_catch!(-1, init()) }
+
+#[no_mangle]
+pub extern "C" fn rust_recipedb_term() { ffi_catch!((), term()) }
+
+#[no_mangle]
+pub extern "C" fn rust_recipedb_search(id: c_uint) -> *mut RecipeData { ffi_catch!(null_mut(), search(id)) }
+
+#[no_mangle]
+pub extern "C" fn rust_recipedb_searchexist(id: c_uint) -> *mut RecipeData { ffi_catch!(null_mut(), searchexist(id)) }
+
+#[no_mangle]
+pub unsafe extern "C" fn rust_recipedb_searchname(s: *const c_char) -> *mut RecipeData {
+    if s.is_null() { return null_mut(); }
+    ffi_catch!(null_mut(), unsafe { searchname(s) })
 }

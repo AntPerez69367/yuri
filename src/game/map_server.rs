@@ -4,25 +4,24 @@
 //! Each `#[no_mangle]` export directly replaces its C counterpart in `libmap_game.a`.
 
 use std::collections::HashMap;
-use std::ffi::{c_char, c_ulong, c_void};
+use std::ffi::{c_char, c_void};
 use std::os::raw::{c_int, c_uchar, c_uint, c_ushort};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::database::{blocking_run, blocking_run_async, get_pool};
 use crate::game::pc::{
-    MapSessionData, Sql, SqlStmt, SqlDataType, SQL_ERROR, SQL_SUCCESS,
+    MapSessionData,
     U_FLAG_UNPHYSICAL,
 };
 
 use crate::database::map_db::BlockList;
 
-use crate::ffi::session::{
+use crate::session::{
     rust_session_wfifohead, rust_session_wdata_ptr, rust_session_commit,
     rust_session_rdata_ptr,
 };
 
-// SQL and session C FFI needed by boards/nmail functions.
-// These mirror the extern blocks in pc.rs / map_parse/*.rs.
+// Session C FFI needed by boards/nmail functions.
 extern "C" {
     fn rust_session_exists(fd: c_int) -> c_int;
     fn rust_session_get_eof(fd: c_int) -> c_int;
@@ -51,27 +50,6 @@ extern "C" {
     #[link_name = "rust_sl_exec"]
     fn sl_exec(user: *mut c_void, code: *mut c_char);
 
-    // SQL C FFI (mirrors pc.rs pub extern "C" block).
-    fn Sql_Query(self_: *mut Sql, query: *const c_char, ...) -> c_int;
-    fn Sql_FreeResult(self_: *mut Sql);
-    fn Sql_EscapeString(self_: *mut Sql, out_to: *mut c_char, from: *const c_char) -> usize;
-    fn Sql_ShowDebug_(self_: *mut Sql, file: *const c_char, line: c_ulong);
-    fn SqlStmt_Malloc(sql: *mut Sql) -> *mut SqlStmt;
-    fn SqlStmt_Prepare(self_: *mut SqlStmt, query: *const c_char, ...) -> c_int;
-    fn SqlStmt_Execute(self_: *mut SqlStmt) -> c_int;
-    fn SqlStmt_BindColumn(
-        self_: *mut SqlStmt,
-        idx: usize,
-        buffer_type: SqlDataType,
-        buffer: *mut c_void,
-        buffer_len: usize,
-        out_len: *mut c_ulong,
-        is_null: *mut c_int,
-    ) -> c_int;
-    fn SqlStmt_NextRow(self_: *mut SqlStmt) -> c_int;
-    fn SqlStmt_Free(self_: *mut SqlStmt);
-    // The C macro SqlStmt_ShowDebug(stmt) expands to SqlStmt_ShowDebug_(stmt, __FILE__, __LINE__).
-    fn SqlStmt_ShowDebug_(stmt: *mut SqlStmt, file: *const c_char, line: c_ulong);
 }
 
 // ---------------------------------------------------------------------------
@@ -120,12 +98,6 @@ pub static mut char_fd: c_int = 0;
 /// Declared `extern int map_fd` in `c_src/map_server.h`.
 #[no_mangle]
 pub static mut map_fd: c_int = 0;
-
-/// Legacy C MySQL handle — allocated by `Sql_Malloc()` / `Sql_Connect()` in
-/// `src/bin/map_server.rs` and also used by sl_compat.c C code.
-/// Declared `extern Sql* sql_handle` in `c_src/map_server.h` / `mmo.h`.
-#[no_mangle]
-pub static mut sql_handle: *mut Sql = std::ptr::null_mut();
 
 /// Online user list (count + per-slot char-id array).
 /// Declared `extern struct userlist_data userlist` in `c_src/map_server.h`.
@@ -192,7 +164,7 @@ pub unsafe extern "C" fn map_clritem() {
 /// `id` must be a valid floor item ID currently registered in the ID database.
 #[no_mangle]
 pub unsafe extern "C" fn map_delitem(id: c_uint) {
-    use crate::ffi::block::map_delblock;
+    use crate::game::block::map_delblock;
     let bl = map_id2bl(id) as *mut BlockList;
     if bl.is_null() {
         return;
@@ -221,7 +193,7 @@ pub unsafe extern "C" fn map_delitem(id: c_uint) {
 /// - Must be called on the game thread (single-threaded game loop).
 #[no_mangle]
 pub unsafe extern "C" fn map_additem(bl: *mut BlockList) {
-    use crate::ffi::block::map_addblock;
+    use crate::game::block::map_addblock;
 
     // Find first free slot.
     let mut i = 0usize;
@@ -300,15 +272,15 @@ pub unsafe extern "C" fn map_freeblock_unlock() -> c_int {
 /// Replaces `map_setmapip` in `c_src/map_server.c`.
 ///
 /// # Safety
-/// `crate::ffi::map_db::map` must be a valid initialized pointer (non-null, pointing to at
+/// `crate::database::map_db::map` must be a valid initialized pointer (non-null, pointing to at
 /// least `MAP_SLOTS` slots). Call only after `rust_map_init` has completed.
 #[no_mangle]
 pub unsafe extern "C" fn map_setmapip(id: c_int, ip: c_uint, port: c_ushort) -> c_int {
     if id < 0 || id as usize >= crate::database::map_db::MAP_SLOTS {
         return 1;
     }
-    (*crate::ffi::map_db::map.add(id as usize)).ip = ip;
-    (*crate::ffi::map_db::map.add(id as usize)).port = port;
+    (*crate::database::map_db::map.add(id as usize)).ip = ip;
+    (*crate::database::map_db::map.add(id as usize)).port = port;
     0
 }
 
@@ -420,7 +392,7 @@ pub unsafe extern "C" fn map_id2fl(id: c_uint) -> *mut c_void {
 /// Mirrors `map_name2sd` in `c_src/map_server_stubs.c`.
 #[no_mangle]
 pub unsafe extern "C" fn map_name2sd(name: *const c_char) -> *mut MapSessionData {
-    use crate::ffi::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof};
+    use crate::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof};
     if name.is_null() { return std::ptr::null_mut(); }
     for i in 0..fd_max {
         if rust_session_exists(i) == 0 { continue; }
@@ -457,7 +429,7 @@ pub unsafe extern "C" fn map_name2npc(name: *const c_char) -> *mut c_void {
 /// Mirrors the C shim `map_loadregistry` in `c_src/map_server_stubs.c`.
 #[no_mangle]
 pub unsafe extern "C" fn map_loadregistry(id: c_int) -> c_int {
-    crate::ffi::map_db::rust_map_loadregistry(id)
+    crate::database::map_db::rust_map_loadregistry(id)
 }
 
 /// Read a game-global registry value by name (case-insensitive).
@@ -626,7 +598,7 @@ extern "C" {
 #[no_mangle]
 pub unsafe extern "C" fn map_canmove(m: c_int, x: c_int, y: c_int) -> c_int {
     // read_pass(m, x, y) expands to map[m].pass[x + y * map[m].xs]
-    let slot = &*crate::ffi::map_db::map.add(m as usize);
+    let slot = &*crate::database::map_db::map.add(m as usize);
     let pass_val = *slot.pass.add(x as usize + y as usize * slot.xs as usize);
 
     if pass_val != 0 {
@@ -1090,7 +1062,7 @@ pub unsafe extern "C" fn nmail_read(_sd: *mut MapSessionData, _post: c_int) -> c
 // ---------------------------------------------------------------------------
 // nmail_luascript — inserts a Lua-mail record and runs `sl_exec`.
 //
-// Uses C FFI SQL (Sql_Query) to match the original pattern.
+// Uses sqlx for database access.
 // Mirrors `nmail_luascript` in `c_src/map_server.c`.
 // ---------------------------------------------------------------------------
 
@@ -1103,7 +1075,6 @@ pub unsafe extern "C" fn nmail_luascript(
 ) -> c_int {
     let fd = (*sd).fd;
     let mut message = [0i8; 4000];
-    let mut escape  = [0i8; 4000];
 
     std::ptr::copy_nonoverlapping(
         rust_session_rdata_ptr(fd, (to + topic + 12) as usize) as *const i8,
@@ -1111,17 +1082,22 @@ pub unsafe extern "C" fn nmail_luascript(
         msg as usize,
     );
 
-    Sql_EscapeString(sql_handle, escape.as_mut_ptr(), message.as_ptr());
+    let cha_name = std::ffi::CStr::from_ptr((*sd).status.name.as_ptr())
+        .to_str().unwrap_or("").to_owned();
+    let body = std::ffi::CStr::from_ptr(message.as_ptr())
+        .to_str().unwrap_or("").to_owned();
 
-    if SQL_ERROR == Sql_Query(
-        sql_handle,
-        c"INSERT INTO `Mail` (`MalChaName`, `MalChaNameDestination`, `MalBody`) VALUES ('%s', 'Lua', '%s')".as_ptr(),
-        (*sd).status.name.as_ptr(),
-        escape.as_ptr(),
-    ) {
-        Sql_ShowDebug_(sql_handle, c"map_server.rs".as_ptr(), line!() as c_ulong);
-        return 0;
-    }
+    let ok = blocking_run(async move {
+        sqlx::query(
+            "INSERT INTO `Mail` (`MalChaName`, `MalChaNameDestination`, `MalBody`) VALUES (?, 'Lua', ?)"
+        )
+        .bind(cha_name)
+        .bind(body)
+        .execute(get_pool())
+        .await
+        .is_ok()
+    });
+    if !ok { return 0; }
 
     sl_exec(sd as *mut c_void, message.as_mut_ptr());
     0
@@ -1130,7 +1106,7 @@ pub unsafe extern "C" fn nmail_luascript(
 // ---------------------------------------------------------------------------
 // nmail_poemscript — validates, deduplicates, and inserts a poem board post.
 //
-// Uses C FFI SqlStmt + Sql_Query to match the original pattern.
+// Uses sqlx for database access.
 // Mirrors `nmail_poemscript` in `c_src/map_server.c`.
 // ---------------------------------------------------------------------------
 
@@ -1149,85 +1125,64 @@ pub unsafe extern "C" fn nmail_poemscript(
     let month = now.month0() as c_int;
     let day   = now.day()    as c_int;
 
-    let stmt = SqlStmt_Malloc(sql_handle);
-    if stmt.is_null() {
-        SqlStmt_ShowDebug_(stmt, c"map_server.rs".as_ptr(), line!() as c_ulong);
-        return -1;
-    }
+    let char_id = (*sd).status.id as i32;
 
     // Check whether the player already submitted a poem this cycle.
-    let mut poemid: c_uint = 0;
-    if SQL_ERROR == SqlStmt_Prepare(
-        stmt,
-        c"SELECT `BrdId` FROM `Boards` WHERE `BrdBnmId` = '19' AND `BrdChaId` = '%d'".as_ptr(),
-        (*sd).status.id,
-    ) || SQL_ERROR == SqlStmt_Execute(stmt)
-      || SQL_ERROR == SqlStmt_BindColumn(
-          stmt, 0,
-          SqlDataType::SqlDtUInt,
-          std::ptr::addr_of_mut!(poemid) as *mut c_void,
-          0, std::ptr::null_mut(), std::ptr::null_mut(),
-      )
-    {
-        SqlStmt_ShowDebug_(stmt, c"map_server.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return 0;
-    }
+    let already_submitted = blocking_run(async move {
+        sqlx::query_scalar::<_, Option<u32>>(
+            "SELECT `BrdId` FROM `Boards` WHERE `BrdBnmId` = '19' AND `BrdChaId` = ? LIMIT 1"
+        )
+        .bind(char_id)
+        .fetch_optional(get_pool())
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+    });
 
-    if SQL_SUCCESS == SqlStmt_NextRow(stmt) {
-        // Poem already submitted.
+    if already_submitted {
         nmail_sendmessage(
             sd,
             b"You have already submitted a poem.\0".as_ptr() as *const c_char,
             6, 1,
         );
-        SqlStmt_Free(stmt);
         return 0;
     }
 
-    // Escape strings for safe SQL insertion.
-    let mut escape_topic   = [0i8; 52];
-    let mut escape_message = [0i8; 4000];
-    Sql_EscapeString(sql_handle, escape_topic.as_mut_ptr(),   topic);
-    Sql_EscapeString(sql_handle, escape_message.as_mut_ptr(), message);
+    // topic and message are *const c_char passed by C caller — convert to owned Strings.
+    let topic_str = std::ffi::CStr::from_ptr(topic)
+        .to_str().unwrap_or("").to_owned();
+    let message_str = std::ffi::CStr::from_ptr(message)
+        .to_str().unwrap_or("").to_owned();
 
     // Find the current maximum board position.
-    let mut boardpos: c_uint = 0;
-    if SQL_ERROR == SqlStmt_Prepare(
-        stmt,
-        c"SELECT MAX(`BrdPosition`) FROM `Boards` WHERE `BrdBnmId` = '19'".as_ptr(),
-    ) || SQL_ERROR == SqlStmt_Execute(stmt)
-      || SQL_ERROR == SqlStmt_BindColumn(
-          stmt, 0,
-          SqlDataType::SqlDtUInt,
-          std::ptr::addr_of_mut!(boardpos) as *mut c_void,
-          0, std::ptr::null_mut(), std::ptr::null_mut(),
-      )
-    {
-        SqlStmt_ShowDebug_(stmt, c"map_server.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return 0;
-    }
-    // Advance row (or use boardpos=0 if no rows yet).
-    let _ = SqlStmt_NextRow(stmt);
+    let boardpos: u32 = blocking_run(async {
+        sqlx::query_scalar::<_, Option<u32>>(
+            "SELECT MAX(`BrdPosition`) FROM `Boards` WHERE `BrdBnmId` = '19'"
+        )
+        .fetch_optional(get_pool())
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+        .unwrap_or(0)
+    });
 
-    SqlStmt_Free(stmt);
-
-    if SQL_ERROR == Sql_Query(
-        sql_handle,
-        c"INSERT INTO `Boards` (`BrdBnmId`, `BrdChaName`, `BrdChaId`, `BrdTopic`, `BrdPost`, `BrdMonth`, `BrdDay`, `BrdPosition`) VALUES ('19', '%s', '%d', '%s', '%s', '%d', '%d', '%u')".as_ptr(),
-        b"Anonymous\0".as_ptr() as *const c_char,
-        (*sd).status.id,
-        escape_topic.as_ptr(),
-        escape_message.as_ptr(),
-        month,
-        day,
-        boardpos.saturating_add(1),
-    ) {
-        Sql_ShowDebug_(sql_handle, c"map_server.rs".as_ptr(), line!() as c_ulong);
-        Sql_FreeResult(sql_handle);
-        return 1;
-    }
+    let ok = blocking_run(async move {
+        sqlx::query(
+            "INSERT INTO `Boards` (`BrdBnmId`, `BrdChaName`, `BrdChaId`, `BrdTopic`, `BrdPost`, `BrdMonth`, `BrdDay`, `BrdPosition`) VALUES ('19', 'Anonymous', ?, ?, ?, ?, ?, ?)"
+        )
+        .bind(char_id)
+        .bind(topic_str)
+        .bind(message_str)
+        .bind(month)
+        .bind(day)
+        .bind(boardpos.saturating_add(1))
+        .execute(get_pool())
+        .await
+        .is_ok()
+    });
+    if !ok { return 1; }
 
     nmail_sendmessage(
         sd,
@@ -1473,7 +1428,7 @@ pub unsafe extern "C" fn nmail_sendmail(
 // ---------------------------------------------------------------------------
 // map_changepostcolor — SQL UPDATE to set board post highlight color.
 //
-// Uses C FFI Sql_Query to match the original pattern.
+// Uses sqlx for database access.
 // Mirrors `map_changepostcolor` in `c_src/map_server.c`.
 // ---------------------------------------------------------------------------
 
@@ -1483,53 +1438,42 @@ pub unsafe extern "C" fn map_changepostcolor(
     post:  c_int,
     color: c_int,
 ) -> c_int {
-    if SQL_ERROR == Sql_Query(
-        sql_handle,
-        c"UPDATE `Boards` SET `BrdHighlighted` = '%d' WHERE `BrdBnmId` = '%d' AND `BrdPosition` = '%d'".as_ptr(),
-        color, board, post,
-    ) {
-        Sql_ShowDebug_(sql_handle, c"map_server.rs".as_ptr(), line!() as c_ulong);
-    }
+    blocking_run(async move {
+        sqlx::query(
+            "UPDATE `Boards` SET `BrdHighlighted` = ? WHERE `BrdBnmId` = ? AND `BrdPosition` = ?"
+        )
+        .bind(color)
+        .bind(board)
+        .bind(post)
+        .execute(get_pool())
+        .await
+        .ok();
+    });
     0
 }
 
 // ---------------------------------------------------------------------------
 // map_getpostcolor — SQL SELECT to retrieve board post highlight color.
 //
-// Uses C FFI SqlStmt to match the original pattern.
+// Uses sqlx for database access.
 // Mirrors `map_getpostcolor` in `c_src/map_server.c`.
 // ---------------------------------------------------------------------------
 
 #[no_mangle]
 pub unsafe extern "C" fn map_getpostcolor(board: c_int, post: c_int) -> c_int {
-    let stmt = SqlStmt_Malloc(sql_handle);
-    if stmt.is_null() {
-        SqlStmt_ShowDebug_(stmt, c"map_server.rs".as_ptr(), line!() as c_ulong);
-        return -1;
-    }
-
-    let mut color: c_int = 0;
-
-    if SQL_ERROR == SqlStmt_Prepare(
-        stmt,
-        c"SELECT `BrdHighlighted` FROM `Boards` WHERE `BrdBnmId` = '%d' AND `BrdPosition` = '%d'".as_ptr(),
-        board, post,
-    ) || SQL_ERROR == SqlStmt_Execute(stmt)
-      || SQL_ERROR == SqlStmt_BindColumn(
-          stmt, 0,
-          SqlDataType::SqlDtInt,
-          std::ptr::addr_of_mut!(color) as *mut c_void,
-          0, std::ptr::null_mut(), std::ptr::null_mut(),
-      )
-    {
-        Sql_ShowDebug_(sql_handle, c"map_server.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return -1;
-    }
-
-    let _ = SqlStmt_NextRow(stmt);
-    SqlStmt_Free(stmt);
-    color
+    blocking_run(async move {
+        sqlx::query_scalar::<_, Option<i32>>(
+            "SELECT `BrdHighlighted` FROM `Boards` WHERE `BrdBnmId` = ? AND `BrdPosition` = ?"
+        )
+        .bind(board)
+        .bind(post)
+        .fetch_optional(get_pool())
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+        .unwrap_or(0)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1713,8 +1657,7 @@ pub unsafe extern "C" fn lang_read(cfg_file: *const c_char) -> c_int {
 /// Replaces `change_time_char` in `c_src/map_server.c`.
 ///
 /// # Safety
-/// Must be called on the game thread.  `sql_handle` must be a valid live
-/// connection.  `fd_max` must reflect the current session table bounds.
+/// Must be called on the game thread.  `fd_max` must reflect the current session table bounds.
 #[no_mangle]
 pub unsafe extern "C" fn change_time_char(_id: c_int, _n: c_int) -> c_int {
     cur_time += 1;
@@ -1743,13 +1686,19 @@ pub unsafe extern "C" fn change_time_char(_id: c_int, _n: c_int) -> c_int {
     }
 
     // Persist updated time to the database.
-    if SQL_ERROR == Sql_Query(
-        sql_handle,
-        c"UPDATE `Time` SET `TimHour`='%d', `TimDay`='%d', `TimSeason`='%d', `TimYear`='%d'".as_ptr(),
-        cur_time, cur_day, cur_season, cur_year,
-    ) {
-        Sql_ShowDebug_(sql_handle, c"map_server.rs".as_ptr(), line!() as c_ulong);
-    }
+    let (t, d, s, y) = (cur_time, cur_day, cur_season, cur_year);
+    blocking_run(async move {
+        sqlx::query(
+            "UPDATE `Time` SET `TimHour` = ?, `TimDay` = ?, `TimSeason` = ?, `TimYear` = ?"
+        )
+        .bind(t)
+        .bind(d)
+        .bind(s)
+        .bind(y)
+        .execute(get_pool())
+        .await
+        .ok();
+    });
 
     0
 }
@@ -1763,59 +1712,33 @@ pub unsafe extern "C" fn change_time_char(_id: c_int, _n: c_int) -> c_int {
 /// Replaces `get_time_thing` in `c_src/map_server.c`.
 ///
 /// # Safety
-/// Must be called on the game thread after `sql_handle` is live.
+/// Must be called on the game thread.
 #[no_mangle]
 pub unsafe extern "C" fn get_time_thing() -> c_int {
-    let stmt = SqlStmt_Malloc(sql_handle);
-    if stmt.is_null() {
-        SqlStmt_ShowDebug_(stmt, c"map_server.rs".as_ptr(), line!() as c_ulong);
-        return 0;
+    #[derive(sqlx::FromRow)]
+    struct TimeRow {
+        #[sqlx(rename = "TimHour")]   hour:   i32,
+        #[sqlx(rename = "TimDay")]    day:    i32,
+        #[sqlx(rename = "TimSeason")] season: i32,
+        #[sqlx(rename = "TimYear")]   year:   i32,
     }
 
-    let mut time_val:   c_int = 0;
-    let mut day_val:    c_int = 0;
-    let mut season_val: c_int = 0;
-    let mut year_val:   c_int = 0;
-
-    if SQL_ERROR == SqlStmt_Prepare(
-        stmt,
-        c"SELECT `TimHour`, `TimDay`, `TimSeason`, `TimYear` FROM `Time`".as_ptr(),
-    ) || SQL_ERROR == SqlStmt_Execute(stmt)
-      || SQL_ERROR == SqlStmt_BindColumn(
-          stmt, 0, SqlDataType::SqlDtInt,
-          std::ptr::addr_of_mut!(time_val) as *mut c_void,
-          0, std::ptr::null_mut(), std::ptr::null_mut(),
-      )
-      || SQL_ERROR == SqlStmt_BindColumn(
-          stmt, 1, SqlDataType::SqlDtInt,
-          std::ptr::addr_of_mut!(day_val) as *mut c_void,
-          0, std::ptr::null_mut(), std::ptr::null_mut(),
-      )
-      || SQL_ERROR == SqlStmt_BindColumn(
-          stmt, 2, SqlDataType::SqlDtInt,
-          std::ptr::addr_of_mut!(season_val) as *mut c_void,
-          0, std::ptr::null_mut(), std::ptr::null_mut(),
-      )
-      || SQL_ERROR == SqlStmt_BindColumn(
-          stmt, 3, SqlDataType::SqlDtInt,
-          std::ptr::addr_of_mut!(year_val) as *mut c_void,
-          0, std::ptr::null_mut(), std::ptr::null_mut(),
-      )
-    {
-        SqlStmt_ShowDebug_(stmt, c"map_server.rs".as_ptr(), line!() as c_ulong);
-        SqlStmt_Free(stmt);
-        return 0;
+    if let Some(row) = blocking_run(async {
+        sqlx::query_as::<_, TimeRow>(
+            "SELECT `TimHour`, `TimDay`, `TimSeason`, `TimYear` FROM `Time` LIMIT 1"
+        )
+        .fetch_optional(get_pool())
+        .await
+        .ok()
+        .flatten()
+    }) {
+        old_time   = row.hour;
+        cur_time   = row.hour;
+        cur_day    = row.day;
+        cur_season = row.season;
+        cur_year   = row.year;
     }
 
-    if SQL_SUCCESS == SqlStmt_NextRow(stmt) {
-        old_time   = time_val;
-        cur_time   = time_val;
-        cur_day    = day_val;
-        cur_season = season_val;
-        cur_year   = year_val;
-    }
-
-    SqlStmt_Free(stmt);
     0
 }
 
@@ -1827,7 +1750,7 @@ pub unsafe extern "C" fn get_time_thing() -> c_int {
 /// Replaces `uptime` in `c_src/map_server.c`.
 ///
 /// # Safety
-/// Must be called on the game thread after `sql_handle` is live.
+/// Must be called on the game thread.
 #[no_mangle]
 pub unsafe extern "C" fn uptime() -> c_int {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1836,20 +1759,18 @@ pub unsafe extern "C" fn uptime() -> c_int {
         .map(|d| d.as_secs() as c_int)
         .unwrap_or(0);
 
-    if SQL_ERROR == Sql_Query(
-        sql_handle,
-        c"DELETE FROM `UpTime` WHERE `UtmId` = '3'".as_ptr(),
-    ) {
-        Sql_ShowDebug_(sql_handle, c"map_server.rs".as_ptr(), line!() as c_ulong);
-    }
-
-    if SQL_ERROR == Sql_Query(
-        sql_handle,
-        c"INSERT INTO `UpTime`(`UtmId`, `UtmValue`) VALUES('3', '%d')".as_ptr(),
-        now,
-    ) {
-        Sql_ShowDebug_(sql_handle, c"map_server.rs".as_ptr(), line!() as c_ulong);
-    }
+    blocking_run(async move {
+        let pool = get_pool();
+        sqlx::query("DELETE FROM `UpTime` WHERE `UtmId` = '3'")
+            .execute(pool)
+            .await
+            .ok();
+        sqlx::query("INSERT INTO `UpTime`(`UtmId`, `UtmValue`) VALUES('3', ?)")
+            .bind(now)
+            .execute(pool)
+            .await
+            .ok();
+    });
 
     0
 }
@@ -2229,7 +2150,7 @@ unsafe fn copy_cstr_to_reg_str(dest: &mut [i8; 64], src: *const c_char) {
 /// Replaces `map_registrysave` in `c_src/map_server.c`.
 ///
 /// # Safety
-/// `crate::ffi::map_db::map` must be a valid initialised pointer.  `m` must be a
+/// `crate::database::map_db::map` must be a valid initialised pointer.  `m` must be a
 /// loaded map index and `i` must be within `[0, MAX_MAPREG)`.
 #[no_mangle]
 pub unsafe extern "C" fn map_registrysave(m: c_int, i: c_int) -> c_int {
@@ -2238,7 +2159,7 @@ pub unsafe extern "C" fn map_registrysave(m: c_int, i: c_int) -> c_int {
     if m < 0 || m as usize >= MAP_SLOTS { return 0; }
     if i < 0 || i as usize >= MAX_MAPREG { return 0; }
 
-    let slot = &mut *crate::ffi::map_db::map.add(m as usize);
+    let slot = &mut *crate::database::map_db::map.add(m as usize);
     if slot.registry.is_null() { return 0; }
 
     let p: &GlobalReg = &*slot.registry.add(i as usize);
@@ -2332,7 +2253,7 @@ pub unsafe extern "C" fn map_registrysave(m: c_int, i: c_int) -> c_int {
 /// Replaces `map_setglobalreg` in `c_src/map_server.c`.
 ///
 /// # Safety
-/// `crate::ffi::map_db::map` must be a valid initialised pointer.  `m` must be within
+/// `crate::database::map_db::map` must be a valid initialised pointer.  `m` must be within
 /// `[0, MAP_SLOTS)`.  `reg` must be a valid non-null null-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn map_setglobalreg(m: c_int, reg: *const c_char, val: c_int) -> c_int {
@@ -2340,7 +2261,7 @@ pub unsafe extern "C" fn map_setglobalreg(m: c_int, reg: *const c_char, val: c_i
 
     if reg.is_null() { return 0; }
     if m < 0 || m as usize >= MAP_SLOTS { return 0; }
-    let slot = &mut *crate::ffi::map_db::map.add(m as usize);
+    let slot = &mut *crate::database::map_db::map.add(m as usize);
     // map_isloaded(m) — registry must be non-null.
     if slot.registry.is_null() { return 0; }
 
@@ -2402,14 +2323,14 @@ pub unsafe extern "C" fn map_setglobalreg(m: c_int, reg: *const c_char, val: c_i
 /// Replaces `map_readglobalreg` in `c_src/map_server.c`.
 ///
 /// # Safety
-/// `crate::ffi::map_db::map` must be a valid initialised pointer.  `m` must be within
+/// `crate::database::map_db::map` must be a valid initialised pointer.  `m` must be within
 /// `[0, MAP_SLOTS)`.  `reg` must be a valid non-null null-terminated C string.
 #[no_mangle]
 pub unsafe extern "C" fn map_readglobalreg(m: c_int, reg: *const c_char) -> c_int {
     use crate::database::map_db::MAP_SLOTS;
 
     if m < 0 || m as usize >= MAP_SLOTS { return 0; }
-    let slot = &*crate::ffi::map_db::map.add(m as usize);
+    let slot = &*crate::database::map_db::map.add(m as usize);
     if slot.registry.is_null() { return 0; }
 
     let num = slot.registry_num as usize;
@@ -2713,7 +2634,7 @@ pub unsafe extern "C" fn map_weather(_id: c_int, _n: c_int) -> c_int {
 /// Mirrors `map_savechars` in `c_src/map_server_stubs.c`.
 #[no_mangle]
 pub unsafe extern "C" fn map_savechars(_none: c_int, _nonetoo: c_int) -> c_int {
-    use crate::ffi::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof};
+    use crate::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof};
     extern "C" { #[link_name = "rust_sl_intif_save"] fn sl_intif_save(sd: *mut c_void) -> c_int; }
     for x in 0..fd_max {
         if rust_session_exists(x) == 0 { continue; }
@@ -2839,8 +2760,8 @@ pub unsafe extern "C" fn map_do_term() {
     map_termiddb();
 
     // Free per-slot tile arrays (Rust Vec alloc) and block grid arrays.
-    if !crate::ffi::map_db::map.is_null() {
-        let slots = std::slice::from_raw_parts_mut(crate::ffi::map_db::map, MAP_SLOTS);
+    if !crate::database::map_db::map.is_null() {
+        let slots = std::slice::from_raw_parts_mut(crate::database::map_db::map, MAP_SLOTS);
         for slot in slots.iter_mut() {
             let cells  = slot.xs as usize * slot.ys as usize;
             let bcells = slot.bxs as usize * slot.bys as usize;
@@ -2881,10 +2802,10 @@ pub unsafe extern "C" fn map_do_term() {
         }
     }
 
-    crate::ffi::block::map_termblock();
-    crate::ffi::item_db::rust_itemdb_term();
-    crate::ffi::magic_db::rust_magicdb_term();
-    crate::ffi::class_db::rust_classdb_term();
+    crate::game::block::map_termblock();
+    crate::database::item_db::rust_itemdb_term();
+    crate::database::magic_db::rust_magicdb_term();
+    crate::database::class_db::rust_classdb_term();
     println!("[map] Map Server Shutdown");
 }
 
@@ -2976,18 +2897,18 @@ pub unsafe extern "C" fn map_reload() -> c_int {
     extern "C" {
         static maps_dir: *const c_char;
     }
-    use crate::ffi::map_db::rust_map_reload;
+    use crate::database::map_db::rust_map_reload;
 
     if rust_map_reload(maps_dir, serverid) != 0 {
         tracing::error!("[map] rust_map_reload failed");
         return -1;
     }
 
-    let n = crate::ffi::map_db::map_n as usize;
+    let n = crate::database::map_db::map_n as usize;
     // Map IDs are sparse — must iterate all slots, not just 0..map_n.
     for i in 0..crate::database::map_db::MAP_SLOTS {
         // map_isloaded(i): registry pointer is non-null iff the map was loaded.
-        let slot = &*crate::ffi::map_db::map.add(i);
+        let slot = &*crate::database::map_db::map.add(i);
         if !slot.registry.is_null() {
             crate::game::block::foreach_in_area(
                 i as i32,

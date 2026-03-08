@@ -9,7 +9,7 @@ use std::os::raw::c_void;
 
 use crate::database::map_db::{BlockList, MapData};
 use crate::game::types::GfxViewer;
-use crate::ffi::map_db::get_map_ptr;
+use crate::database::map_db::get_map_ptr;
 use crate::game::scripting::ffi as sffi;
 use crate::game::scripting::types::item::fixed_str;
 use crate::game::scripting::types::mob::MobObject;
@@ -154,7 +154,7 @@ fn val_to_item_id(v: &mlua::Value) -> c_int {
         mlua::Value::Number(f)  => *f as c_int,
         mlua::Value::String(s)  => {
             if let Some(cs) = s.to_str().ok().and_then(|r| std::ffi::CString::new(r.as_bytes()).ok()) {
-                let data = unsafe { crate::ffi::item_db::rust_itemdb_searchname(cs.as_ptr()) };
+                let data = unsafe { crate::database::item_db::rust_itemdb_searchname(cs.as_ptr()) };
                 if !data.is_null() { return unsafe { (*data).id } as c_int; }
             }
             0

@@ -4,7 +4,7 @@ use std::ffi::{CStr, CString, c_char, c_int, c_uint, c_uchar, c_void};
 use mlua::{Lua, Value};
 
 use crate::database::{blocking_run, get_pool};
-use crate::ffi::map_db::get_map_ptr;
+use crate::database::map_db::get_map_ptr;
 use crate::game::scripting::ffi as sffi;
 use crate::game::scripting::types;
 
@@ -52,7 +52,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // Tick / time
     // -----------------------------------------------------------------------
     g.set("getTick", lua.create_function(|_, ()| {
-        Ok(unsafe { crate::ffi::timer::gettick() } as i64)
+        Ok(unsafe { crate::timer::gettick() } as i64)
     })?)?;
 
     g.set("timeMS", lua.create_function(|_, ()| {
@@ -558,7 +558,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // addMob / checkOnline / getOfflineID
     // -----------------------------------------------------------------------
     g.set("addMob", lua.create_function(|_, (m, x, y, mobid): (i32, i32, i32, i32)| {
-        if !unsafe { crate::ffi::map_db::map_is_loaded(m as u16) } { return Ok(false); }
+        if !unsafe { crate::database::map_db::map_is_loaded(m as u16) } { return Ok(false); }
         let sid = unsafe { sffi::serverid };
         let ok = blocking_run(
             sqlx::query(&format!(

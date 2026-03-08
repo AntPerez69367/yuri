@@ -17,9 +17,9 @@ use std::os::raw::{c_char, c_int, c_uint, c_void};
 
 use crate::database::{blocking_run, get_pool};
 use crate::database::map_db::BlockList;
-use crate::ffi::block::map_delblock;
-use crate::ffi::scripting::rust_sl_resumemenu;
-use crate::ffi::session::rust_session_rdata_ptr;
+use crate::game::block::map_delblock;
+use crate::game::scripting::rust_sl_resumemenu;
+use crate::session::rust_session_rdata_ptr;
 use crate::game::map_server::{
     boards_delete, boards_post, boards_readpost, boards_showposts, hasCoref,
     map_changepostcolor, map_deliddb, map_getpostcolor, map_id2bl, map_id2sd,
@@ -95,7 +95,7 @@ unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::
 
 #[inline]
 unsafe fn read_obj(m: c_int, x: c_int, y: c_int) -> u16 {
-    use crate::ffi::map_db::map;
+    use crate::database::map_db::map;
     let md = &*map.add(m as usize);
     if md.obj.is_null() { return 0; }
     *md.obj.add(x as usize + y as usize * md.xs as usize)
@@ -549,7 +549,7 @@ pub unsafe extern "C" fn clif_delay(milliseconds: c_int) {
 /// Replaces `clif_sendheartbeat` in `c_src/sl_compat.c` (line 2574).
 #[no_mangle]
 pub unsafe extern "C" fn clif_sendheartbeat(id: c_int, _none: c_int) -> c_int {
-    use crate::ffi::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
+    use crate::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
     use crate::game::map_server::map_id2sd;
     let sd = map_id2sd(id as c_uint) as *mut MapSessionData;
     if sd.is_null() { return 1; }
@@ -677,7 +677,7 @@ pub struct BoardQuestionaire {
 /// Write big-endian u16 at `pos` in the send-FIFO. Mirrors `WFIFOW(fd,pos) = SWAP16(val)`.
 #[inline]
 unsafe fn wbe16(fd: c_int, pos: usize, val: u16) {
-    use crate::ffi::session::rust_session_wdata_ptr;
+    use crate::session::rust_session_wdata_ptr;
     let p = rust_session_wdata_ptr(fd, pos) as *mut u16;
     if !p.is_null() { p.write_unaligned(val.to_be()); }
 }
@@ -685,7 +685,7 @@ unsafe fn wbe16(fd: c_int, pos: usize, val: u16) {
 /// Write big-endian u32 at `pos` in the send-FIFO. Mirrors `WFIFOL(fd,pos) = SWAP32(val)`.
 #[inline]
 unsafe fn wbe32(fd: c_int, pos: usize, val: u32) {
-    use crate::ffi::session::rust_session_wdata_ptr;
+    use crate::session::rust_session_wdata_ptr;
     let p = rust_session_wdata_ptr(fd, pos) as *mut u32;
     if !p.is_null() { p.write_unaligned(val.to_be()); }
 }
@@ -693,7 +693,7 @@ unsafe fn wbe32(fd: c_int, pos: usize, val: u32) {
 /// Copy null-terminated string bytes starting at `pos`. Mirrors `strcpy(WFIFOP(fd,pos), s)`.
 #[inline]
 unsafe fn wfifo_strcpy(fd: c_int, pos: usize, s: &[u8]) {
-    use crate::ffi::session::rust_session_wdata_ptr;
+    use crate::session::rust_session_wdata_ptr;
     let p = rust_session_wdata_ptr(fd, pos);
     if !p.is_null() {
         std::ptr::copy_nonoverlapping(s.as_ptr(), p, s.len());
@@ -757,7 +757,7 @@ pub unsafe extern "C" fn clif_accept2(
         rust_session_set_eof(fd, 11);
         return 0;
     }
-    if crate::ffi::core::rust_should_shutdown() != 0 {
+    if crate::core::rust_should_shutdown() != 0 {
         rust_session_set_eof(fd, 1);
         return 0;
     }
@@ -776,7 +776,7 @@ pub unsafe extern "C" fn clif_accept2(
     .ok()
     .flatten()
     .unwrap_or(0);
-    crate::ffi::map_char::rust_intif_load(fd, id, n.as_ptr() as *const c_char);
+    crate::game::map_char::rust_intif_load(fd, id, n.as_ptr() as *const c_char);
     0
 }
 
@@ -798,12 +798,12 @@ pub unsafe extern "C" fn clif_transfer(
         1 => 2002,
         _ => 2003,
     };
-    let xk = crate::ffi::config::config().xor_key.as_bytes();
+    let xk = crate::config::config().xor_key.as_bytes();
     let xk_len = xk.len().min(9);
     let name_bytes = CStr::from_ptr((*sd).status.name.as_ptr() as *const c_char).to_bytes();
     let name_len = name_bytes.len();
 
-    use crate::ffi::session::{rust_session_wdata_ptr, rust_session_wfifohead, rust_session_commit};
+    use crate::session::{rust_session_wdata_ptr, rust_session_wfifohead, rust_session_commit};
     use crate::network::crypt::encrypt;
     rust_session_wfifohead(fd, 255);
     let w = |off: usize| rust_session_wdata_ptr(fd, off);
@@ -842,12 +842,12 @@ pub unsafe extern "C" fn clif_transfer_test(
     // inet_addr("192.88.99.100") on LE x86 — bytes stored in network order
     // SWAP32 of that = host-order; WFIFOL writes LE → wire bytes are network-order
     let test_ip_net: u32 = u32::from_ne_bytes([192, 88, 99, 100]);
-    let xk = crate::ffi::config::config().xor_key.as_bytes();
+    let xk = crate::config::config().xor_key.as_bytes();
     let xk_len = xk.len().min(9);
     const FAKE_NAME: &[u8] = b"FAKEUSERNAME";
     let name_len = FAKE_NAME.len();
 
-    use crate::ffi::session::{rust_session_wdata_ptr, rust_session_wfifohead, rust_session_commit};
+    use crate::session::{rust_session_wdata_ptr, rust_session_wfifohead, rust_session_commit};
     use crate::network::crypt::encrypt;
     rust_session_wfifohead(fd, 255);
     let w = |off: usize| rust_session_wdata_ptr(fd, off);
@@ -884,7 +884,7 @@ pub unsafe extern "C" fn clif_sendBoardQuestionaire(
         return 0;
     }
     let fd = (*sd).fd;
-    use crate::ffi::session::{rust_session_wdata_ptr, rust_session_wfifohead, rust_session_commit};
+    use crate::session::{rust_session_wdata_ptr, rust_session_wfifohead, rust_session_commit};
     use crate::network::crypt::encrypt;
     rust_session_wfifohead(fd, 65535);
     let w = |off: usize| rust_session_wdata_ptr(fd, off);
@@ -1121,8 +1121,8 @@ pub unsafe extern "C" fn clif_changestatus(sd: *mut MapSessionData, type_: c_int
 // table, and dispatches `itemCreation(pc)` script.
 #[no_mangle]
 pub unsafe extern "C" fn createdb_start(sd: *mut c_void) -> c_int {
-    use crate::ffi::item_db::rust_itemdb_stackamount;
-    use crate::ffi::session::rust_session_rdata_ptr;
+    use crate::database::item_db::rust_itemdb_stackamount;
+    use crate::session::rust_session_rdata_ptr;
     use crate::game::scripting::sl_state;
     use crate::database::map_db::BlockList;
 

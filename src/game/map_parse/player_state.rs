@@ -12,8 +12,8 @@ use std::ffi::{c_char, c_int, c_uint};
 use std::ptr;
 
 use crate::database::map_db::BlockList;
-use crate::ffi::map_db::map;
-use crate::ffi::session::{
+use crate::database::map_db::map;
+use crate::session::{
     rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr,
 };
 use crate::game::pc::{

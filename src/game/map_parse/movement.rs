@@ -18,8 +18,8 @@ use std::ffi::{c_char, c_int, c_uint, c_ulong};
 use std::ptr;
 
 use crate::database::map_db::{BlockList, WarpList, BLOCK_SIZE};
-use crate::ffi::map_db::map;
-use crate::ffi::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr};
+use crate::database::map_db::map;
+use crate::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr};
 use crate::game::pc::{
     MapSessionData,
     BL_PC, BL_MOB, BL_NPC,
@@ -1482,19 +1482,19 @@ pub unsafe extern "C" fn clif_parseviewchange(sd: *mut MapSessionData) -> c_int 
     use crate::game::map_parse::player_state::clif_sendxychange;
 
     let fd = (*sd).fd;
-    let direction = *crate::ffi::session::rust_session_rdata_ptr(fd, 5) as c_int;
-    let mut dx = *crate::ffi::session::rust_session_rdata_ptr(fd, 6) as c_int;
-    let mut dy = *crate::ffi::session::rust_session_rdata_ptr(fd, 7) as c_int;
+    let direction = *crate::session::rust_session_rdata_ptr(fd, 5) as c_int;
+    let mut dx = *crate::session::rust_session_rdata_ptr(fd, 6) as c_int;
+    let mut dy = *crate::session::rust_session_rdata_ptr(fd, 7) as c_int;
     let x0 = u16::from_be_bytes([
-        *crate::ffi::session::rust_session_rdata_ptr(fd, 8),
-        *crate::ffi::session::rust_session_rdata_ptr(fd, 9),
+        *crate::session::rust_session_rdata_ptr(fd, 8),
+        *crate::session::rust_session_rdata_ptr(fd, 9),
     ]) as c_int;
     let y0 = u16::from_be_bytes([
-        *crate::ffi::session::rust_session_rdata_ptr(fd, 10),
-        *crate::ffi::session::rust_session_rdata_ptr(fd, 11),
+        *crate::session::rust_session_rdata_ptr(fd, 10),
+        *crate::session::rust_session_rdata_ptr(fd, 11),
     ]) as c_int;
-    let x1 = *crate::ffi::session::rust_session_rdata_ptr(fd, 12) as c_int;
-    let y1 = *crate::ffi::session::rust_session_rdata_ptr(fd, 13) as c_int;
+    let x1 = *crate::session::rust_session_rdata_ptr(fd, 12) as c_int;
+    let y1 = *crate::session::rust_session_rdata_ptr(fd, 13) as c_int;
 
     if (*sd).status.state == 3 {
         clif_sendminitext(sd, c"You cannot do that while riding a mount.".as_ptr());
@@ -1583,12 +1583,12 @@ pub unsafe extern "C" fn clif_parselookat(sd: *mut MapSessionData) -> c_int {
     use crate::game::mob::BL_ITEM;
     let fd = (*sd).fd;
     let x = u16::from_be_bytes([
-        *crate::ffi::session::rust_session_rdata_ptr(fd, 5),
-        *crate::ffi::session::rust_session_rdata_ptr(fd, 6),
+        *crate::session::rust_session_rdata_ptr(fd, 5),
+        *crate::session::rust_session_rdata_ptr(fd, 6),
     ]) as c_int;
     let y = u16::from_be_bytes([
-        *crate::ffi::session::rust_session_rdata_ptr(fd, 7),
-        *crate::ffi::session::rust_session_rdata_ptr(fd, 8),
+        *crate::session::rust_session_rdata_ptr(fd, 7),
+        *crate::session::rust_session_rdata_ptr(fd, 8),
     ]) as c_int;
     let m = (*sd).bl.m as c_int;
     map_foreachincell(clif_parselookat_sub, m, x, y, BL_PC,   sd);
@@ -1610,8 +1610,8 @@ pub unsafe extern "C" fn clif_parselookat(sd: *mut MapSessionData) -> c_int {
 #[cfg(not(test))]
 #[no_mangle]
 pub unsafe extern "C" fn clif_refreshnoclick(sd: *mut MapSessionData) -> c_int {
-    use crate::ffi::map_db::map;
-    use crate::ffi::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
+    use crate::database::map_db::map;
+    use crate::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
     use crate::game::map_parse::player_state::{clif_sendmapinfo, clif_sendxynoclick};
     use crate::game::client::visual::clif_destroyold;
     use crate::game::pc::FLAG_GROUP;
@@ -1716,7 +1716,7 @@ pub unsafe extern "C" fn clif_mob_move(bl: *mut BlockList, mut ap: ...) -> c_int
     let fd = (*sd).fd;
     wfifoheader(fd, 0x0C, 11);
     // WFIFOL(fd, 5) = SWAP32(mob->bl.id)
-    let pw = |off: usize| crate::ffi::session::rust_session_wdata_ptr(fd, off);
+    let pw = |off: usize| crate::session::rust_session_wdata_ptr(fd, off);
     (pw(5) as *mut u32).write_unaligned((*mob).bl.id.to_be());
     (pw(9) as *mut u16).write_unaligned(((*mob).bx as u16).to_be());
     (pw(11) as *mut u16).write_unaligned(((*mob).by_ as u16).to_be());

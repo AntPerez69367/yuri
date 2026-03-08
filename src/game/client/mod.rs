@@ -32,7 +32,7 @@ unsafe fn clif_sendboard(sd: *mut c_void) {
 }
 
 use std::os::raw::{c_char, c_int, c_uchar, c_void};
-use crate::ffi::session::{
+use crate::session::{
     rust_session_exists, rust_session_get_data, rust_session_get_eof,
     rust_session_rdata_ptr, rust_session_set_eof, rust_session_skip,
     rust_session_available, rust_session_wfifohead, rust_session_wdata_ptr,
@@ -507,7 +507,7 @@ unsafe fn should_send_to(
     len: c_int,
 ) -> bool {
     use crate::game::pc::{OPT_FLAG_STEALTH, OPT_FLAG_GHOSTS};
-    use crate::ffi::map_db::map;
+    use crate::database::map_db::map;
     use crate::database::map_db::MAP_SLOTS;
 
     if sd.is_null() || src_bl.is_null() {

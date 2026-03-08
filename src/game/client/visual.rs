@@ -12,7 +12,7 @@
 use std::os::raw::{c_char, c_float, c_int, c_uint};
 
 use crate::database::{board_db, class_db};
-use crate::ffi::session::{
+use crate::session::{
     rust_session_available, rust_session_commit, rust_session_exists, rust_session_get_client_ip,
     rust_session_get_data, rust_session_get_eof, rust_session_increment, rust_session_rdata_ptr,
     rust_session_set_eof, rust_session_wdata_ptr, rust_session_wfifohead,
@@ -817,7 +817,7 @@ pub unsafe extern "C" fn clif_getlvlxp(level: c_int) -> c_uint {
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-/// `crate::ffi::map_db::map` must be initialised before calling this function.
+/// `crate::database::map_db::map` must be initialised before calling this function.
 #[no_mangle]
 pub unsafe extern "C" fn clif_sendweather(
     sd: *mut crate::game::pc::MapSessionData,
@@ -836,7 +836,7 @@ pub unsafe extern "C" fn clif_sendweather(
     // FLAG_WEATHER = 32 (mmo.h line 45). setting_flags is u16.
     const FLAG_WEATHER: u16 = 32;
     let weather_byte: u8 = if sdr.status.setting_flags & FLAG_WEATHER != 0 {
-        let map_ptr = crate::ffi::map_db::map;
+        let map_ptr = crate::database::map_db::map;
         if map_ptr.is_null() {
             0
         } else {
@@ -885,7 +885,7 @@ pub unsafe extern "C" fn clif_sendweather(
 ///
 /// # Safety
 /// Both `sd` and `tsd` must be valid, non-null pointers to initialised [`MapSessionData`].
-/// `crate::ffi::map_db::map` must be initialised before calling this function.
+/// `crate::database::map_db::map` must be initialised before calling this function.
 #[no_mangle]
 pub unsafe extern "C" fn clif_show_ghost(
     sd: *mut crate::game::pc::MapSessionData,
@@ -901,7 +901,7 @@ pub unsafe extern "C" fn clif_show_ghost(
         return 1;
     }
 
-    let map_ptr = crate::ffi::map_db::map;
+    let map_ptr = crate::database::map_db::map;
     if map_ptr.is_null() {
         return 1;
     }
@@ -1917,7 +1917,7 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
 
     // Ghost logic — after the packet is sent, handle "show_ghosts" map setting.
     {
-        let map_ptr = crate::ffi::map_db::map;
+        let map_ptr = crate::database::map_db::map;
         if !map_ptr.is_null() {
             let sd_r = &*sd;
             let src_r = &*src_sd;

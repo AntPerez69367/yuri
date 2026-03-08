@@ -12,7 +12,7 @@ use crate::database::map_db::{WarpList, BLOCK_SIZE};
 #[cfg(not(test))]
 use crate::database::{blocking_run, get_pool};
 #[cfg(not(test))]
-use crate::ffi::map_db::{get_map_ptr, map_is_loaded};
+use crate::database::map_db::{get_map_ptr, map_is_loaded};
 
 // MAX_EQUIP is defined in charstatus::MAX_EQUIP (imported above) — same slot count.
 pub const MAX_GLOBALNPCREG: usize = 100;
@@ -479,7 +479,8 @@ pub unsafe fn npc_duration(nd: *mut NpcData) -> c_int {
 ///
 /// Caller must hold the server-wide lock.  `map_id2npc` must be safe to call
 /// for any ID in the scanned ranges.
-pub unsafe fn npc_runtimers(_id: c_int, _n: c_int) -> c_int {
+#[no_mangle]
+pub unsafe extern "C" fn npc_runtimers(_id: c_int, _n: c_int) -> c_int {
     // regular NPCs
     let mut x = NPC_START_NUM;
     while x <= NPC_ID {
@@ -624,7 +625,8 @@ pub async unsafe fn warp_init_async() -> c_int {
 
 /// Blocking wrapper. Must be called after the sqlx pool is initialized.
 #[cfg(not(test))]
-pub fn warp_init() -> c_int {
+#[no_mangle]
+pub unsafe extern "C" fn warp_init() -> c_int {
     blocking_run(async { unsafe { warp_init_async().await } })
 }
 
@@ -852,7 +854,8 @@ pub async unsafe fn npc_init_async() -> c_int {
 
 /// Blocking wrapper. Must be called after the sqlx pool is initialized.
 #[cfg(not(test))]
-pub fn npc_init() -> c_int {
+#[no_mangle]
+pub unsafe extern "C" fn npc_init() -> c_int {
     blocking_run(async { unsafe { npc_init_async().await } })
 }
 
@@ -990,7 +993,7 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> c_int {
     let mut y1: c_int = 0;
     let mut nothingnew: c_int = 0;
 
-    let md = crate::ffi::map_db::get_map_ptr(nd.bl.m);
+    let md = crate::database::map_db::get_map_ptr(nd.bl.m);
     if md.is_null() { return 0; }
     let map_xs = (*md).xs as c_int;
     let map_ys = (*md).ys as c_int;
@@ -1063,7 +1066,7 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> c_int {
     if dy >= map_ys { dy = map_ys - 1; }
 
     // Check warp at destination block
-    let mut war = crate::ffi::map_db::map_get_warp(nd.bl.m, dx as u16, dy as u16);
+    let mut war = crate::database::map_db::map_get_warp(nd.bl.m, dx as u16, dy as u16);
     while !war.is_null() {
         if (*war).x == dx && (*war).y == dy { return 0; }
         war = (*war).next;
@@ -1226,4 +1229,68 @@ mod tests {
             NPCTEMP_ID = orig;
         }
     }
+}
+
+// ─── FFI bridge (moved from src/ffi/npc.rs) ───────────────────────────────
+
+// npc_init, warp_init, and npc_runtimers are #[no_mangle] on the original function definitions above.
+
+#[no_mangle]
+pub unsafe extern "C" fn npc_action_ffi(nd: *mut NpcData) -> c_int {
+    npc_action(nd)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn npc_movetime_ffi(nd: *mut NpcData) -> c_int {
+    npc_movetime(nd)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn npc_duration_ffi(nd: *mut NpcData) -> c_int {
+    npc_duration(nd)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn npc_warp_ffi(nd: *mut NpcData, m: c_int, x: c_int, y: c_int) -> c_int {
+    npc_warp(nd, m, x, y)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn npc_move_ffi(nd: *mut NpcData) -> c_int {
+    npc_move(nd)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn npc_readglobalreg_ffi(nd: *mut NpcData, reg: *const c_char) -> c_int {
+    npc_readglobalreg(nd, reg)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn npc_setglobalreg_ffi(nd: *mut NpcData, reg: *const c_char, val: c_int) -> c_int {
+    npc_setglobalreg(nd, reg, val)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn npc_idlower_ffi(id: c_int) -> c_int {
+    npc_idlower(id)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn npc_src_clear_ffi() -> c_int {
+    npc_src_clear()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn npc_src_add_ffi(f: *const c_char) -> c_int {
+    npc_src_add(f)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn npc_warp_add_ffi(f: *const c_char) -> c_int {
+    npc_warp_add(f)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn npc_get_new_npctempid_ffi() -> c_uint {
+    npc_get_new_npctempid()
 }

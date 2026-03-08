@@ -4,7 +4,7 @@
 use std::os::raw::c_int;
 
 use crate::database::map_db::BlockList;
-use crate::ffi::session::{
+use crate::session::{
     rust_session_available, rust_session_commit, rust_session_increment,
     rust_session_rdata_ptr, rust_session_skip, rust_session_wdata_ptr,
     rust_session_wfifohead, rust_session_exists,

@@ -4,7 +4,7 @@ use std::sync::{Arc, atomic::AtomicBool};
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
 use crate::database::map_db::{BlockList, MapData};
-use crate::ffi::map_db::get_map_ptr;
+use crate::database::map_db::get_map_ptr;
 use crate::game::npc::{NpcData, npc_move, npc_warp};
 use crate::game::scripting::ffi as sffi;
 use crate::game::scripting::types::mob::MobObject;

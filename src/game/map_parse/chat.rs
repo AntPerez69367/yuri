@@ -9,8 +9,8 @@
 use std::ffi::{c_char, c_int, c_uint, c_ulong, c_void};
 
 use crate::database::map_db::{BlockList, MapData};
-use crate::ffi::map_db::map;
-use crate::ffi::session::{
+use crate::database::map_db::map;
+use crate::session::{
     rust_session_exists, rust_session_get_data, rust_session_set_eof,
 };
 use crate::game::npc::NpcData;
@@ -48,7 +48,6 @@ extern "C" {
     fn rust_magicdb_yname(id: c_int) -> *mut c_char;
     #[link_name = "rust_sl_async_freeco"]
     fn sl_async_freeco(sd: *mut c_void) -> c_int;
-    fn Sql_EscapeString(handle: *mut c_void, out: *mut c_char, src: *const c_char);
     fn clif_Hacker(name: *mut c_char, reason: *const c_char) -> c_int;
 }
 
@@ -66,8 +65,6 @@ unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::
     crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
 }
 
-
-use crate::game::map_server::sql_handle;
 
 // NPC subtype constant (from map_server.h)
 const SCRIPT: u8 = 0;
@@ -152,7 +149,7 @@ pub unsafe extern "C" fn clif_broadcast_sub(bl: *mut BlockList, mut ap: ...) -> 
     wfifob((*sd).fd, 5, 0x05);
     wfifow((*sd).fd, 6, (len as u16).to_be());
     // copy msg bytes into wbuffer at offset 8
-    let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 8);
+    let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 8);
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(msg as *const u8, dst, len);
     }
@@ -186,7 +183,7 @@ pub unsafe extern "C" fn clif_gmbroadcast_sub(bl: *mut BlockList, mut ap: ...) -
     wfifob((*sd).fd, 4, 0x03);
     wfifob((*sd).fd, 5, 0x05);
     wfifow((*sd).fd, 6, (len as u16).to_be());
-    let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 8);
+    let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 8);
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(msg as *const u8, dst, len);
     }
@@ -221,7 +218,7 @@ pub unsafe extern "C" fn clif_broadcasttogm_sub(bl: *mut BlockList, mut ap: ...)
         wfifob((*sd).fd, 4, 0x03);
         wfifob((*sd).fd, 5, 0x05);
         wfifow((*sd).fd, 6, (len as u16).to_be());
-        let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 8);
+        let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 8);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(msg as *const u8, dst, len);
         }
@@ -308,7 +305,7 @@ pub unsafe extern "C" fn clif_guitextsd(msg: *const c_char, sd: *mut MapSessionD
     wfifob((*sd).fd, 3, 0x58);
     wfifob((*sd).fd, 5, 0x06);
     wfifow((*sd).fd, 6, (mlen as u16).to_be());
-    let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 8);
+    let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 8);
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(msg as *const u8, dst, mlen);
     }
@@ -342,7 +339,7 @@ pub unsafe extern "C" fn clif_guitext(bl: *mut BlockList, mut ap: ...) -> c_int 
     wfifob((*sd).fd, 3, 0x58);
     wfifob((*sd).fd, 5, 0x06);
     wfifow((*sd).fd, 6, (mlen as u16).to_be());
-    let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 8);
+    let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 8);
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(msg as *const u8, dst, mlen);
     }
@@ -406,7 +403,7 @@ pub unsafe extern "C" fn clif_sendmsg(
     wfifob((*sd).fd, 4, 0x03);
     wfifow((*sd).fd, 5, msg_type as u16);
     wfifob((*sd).fd, 7, len as u8);
-    let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 8);
+    let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 8);
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(buf as *const u8, dst, len);
     }
@@ -537,7 +534,7 @@ pub unsafe extern "C" fn clif_sendbluemessage(sd: *mut MapSessionData, msg: *mut
     wfifob((*sd).fd, 4, 0x03);
     wfifow((*sd).fd, 5, 0u16);
     wfifob((*sd).fd, 7, mlen as u8);
-    let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 8);
+    let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 8);
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(msg as *const u8, dst, mlen);
     }
@@ -951,10 +948,6 @@ pub unsafe extern "C" fn clif_parsewisp(sd: *mut MapSessionData) -> c_int {
     let dst_name_c = dst_name.as_ptr() as *const c_char;
     let msg_c = msg_buf.as_ptr() as *const c_char;
 
-    // Sql_EscapeString for the msg
-    let mut escape = [0i8; 255];
-    Sql_EscapeString(sql_handle as *mut c_void, escape.as_mut_ptr(), msg_c);
-
     // "!" → clan chat
     if dst_name[0] == b'!' && dst_name[1] == 0 {
         if (*sd).status.clan == 0 {
@@ -1099,9 +1092,6 @@ pub unsafe extern "C" fn clif_sendscriptsay(
         clif_sendminitext(sd, m.as_ptr() as *const c_char);
         return 0;
     }
-
-    let mut escape = [0i8; 255];
-    Sql_EscapeString(sql_handle as *mut c_void, escape.as_mut_ptr(), msg);
 
     if rust_is_command(sd, msg, msglen) != 0 {
         return 0;
@@ -1299,7 +1289,7 @@ pub unsafe extern "C" fn clif_speak(bl: *mut BlockList, mut ap: ...) -> c_int {
     let hdr_len = (len + 8) as u16;
     wfifoheader((*sd).fd, 0x0D, hdr_len);
     // copy msg after header at offset 11
-    let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 11);
+    let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 11);
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(msg as *const u8, dst, len);
     }

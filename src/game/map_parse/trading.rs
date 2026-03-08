@@ -18,7 +18,7 @@
 use std::ffi::{c_char, c_int, c_uint, c_ulong};
 
 use crate::database::map_db::BlockList;
-use crate::ffi::session::{rust_session_exists, rust_session_set_eof};
+use crate::session::{rust_session_exists, rust_session_set_eof};
 use crate::game::mob::MobSpawnData;
 use crate::game::pc::{
     MapSessionData,
@@ -158,12 +158,12 @@ pub unsafe extern "C" fn clif_exchange_message(
     wfifob(sd.fd, 6, extra as u8);
     wfifob(sd.fd, 7, msg_len as u8);
     // copy message bytes into WFIFOP(sd->fd, 8)
-    let dst = crate::ffi::session::rust_session_wdata_ptr(sd.fd, 8) as *mut u8;
+    let dst = crate::session::rust_session_wdata_ptr(sd.fd, 8) as *mut u8;
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(message as *const u8, dst, msg_len);
     }
     wfifow(sd.fd, 1, (len + 3) as u16);   // SWAP16(len + 3) — big-endian
-    let p = crate::ffi::session::rust_session_wdata_ptr(sd.fd, 1) as *mut u16;
+    let p = crate::session::rust_session_wdata_ptr(sd.fd, 1) as *mut u16;
     if !p.is_null() { p.write_unaligned(((len + 3) as u16).to_be()); }
     wfifoset(sd.fd, encrypt(sd.fd) as usize);
     0
@@ -293,22 +293,22 @@ pub unsafe extern "C" fn clif_startexchange(
         wfifob((*sd).fd, 4, 0x03);
         wfifob((*sd).fd, 5, 0x00);
         // WFIFOL(sd->fd, 6) = SWAP32(tsd->bl.id)
-        let p = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 6) as *mut u32;
+        let p = crate::session::rust_session_wdata_ptr((*sd).fd, 6) as *mut u32;
         if !p.is_null() { p.write_unaligned((*tsd).bl.id.to_be()); }
         let mut len: usize = 4;
         let buf_len = libc::strlen(buff.as_ptr());
         wfifob((*sd).fd, len + 6, buf_len as u8);
-        let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, len + 7) as *mut u8;
+        let dst = crate::session::rust_session_wdata_ptr((*sd).fd, len + 7) as *mut u8;
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(buff.as_ptr() as *const u8, dst, buf_len);
         }
         len += buf_len + 1;
         // WFIFOW(sd->fd, len+6) = SWAP16(tsd->status.level)
-        let p2 = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, len + 6) as *mut u16;
+        let p2 = crate::session::rust_session_wdata_ptr((*sd).fd, len + 6) as *mut u16;
         if !p2.is_null() { p2.write_unaligned(((*tsd).status.level as u16).to_be()); }
         len += 2;
         // WFIFOW(sd->fd, 1) = SWAP16(len + 3)
-        let ph = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
+        let ph = crate::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
         if !ph.is_null() { ph.write_unaligned(((len + 3) as u16).to_be()); }
         wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
 
@@ -342,21 +342,21 @@ pub unsafe extern "C" fn clif_startexchange(
         wfifob((*tsd).fd, 4, 0x03);
         wfifob((*tsd).fd, 5, 0x00);
         // WFIFOL(tsd->fd, 6) = SWAP32(sd->bl.id)
-        let p3 = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 6) as *mut u32;
+        let p3 = crate::session::rust_session_wdata_ptr((*tsd).fd, 6) as *mut u32;
         if !p3.is_null() { p3.write_unaligned((*sd).bl.id.to_be()); }
         let mut len: usize = 4;
         let buf_len = libc::strlen(buff.as_ptr());
         wfifob((*tsd).fd, len + 6, buf_len as u8);
-        let dst = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, len + 7) as *mut u8;
+        let dst = crate::session::rust_session_wdata_ptr((*tsd).fd, len + 7) as *mut u8;
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(buff.as_ptr() as *const u8, dst, buf_len);
         }
         len += buf_len + 1;
         // WFIFOW(tsd->fd, len+6) = SWAP16(sd->status.level)
-        let p4 = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, len + 6) as *mut u16;
+        let p4 = crate::session::rust_session_wdata_ptr((*tsd).fd, len + 6) as *mut u16;
         if !p4.is_null() { p4.write_unaligned(((*sd).status.level as u16).to_be()); }
         len += 2;
-        let ph2 = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 1) as *mut u16;
+        let ph2 = crate::session::rust_session_wdata_ptr((*tsd).fd, 1) as *mut u16;
         if !ph2.is_null() { ph2.write_unaligned(((len + 3) as u16).to_be()); }
         wfifoset((*tsd).fd, encrypt((*tsd).fd) as usize);
 
@@ -413,16 +413,16 @@ pub unsafe extern "C" fn clif_exchange_additem_else(
     wfifob((*sd).fd, 7, (*sd).exchange.list_count as u8);
     let len: usize = 0;
     // WFIFOW(sd->fd, len+8) = 0xFFFF
-    let pw = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, len + 8) as *mut u16;
+    let pw = crate::session::rust_session_wdata_ptr((*sd).fd, len + 8) as *mut u16;
     if !pw.is_null() { pw.write_unaligned(0xFFFF_u16.to_le()); }
     wfifob((*sd).fd, len + 10, 0x00);
     wfifob((*sd).fd, len + 11, buf_len as u8);
-    let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, len + 12) as *mut u8;
+    let dst = crate::session::rust_session_wdata_ptr((*sd).fd, len + 12) as *mut u8;
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(nameof.as_ptr() as *const u8, dst, buf_len);
     }
     let pkt_len = len + buf_len + 5;   // WFIFOW(sd->fd,1) = SWAP16(len+5)
-    let ph = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
+    let ph = crate::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
     if !ph.is_null() { ph.write_unaligned(((pkt_len) as u16).to_be()); }
     wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
 
@@ -439,16 +439,16 @@ pub unsafe extern "C" fn clif_exchange_additem_else(
     wfifob((*tsd).fd, 5, 0x02);
     wfifob((*tsd).fd, 6, 0x01);
     wfifob((*tsd).fd, 7, (*sd).exchange.list_count as u8);
-    let pw2 = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 8) as *mut u16;
+    let pw2 = crate::session::rust_session_wdata_ptr((*tsd).fd, 8) as *mut u16;
     if !pw2.is_null() { pw2.write_unaligned(0xFFFF_u16.to_le()); }
     wfifob((*tsd).fd, 10, 0);
     wfifob((*tsd).fd, 11, buf_len as u8);
-    let dst2 = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 12) as *mut u8;
+    let dst2 = crate::session::rust_session_wdata_ptr((*tsd).fd, 12) as *mut u8;
     if !dst2.is_null() {
         std::ptr::copy_nonoverlapping(nameof.as_ptr() as *const u8, dst2, buf_len);
     }
     let tsd_pkt_len = buf_len + 1;   // len += strlen(buff)+1; WFIFOW(tsd->fd,1)=SWAP16(len+8)
-    let ph2 = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 1) as *mut u16;
+    let ph2 = crate::session::rust_session_wdata_ptr((*tsd).fd, 1) as *mut u16;
     if !ph2.is_null() { ph2.write_unaligned(((tsd_pkt_len + 8) as u16).to_be()); }
     wfifoset((*tsd).fd, encrypt((*tsd).fd) as usize);
 
@@ -593,22 +593,22 @@ pub unsafe extern "C" fn clif_exchange_additem(
 
     if ex_item.custom_icon != 0 {
         let icon_val = ex_item.custom_icon + 49152;
-        let pw = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, len + 8) as *mut u16;
+        let pw = crate::session::rust_session_wdata_ptr((*sd).fd, len + 8) as *mut u16;
         if !pw.is_null() { pw.write_unaligned((icon_val as u16).to_be()); }
         wfifob((*sd).fd, len + 10, ex_item.custom_icon_color as u8);
     } else {
         let icon_val = itemdb_icon(ex_item.id) as u16;
-        let pw = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, len + 8) as *mut u16;
+        let pw = crate::session::rust_session_wdata_ptr((*sd).fd, len + 8) as *mut u16;
         if !pw.is_null() { pw.write_unaligned(icon_val.to_be()); }
         wfifob((*sd).fd, len + 10, itemdb_iconcolor(ex_item.id) as u8);
     }
     wfifob((*sd).fd, len + 11, buf_len as u8);
-    let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, len + 12) as *mut u8;
+    let dst = crate::session::rust_session_wdata_ptr((*sd).fd, len + 12) as *mut u8;
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(buff.as_ptr() as *const u8, dst, buf_len);
     }
     let sd_pkt_len = len + buf_len + 5;
-    let ph = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
+    let ph = crate::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
     if !ph.is_null() { ph.write_unaligned((sd_pkt_len as u16).to_be()); }
     wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
 
@@ -686,22 +686,22 @@ pub unsafe extern "C" fn clif_exchange_additem(
     let ex_item = &(*sd).exchange.item[i];
     if ex_item.custom_icon != 0 {
         let icon_val = ex_item.custom_icon + 49152;
-        let pw = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 8) as *mut u16;
+        let pw = crate::session::rust_session_wdata_ptr((*tsd).fd, 8) as *mut u16;
         if !pw.is_null() { pw.write_unaligned((icon_val as u16).to_be()); }
         wfifob((*tsd).fd, 10, ex_item.custom_icon_color as u8);
     } else {
         let icon_val = itemdb_icon(ex_item.id) as u16;
-        let pw = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 8) as *mut u16;
+        let pw = crate::session::rust_session_wdata_ptr((*tsd).fd, 8) as *mut u16;
         if !pw.is_null() { pw.write_unaligned(icon_val.to_be()); }
         wfifob((*tsd).fd, 10, itemdb_iconcolor(ex_item.id) as u8);
     }
     wfifob((*tsd).fd, 11, buf_len as u8);
-    let dst2 = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 12) as *mut u8;
+    let dst2 = crate::session::rust_session_wdata_ptr((*tsd).fd, 12) as *mut u8;
     if !dst2.is_null() {
         std::ptr::copy_nonoverlapping(buff.as_ptr() as *const u8, dst2, buf_len);
     }
     let tsd_pkt_len = len + buf_len + 1;   // len += strlen(buff)+1; WFIFOW(tsd->fd,1)=SWAP16(len+8)
-    let ph2 = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 1) as *mut u16;
+    let ph2 = crate::session::rust_session_wdata_ptr((*tsd).fd, 1) as *mut u16;
     if !ph2.is_null() { ph2.write_unaligned(((tsd_pkt_len + 8) as u16).to_be()); }
     wfifoset((*tsd).fd, encrypt((*tsd).fd) as usize);
 
@@ -741,7 +741,7 @@ pub unsafe extern "C" fn clif_exchange_money(
     // sd side: own gold offer
     wfifob((*sd).fd, 0, 0xAA);
     {
-        let p = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
+        let p = crate::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
         if !p.is_null() { p.write_unaligned(8_u16.to_be()); }
     }
     wfifob((*sd).fd, 3, 0x42);
@@ -749,7 +749,7 @@ pub unsafe extern "C" fn clif_exchange_money(
     wfifob((*sd).fd, 5, 0x03);
     wfifob((*sd).fd, 6, 0x00);
     {
-        let p = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 7) as *mut u32;
+        let p = crate::session::rust_session_wdata_ptr((*sd).fd, 7) as *mut u32;
         if !p.is_null() { p.write_unaligned((*sd).exchange.gold.to_be()); }
     }
     wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
@@ -757,7 +757,7 @@ pub unsafe extern "C" fn clif_exchange_money(
     // tsd side: sd's gold offer visible to partner
     wfifob((*tsd).fd, 0, 0xAA);
     {
-        let p = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 1) as *mut u16;
+        let p = crate::session::rust_session_wdata_ptr((*tsd).fd, 1) as *mut u16;
         if !p.is_null() { p.write_unaligned(8_u16.to_be()); }
     }
     wfifob((*tsd).fd, 3, 0x42);
@@ -765,7 +765,7 @@ pub unsafe extern "C" fn clif_exchange_money(
     wfifob((*tsd).fd, 5, 0x03);
     wfifob((*tsd).fd, 6, 0x01);
     {
-        let p = crate::ffi::session::rust_session_wdata_ptr((*tsd).fd, 7) as *mut u32;
+        let p = crate::session::rust_session_wdata_ptr((*tsd).fd, 7) as *mut u32;
         if !p.is_null() { p.write_unaligned((*sd).exchange.gold.to_be()); }
     }
     wfifoset((*tsd).fd, encrypt((*tsd).fd) as usize);
@@ -940,11 +940,11 @@ pub unsafe extern "C" fn clif_handitem(sd: *mut MapSessionData) -> c_int {
             wfifohead((*sd).fd, msg_len + 11);
             wfifob((*sd).fd, 5, 0);
             {
-                let p = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 6) as *mut u32;
+                let p = crate::session::rust_session_wdata_ptr((*sd).fd, 6) as *mut u32;
                 if !p.is_null() { p.write_unaligned((*bl).id.to_be()); }
             }
             wfifob((*sd).fd, 10, msg_len as u8);
-            let dst = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 11) as *mut u8;
+            let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 11) as *mut u8;
             if !dst.is_null() {
                 std::ptr::copy_nonoverlapping(msg.as_ptr() as *const u8, dst, msg_len);
             }
@@ -952,7 +952,7 @@ pub unsafe extern "C" fn clif_handitem(sd: *mut MapSessionData) -> c_int {
             wfifob((*sd).fd, 3, 0x0D);
             wfifob((*sd).fd, 4, 0); // increment placeholder (WFIFOHEADER sets it)
             {
-                let ph = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
+                let ph = crate::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
                 if !ph.is_null() { ph.write_unaligned(((msg_len + 11) as u16).to_be()); }
             }
             wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
@@ -1004,7 +1004,7 @@ pub unsafe extern "C" fn clif_parse_exchange(sd: *mut MapSessionData) -> c_int {
                 wfifohead((*sd).fd, 7);
                 wfifob((*sd).fd, 0, 0xAA);
                 {
-                    let p = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
+                    let p = crate::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
                     if !p.is_null() { p.write_unaligned(4_u16.to_be()); }
                 }
                 wfifob((*sd).fd, 3, 0x42);

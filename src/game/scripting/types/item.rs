@@ -142,7 +142,7 @@ pub fn write_str_field(arr: &mut [c_char], s: &mlua::String) {
 }
 
 /// Shared getattr for an ItemData record — used by all item type fallbacks.
-pub fn item_data_getattr(
+pub unsafe fn item_data_getattr(
     lua: &mlua::Lua,
     d: *const ItemData,
     key: &str,
@@ -202,16 +202,16 @@ pub fn item_data_getattr(
         "protection"   => int!(d.protection),
         "reqMight"     => int!(d.mightreq),
         "rank" => {
-            let path = unsafe { crate::ffi::class_db::rust_classdb_path(d.class as c_int) };
-            let ptr = unsafe { crate::ffi::class_db::rust_classdb_name(path, d.rank) };
+            let path = unsafe { crate::database::class_db::rust_classdb_path(d.class as c_int) };
+            let ptr = unsafe { crate::database::class_db::rust_classdb_name(path, d.rank) };
             let s = classdb_name_to_string(ptr);
             Ok(mlua::Value::String(lua.create_string(s)?))
         }
         "baseClass" => {
-            int!(unsafe { crate::ffi::class_db::rust_classdb_path(d.class as c_int) })
+            int!(unsafe { crate::database::class_db::rust_classdb_path(d.class as c_int) })
         }
         "className" => {
-            let ptr = unsafe { crate::ffi::class_db::rust_classdb_name(d.class as c_int, d.rank) };
+            let ptr = unsafe { crate::database::class_db::rust_classdb_name(d.class as c_int, d.rank) };
             let s = classdb_name_to_string(ptr);
             Ok(mlua::Value::String(lua.create_string(s)?))
         }
@@ -222,7 +222,7 @@ pub fn item_data_getattr(
 fn classdb_name_to_string(ptr: *mut c_char) -> String {
     if ptr.is_null() { return String::new(); }
     let s = unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() };
-    unsafe { crate::ffi::class_db::rust_classdb_free_name(ptr); }
+    unsafe { crate::database::class_db::rust_classdb_free_name(ptr); }
     s
 }
 
@@ -232,7 +232,7 @@ fn classdb_name_to_string(ptr: *mut c_char) -> String {
 impl UserData for ItemObject {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_meta_method(MetaMethod::Index, |lua, this, key: String| {
-            item_data_getattr(lua, this.ptr as *const ItemData, &key)
+            unsafe { item_data_getattr(lua, this.ptr as *const ItemData, &key) }
         });
     }
 }
@@ -265,8 +265,8 @@ impl UserData for BItemObject {
                 "customIconColor" => int!(bi.custom_icon_color),
                 "note"            => cstr!(&bi.note),
                 _ => {
-                    let db = unsafe { crate::ffi::item_db::rust_itemdb_search(bi.id) };
-                    item_data_getattr(lua, db, &key)
+                    let db = unsafe { crate::database::item_db::rust_itemdb_search(bi.id) };
+                    unsafe { item_data_getattr(lua, db, &key) }
                 }
             }
         });
@@ -330,8 +330,8 @@ impl UserData for BankItemObject {
                 "customIconColor" => int!(bd.custom_icon_color),
                 "note"            => cstr!(&bd.note),
                 _ => {
-                    let db = unsafe { crate::ffi::item_db::rust_itemdb_search(bd.item_id) };
-                    item_data_getattr(lua, db, &key)
+                    let db = unsafe { crate::database::item_db::rust_itemdb_search(bd.item_id) };
+                    unsafe { item_data_getattr(lua, db, &key) }
                 }
             }
         });
@@ -391,8 +391,8 @@ impl UserData for ParcelObject {
                 "pos"       => int!(p.pos),
                 "npcFlag"   => int!(p.npcflag),
                 _ => {
-                    let db = unsafe { crate::ffi::item_db::rust_itemdb_search(p.data.id) };
-                    item_data_getattr(lua, db, &key)
+                    let db = unsafe { crate::database::item_db::rust_itemdb_search(p.data.id) };
+                    unsafe { item_data_getattr(lua, db, &key) }
                 }
             }
         });

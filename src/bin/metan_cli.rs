@@ -202,7 +202,7 @@ async fn main() -> Result<()> {
         item_db::init();
         let data_dir_c = CString::new(data_dir.as_str())
             .expect("data_dir contains nul byte");
-        class_db::init(data_dir_c.as_ptr());
+        unsafe { class_db::init(data_dir_c.as_ptr()); }
     })
     .await
     .context("DB init thread panicked")?;

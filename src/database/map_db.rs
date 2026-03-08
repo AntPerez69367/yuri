@@ -206,7 +206,7 @@ pub fn parse_map_file(path: &str) -> Result<ParsedTiles> {
     let tile = alloc_zeroed_slice::<c_ushort>(cell_count);
     let pass = alloc_zeroed_slice::<c_ushort>(cell_count);
     let obj = alloc_zeroed_slice::<c_ushort>(cell_count);
-    let map = alloc_zeroed_slice::<c_uchar>(cell_count);
+    let map_cells = alloc_zeroed_slice::<c_uchar>(cell_count);
 
     let mut pos = 4usize;
     for i in 0..cell_count {
@@ -226,7 +226,7 @@ pub fn parse_map_file(path: &str) -> Result<ParsedTiles> {
         tile,
         pass,
         obj,
-        map,
+        map: map_cells,
     })
 }
 
@@ -303,15 +303,15 @@ fn load_all_registries(
 
     let rows = blocking_run(query.fetch_all(get_pool()))?;
 
-    let mut map: std::collections::HashMap<u32, Vec<(String, u32)>> =
+    let mut registry: std::collections::HashMap<u32, Vec<(String, u32)>> =
         std::collections::HashMap::new();
     for row in rows {
         let map_id: u32 = row.try_get("mrg_map_id")?;
         let identifier: String = row.try_get("mrg_identifier")?;
         let value: u32 = row.try_get("mrg_value")?;
-        map.entry(map_id).or_default().push((identifier, value));
+        registry.entry(map_id).or_default().push((identifier, value));
     }
-    Ok(map)
+    Ok(registry)
 }
 
 /// Query the Maps table and populate map slots. Called once at startup.
@@ -627,4 +627,117 @@ mod layout_tests {
         assert_eq!(std::mem::size_of::<WarpList>(), 40);
         assert_eq!(std::mem::offset_of!(WarpList, next), 24);
     }
+}
+
+// ─── FFI exports ─────────────────────────────────────────────────────────────
+// Content moved from src/ffi/map_db.rs
+
+use std::ffi::CStr;
+
+// Rust owns these globals. Exported to C so map_server.c can read map[id].* unchanged.
+#[no_mangle]
+pub static mut map: *mut MapData = std::ptr::null_mut();
+#[no_mangle]
+pub static mut map_n: c_int = 0;
+
+/// Allocate the 65535-slot map array, load all maps from DB + files, set C globals.
+#[no_mangle]
+pub unsafe extern "C" fn rust_map_init(maps_dir: *const c_char, server_id: c_int) -> c_int {
+    ffi_catch!(-1, {
+        let dir = match unsafe { CStr::from_ptr(maps_dir) }.to_str() {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+
+        let raw = unsafe {
+            let layout = std::alloc::Layout::new::<[MapData; MAP_SLOTS]>();
+            let ptr = std::alloc::alloc_zeroed(layout);
+            if ptr.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
+            ptr as *mut MapData
+        };
+
+        match load_maps(dir, server_id, unsafe { &mut *(raw as *mut [MapData; MAP_SLOTS]) }) {
+            Ok(count) => {
+                unsafe {
+                    map = raw;
+                    map_n = count as c_int;
+                }
+                tracing::info!("[map] map data loaded count={count}");
+                0
+            }
+            Err(e) => {
+                tracing::error!("[map] rust_map_init failed: {e:#}");
+                unsafe {
+                    let layout = std::alloc::Layout::new::<[MapData; MAP_SLOTS]>();
+                    std::alloc::dealloc(raw as *mut u8, layout);
+                }
+                -1
+            }
+        }
+    })
+}
+
+/// Reload map metadata + registry in-place.
+#[no_mangle]
+pub unsafe extern "C" fn rust_map_reload(maps_dir: *const c_char, server_id: c_int) -> c_int {
+    ffi_catch!(-1, {
+        if unsafe { map.is_null() } { return -1; }
+        let dir = match unsafe { CStr::from_ptr(maps_dir) }.to_str() {
+            Ok(s) => s,
+            Err(_) => return -1,
+        };
+        let slots = unsafe { &mut *(map as *mut [MapData; MAP_SLOTS]) };
+        match reload_maps(dir, server_id, slots) {
+            Ok(_) => 0,
+            Err(e) => { tracing::error!("[map] rust_map_reload failed: {e:#}"); -1 }
+        }
+    })
+}
+
+/// Returns a raw pointer to the MapData slot for `id`, or null if out of range.
+pub unsafe fn get_map_ptr(id: u16) -> *mut MapData {
+    if map.is_null() || id as usize >= MAP_SLOTS {
+        std::ptr::null_mut()
+    } else {
+        map.add(id as usize)
+    }
+}
+
+/// Returns the warp list head at the block containing `(dx, dy)` on map `m`.
+pub unsafe fn map_get_warp(m: u16, dx: u16, dy: u16) -> *mut WarpList {
+    let md_ptr = get_map_ptr(m);
+    if md_ptr.is_null() { return std::ptr::null_mut(); }
+    let md = &*md_ptr;
+    if md.xs == 0 || md.ys == 0 { return std::ptr::null_mut(); }
+    if dx >= md.xs || dy >= md.ys { return std::ptr::null_mut(); }
+    if md.warp.is_null() { return std::ptr::null_mut(); }
+    let block_size = BLOCK_SIZE;
+    let bx = dx as usize / block_size;
+    let by = dy as usize / block_size;
+    if bx >= md.bxs as usize || by >= md.bys as usize { return std::ptr::null_mut(); }
+    let idx = bx + by * md.bxs as usize;
+    md.warp.add(idx).read()
+}
+
+/// Returns true if the map slot for `id` is loaded (xs > 0).
+pub unsafe fn map_is_loaded(id: u16) -> bool {
+    let ptr = get_map_ptr(id);
+    !ptr.is_null() && (*ptr).xs > 0
+}
+
+/// Reload the MapRegistry for a single map.
+#[no_mangle]
+pub unsafe extern "C" fn rust_map_loadregistry(map_id: c_int) -> c_int {
+    ffi_catch!(-1, {
+        if unsafe { map.is_null() } { return -1; }
+        let id = map_id as usize;
+        if id >= MAP_SLOTS { return -1; }
+        let slot = unsafe { &mut *map.add(id) };
+        match load_registry(slot, map_id as u32) {
+            Ok(_) => 0,
+            Err(e) => { tracing::error!("[map] rust_map_loadregistry map_id={map_id} failed: {e:#}"); -1 }
+        }
+    })
 }

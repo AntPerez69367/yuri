@@ -6,8 +6,6 @@ use std::ffi::{c_char, c_double, c_float, c_int, c_long, c_short, c_uchar, c_uin
 use std::os::raw::c_void;
 
 use crate::database::map_db::BlockList;
-// sql_handle is a Rust #[no_mangle] static in src/game/map_server.rs.
-use crate::game::map_server::sql_handle;
 // MobSpawnData is used by future porting tasks (Tasks 6+); import it when needed.
 use crate::game::types::GfxViewer;
 use crate::servers::char::charstatus::MmoCharStatus;
@@ -509,45 +507,6 @@ pub const MAP_ERRMOUNT:     usize = 12;
 // Re-exported here so callers importing from `crate::game::pc` still find them.
 pub use crate::game::map_server::{MapMsgData, map_msg};
 
-// Sql opaque handle (declared in db_mysql.h as `struct Sql`)
-// Used for sql_handle global in pc.c
-#[repr(C)]
-pub struct Sql {
-    _opaque: [u8; 0],
-}
-
-// SqlStmt opaque handle (declared in db_mysql.h as `struct SqlStmt`)
-#[repr(C)]
-pub struct SqlStmt {
-    _opaque: [u8; 0],
-}
-
-// SqlDataType used by SqlStmt_BindColumn (from db_mysql.h enum)
-#[repr(C)]
-pub enum SqlDataType {
-    SqlDtNull = 0,
-    SqlDtUChar,
-    SqlDtChar,
-    SqlDtUShort,
-    SqlDtShort,
-    SqlDtUInt,
-    SqlDtInt,
-    SqlDtULong,
-    SqlDtLong,
-    SqlDtULongLong,
-    SqlDtLongLong,
-    SqlDtFloat,
-    SqlDtDouble,
-    SqlDtString,
-    SqlDtEnum,
-    SqlDtBlob,
-    SqlDtLastType,
-}
-
-// SQL_ERROR / SQL_SUCCESS constants (from db_mysql.h)
-pub const SQL_ERROR:   c_int = -1;
-pub const SQL_SUCCESS: c_int =  0;
-
 // ─── Extern "C" declarations (C functions called by pc.c) ─────────────────────
 
 #[cfg(not(test))]
@@ -781,51 +740,6 @@ extern "C" {
     #[link_name = "rust_classdb_level"]
     pub fn classdb_level(path: c_int, lvl: c_int) -> c_uint;
 
-    // ── SQL / db_mysql functions ───────────────────────────────────────────────
-    // sql_handle is now a Rust #[no_mangle] static in src/game/map_server.rs.
-    // Access it via crate::game::map_server::sql_handle.
-
-    /// `int Sql_Query(Sql* self, const char* query, ...)` — variadic
-    pub fn Sql_Query(self_: *mut Sql, query: *const c_char, ...) -> c_int;
-
-    /// `uint64_t Sql_NumRows(Sql* self)` — returned as u64 (= C uint64_t)
-    pub fn Sql_NumRows(self_: *mut Sql) -> u64;
-
-    /// `void Sql_FreeResult(Sql* self)`
-    pub fn Sql_FreeResult(self_: *mut Sql);
-
-    /// `size_t Sql_EscapeString(Sql* self, char* out_to, const char* from)`
-    pub fn Sql_EscapeString(self_: *mut Sql, out_to: *mut c_char, from: *const c_char) -> usize;
-
-    /// `struct SqlStmt* SqlStmt_Malloc(Sql* sql)`
-    pub fn SqlStmt_Malloc(sql: *mut Sql) -> *mut SqlStmt;
-
-    /// `int SqlStmt_Prepare(SqlStmt* self, const char* query, ...)` — variadic
-    pub fn SqlStmt_Prepare(self_: *mut SqlStmt, query: *const c_char, ...) -> c_int;
-
-    /// `int SqlStmt_Execute(SqlStmt* self)`
-    pub fn SqlStmt_Execute(self_: *mut SqlStmt) -> c_int;
-
-    /// `int SqlStmt_BindColumn(SqlStmt* self, size_t idx, SqlDataType type, void* buf, size_t buf_len, unsigned long* out_len, int* is_null)`
-    pub fn SqlStmt_BindColumn(
-        self_: *mut SqlStmt,
-        idx: usize,
-        buffer_type: SqlDataType,
-        buffer: *mut c_void,
-        buffer_len: usize,
-        out_len: *mut c_ulong,
-        is_null: *mut c_int,
-    ) -> c_int;
-
-    /// `uint64_t SqlStmt_NumRows(SqlStmt* self)`
-    pub fn SqlStmt_NumRows(self_: *mut SqlStmt) -> u64;
-
-    /// `int SqlStmt_NextRow(SqlStmt* self)` — returns SQL_SUCCESS or SQL_ERROR
-    pub fn SqlStmt_NextRow(self_: *mut SqlStmt) -> c_int;
-
-    /// `void SqlStmt_Free(SqlStmt* self)`
-    pub fn SqlStmt_Free(self_: *mut SqlStmt);
-
     // ── session helpers — Rust-exported to C (from yuri.h/session.h) ──────────
     #[link_name = "rust_session_exists"]
     pub fn rust_session_exists(fd: c_int) -> bool;
@@ -905,16 +819,6 @@ extern "C" {
     // ── intif_save proxy via sl_pc_forcesave (sl_compat.c) ───────────────────
     /// `int sl_pc_forcesave(void* sd)` — calls intif_save(sd) in C.
     pub fn sl_pc_forcesave(sd: *mut c_void) -> c_int;
-
-    // ── SQL debug helper ──────────────────────────────────────────────────────
-    /// `void Sql_ShowDebug_(Sql* self, const char* file, unsigned long line)`
-    /// Called by the C `Sql_ShowDebug(self)` macro; we invoke it directly in Rust.
-    pub fn Sql_ShowDebug_(self_: *mut Sql, file: *const c_char, line: c_ulong);
-
-    // ── rnd — rnd(x) is a C macro over randomMT(); use randomMT() directly ──────
-    /// `unsigned int randomMT(void)` — Mersenne Twister generator.
-    /// Equivalent to: `(int)(randomMT() & 0xFFFFFF) % n`
-    pub fn randomMT() -> c_uint;
 
     // ── network encryption (net_crypt.c) ──────────────────────────────────────
     /// `int encrypt(int fd)` — encrypts the WFIFO buffer and returns the encrypted length.
@@ -1450,7 +1354,7 @@ pub unsafe extern "C" fn rust_pc_timer(id: c_int, _none: c_int) -> c_int {
     if (*sd).status.pk == 1 && (*sd).status.pkduration > 0 {
         (*sd).status.pkduration -= 1000;
 
-        if (*sd).status.pkduration <= 0 {
+        if (*sd).status.pkduration == 0 {
             (*sd).status.pk = 0;
             clif_sendchararea(sd);
         }
@@ -1502,7 +1406,7 @@ pub unsafe extern "C" fn rust_pc_scripttimer(id: c_int, _none: c_int) -> c_int {
         );
     }
 
-    if (*sd).status.hp <= 0 && (*sd).deathflag != 0 {
+    if (*sd).status.hp == 0 && (*sd).deathflag != 0 {
         rust_pc_diescript(sd);
         return 0;
     }
@@ -1576,32 +1480,32 @@ pub unsafe extern "C" fn rust_pc_sendpong(id: c_int, _none: c_int) -> c_int {
     }
 
     // WFIFOHEAD(fd, 10)
-    crate::ffi::session::rust_session_wfifohead((*sd).fd, 10);
+    crate::session::rust_session_wfifohead((*sd).fd, 10);
 
     // WFIFOB(fd, 0) = 0xAA
-    let p = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 0);
+    let p = crate::session::rust_session_wdata_ptr((*sd).fd, 0);
     if !p.is_null() { *p = 0xAAu8; }
 
     // WFIFOW(fd, 1) = SWAP16(0x09)  — big-endian 16-bit (byte-swap of 0x0009 → 0x0900)
-    let p = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
+    let p = crate::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
     if !p.is_null() { p.write_unaligned(0x09u16.swap_bytes()); }
 
     // WFIFOB(fd, 3) = 0x68
-    let p = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 3);
+    let p = crate::session::rust_session_wdata_ptr((*sd).fd, 3);
     if !p.is_null() { *p = 0x68u8; }
 
     // WFIFOL(fd, 5) = SWAP32(gettick())  — big-endian 32-bit tick
     let tick = gettick_pc();
-    let p = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 5) as *mut u32;
+    let p = crate::session::rust_session_wdata_ptr((*sd).fd, 5) as *mut u32;
     if !p.is_null() { p.write_unaligned(tick.swap_bytes()); }
 
     // WFIFOB(fd, 9) = 0x00
-    let p = crate::ffi::session::rust_session_wdata_ptr((*sd).fd, 9);
+    let p = crate::session::rust_session_wdata_ptr((*sd).fd, 9);
     if !p.is_null() { *p = 0x00u8; }
 
     // WFIFOSET(fd, encrypt(fd))
     let enc_len = encrypt_fd((*sd).fd);
-    crate::ffi::session::rust_session_commit((*sd).fd, enc_len as usize);
+    crate::session::rust_session_commit((*sd).fd, enc_len as usize);
 
     (*sd).LastPingTick = gettick_pc() as c_ulong;
     0
@@ -1620,29 +1524,33 @@ pub unsafe extern "C" fn rust_pc_requestmp(sd: *mut MapSessionData) -> c_int {
 
     (*sd).flags = 0;
 
+    let char_name = std::ffi::CStr::from_ptr((*sd).status.name.as_ptr())
+        .to_str().unwrap_or("").to_owned();
+    let char_id = (*sd).status.id;
+
     // Check for new mail
-    let mut escaped_name = [0i8; 255];
-    Sql_EscapeString(sql_handle, escaped_name.as_mut_ptr(), (*sd).status.name.as_ptr());
-    let query_mail = c"SELECT `MalNew` FROM `Mail` WHERE `MalNew` = 1 AND `MalChaNameDestination` = '%s'";
-    if SQL_ERROR == Sql_Query(sql_handle, query_mail.as_ptr(), escaped_name.as_ptr()) {
-        Sql_ShowDebug_(sql_handle, c"pc.rs".as_ptr(), line!() as c_ulong);
-        return 0;
-    }
-    if Sql_NumRows(sql_handle) > 0 {
-        (*sd).flags |= FLAG_MAIL;
-    }
-    Sql_FreeResult(sql_handle);
+    let has_mail = crate::database::blocking_run(async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM `Mail` WHERE `MalNew` = 1 AND `MalChaNameDestination` = ?"
+        )
+        .bind(char_name)
+        .fetch_one(crate::database::get_pool())
+        .await
+        .unwrap_or(0)
+    }) > 0;
+    if has_mail { (*sd).flags |= FLAG_MAIL; }
 
     // Check for pending parcels
-    let query_parcel = c"SELECT `ParItmId` FROM `Parcels` WHERE `ParChaIdDestination`='%u'";
-    if SQL_ERROR == Sql_Query(sql_handle, query_parcel.as_ptr(), (*sd).status.id) {
-        Sql_ShowDebug_(sql_handle, c"pc.rs".as_ptr(), line!() as c_ulong);
-        return 0;
-    }
-    if Sql_NumRows(sql_handle) > 0 {
-        (*sd).flags |= FLAG_PARCEL;
-    }
-    Sql_FreeResult(sql_handle);
+    let has_parcel = crate::database::blocking_run(async move {
+        sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM `Parcels` WHERE `ParChaIdDestination` = ?"
+        )
+        .bind(char_id)
+        .fetch_one(crate::database::get_pool())
+        .await
+        .unwrap_or(0)
+    }) > 0;
+    if has_parcel { (*sd).flags |= FLAG_PARCEL; }
 
     0
 }
@@ -1691,7 +1599,7 @@ pub unsafe extern "C" fn rust_pc_givexp(
     let by = ((*sd).bl.y as c_int) / BLOCK_SIZE as c_int;
 
     // stack check — count PCs at the exact same tile
-    let map_ptr = crate::ffi::map_db::get_map_ptr((*sd).bl.m as u16);
+    let map_ptr = crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
     if !map_ptr.is_null() {
         let bxs = (*map_ptr).bxs as c_int;
         let block_slot = bx + by * bxs;
@@ -1972,7 +1880,7 @@ pub unsafe extern "C" fn rust_pc_calcdamage(sd: *mut MapSessionData) -> c_float 
     if (*sd).minSdam > 0 && (*sd).maxSdam > 0 {
         let mut ran = (*sd).maxSdam - (*sd).minSdam;
         if ran <= 0 { ran = 1; }
-        ran = ((randomMT() & 0xFFFFFF) % (ran as c_uint)) as c_int + (*sd).minSdam;
+        ran = ((rand::random::<u32>() & 0x00FF_FFFF) % (ran as u32)) as c_int + (*sd).minSdam;
         damage += (ran as c_float) / 2.0f32;
     }
 
@@ -2877,10 +2785,6 @@ pub unsafe extern "C" fn rust_pc_additem(
             sd, num, id_u as c_int, (*fl).owner as c_int, (*fl).real_name.as_mut_ptr(),
         );
 
-        // Escape a C string for logging (result discarded — logging is commented out in C).
-        let mut _escape = [0i8; 255];
-        Sql_EscapeString(sql_handle, _escape.as_mut_ptr(), (*fl).real_name.as_ptr());
-
         if (*fl).amount > i {
             // Partial fill: put as much as fits.
             let inv = &mut (*sd).status.inventory[num as usize];
@@ -3160,8 +3064,6 @@ pub unsafe extern "C" fn rust_pc_dropitemmap(
 
     if type_ != 0 || (*sd).status.inventory[id_u].amount == 0 {
         // Full drop: clear the slot.
-        let mut _escape = [0i8; 255];
-        Sql_EscapeString(sql_handle, _escape.as_mut_ptr(), (*fl).data.real_name.as_ptr());
         libc::memset(
             &mut (*sd).status.inventory[id_u] as *mut Item as *mut libc::c_void,
             0,
@@ -3170,8 +3072,6 @@ pub unsafe extern "C" fn rust_pc_dropitemmap(
         clif_senddelitem(sd, id, 1);
     } else {
         // Partial drop: update count.
-        let mut _escape = [0i8; 255];
-        Sql_EscapeString(sql_handle, _escape.as_mut_ptr(), (*fl).data.real_name.as_ptr());
         (*fl).data.amount = 1;
         clif_sendadditem(sd, id);
     }
@@ -3324,7 +3224,7 @@ pub unsafe extern "C" fn rust_pc_useitem(
                 .wrapping_add(itemdb_time((*sd).status.inventory[id_u].id) as u32);
     }
 
-    let map_ptr = crate::ffi::map_db::get_map_ptr((*sd).bl.m as u16);
+    let map_ptr = crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
 
     macro_rules! can_use {
         () => {
@@ -4031,8 +3931,6 @@ pub unsafe extern "C" fn rust_pc_getitemscript(
         clif_lookgone_pc(&mut (*fl).bl as *mut BlockList);
         map_delitem((*fl).bl.id);
 
-        let mut _escape = [0i8; 255];
-        Sql_EscapeString(sql_handle, _escape.as_mut_ptr(), (*fl).data.real_name.as_ptr());
         return 0;
     }
 
@@ -4126,7 +4024,7 @@ pub unsafe extern "C" fn rust_pc_warp(
     mut y: c_int,
 ) -> c_int {
     use crate::servers::char::charstatus::{MAX_SPELLS, MAX_MAGIC_TIMERS};
-    use crate::ffi::map_db::map_is_loaded;
+    use crate::database::map_db::map_is_loaded;
 
     if sd.is_null() { return 0; }
 
@@ -4142,48 +4040,23 @@ pub unsafe extern "C" fn rust_pc_warp(
             return 0;
         }
 
-        let mut destsrv: c_int = 0;
+        let map_id = m;
+        let destsrv = crate::database::blocking_run(async move {
+            sqlx::query_scalar::<_, Option<i32>>(
+                "SELECT `MapServer` FROM `Maps` WHERE `MapId` = ?"
+            )
+            .bind(map_id)
+            .fetch_optional(crate::database::get_pool())
+            .await
+            .ok()
+            .flatten()
+            .flatten()
+        });
 
-        let stmt = SqlStmt_Malloc(sql_handle);
-        if stmt.is_null() {
-            return -1;
-        }
-
-        let rc = SqlStmt_Prepare(
-            stmt,
-            c"SELECT `MapServer` FROM `Maps` WHERE `MapId` = '%d'".as_ptr(),
-            m,
-        );
-        if rc == SQL_ERROR {
-            SqlStmt_Free(stmt);
-            return -1;
-        }
-
-        if SqlStmt_Execute(stmt) == SQL_ERROR {
-            SqlStmt_Free(stmt);
-            return -1;
-        }
-
-        if SqlStmt_BindColumn(
-            stmt,
-            0,
-            SqlDataType::SqlDtInt,
-            &mut destsrv as *mut c_int as *mut c_void,
-            0,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        ) == SQL_ERROR {
-            SqlStmt_Free(stmt);
-            return -1;
-        }
-
-        if SqlStmt_NumRows(stmt) == 0 {
-            SqlStmt_Free(stmt);
-            return 0;
-        }
-
-        let _ = SqlStmt_NextRow(stmt);
-        SqlStmt_Free(stmt);
+        let destsrv = match destsrv {
+            Some(srv) => srv,
+            None => return 0,
+        };
 
         if x < 0 || x > 255 { x = 1; }
         if y < 0 || y > 255 { y = 1; }
@@ -4197,7 +4070,7 @@ pub unsafe extern "C" fn rust_pc_warp(
     }
 
     // Map is loaded locally — clamp coordinates to map bounds.
-    let map_ptr = crate::ffi::map_db::get_map_ptr(m as u16);
+    let map_ptr = crate::database::map_db::get_map_ptr(m as u16);
     if map_ptr.is_null() { return 0; }
     let xs = (*map_ptr).xs as c_int;
     let ys = (*map_ptr).ys as c_int;

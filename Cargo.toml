@@ -38,9 +38,6 @@ tokio = { version = "1", features = ["full"] }
 # Only enable when building the map_server binary.
 map-game = []
 
-[build-dependencies]
-cc = "1"
-
 [dev-dependencies]
 criterion = "0.8.2"
 

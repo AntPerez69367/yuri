@@ -52,8 +52,8 @@ async fn handle_accept(state: &Arc<MapState>, pkt: &[u8]) {
     // map[i].tile != NULL means the map was loaded (same check as C gm_command.c:1504).
     #[cfg(not(test))]
     let map_ids: Vec<u16> = unsafe {
-        let map_ptr = crate::ffi::map_db::map;
-        let map_n   = crate::ffi::map_db::map_n as usize;
+        let map_ptr = crate::database::map_db::map;
+        let map_n   = crate::database::map_db::map_n as usize;
         if map_ptr.is_null() {
             vec![]
         } else {
@@ -154,9 +154,9 @@ async fn handle_charload(_state: &Arc<MapState>, pkt: &[u8]) {
     // This prevents concurrent Lua state access: timer callbacks (mob AI, NPC timers) and
     // charload both call sl_doscript_blargs, and LuaJIT is single-threaded.
     // spawn_blocking would put this on a separate OS thread, racing with timer_do.
-    #[cfg(not(test))]
+    #[cfg(all(feature = "map-game", not(test)))]
     {
-        let rc = crate::ffi::map_char::call_intif_mmo_tosd(fd, &mut raw);
+        let rc = crate::game::map_char::call_intif_mmo_tosd(fd, &mut raw);
         tracing::info!("[map] [charif] intif_mmo_tosd returned rc={}", rc);
     }
 

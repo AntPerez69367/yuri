@@ -1,1 +1,0 @@
-This directory contains all of the C deps that are used by the server. Several of these are old pieces of code that come from the original rAthena codebase and are being phased out.

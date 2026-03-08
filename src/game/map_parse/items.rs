@@ -8,8 +8,8 @@
 use std::ffi::{c_char, c_int, c_uint, c_void};
 
 use crate::database::map_db::{BlockList, WarpList, BLOCK_SIZE};
-use crate::ffi::map_db::map;
-use crate::ffi::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr};
+use crate::database::map_db::map;
+use crate::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr};
 use crate::game::mob::MOB_DEAD;
 use crate::game::pc::{
     MapSessionData,

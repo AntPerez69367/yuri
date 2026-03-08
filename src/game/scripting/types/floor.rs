@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicPtr, Ordering};
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
 use crate::database::map_db::{BlockList, MapData};
-use crate::ffi::map_db::get_map_ptr;
+use crate::database::map_db::get_map_ptr;
 use crate::game::scripting::types::item::{
     BoundItem, fixed_str, item_data_getattr, write_str_field,
 };
@@ -228,9 +228,9 @@ impl UserData for FloorListObject {
                 }
                 _ => {
                     let db = unsafe {
-                        crate::ffi::item_db::rust_itemdb_search(fl_ref.data.id)
+                        crate::database::item_db::rust_itemdb_search(fl_ref.data.id)
                     };
-                    item_data_getattr(lua, db, &key)
+                    unsafe { item_data_getattr(lua, db, &key) }
                 }
             }
         });

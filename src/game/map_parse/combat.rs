@@ -9,8 +9,8 @@ use std::ffi::{c_char, c_int, c_uint};
 
 use crate::database::map_db::BlockList;
 use crate::database::mob_db::MobDbData;
-use crate::ffi::map_db::map;
-use crate::ffi::session::{rust_session_exists, rust_session_set_eof};
+use crate::database::map_db::map;
+use crate::session::{rust_session_exists, rust_session_set_eof};
 use crate::game::mob::{MobSpawnData, MOB_DEAD, MAX_MAGIC_TIMERS, MAX_THREATCOUNT};
 use crate::game::pc::{
     MapSessionData,
@@ -67,7 +67,6 @@ extern "C" {
     fn rust_magicdb_mute(id: c_int) -> c_int;
     fn rust_magicdb_ticker(id: c_int) -> c_int;
     fn rust_mob_flushmagic(mob: *mut MobSpawnData) -> c_int;
-    fn randomMT() -> c_uint;
     fn rust_sl_async_freeco(user: *mut std::ffi::c_void);
     fn rust_magicdb_canfail(id: c_int) -> c_int;
     fn map_id2mob(id: c_uint) -> *mut MobSpawnData;
@@ -90,8 +89,8 @@ unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::
 
 // rnd(x) macro: ((int)(randomMT() & 0xFFFFFF) % (x))
 #[inline]
-unsafe fn rnd(x: c_int) -> c_int {
-    ((randomMT() & 0x00FF_FFFF) as c_int).wrapping_rem(x)
+fn rnd(x: c_int) -> c_int {
+    ((rand::random::<u32>() & 0x00FF_FFFF) as c_int).wrapping_rem(x)
 }
 
 // ─── clif_pc_damage ──────────────────────────────────────────────────────────
@@ -550,7 +549,7 @@ pub unsafe extern "C" fn clif_send_duration(
 
     // copy label bytes to WFIFOP(fd, 6)
     {
-        use crate::ffi::session::rust_session_wdata_ptr;
+        use crate::session::rust_session_wdata_ptr;
         let dst = rust_session_wdata_ptr(fd, 6);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(label.as_ptr(), dst, label_len);
@@ -688,7 +687,7 @@ pub unsafe extern "C" fn clif_send_mob_health_sub(bl: *mut BlockList, mut ap: ..
         return 0;
     }
 
-    use crate::ffi::session::{rust_session_get_eof};
+    use crate::session::{rust_session_get_eof};
     if rust_session_exists((*tsd).fd) == 0 || rust_session_get_eof((*tsd).fd) != 0 {
         rust_session_set_eof((*tsd).fd, 8);
         return 0;
@@ -1078,7 +1077,7 @@ pub unsafe extern "C" fn clif_sendmagic(sd: *mut MapSessionData, pos: c_int) -> 
     wfifob(fd, 6, spell_type as u8);
     wfifob(fd, 7, name_len as u8);
     {
-        use crate::ffi::session::rust_session_wdata_ptr;
+        use crate::session::rust_session_wdata_ptr;
         let dst = rust_session_wdata_ptr(fd, 8);
         if !dst.is_null() && !name.is_null() {
             std::ptr::copy_nonoverlapping(name as *const u8, dst, name_len);

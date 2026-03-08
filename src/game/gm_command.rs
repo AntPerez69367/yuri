@@ -46,11 +46,9 @@ extern "C" {
 }
 
 // char_fd, sql_handle, and userlist are now Rust #[no_mangle] statics in src/game/map_server.rs.
-use crate::game::map_server::{char_fd, sql_handle as SQL_HANDLE, userlist};
+use crate::game::map_server::{char_fd, userlist};
 
-/// Helper: cast the Rust sql_handle (*mut Sql) to *mut c_void for C FFI calls in this file.
-#[inline(always)]
-unsafe fn sql_handle_void() -> *mut c_void { SQL_HANDLE as *mut c_void }
+use crate::database::{blocking_run, get_pool};
 
 type LuaState = c_void; // opaque
 
@@ -134,17 +132,6 @@ extern "C" {
     #[link_name = "rust_mobspawn_read"]
     fn mobspawn_read() -> c_int;
 
-    // SQL (sql_handle is now a Rust static; access via crate::game::map_server::sql_handle cast to *mut c_void)
-    fn Sql_Query(handle: *mut c_void, fmt: *const c_char, ...) -> c_int;
-    fn Sql_EscapeString(handle: *mut c_void, out: *mut c_char, src: *const c_char);
-    fn Sql_FreeResult(handle: *mut c_void);
-    // Sql_ShowDebug has a trailing underscore in libdeps.a
-    #[link_name = "Sql_ShowDebug_"]
-    fn Sql_ShowDebug(handle: *mut c_void);
-    fn SqlStmt_Malloc(handle: *mut c_void) -> *mut c_void;
-    #[link_name = "SqlStmt_ShowDebug_"]
-    fn SqlStmt_ShowDebug(stmt: *mut c_void, file: *const c_char, line: c_ulong);
-
     // session helpers
     fn rust_session_exists(fd: c_int) -> c_int;
     fn rust_session_get_data(fd: c_int) -> *mut MapSessionData;
@@ -187,8 +174,6 @@ unsafe fn classdb_read() {}
 #[allow(clippy::inline_always)]
 #[inline(always)]
 unsafe fn leveldb_read() {}
-
-const SQL_ERROR: c_int = -1;
 
 type CmdFn = unsafe fn(*mut MapSessionData, *mut c_char, *mut LuaState) -> c_int;
 
@@ -294,7 +279,7 @@ static COMMANDS: &[CommandEntry] = &[
 // ─── Stub implementations (replaced batch-by-batch below) ────────────────────
 
 unsafe fn command_debug(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
-    use crate::ffi::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
+    use crate::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
     if sd.is_null() || line.is_null() { return 0; }
     let s = std::ffi::CStr::from_ptr(line).to_str().unwrap_or("");
     let mut iter = s.splitn(2, char::is_whitespace);
@@ -640,7 +625,7 @@ unsafe fn command_reloadspawn(sd: *mut MapSessionData, _line: *mut c_char, _s: *
 unsafe fn command_pvp(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
     let pvp = match parse_int(line) { Some(v) => v, None => return -1 };
-    let mp = crate::ffi::map_db::get_map_ptr((*sd).bl.m);
+    let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
     if !mp.is_null() { (*mp).pvp = pvp as u8; }
     let mut buf = [0i8; 64];
     let msg = format!("PvP set to: {}\0", pvp);
@@ -650,7 +635,7 @@ unsafe fn command_pvp(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaSt
 }
 unsafe fn command_spellwork(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
-    let mp = crate::ffi::map_db::get_map_ptr((*sd).bl.m);
+    let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
     if !mp.is_null() { (*mp).spell ^= 1; }
     0
 }
@@ -685,13 +670,15 @@ unsafe fn command_ban(_sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaS
     let tsd = map_name2sd(name.as_ptr());
     if !tsd.is_null() {
         printf(b"Banning %s\n\0".as_ptr() as *const c_char, name.as_ptr());
-        let mut esc = [0i8; 65];
-        Sql_EscapeString(sql_handle_void(), esc.as_mut_ptr(), name.as_ptr());
-        if SQL_ERROR == Sql_Query(sql_handle_void(),
-            b"UPDATE `Character` SET ChaBanned = '1' WHERE `ChaName` = '%s'\0".as_ptr() as *const c_char,
-            esc.as_ptr()) {
-            Sql_ShowDebug(sql_handle_void());
-        }
+        let name_str = std::ffi::CStr::from_ptr(name.as_ptr())
+            .to_str().unwrap_or("").to_owned();
+        blocking_run(async move {
+            sqlx::query("UPDATE `Character` SET `ChaBanned` = '1' WHERE `ChaName` = ?")
+                .bind(name_str)
+                .execute(get_pool())
+                .await
+                .ok();
+        });
         rust_session_set_eof((*tsd).fd, 1);
     }
     0
@@ -699,13 +686,15 @@ unsafe fn command_ban(_sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaS
 unsafe fn command_unban(_sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
     let name = match parse_str32(line) { Some(v) => v, None => return -1 };
     printf(b"Unbanning %s\n\0".as_ptr() as *const c_char, name.as_ptr());
-    let mut esc = [0i8; 65];
-    Sql_EscapeString(sql_handle_void(), esc.as_mut_ptr(), name.as_ptr());
-    if SQL_ERROR == Sql_Query(sql_handle_void(),
-        b"UPDATE `Character` SET ChaBanned = '0' WHERE `ChaName` = '%s'\0".as_ptr() as *const c_char,
-        esc.as_ptr()) {
-        Sql_ShowDebug(sql_handle_void());
-    }
+    let name_str = std::ffi::CStr::from_ptr(name.as_ptr())
+        .to_str().unwrap_or("").to_owned();
+    blocking_run(async move {
+        sqlx::query("UPDATE `Character` SET `ChaBanned` = '0' WHERE `ChaName` = ?")
+            .bind(name_str)
+            .execute(get_pool())
+            .await
+            .ok();
+    });
     0
 }
 unsafe fn command_kc(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
@@ -924,7 +913,7 @@ unsafe fn command_gfxtoggle(sd: *mut MapSessionData, _line: *mut c_char, _s: *mu
 unsafe fn command_weather(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
     let weather = parse_int(line).unwrap_or(5);
-    let mp = crate::ffi::map_db::get_map_ptr((*sd).bl.m);
+    let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
     if !mp.is_null() { (*mp).weather = weather as u8; }
     for x in 1..fd_max {
         if rust_session_exists(x) != 0 {
@@ -939,7 +928,7 @@ unsafe fn command_weather(sd: *mut MapSessionData, line: *mut c_char, _s: *mut L
 unsafe fn command_light(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
     let light = parse_int(line).unwrap_or(232);
-    let mp = crate::ffi::map_db::get_map_ptr((*sd).bl.m);
+    let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
     if !mp.is_null() { (*mp).light = light as u8; }
     for x in 0..fd_max {
         if rust_session_exists(x) != 0 {
@@ -1042,13 +1031,20 @@ unsafe fn command_job(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaSt
     if subjob < 0 || subjob > 16 { subjob = 0; }
     (*sd).status.class = job as u8;
     (*sd).status.mark = subjob as u8;
-    if SQL_ERROR == Sql_Query(sql_handle_void(),
-        b"UPDATE `Character` SET `ChaPthId` = '%u', `ChaMark` = '%u' WHERE `ChaId` = '%u'\0".as_ptr() as *const c_char,
-        (*sd).status.class as c_uint, (*sd).status.mark as c_uint, (*sd).status.id) {
-        Sql_ShowDebug(sql_handle_void());
-        Sql_FreeResult(sql_handle_void());
-        return 0;
-    }
+    let class_val = (*sd).status.class as u32;
+    let mark_val = (*sd).status.mark as u32;
+    let char_id = (*sd).status.id;
+    blocking_run(async move {
+        sqlx::query(
+            "UPDATE `Character` SET `ChaPthId` = ?, `ChaMark` = ? WHERE `ChaId` = ?"
+        )
+        .bind(class_val)
+        .bind(mark_val)
+        .bind(char_id)
+        .execute(get_pool())
+        .await
+        .ok();
+    });
     clif_mystaytus(sd);
     0
 }
@@ -1058,7 +1054,7 @@ unsafe fn command_music(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lua
     let oldm = (*sd).bl.m as c_int;
     let oldx = (*sd).bl.x as c_int;
     let oldy = (*sd).bl.y as c_int;
-    let mp = crate::ffi::map_db::get_map_ptr((*sd).bl.m);
+    let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
     if !mp.is_null() { (*mp).bgm = MUSICFX as u16; }
     pc_warp(sd, 10002, 0, 0);
     pc_warp(sd, oldm, oldx, oldy);
@@ -1070,7 +1066,7 @@ unsafe fn command_musicn(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut L
     let oldm = (*sd).bl.m as c_int;
     let oldx = (*sd).bl.x as c_int;
     let oldy = (*sd).bl.y as c_int;
-    let mp = crate::ffi::map_db::get_map_ptr((*sd).bl.m);
+    let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
     if !mp.is_null() { (*mp).bgm = MUSICFX as u16; }
     pc_warp(sd, 10002, 0, 0);
     pc_warp(sd, oldm, oldx, oldy);
@@ -1082,7 +1078,7 @@ unsafe fn command_musicp(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut L
     let oldm = (*sd).bl.m as c_int;
     let oldx = (*sd).bl.x as c_int;
     let oldy = (*sd).bl.y as c_int;
-    let mp = crate::ffi::map_db::get_map_ptr((*sd).bl.m);
+    let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
     if !mp.is_null() { (*mp).bgm = MUSICFX as u16; }
     pc_warp(sd, 10002, 0, 0);
     pc_warp(sd, oldm, oldx, oldy);
@@ -1170,7 +1166,7 @@ unsafe fn command_reloadnpc(sd: *mut MapSessionData, _line: *mut c_char, _s: *mu
 unsafe fn command_reloadmaps(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     map_reload();
     if char_fd > 0 && rust_session_exists(char_fd) != 0 {
-        use crate::ffi::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
+        use crate::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
         let pkt_len = (map_n * 2 + 8) as usize;
         rust_session_wfifohead(char_fd, pkt_len);
         (rust_session_wdata_ptr(char_fd, 0) as *mut u16).write_unaligned(0x3001u16.to_le());
@@ -1178,7 +1174,7 @@ unsafe fn command_reloadmaps(sd: *mut MapSessionData, _line: *mut c_char, _s: *m
         (rust_session_wdata_ptr(char_fd, 6) as *mut u16).write_unaligned(map_n as u16);
         let mut j: usize = 0;
         for i in 0..MAX_MAP_PER_SERVER {
-            let mp = crate::ffi::map_db::get_map_ptr(i as u16);
+            let mp = crate::database::map_db::get_map_ptr(i as u16);
             if !mp.is_null() && !(*mp).tile.is_null() {
                 (rust_session_wdata_ptr(char_fd, j * 2 + 8) as *mut u16).write_unaligned(i as u16);
                 j += 1;

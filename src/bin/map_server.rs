@@ -21,15 +21,6 @@ extern "C" {
     fn lang_read(file: *const i8);
     fn rust_mob_timer_spawns(id: i32, n: i32) -> i32;
     fn npc_runtimers(id: i32, n: i32) -> i32;
-
-    // Legacy C SQL functions from libdeps.a
-    fn Sql_Malloc() -> *mut std::ffi::c_void;
-    fn Sql_Connect(
-        handle: *mut std::ffi::c_void,
-        user: *const i8, pw: *const i8,
-        host: *const i8, port: u16,
-        db: *const i8,
-    ) -> i32;
 }
 
 // Rust FFI functions from libyuri.a (these replace the static-inline C shims).
@@ -50,10 +41,6 @@ extern "C" {
     fn rust_set_termfunc(f: Option<unsafe extern "C" fn()>);
 }
 
-// sql_handle is now a Rust #[no_mangle] static in src/game/map_server.rs.
-// We access it directly via the game module.
-use yuri::game::map_server::sql_handle;
-
 // fd_max is normally defined in core.c (which we exclude to avoid duplicate main()).
 // The Rust session layer updates this via the c_update_fd_max callback.
 #[no_mangle]
@@ -68,9 +55,14 @@ pub unsafe extern "C" fn c_update_fd_max(new_max: std::ffi::c_int) {
 extern "C" {
     fn rust_core_init();
     fn rust_register_fd_max_updater(cb: unsafe extern "C" fn(std::ffi::c_int));
-    fn db_init();
     fn timer_init();
 }
+
+/// Stub replacing `db_init()` from `c_deps/db.c`.
+/// The original function only increments a statistics counter; it has no
+/// side-effects on any game state, so removing it is safe.
+#[no_mangle]
+pub extern "C" fn db_init() {}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -83,7 +75,7 @@ async fn main() -> Result<()> {
     unsafe {
         rust_core_init();
         rust_register_fd_max_updater(c_update_fd_max);
-        db_init();
+        // db_init() is now a no-op stub defined above
         timer_init();
     }
 
@@ -116,7 +108,7 @@ async fn main() -> Result<()> {
     // Call rust_config_read so C code can access config globals
     {
         let cpath = CString::new(conf_file.as_str()).unwrap();
-        if unsafe { yuri::ffi::config::rust_config_read(cpath.as_ptr()) } != 0 {
+        if unsafe { yuri::config::rust_config_read(cpath.as_ptr()) } != 0 {
             anyhow::bail!("rust_config_read failed for {}", conf_file);
         }
     }
@@ -151,24 +143,6 @@ async fn main() -> Result<()> {
     yuri::database::set_pool(pool.clone())
         .context("Failed to register DB pool with Rust DB modules")?;
 
-    // Legacy C SQL handle
-    unsafe {
-        let handle = Sql_Malloc();
-        if handle.is_null() {
-            anyhow::bail!("Sql_Malloc failed");
-        }
-        let user = CString::new(config.sql_id.as_str()).unwrap();
-        let pw   = CString::new(config.sql_pw.as_str()).unwrap();
-        let host = CString::new(config.sql_ip.as_str()).unwrap();
-        let db   = CString::new(config.sql_db.as_str()).unwrap();
-        let rc = Sql_Connect(handle, user.as_ptr(), pw.as_ptr(), host.as_ptr(),
-                              config.sql_port, db.as_ptr());
-        if rc != 0 { // SQL_SUCCESS == 0
-            anyhow::bail!("Sql_Connect failed");
-        }
-        sql_handle = handle as *mut yuri::game::pc::Sql;
-    }
-
     // Reset online flags
     sqlx::query("UPDATE `Character` SET `ChaOnline` = 0 WHERE `ChaOnline` = 1")
         .execute(&pool)
@@ -186,7 +160,7 @@ async fn main() -> Result<()> {
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
             let maps_dir_c = CString::new(maps_dir.as_str()).unwrap();
-            if unsafe { yuri::ffi::map_db::rust_map_init(maps_dir_c.as_ptr(), serverid) } != 0 {
+            if unsafe { yuri::database::map_db::rust_map_init(maps_dir_c.as_ptr(), serverid) } != 0 {
                 anyhow::bail!("rust_map_init failed");
             }
 
@@ -217,9 +191,9 @@ async fn main() -> Result<()> {
                 // Timers from the old do_init — restored here after do_init was removed.
                 let startup = std::ffi::CString::new("startup").unwrap();
                 yuri::game::scripting::doscript_blargs(startup.as_ptr(), std::ptr::null(), &[]);
-                yuri::ffi::timer::timer_insert(50,   50,   Some(rust_mob_timer_spawns), 0, 0);
-                yuri::ffi::timer::timer_insert(100,  100,  Some(npc_runtimers),    0, 0);
-                yuri::ffi::timer::timer_insert(1000, 1000, Some(yuri::game::map_server::rust_map_cronjob), 0, 0);
+                yuri::timer::timer_insert(50,   50,   Some(rust_mob_timer_spawns), 0, 0);
+                yuri::timer::timer_insert(100,  100,  Some(npc_runtimers),    0, 0);
+                yuri::timer::timer_insert(1000, 1000, Some(yuri::game::map_server::rust_map_cronjob), 0, 0);
 
                 rust_set_termfunc(Some(map_do_term));
             }
@@ -231,9 +205,9 @@ async fn main() -> Result<()> {
     let state = Arc::new(MapState::new(pool, config));
 
     // Register state with FFI bridge so C game logic can send packets to char_server.
-    yuri::ffi::map_char::set_map_state(Arc::clone(&state));
+    yuri::game::map_char::set_map_state(Arc::clone(&state));
     // Register intif_mmo_tosd so packet.rs can call it without linking map_game into libyuri.
-    yuri::ffi::map_char::set_mmo_tosd_fn(intif_mmo_tosd);
+    yuri::game::map_char::set_mmo_tosd_fn(intif_mmo_tosd);
 
     // Spawn auth DB expiry timer (replaces auth_timer — every 30s).
     // Does not touch Lua, safe on any thread.
