@@ -18,13 +18,11 @@
 //   c_deps/strlib.c  removed (Tasks 4.2-4.8) — no callers
 
 fn main() {
-    // External system libraries required by Rust code or libluajit/libmysqlclient.
+    // LuaJIT — required by mlua; not available as a Rust crate.
     println!("cargo:rustc-link-lib=luajit-5.1");
-    println!("cargo:rustc-link-lib=mysqlclient");
-    println!("cargo:rustc-link-lib=z");
-    println!("cargo:rustc-link-lib=m");
+    // LuaJIT runtime dependencies on Linux.
     println!("cargo:rustc-link-lib=dl");
-    println!("cargo:rustc-link-lib=pthread");
+    println!("cargo:rustc-link-lib=m");
 
     // Re-run triggers
     println!("cargo:rerun-if-changed=build.rs");

@@ -34,7 +34,10 @@ pub(crate) fn get_pool() -> &'static MySqlPool {
 }
 
 pub(crate) fn blocking_run<F: Future>(f: F) -> F::Output {
-    get_runtime().lock().unwrap().block_on(f)
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => tokio::task::block_in_place(|| handle.block_on(f)),
+        Err(_) => get_runtime().lock().unwrap().block_on(f),
+    }
 }
 
 /// Like `blocking_run`, but safe to call from within a Tokio async task (e.g. LocalSet).
