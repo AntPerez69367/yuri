@@ -619,7 +619,7 @@ pub unsafe fn clif_sendoptions(sd: *mut MapSessionData) -> i32 {
 ///   - Exchange / group flags
 ///   - Legend entries (icon, color, text — with optional $player substitution)
 ///
-pub unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
+pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
     if rust_session_exists((*sd).fd) == 0 {
@@ -698,7 +698,7 @@ pub unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
 
     // ── Partner ───────────────────────────────────────────────────────────────
     if (*sd).status.partner != 0 {
-        let pname = map_id2name((*sd).status.partner);
+        let pname = map_id2name((*sd).status.partner).await;
         let mut buf = [0i8; 128];
         if !pname.is_null() {
             // sprintf(buf, "Partner: %s", pname)
@@ -828,7 +828,8 @@ pub unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
         wfifob(fd, 9 + len, lg.color as u8);
 
         if lg.tchaid > 0 {
-            let char_name = clif_getName(lg.tchaid);
+            let tchaid = lg.tchaid;
+            let char_name = clif_getName(tchaid).await;
             let text_ptr  = lg.text.as_ptr() as *const i8;
             let buff      = replace_str_local(text_ptr, b"$player\0", char_name);
             let buff_ptr  = buff as *const u8;
@@ -851,6 +852,60 @@ pub unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     }
     wfifoset(fd, encrypt(fd) as usize);
     0
+}
+
+// ─── clif_mystaytus_by_addr ──────────────────────────────────────────────────
+
+/// A `Send` future that drives `clif_mystaytus` to completion.
+///
+/// `*mut MapSessionData` is unconditionally `!Send` in Rust even though
+/// `MapSessionData` itself carries `unsafe impl Send` (pc.rs:335). This
+/// wrapper re-asserts `Send` so the future can be handed to
+/// `blocking_run_async`, which blocks the calling thread until the future
+/// resolves — no concurrent access to `MapSessionData` is possible.
+///
+/// # Safety invariant
+/// The caller must ensure:
+/// 1. `sd_usize` was a valid, non-null `*mut MapSessionData`.
+/// 2. The `MapSessionData` outlives this future (i.e. the owning session is
+///    not freed while this future is in flight).  `blocking_run_async` joins
+///    the spawned thread before returning, so the calling thread (which owns
+///    the session) cannot free it first.
+/// # Safety
+/// This future must only be driven to completion via [`blocking_run_async`],
+/// which joins the OS thread before returning. Do **not** pass to `tokio::spawn`
+/// or any executor that may poll it concurrently with the session thread.
+#[must_use]
+pub struct ClIfMystaytus {
+    inner: std::pin::Pin<Box<dyn std::future::Future<Output = i32> + 'static>>,
+}
+
+// SAFETY: `MapSessionData` is declared `unsafe impl Send` in pc.rs.
+// `blocking_run_async` blocks the calling thread until this future
+// resolves, preventing any concurrent access.
+unsafe impl Send for ClIfMystaytus {}
+
+impl std::future::Future for ClIfMystaytus {
+    type Output = i32;
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<i32> {
+        self.inner.as_mut().poll(cx)
+    }
+}
+
+/// Construct a `Send`-safe future that calls `clif_mystaytus` for the session
+/// at `sd_usize`.  See [`ClIfMystaytus`] for the safety contract.
+pub fn clif_mystaytus_by_addr(sd_usize: usize) -> ClIfMystaytus {
+    ClIfMystaytus {
+        // SAFETY: sd_usize is a valid *mut MapSessionData cast to usize by
+        // the caller.  The future is driven to completion before the caller
+        // can free the session (blocking_run_async joins the spawned thread).
+        inner: Box::pin(async move {
+            unsafe { clif_mystaytus(sd_usize as *mut MapSessionData).await }
+        }),
+    }
 }
 
 // ─── clif_getchararea ────────────────────────────────────────────────────────

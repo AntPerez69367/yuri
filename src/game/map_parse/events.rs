@@ -2,7 +2,7 @@
 #![allow(non_snake_case, clippy::wildcard_imports, clippy::too_many_lines)]
 
 
-use crate::database::{blocking_run_async, get_pool};
+use crate::database::get_pool;
 
 use crate::game::pc::{
     MapSessionData,
@@ -167,7 +167,7 @@ pub unsafe fn clif_intcheck(number: i32, field: i32, fd: i32) {
 ///
 /// Finds the highest existing `ParPosition` for the destination character and
 /// inserts a new row one slot higher.  C line 4100.
-pub unsafe fn sendRewardParcel(
+pub async unsafe fn sendRewardParcel(
     sd:           *mut MapSessionData,
     eventid:      i32,
     rank:         i32,
@@ -207,8 +207,7 @@ pub unsafe fn sendRewardParcel(
 
     // Find highest existing position for this receiver.
     // ParPosition is int(10) unsigned — query_scalar must use u32.
-    let newest: i32 = (blocking_run_async(async move {
-        sqlx::query_scalar::<_, Option<u32>>(
+    let newest: i32 = (sqlx::query_scalar::<_, Option<u32>>(
             "SELECT MAX(`ParPosition`) FROM `Parcels` WHERE `ParChaIdDestination` = ?"
         )
         .bind(receiver)
@@ -216,8 +215,7 @@ pub unsafe fn sendRewardParcel(
         .await
         .ok()
         .flatten()
-        .unwrap_or(0) as i32
-    })) + 1;
+        .unwrap_or(0) as i32) + 1;
 
     // engrave is item name (up to 30 chars); use it directly in parameterized query
     let engrave_str = std::ffi::CStr::from_ptr(engrave.as_ptr())
@@ -225,8 +223,7 @@ pub unsafe fn sendRewardParcel(
         .unwrap_or("")
         .to_owned();
 
-    let ok = blocking_run_async(async move {
-        sqlx::query(
+    let ok = sqlx::query(
             "INSERT INTO `Parcels` (`ParChaIdDestination`, `ParSender`, `ParItmId`, \
 `ParAmount`, `ParChaIdOwner`, `ParEngrave`, `ParPosition`, `ParNpc`) \
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
@@ -241,8 +238,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
         .bind(npcflag)
         .execute(get_pool())
         .await
-        .is_ok()
-    });
+        .is_ok();
     if !ok {
         return 1;
     }
@@ -256,7 +252,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 /// award parcels, send a mail confirmation, and update the claim flag.
 ///
 /// C line 4186.
-pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: i32) -> i32 {
+pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: i32) -> i32 {
     let eventid = rfifob(fd, 7) as i32;
     let g_cur_year   = cur_year.load(AtomicOrd::Relaxed);
     let g_cur_season = cur_season.load(AtomicOrd::Relaxed);
@@ -302,8 +298,7 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: i32) -> i32 {
 
     // Query 1: event metadata + per-rank rewards
     let event_id_u = eventid as u32;
-    let Some(er) = blocking_run_async(async move {
-        sqlx::query_as::<_, EventRewardRow>(
+    let Some(er) = sqlx::query_as::<_, EventRewardRow>(
             "SELECT `EventName`, `EventLegend`, `EventRewardRanks_Display`, \
              `EventLegendIcon1`, `EventLegendIcon1Color`, \
              `EventLegendIcon2`, `EventLegendIcon2Color`, \
@@ -326,8 +321,7 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: i32) -> i32 {
         .fetch_optional(get_pool())
         .await
         .ok()
-        .flatten()
-    }) else { return 0; };
+        .flatten() else { return 0; };
 
     // Copy fields from row into local variables
     {
@@ -377,8 +371,7 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: i32) -> i32 {
     // Query 2: player's rank for this event
     // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
     let cha_id = (*sd).status.id as i32;
-    let Some(rank) = blocking_run_async(async move {
-        sqlx::query_scalar::<_, i32>(
+    let Some(rank) = sqlx::query_scalar::<_, i32>(
             "SELECT `Rank` FROM `RankingScores` WHERE `ChaId` = ? AND `EventId` = ?"
         )
         .bind(cha_id)
@@ -386,8 +379,7 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: i32) -> i32 {
         .fetch_optional(get_pool())
         .await
         .ok()
-        .flatten()
-    }) else { return 0; };
+        .flatten() else { return 0; };
 
     // Determine season string
     if g_cur_season == 1 { libc::strcpy(season.as_mut_ptr(), b"Winter\0".as_ptr() as *const i8); }
@@ -483,11 +475,11 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: i32) -> i32 {
     let mut sent_parcel_success: i32 = 0;
 
     if reward1amount >= 1 && reward2amount >= 1 {
-        sent_parcel_success  = sendRewardParcel(sd, eventid, rank, reward1item, reward1amount);
-        sent_parcel_success += sendRewardParcel(sd, eventid, rank, reward2item, reward2amount);
+        sent_parcel_success  = sendRewardParcel(sd, eventid, rank, reward1item, reward1amount).await;
+        sent_parcel_success += sendRewardParcel(sd, eventid, rank, reward2item, reward2amount).await;
     }
     if reward1amount >= 1 && reward2amount == 0 {
-        sent_parcel_success = sendRewardParcel(sd, eventid, rank, reward1item, reward1amount);
+        sent_parcel_success = sendRewardParcel(sd, eventid, rank, reward1item, reward1amount).await;
     }
 
     if sent_parcel_success == 2 {
@@ -580,18 +572,16 @@ You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewar
         let eventid_i32 = eventid;
         // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
         let cha_id_i32  = (*sd).status.id as i32;
-        let _ = blocking_run_async(async move {
-            sqlx::query(
+        let _ = sqlx::query(
                 "UPDATE `RankingScores` SET `EventClaim` = 2 WHERE `EventId` = ? AND `ChaId` = ?"
             )
             .bind(eventid_i32)
             .bind(cha_id_i32)
             .execute(get_pool())
-            .await
-        });
+            .await;
     }
 
-    clif_parseranking(sd, fd);
+    clif_parseranking(sd, fd).await;
     0
 }
 
@@ -601,7 +591,7 @@ You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewar
 ///
 /// Iterates `rewardranks` times, writing per-rank legend title, icon, and
 /// item reward information into the WFIFO.  C line 4561.
-pub unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: i32) -> i32 {
+pub async unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: i32) -> i32 {
     let g_cur_year = cur_year.load(AtomicOrd::Relaxed);
     wfifohead(fd, 0);
     wfifob(fd, 0, 0xAA);
@@ -648,8 +638,7 @@ pub unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: i32) -> i32 {
     let mut _5thPlaceReward1_ItmId = 0i32;    let mut _5thPlaceReward1_Amount = 0i32;
     let mut _5thPlaceReward2_ItmId = 0i32;    let mut _5thPlaceReward2_Amount = 0i32;
 
-    let Some(rr) = blocking_run_async(async move {
-        sqlx::query_as::<_, RankingEventRow>(
+    let Some(rr) = sqlx::query_as::<_, RankingEventRow>(
             "SELECT `EventRewardRanks_Display`, `EventLegend`, \
              `EventLegendIcon1`, `EventLegendIcon1Color`, \
              `EventLegendIcon2`, `EventLegendIcon2Color`, \
@@ -672,8 +661,7 @@ pub unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: i32) -> i32 {
         .fetch_optional(get_pool())
         .await
         .ok()
-        .flatten()
-    }) else { return 0; };
+        .flatten() else { return 0; };
 
     // Copy fields from row into local variables
     rewardranks       = rr.reward_ranks;
@@ -846,18 +834,16 @@ pub unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: i32) -> i32 {
 ///
 /// Writes 4 ints via `clif_intcheck` at `pos+7`, `pos+11`, `pos+15`, `pos+19`.
 /// C line 4900.
-pub unsafe fn retrieveEventDates(eventid: i32, pos: i32, fd: i32) {
+pub async unsafe fn retrieveEventDates(eventid: i32, pos: i32, fd: i32) {
     let event_id_u = eventid as u32;
-    let Some(dates) = blocking_run_async(async move {
-        sqlx::query_as::<_, EventDates>(
+    let Some(dates) = sqlx::query_as::<_, EventDates>(
             "SELECT `FromDate`, `FromTime`, `ToDate`, `ToTime` FROM `RankingEvents` WHERE `EventId` = ?"
         )
         .bind(event_id_u)
         .fetch_optional(get_pool())
         .await
         .ok()
-        .flatten()
-    }) else { return; };
+        .flatten() else { return; };
 
     clif_intcheck(dates.from_date, pos + 7,  fd);
     clif_intcheck(dates.from_time, pos + 11, fd);
@@ -870,13 +856,12 @@ pub unsafe fn retrieveEventDates(eventid: i32, pos: i32, fd: i32) {
 /// Return the player's score for `eventid`, or 0 if not found / on error.
 ///
 /// C line 4951.
-pub unsafe fn checkPlayerScore(eventid: i32, sd: *mut MapSessionData) -> i32 {
+pub async unsafe fn checkPlayerScore(eventid: i32, sd: *mut MapSessionData) -> i32 {
     // EventId is int(10) signed — i32 bind is correct
     let event_id_i = eventid;
     // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
     let cha_id = (*sd).status.id as i32;
-    blocking_run_async(async move {
-        sqlx::query_scalar::<_, i32>(
+    sqlx::query_scalar::<_, i32>(
             "SELECT `Score` FROM `RankingScores` WHERE `EventId` = ? AND `ChaId` = ?"
         )
         .bind(event_id_i)
@@ -886,7 +871,6 @@ pub unsafe fn checkPlayerScore(eventid: i32, sd: *mut MapSessionData) -> i32 {
         .ok()
         .flatten()
         .unwrap_or(0)
-    })
 }
 
 // ─── updateRanks ──────────────────────────────────────────────────────────────
@@ -895,19 +879,17 @@ pub unsafe fn checkPlayerScore(eventid: i32, sd: *mut MapSessionData) -> i32 {
 ///
 /// Issues `SET @r=0` then `UPDATE … SET Rank = @r := (@r+1) ORDER BY Score DESC`.
 /// C line 4983.
-pub unsafe fn updateRanks(eventid: i32) {
+pub async unsafe fn updateRanks(eventid: i32) {
     // EventId is int(10) signed — i32 bind is correct
     // The vestigial SELECT is dropped; just run the rank-update pair.
-    blocking_run_async(async move {
-        let pool = get_pool();
-        let _ = sqlx::query("SET @r=0").execute(pool).await;
-        let _ = sqlx::query(
-            "UPDATE `RankingScores` SET `Rank` = @r := (@r+1) WHERE `EventId` = ? ORDER BY `Score` DESC"
-        )
-        .bind(eventid)
-        .execute(pool)
-        .await;
-    });
+    let pool = get_pool();
+    let _ = sqlx::query("SET @r=0").execute(pool).await;
+    let _ = sqlx::query(
+        "UPDATE `RankingScores` SET `Rank` = @r := (@r+1) WHERE `EventId` = ? ORDER BY `Score` DESC"
+    )
+    .bind(eventid)
+    .execute(pool)
+    .await;
 }
 
 // ─── checkPlayerRank ──────────────────────────────────────────────────────────
@@ -915,13 +897,12 @@ pub unsafe fn updateRanks(eventid: i32) {
 /// Return the player's current rank for `eventid`, or 0 if not found / on error.
 ///
 /// C line 5018.
-pub unsafe fn checkPlayerRank(eventid: i32, sd: *mut MapSessionData) -> i32 {
+pub async unsafe fn checkPlayerRank(eventid: i32, sd: *mut MapSessionData) -> i32 {
     // EventId is int(10) signed — i32 bind is correct
     let event_id_i = eventid;
     // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
     let cha_id = (*sd).status.id as i32;
-    blocking_run_async(async move {
-        sqlx::query_scalar::<_, i32>(
+    sqlx::query_scalar::<_, i32>(
             "SELECT `Rank` FROM `RankingScores` WHERE `EventId` = ? AND `ChaId` = ?"
         )
         .bind(event_id_i)
@@ -931,7 +912,6 @@ pub unsafe fn checkPlayerRank(eventid: i32, sd: *mut MapSessionData) -> i32 {
         .ok()
         .flatten()
         .unwrap_or(0)
-    })
 }
 
 // ─── checkevent_claim ─────────────────────────────────────────────────────────
@@ -940,14 +920,13 @@ pub unsafe fn checkPlayerRank(eventid: i32, sd: *mut MapSessionData) -> i32 {
 /// Returns the column value on success, or 2 if no row is found.
 ///
 /// SQL: SELECT EventClaim FROM RankingScores WHERE EventId=? AND ChaId=?
-pub unsafe fn checkevent_claim(eventid: i32, _fd: i32, sd: *mut MapSessionData) -> i32 {
+pub async unsafe fn checkevent_claim(eventid: i32, _fd: i32, sd: *mut MapSessionData) -> i32 {
     // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
     let cha_id = (*sd).status.id as i32;
     // EventId is int(10) signed — i32 bind is correct
     let event_id = eventid;
 
-    blocking_run_async(async move {
-        sqlx::query_scalar::<_, i32>(
+    sqlx::query_scalar::<_, i32>(
             "SELECT `EventClaim` FROM `RankingScores` WHERE `EventId` = ? AND `ChaId` = ?"
         )
         .bind(event_id)
@@ -957,7 +936,6 @@ pub unsafe fn checkevent_claim(eventid: i32, _fd: i32, sd: *mut MapSessionData) 
         .ok()
         .flatten()
         .unwrap_or(2) // 2 = "not found / not claimed"
-    })
 }
 
 // ─── dateevent_block ──────────────────────────────────────────────────────────
@@ -967,13 +945,13 @@ pub unsafe fn checkevent_claim(eventid: i32, _fd: i32, sd: *mut MapSessionData) 
 /// Writes the event header bytes and delegates date fields to `retrieveEventDates`,
 /// then appends the claim byte at pos+20.
 ///
-pub unsafe fn dateevent_block(pos: i32, eventid: i32, fd: i32, sd: *mut MapSessionData) {
+pub async unsafe fn dateevent_block(pos: i32, eventid: i32, fd: i32, sd: *mut MapSessionData) {
     wfifob(fd, pos as usize,       0);
     wfifob(fd, pos as usize + 1,   eventid as u8);
     wfifob(fd, pos as usize + 2,   142);
     wfifob(fd, pos as usize + 3,   227);
-    retrieveEventDates(eventid, pos, fd);
-    wfifob(fd, pos as usize + 20,  checkevent_claim(eventid, fd, sd) as u8);
+    retrieveEventDates(eventid, pos, fd).await;
+    wfifob(fd, pos as usize + 20,  checkevent_claim(eventid, fd, sd).await as u8);
 }
 
 // ─── filler_block ─────────────────────────────────────────────────────────────
@@ -981,9 +959,9 @@ pub unsafe fn dateevent_block(pos: i32, eventid: i32, fd: i32, sd: *mut MapSessi
 /// Write the "filler" event block into the WFIFO at position `pos`.
 ///
 /// Writes player rank / score / claim bytes for the chosen event.
-pub unsafe fn filler_block(pos: i32, eventid: i32, fd: i32, sd: *mut MapSessionData) {
-    let player_score = checkPlayerScore(eventid, sd);
-    let player_rank  = checkPlayerRank(eventid, sd);
+pub async unsafe fn filler_block(pos: i32, eventid: i32, fd: i32, sd: *mut MapSessionData) {
+    let player_score = checkPlayerScore(eventid, sd).await;
+    let player_rank  = checkPlayerRank(eventid, sd).await;
 
     wfifob(fd, pos as usize + 1,  rfifob(fd, 7));
     wfifob(fd, pos as usize + 2,  142);
@@ -991,7 +969,7 @@ pub unsafe fn filler_block(pos: i32, eventid: i32, fd: i32, sd: *mut MapSessionD
     wfifob(fd, pos as usize + 4,  1);
     clif_intcheck(player_rank,  pos + 8,  fd);
     clif_intcheck(player_score, pos + 12, fd);
-    wfifob(fd, pos as usize + 13, checkevent_claim(eventid, fd, sd) as u8);
+    wfifob(fd, pos as usize + 13, checkevent_claim(eventid, fd, sd).await as u8);
 }
 
 // ─── gettotalscores ───────────────────────────────────────────────────────────
@@ -999,17 +977,15 @@ pub unsafe fn filler_block(pos: i32, eventid: i32, fd: i32, sd: *mut MapSessionD
 /// Return the number of score rows for `eventid` in `RankingScores`.
 ///
 /// SQL: SELECT COUNT(*) FROM RankingScores WHERE EventId=?
-pub unsafe fn gettotalscores(eventid: i32) -> i32 {
+pub async unsafe fn gettotalscores(eventid: i32) -> i32 {
     let event_id = eventid as u32;
-    blocking_run_async(async move {
-        sqlx::query_scalar::<_, i64>(
+    sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM `RankingScores` WHERE `EventId` = ?"
         )
         .bind(event_id)
         .fetch_one(get_pool())
         .await
         .unwrap_or(0) as i32
-    })
 }
 
 // ─── getevents ────────────────────────────────────────────────────────────────
@@ -1017,15 +993,13 @@ pub unsafe fn gettotalscores(eventid: i32) -> i32 {
 /// Return the number of rows in `RankingEvents`.
 ///
 /// SQL: SELECT COUNT(*) FROM RankingEvents
-pub unsafe fn getevents() -> i32 {
-    blocking_run_async(async {
-        sqlx::query_scalar::<_, i64>(
+pub async unsafe fn getevents() -> i32 {
+    sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM `RankingEvents`"
         )
         .fetch_one(get_pool())
         .await
         .unwrap_or(0) as i32
-    })
 }
 
 // ─── getevent_name ────────────────────────────────────────────────────────────
@@ -1035,7 +1009,7 @@ pub unsafe fn getevents() -> i32 {
 ///
 /// Returns updated `pos` after writing all blocks.
 /// SQL: SELECT EventName FROM RankingEvents
-pub unsafe fn getevent_name(mut pos: i32, fd: i32, sd: *mut MapSessionData) -> i32 {
+pub async unsafe fn getevent_name(mut pos: i32, fd: i32, sd: *mut MapSessionData) -> i32 {
     // EventId is int(10) signed — i32 bind is correct
     struct EventRow { event_id: i32, name: String }
     impl sqlx::FromRow<'_, sqlx::mysql::MySqlRow> for EventRow {
@@ -1048,15 +1022,13 @@ pub unsafe fn getevent_name(mut pos: i32, fd: i32, sd: *mut MapSessionData) -> i
         }
     }
 
-    let rows: Vec<EventRow> = blocking_run_async(async {
-        sqlx::query_as::<_, EventRow>("SELECT `EventId`, `EventName` FROM `RankingEvents`")
+    let rows: Vec<EventRow> = sqlx::query_as::<_, EventRow>("SELECT `EventId`, `EventName` FROM `RankingEvents`")
             .fetch_all(get_pool())
             .await
-            .unwrap_or_default()
-    });
+            .unwrap_or_default();
 
     for row in rows.iter() {
-        dateevent_block(pos, row.event_id as i32, fd, sd);
+        dateevent_block(pos, row.event_id as i32, fd, sd).await;
         pos += 21;
         let name_bytes = row.name.as_bytes();
         let name_len   = name_bytes.len();
@@ -1075,7 +1047,7 @@ pub unsafe fn getevent_name(mut pos: i32, fd: i32, sd: *mut MapSessionData) -> i
 /// them into the WFIFO. Adjusts the row-count byte when fewer than 10 rows exist.
 ///
 /// SQL: SELECT ChaName, Score, Rank FROM RankingScores WHERE EventId=? ORDER BY Rank ASC LIMIT 10 [OFFSET ?]
-pub unsafe fn getevent_playerscores(
+pub async unsafe fn getevent_playerscores(
     eventid:     i32,
     totalscores: i32,
     mut pos:     i32,
@@ -1097,28 +1069,26 @@ pub unsafe fn getevent_playerscores(
     }
 
     let event_id = eventid as u32;
-    let rows: Vec<ScoreRow> = blocking_run_async(async move {
-        if totalscores > 10 {
-            sqlx::query_as::<_, ScoreRow>(
-                "SELECT `ChaName`, `Score`, `Rank` FROM `RankingScores` \
-                 WHERE `EventId` = ? ORDER BY `Rank` ASC LIMIT 10 OFFSET ?"
-            )
-            .bind(event_id)
-            .bind(offset)
-            .fetch_all(get_pool())
-            .await
-            .unwrap_or_default()
-        } else {
-            sqlx::query_as::<_, ScoreRow>(
-                "SELECT `ChaName`, `Score`, `Rank` FROM `RankingScores` \
-                 WHERE `EventId` = ? ORDER BY `Rank` ASC LIMIT 10"
-            )
-            .bind(event_id)
-            .fetch_all(get_pool())
-            .await
-            .unwrap_or_default()
-        }
-    });
+    let rows: Vec<ScoreRow> = if totalscores > 10 {
+        sqlx::query_as::<_, ScoreRow>(
+            "SELECT `ChaName`, `Score`, `Rank` FROM `RankingScores` \
+             WHERE `EventId` = ? ORDER BY `Rank` ASC LIMIT 10 OFFSET ?"
+        )
+        .bind(event_id)
+        .bind(offset)
+        .fetch_all(get_pool())
+        .await
+        .unwrap_or_default()
+    } else {
+        sqlx::query_as::<_, ScoreRow>(
+            "SELECT `ChaName`, `Score`, `Rank` FROM `RankingScores` \
+             WHERE `EventId` = ? ORDER BY `Rank` ASC LIMIT 10"
+        )
+        .bind(event_id)
+        .fetch_all(get_pool())
+        .await
+        .unwrap_or_default()
+    };
 
     // If fewer than 10 rows, patch the count byte written just before `pos`
     if (rows.len() as i32) < 10 {
@@ -1149,7 +1119,7 @@ pub unsafe fn getevent_playerscores(
 /// Assembles: event count, event name/date blocks, filler block, score list,
 /// total score count, encrypts and sends.
 ///
-pub unsafe fn clif_parseranking(sd: *mut MapSessionData, fd: i32) -> i32 {
+pub async unsafe fn clif_parseranking(sd: *mut MapSessionData, fd: i32) -> i32 {
     wfifohead(fd, 0);
     wfifob(fd, 0, 0xAA);
     wfifob(fd, 1, 0x02);
@@ -1162,19 +1132,19 @@ pub unsafe fn clif_parseranking(sd: *mut MapSessionData, fd: i32) -> i32 {
         wfifob(fd, i, 0);
     }
 
-    wfifob(fd, 7, getevents() as u8);
+    wfifob(fd, 7, getevents().await as u8);
     let chosen_event = rfifob(fd, 7) as i32;
 
-    updateRanks(chosen_event);
+    updateRanks(chosen_event).await;
 
     let mut pos: i32 = 8;
-    pos = getevent_name(pos, fd, sd);
-    filler_block(pos, chosen_event, fd, sd);
+    pos = getevent_name(pos, fd, sd).await;
+    filler_block(pos, chosen_event, fd, sd).await;
     pos += 15;
     wfifob(fd, pos as usize, 10);
-    let totalscores = gettotalscores(chosen_event);
+    let totalscores = gettotalscores(chosen_event).await;
     pos += 1;
-    pos = getevent_playerscores(chosen_event, totalscores, pos, fd);
+    pos = getevent_playerscores(chosen_event, totalscores, pos, fd).await;
     pos += 3;
     wfifob(fd, pos as usize, totalscores as u8);
     pos += 1;

@@ -35,7 +35,7 @@ use crate::game::map_parse::groups::{clif_grouphealth_update, clif_isingroup};
 use crate::game::map_parse::chat::{clif_sendmsg, clif_sendminitext, clif_playsound};
 use crate::game::map_parse::items::clif_unequipit;
 use crate::game::client::visual::{clif_getequiptype, broadcast_update_state};
-use crate::game::map_server::{map_lastdeath_mob, map_id2mob};
+use crate::game::map_server::map_id2mob;
 use crate::game::map_server::groups;
 use crate::game::pc::{addtokillreg, rust_pc_calcstat, rust_pc_checklevel, rust_pc_isequip};
 use crate::game::client::handlers::clif_addtokillreg;
@@ -736,7 +736,7 @@ pub unsafe fn clif_send_mob_health(mob: *mut MobSpawnData, damage: i32, critical
 
 /// Apply damage to a mob, compute percentage, broadcast health bars, run scripts.
 ///
-pub unsafe fn clif_send_mob_healthscript(mob: *mut MobSpawnData, damage: i32, critical: i32) -> i32 {
+pub async unsafe fn clif_send_mob_healthscript(mob: *mut MobSpawnData, damage: i32, critical: i32) -> i32 {
     let _ = critical;
     if mob.is_null() { return 0; }
 
@@ -835,7 +835,7 @@ pub unsafe fn clif_send_mob_healthscript(mob: *mut MobSpawnData, damage: i32, cr
 
     if (*mob).current_vita == 0 {
         rust_mob_flushmagic(mob);
-        clif_mob_kill(mob);
+        clif_mob_kill(mob).await;
 
         if !tmob.is_null() && (*mob).summon == 0 {
             for x in 0..MAX_MAGIC_TIMERS {
@@ -939,7 +939,7 @@ pub unsafe fn clif_send_mob_healthscript(mob: *mut MobSpawnData, damage: i32, cr
 
 /// Mark a mob as dead, clear threat tables, broadcast despawn packets.
 ///
-pub unsafe fn clif_mob_kill(mob: *mut MobSpawnData) -> i32 {
+pub async unsafe fn clif_mob_kill(mob: *mut MobSpawnData) -> i32 {
     for x in 0..MAX_THREATCOUNT {
         (*mob).threat[x].user   = 0;
         (*mob).threat[x].amount = 0;
@@ -956,7 +956,7 @@ pub unsafe fn clif_mob_kill(mob: *mut MobSpawnData) -> i32 {
     (*mob).last_death = libc_time() as u32;
 
     if (*mob).onetime == 0 {
-        map_lastdeath_mob(mob);
+        crate::game::map_server::map_lastdeath_mob(mob).await;
     }
 
     let mob_ptr = mob;

@@ -164,7 +164,7 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
     // Functions now ported to Rust — call via module path.
     use crate::game::map_parse::player_state::{
         clif_sendack, clif_sendtime, clif_sendid, clif_sendmapinfo,
-        clif_sendstatus, clif_mystaytus, clif_refresh, clif_sendxy,
+        clif_sendstatus, clif_mystaytus_by_addr, clif_refresh, clif_sendxy,
         clif_getchararea, clif_retrieveprofile,
     };
     let fd = (*sd).fd;
@@ -179,7 +179,7 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
     tracing::info!("[map] [login] fd={} step=sendstatus", fd);
     clif_sendstatus(sd, SFLAG_FULLSTATS | SFLAG_HPMP | SFLAG_XPMONEY);
     tracing::info!("[map] [login] fd={} step=mystaytus_1", fd);
-    clif_mystaytus(sd);
+    crate::database::blocking_run_async(clif_mystaytus_by_addr(sd as usize));
     tracing::info!("[map] [login] fd={} step=spawn", fd);
     clif_spawn(sd);
     tracing::info!("[map] [login] fd={} step=refresh", fd);
@@ -215,14 +215,14 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
     // Register the player in the global ID database and mark online.
     tracing::info!("[map] [login] fd={} step=addiddb", fd);
     crate::game::map_server::map_addiddb(ptr::addr_of_mut!((*sd).bl));
-    crate::game::map_server::mmo_setonline((*sd).status.id, 1);
+    crate::database::blocking_run_async(crate::game::map_server::mmo_setonline((*sd).status.id, 1));
 
     // Final stat calculation and state broadcast.
     tracing::info!("[map] [login] fd={} step=calcstat", fd);
     rust_pc_calcstat(sd);
     rust_pc_checklevel(sd);
     tracing::info!("[map] [login] fd={} step=mystaytus_2", fd);
-    clif_mystaytus(sd);
+    crate::database::blocking_run_async(clif_mystaytus_by_addr(sd as usize));
 
     // Send our state to all PCs in the area.
     tracing::info!("[map] [login] fd={} step=updatestate", fd);

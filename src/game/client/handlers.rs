@@ -14,7 +14,7 @@
 
 use std::ffi::CStr;
 
-use crate::database::{blocking_run_async, get_pool};
+use crate::database::get_pool;
 use crate::database::map_db::BlockList;
 use crate::game::block::map_delblock;
 use crate::game::scripting::rust_sl_resumemenu;
@@ -135,7 +135,7 @@ pub unsafe fn clif_stoptimers(sd: *mut MapSessionData) -> i32 {
 ////
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
+pub async unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
     if (*sd).exchange.target != 0 {
         let tsd = map_id2sd((*sd).exchange.target) as *mut MapSessionData;
         clif_exchange_close(sd);
@@ -155,12 +155,11 @@ pub unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
     map_deliddb(&raw mut (*sd).bl);
 
     let id = (*sd).status.id;
-    if let Err(e) = blocking_run_async(async move {
-        sqlx::query("UPDATE `Character` SET `ChaOnline` = '0' WHERE `ChaId` = ?")
-            .bind(id)
-            .execute(get_pool())
-            .await
-    }) {
+    if let Err(e) = sqlx::query("UPDATE `Character` SET `ChaOnline` = '0' WHERE `ChaId` = ?")
+        .bind(id)
+        .execute(get_pool())
+        .await
+    {
         tracing::error!("[handle_disconnect] ChaOnline update failed: {e}");
     }
 
@@ -232,7 +231,7 @@ pub unsafe fn clif_handle_powerboards(sd: *mut MapSessionData) -> i32 {
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_handle_boards(sd: *mut MapSessionData) -> i32 {
+pub async unsafe fn clif_handle_boards(sd: *mut MapSessionData) -> i32 {
     match rbyte((*sd).fd, 5) {
         1 => {
             (*sd).bcount = 0;
@@ -260,7 +259,7 @@ pub unsafe fn clif_handle_boards(sd: *mut MapSessionData) -> i32 {
         }
         6 => {
             if (*sd).status.level >= 10 {
-                nmail_write(sd);
+                nmail_write(sd).await;
             } else {
                 clif_sendminitext(
                     sd,
@@ -272,8 +271,8 @@ pub unsafe fn clif_handle_boards(sd: *mut MapSessionData) -> i32 {
             if (*sd).status.gm_level != 0 {
                 let board = rword_be((*sd).fd, 6) as i32;
                 let post  = rword_be((*sd).fd, 8) as i32;
-                let color = map_getpostcolor(board, post) ^ 1;
-                map_changepostcolor(board, post, color);
+                let color = map_getpostcolor(board, post).await ^ 1;
+                map_changepostcolor(board, post, color).await;
                 nmail_sendmessage(sd, c"Post updated.".as_ptr(), 6, 0);
             }
         }
@@ -378,7 +377,7 @@ pub unsafe fn clif_parsechangepos(sd: *mut MapSessionData) -> i32 {
 ////
 /// # Safety
 /// `sd` must be valid. `friend_list` is a raw byte buffer of length `len`.
-pub unsafe fn clif_parsefriends(
+pub async unsafe fn clif_parsefriends(
     sd: *mut MapSessionData,
     friend_list: *const i8,
     len: i32,
@@ -405,59 +404,58 @@ pub unsafe fn clif_parsefriends(
     }
 
     let id = (*sd).status.id;
-    if let Err(e) = blocking_run_async(async move {
-        let pool = get_pool();
-        // Upsert: ensure row exists
-        let exists: bool = sqlx::query_scalar(
-            "SELECT COUNT(*) > 0 FROM `Friends` WHERE `FndChaId` = ?"
-        )
-        .bind(id)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(false);
-        if !exists {
-            sqlx::query("INSERT INTO `Friends` (`FndChaId`) VALUES (?)")
-                .bind(id)
-                .execute(pool)
-                .await?;
+    let pool = get_pool();
+    // Upsert: ensure row exists
+    let exists: bool = sqlx::query_scalar(
+        "SELECT COUNT(*) > 0 FROM `Friends` WHERE `FndChaId` = ?"
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false);
+    if !exists {
+        if let Err(e) = sqlx::query("INSERT INTO `Friends` (`FndChaId`) VALUES (?)")
+            .bind(id)
+            .execute(pool)
+            .await
+        {
+            tracing::error!("[parsefriends] id={id} insert: {e}");
         }
-        // Update all 20 slots in one query
-        sqlx::query(
-            "UPDATE `Friends` SET \
-             `FndChaName1`=?,`FndChaName2`=?,`FndChaName3`=?,`FndChaName4`=?,\
-             `FndChaName5`=?,`FndChaName6`=?,`FndChaName7`=?,`FndChaName8`=?,\
-             `FndChaName9`=?,`FndChaName10`=?,`FndChaName11`=?,`FndChaName12`=?,\
-             `FndChaName13`=?,`FndChaName14`=?,`FndChaName15`=?,`FndChaName16`=?,\
-             `FndChaName17`=?,`FndChaName18`=?,`FndChaName19`=?,`FndChaName20`=? \
-             WHERE `FndChaId` = ?"
-        )
-        .bind(&friends[0])  .bind(&friends[1])  .bind(&friends[2])  .bind(&friends[3])
-        .bind(&friends[4])  .bind(&friends[5])  .bind(&friends[6])  .bind(&friends[7])
-        .bind(&friends[8])  .bind(&friends[9])  .bind(&friends[10]) .bind(&friends[11])
-        .bind(&friends[12]) .bind(&friends[13]) .bind(&friends[14]) .bind(&friends[15])
-        .bind(&friends[16]) .bind(&friends[17]) .bind(&friends[18]) .bind(&friends[19])
-        .bind(id)
-        .execute(pool)
-        .await?;
-        Ok::<_, sqlx::Error>(())
-    }) {
+    }
+    // Update all 20 slots in one query
+    if let Err(e) = sqlx::query(
+        "UPDATE `Friends` SET \
+         `FndChaName1`=?,`FndChaName2`=?,`FndChaName3`=?,`FndChaName4`=?,\
+         `FndChaName5`=?,`FndChaName6`=?,`FndChaName7`=?,`FndChaName8`=?,\
+         `FndChaName9`=?,`FndChaName10`=?,`FndChaName11`=?,`FndChaName12`=?,\
+         `FndChaName13`=?,`FndChaName14`=?,`FndChaName15`=?,`FndChaName16`=?,\
+         `FndChaName17`=?,`FndChaName18`=?,`FndChaName19`=?,`FndChaName20`=? \
+         WHERE `FndChaId` = ?"
+    )
+    .bind(&friends[0])  .bind(&friends[1])  .bind(&friends[2])  .bind(&friends[3])
+    .bind(&friends[4])  .bind(&friends[5])  .bind(&friends[6])  .bind(&friends[7])
+    .bind(&friends[8])  .bind(&friends[9])  .bind(&friends[10]) .bind(&friends[11])
+    .bind(&friends[12]) .bind(&friends[13]) .bind(&friends[14]) .bind(&friends[15])
+    .bind(&friends[16]) .bind(&friends[17]) .bind(&friends[18]) .bind(&friends[19])
+    .bind(id)
+    .execute(pool)
+    .await
+    {
         tracing::error!("[parsefriends] id={id}: {e}");
     }
     0
 }
 
 /// Return the AccountId for the given character ID, or 0 if not found.
-pub unsafe fn clif_isregistered(id: u32) -> i32 {
-    blocking_run_async(async move {
-        sqlx::query_scalar::<_, u32>(
-            "SELECT `AccountId` FROM `Accounts` WHERE \
-             `AccountCharId1`=? OR `AccountCharId2`=? OR `AccountCharId3`=? OR \
-             `AccountCharId4`=? OR `AccountCharId5`=? OR `AccountCharId6`=?"
-        )
-        .bind(id).bind(id).bind(id).bind(id).bind(id).bind(id)
-        .fetch_optional(get_pool())
-        .await
-    })
+pub async unsafe fn clif_isregistered(id: u32) -> i32 {
+    sqlx::query_scalar::<_, u32>(
+        "SELECT `AccountId` FROM `Accounts` WHERE \
+         `AccountCharId1`=? OR `AccountCharId2`=? OR `AccountCharId3`=? OR \
+         `AccountCharId4`=? OR `AccountCharId5`=? OR `AccountCharId6`=?"
+    )
+    .bind(id).bind(id).bind(id).bind(id).bind(id).bind(id)
+    .fetch_optional(get_pool())
+    .await
     .ok()
     .flatten()
     .unwrap_or(0) as i32
@@ -465,18 +463,15 @@ pub unsafe fn clif_isregistered(id: u32) -> i32 {
 
 /// Return a heap-allocated C string with the account email for character `id`, or NULL.
 /// The caller does not free the pointer (leaked to match original C behaviour).
-pub unsafe fn clif_getaccountemail(id: u32) -> *const i8 {
-    let acct_id = clif_isregistered(id);
+pub async unsafe fn clif_getaccountemail(id: u32) -> *const i8 {
+    let acct_id = clif_isregistered(id).await;
     if acct_id == 0 { return std::ptr::null(); }
-    let email: Option<String> = blocking_run_async(async move {
-        sqlx::query_scalar(
-            "SELECT `AccountEmail` FROM `Accounts` WHERE `AccountId` = ?"
-        )
-        .bind(acct_id as u32)
-        .fetch_optional(get_pool())
-        .await
-        .unwrap_or(None)
-    })
+    let email: Option<String> = sqlx::query_scalar(
+        "SELECT `AccountEmail` FROM `Accounts` WHERE `AccountId` = ?"
+    )
+    .bind(acct_id as u32)
+    .fetch_optional(get_pool())
+    .await
     .unwrap_or(None);
     match email {
         Some(s) => match std::ffi::CString::new(s) {
@@ -649,19 +644,17 @@ static NAME_BUF: std::sync::Mutex<[u8; 16]> = std::sync::Mutex::new([0u8; 16]);
 // ─── New ported functions ───────────────────────────────────────────────────
 
 /// Look up a character name by ChaId; returns pointer into a static 16-byte buffer.
-pub unsafe fn clif_getName(id: u32) -> *mut i8 {
-    let name: String = blocking_run_async(async move {
-        sqlx::query_scalar::<_, String>(
-            "SELECT `ChaName` FROM `Character` WHERE `ChaId` = ?"
-        )
-        .bind(id)
-        .fetch_optional(get_pool())
-        .await
-    })
+pub async unsafe fn clif_getName(id: u32) -> *mut i8 {
+    let name: String = sqlx::query_scalar::<_, String>(
+        "SELECT `ChaName` FROM `Character` WHERE `ChaId` = ?"
+    )
+    .bind(id)
+    .fetch_optional(get_pool())
+    .await
     .ok()
     .flatten()
     .unwrap_or_default();
-    let mut buf = NAME_BUF.lock().unwrap();
+    let mut buf = NAME_BUF.lock().unwrap_or_else(|e| e.into_inner());
     buf.fill(0);
     let bytes = name.as_bytes();
     let n = bytes.len().min(15);
@@ -684,7 +677,7 @@ pub unsafe fn clif_Hacker(name: *mut i8, reason: *const i8) -> i32 {
 }
 
 /// Accept a character-load request; look up ChaId by name, then call intif_load.
-pub unsafe fn clif_accept2(
+pub async unsafe fn clif_accept2(
     fd: i32, name: *mut i8, name_len: i32,
 ) -> i32 {
     if name_len <= 0 || name_len > 16 {
@@ -699,14 +692,12 @@ pub unsafe fn clif_accept2(
     std::ptr::copy_nonoverlapping(name as *const u8, n.as_mut_ptr(), name_len as usize);
     let name_str = CStr::from_ptr(n.as_ptr() as *const i8)
         .to_str().unwrap_or("").to_owned();
-    let id: u32 = blocking_run_async(async move {
-        sqlx::query_scalar::<_, u32>(
-            "SELECT `ChaId` FROM `Character` WHERE `ChaName` = ?"
-        )
-        .bind(name_str)
-        .fetch_optional(get_pool())
-        .await
-    })
+    let id: u32 = sqlx::query_scalar::<_, u32>(
+        "SELECT `ChaId` FROM `Character` WHERE `ChaName` = ?"
+    )
+    .bind(name_str)
+    .fetch_optional(get_pool())
+    .await
     .ok()
     .flatten()
     .unwrap_or(0);
@@ -1104,4 +1095,29 @@ pub unsafe fn createdb_start(sd: *mut std::ffi::c_void) -> i32 {
         c"itemCreation".as_ptr(), std::ptr::null(), &[bl_ptr],
     );
     0
+}
+
+// ─── Sync wrappers for FFI callers that cannot .await ──────────────────────────
+//
+// These are thin blocking wrappers for C FFI / Lua accessor call sites
+// (pc_accessors.rs) that cannot be made async. They use blocking_run_async
+// because they execute inside the async LocalSet.
+//
+// NOTE: clif_getName_sync was removed — player_state.rs and visual.rs now
+// import clif_getName directly and call it via blocking_run_async locally.
+
+use crate::database::blocking_run_async;
+
+/// Sync wrapper for [`clif_isregistered`] — for use in FFI / non-async call sites.
+pub unsafe fn clif_isregistered_sync(id: u32) -> i32 {
+    blocking_run_async(clif_isregistered(id))
+}
+
+/// Sync wrapper for [`clif_getaccountemail`] — for use in FFI / non-async call sites.
+pub unsafe fn clif_getaccountemail_sync(id: u32) -> *const i8 {
+    // Transmit the raw pointer through usize (which is Send) to satisfy blocking_run_async.
+    let addr: usize = blocking_run_async(async move {
+        clif_getaccountemail(id).await as usize
+    });
+    addr as *const i8
 }

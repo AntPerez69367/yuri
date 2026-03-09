@@ -232,8 +232,15 @@ impl UserData for MapRegObject {
             if this.ptr.is_null() {
                 return Err(mlua::Error::external("MapRegObject: ptr is null"));
             }
-            let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            unsafe { map_globals::map_setglobalreg_sd(this.ptr, ckey.as_ptr(), val_to_int(&val)?); }
+            let val_i = val_to_int(&val)?;
+            // Extract the map index synchronously from the session data pointer.
+            let m = unsafe {
+                let sd = this.ptr as *const crate::game::pc::MapSessionData;
+                (*sd).bl.m as i32
+            };
+            crate::database::blocking_run_async(async move {
+                unsafe { crate::game::map_server::map_setglobalreg_str(m, key, val_i).await; }
+            });
             Ok(())
         });
     }
@@ -250,8 +257,10 @@ impl UserData for GameRegObject {
             Ok(val)
         });
         methods.add_meta_method(MetaMethod::NewIndex, |_, _this, (key, val): (String, mlua::Value)| {
-            let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            unsafe { sffi::map_setglobalgamereg(ckey.as_ptr(), val_to_int(&val)?); }
+            let val_i = val_to_int(&val)?;
+            crate::database::blocking_run_async(async move {
+                unsafe { crate::game::map_server::map_setglobalgamereg_str(key, val_i).await; }
+            });
             Ok(())
         });
     }

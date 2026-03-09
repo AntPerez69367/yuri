@@ -73,7 +73,9 @@ pub unsafe fn rust_mob_setglobalreg(mob: *mut std::ffi::c_void, attrname: *const
 pub use crate::game::map_parse::chat::{clif_broadcast, clif_gmbroadcast};
 
 pub unsafe fn clif_mystaytus(sd: *mut std::ffi::c_void) {
-    crate::game::map_parse::player_state::clif_mystaytus(sd as *mut _);
+    crate::database::blocking_run_async(
+        crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as usize)
+    );
 }
 
 // ─── Magic / mob DB ───────────────────────────────────────────────────────────

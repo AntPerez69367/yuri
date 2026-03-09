@@ -386,18 +386,32 @@ pub unsafe fn clif_sendadditem(sd: *mut MapSessionData, num: i32) -> i32 {
 
     // owner name
     if (*sd).status.inventory[n].owner != 0 {
-        let owner_ptr = map_id2name((*sd).status.inventory[n].owner);
-        if !owner_ptr.is_null() {
-            let owner_len = strlen_cstr(owner_ptr);
+        let owner_id = (*sd).status.inventory[n].owner;
+        // map_id2name returns a libc-allocated *mut i8 which is !Send.
+        // Convert to Vec<u8> inside the async block so only a Send type crosses the thread.
+        let owner_bytes: Option<Vec<u8>> = crate::database::blocking_run_async(async move {
+            // Cast *mut i8 to usize immediately so the async block's state is Send.
+            let ptr_usize = unsafe { map_id2name(owner_id).await } as usize;
+            if ptr_usize == 0 {
+                None
+            } else {
+                let ptr = ptr_usize as *mut i8;
+                let len = unsafe { libc::strlen(ptr as *const libc::c_char) };
+                let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len).to_vec() };
+                unsafe { libc::free(ptr as *mut libc::c_void) };
+                Some(bytes)
+            }
+        });
+        if let Some(bytes) = owner_bytes {
+            let owner_len = bytes.len();
             wfifob(fd, len, owner_len as u8);
             {
                 let dst = rust_session_wdata_ptr(fd, len + 1);
                 if !dst.is_null() {
-                    std::ptr::copy_nonoverlapping(owner_ptr.cast::<u8>(), dst, owner_len);
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, owner_len);
                 }
             }
             len += owner_len + 1;
-            libc_free(owner_ptr.cast());
         } else {
             wfifob(fd, len, 0);
             len += 1;

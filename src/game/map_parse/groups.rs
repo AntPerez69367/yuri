@@ -10,7 +10,7 @@ use crate::database::map_db::BlockList;
 use crate::database::map_db::{get_map_ptr, map_is_loaded};
 use crate::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr};
 use crate::game::mob::MobSpawnData;
-use crate::database::{blocking_run_async, get_pool};
+use crate::database::get_pool;
 
 use crate::game::pc::{
     MapSessionData,
@@ -827,7 +827,7 @@ pub unsafe fn clif_parseparcel(sd: *mut MapSessionData) -> i32 {
 // ─── clif_huntertoggle ────────────────────────────────────────────────────────
 
 /// Toggle hunter mode on/off for `sd` and persist to database.  C line 9419.
-pub unsafe fn clif_huntertoggle(sd: *mut MapSessionData) -> i32 {
+pub async unsafe fn clif_huntertoggle(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
     (*sd).hunter = rfifob((*sd).fd, 5) as i32;
@@ -846,8 +846,7 @@ pub unsafe fn clif_huntertoggle(sd: *mut MapSessionData) -> i32 {
         .unwrap_or("")
         .to_owned();
 
-    blocking_run_async(async move {
-        sqlx::query(
+    sqlx::query(
             "UPDATE `Character` SET `ChaHunter` = ?, `ChaHunterNote` = ? WHERE `ChaId` = ?"
         )
         .bind(hunter_val)
@@ -856,7 +855,6 @@ pub unsafe fn clif_huntertoggle(sd: *mut MapSessionData) -> i32 {
         .execute(get_pool())
         .await
         .ok();
-    });
 
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
@@ -874,7 +872,7 @@ pub unsafe fn clif_huntertoggle(sd: *mut MapSessionData) -> i32 {
 // ─── clif_sendhunternote ──────────────────────────────────────────────────────
 
 /// Fetch and send the hunter note for a named player.  C line 9468.
-pub unsafe fn clif_sendhunternote(sd: *mut MapSessionData) -> i32 {
+pub async unsafe fn clif_sendhunternote(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
     let hname_len = rfifob((*sd).fd, 5) as usize;
@@ -894,8 +892,7 @@ pub unsafe fn clif_sendhunternote(sd: *mut MapSessionData) -> i32 {
         .unwrap_or("")
         .to_owned();
 
-    let note_result = blocking_run_async(async move {
-        sqlx::query_scalar::<_, String>(
+    let note_result = sqlx::query_scalar::<_, String>(
             "SELECT `ChaHunterNote` FROM `Character` WHERE `ChaName` = ?"
         )
         .bind(hunter_name_str)
@@ -903,8 +900,7 @@ pub unsafe fn clif_sendhunternote(sd: *mut MapSessionData) -> i32 {
         .await
         .ok()
         .flatten()
-        .unwrap_or_default()
-    });
+        .unwrap_or_default();
 
     // Copy note into fixed-size buffer for packet building
     let mut hunternote = [0i8; 41];

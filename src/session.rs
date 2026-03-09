@@ -3,8 +3,10 @@
 //! This module replaces session.c with memory-safe async Rust implementation.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::os::unix::io::AsRawFd;
+use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Mutex as StdMutex, RwLock};
@@ -13,6 +15,23 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::runtime::Runtime;
 use tokio::sync::Mutex;
+
+/// Future returned by an async session callback.
+/// Not Send — runs in-place inside the LocalSet session task.
+pub type CallbackFuture = Pin<Box<dyn Future<Output = i32> + 'static>>;
+
+/// An async session callback stored in SessionCallbacks.
+/// The Fn itself is Send+Sync (no captured raw pointers); the Future it
+/// returns is allowed to capture raw pointers because it runs in LocalSet.
+pub type AsyncCallback = Arc<dyn Fn(i32) -> CallbackFuture + Send + Sync + 'static>;
+
+/// Wrap a synchronous unsafe fn pointer as an AsyncCallback.
+/// Use this for simple callbacks that don't need .await.
+pub fn sync_callback(f: unsafe fn(i32) -> i32) -> AsyncCallback {
+    std::sync::Arc::new(move |fd: i32| -> CallbackFuture {
+        Box::pin(async move { unsafe { f(fd) } })
+    })
+}
 
 /// Buffer size constants
 pub const RFIFO_SIZE: usize = 16 * 1024;
@@ -81,17 +100,17 @@ pub enum SessionError {
     Io(#[from] std::io::Error),
 }
 
-/// Callback function pointers for C interop
-#[derive(Clone, Copy, Default)]
+/// Async callback function pointers for session lifecycle events
+#[derive(Clone, Default)]
 pub struct SessionCallbacks {
     /// Called once when a new connection is accepted (before any data is read)
-    pub accept: Option<unsafe fn(i32) -> i32>,
+    pub accept: Option<AsyncCallback>,
     /// Called when packet data is received and ready to parse
-    pub parse: Option<unsafe fn(i32) -> i32>,
+    pub parse: Option<AsyncCallback>,
     /// Called when session has been idle for too long
-    pub timeout: Option<unsafe fn(i32) -> i32>,
+    pub timeout: Option<AsyncCallback>,
     /// Called when session is being shut down
-    pub shutdown: Option<unsafe fn(i32) -> i32>,
+    pub shutdown: Option<AsyncCallback>,
 }
 
 /// Global session manager (thread-safe, sync-accessible from C callbacks)
@@ -150,7 +169,7 @@ impl SessionManager {
 
     /// Get default callbacks (sync)
     pub fn get_default_callbacks(&self) -> SessionCallbacks {
-        *self.default_callbacks.lock().unwrap()
+        self.default_callbacks.lock().unwrap().clone()
     }
 
     /// Set default callbacks (sync)
@@ -912,12 +931,12 @@ async fn session_io_task_from_accept(stream: TcpStream, addr: SocketAddr) {
     // The callback may write to the session's write buffer; we flush it below.
     let accept_cb = {
         match manager.get_session(fd) {
-            Some(arc) => arc.try_lock().ok().and_then(|s| s.callbacks.accept),
+            Some(arc) => arc.try_lock().ok().and_then(|s| s.callbacks.accept.clone()),
             None => None,
         }
     };
     if let Some(cb) = accept_cb {
-        unsafe { cb(fd); }
+        cb(fd).await;
 
         // Flush whatever the accept callback wrote
         flush_wdata_to_socket(fd, manager).await;
@@ -1004,11 +1023,11 @@ async fn session_io_task(fd: i32) {
                         None
                     } else {
                         session.shutdown_called = true;
-                        session.callbacks.shutdown
+                        session.callbacks.shutdown.clone()
                     }
                 };
                 if let Some(cb) = shutdown_cb {
-                    unsafe { cb(fd); }
+                    cb(fd).await;
                 }
                 manager.remove_session(fd);
                 return;
@@ -1034,10 +1053,10 @@ async fn session_io_task(fd: i32) {
             // what happens for peer-initiated closes (Ok(0) branch below).
             let parse_cb = {
                 let session = session_arc.lock().await;
-                session.callbacks.parse
+                session.callbacks.parse.clone()
             };
             if let Some(cb) = parse_cb {
-                unsafe { cb(fd); }
+                cb(fd).await;
             }
             break;
         }
@@ -1080,10 +1099,10 @@ async fn session_io_task(fd: i32) {
                 }
                 let parse_cb = {
                     let session = session_arc.lock().await;
-                    session.callbacks.parse
+                    session.callbacks.parse.clone()
                 };
                 if let Some(cb) = parse_cb {
-                    unsafe { cb(fd); }
+                    cb(fd).await;
                 }
                 break;
             }
@@ -1122,7 +1141,7 @@ async fn session_io_task(fd: i32) {
                 // or no progress was made (avoids infinite loop on unknown packets).
                 let parse_cb = {
                     let session = session_arc.lock().await;
-                    session.callbacks.parse
+                    session.callbacks.parse.clone()
                 };
                 if let Some(cb) = parse_cb {
                     loop {
@@ -1132,7 +1151,7 @@ async fn session_io_task(fd: i32) {
                         };
                         if available == 0 { break; }
 
-                        let ret = unsafe { cb(fd) };
+                        let ret = cb(fd).await;
                         if ret == 2 { break; }
 
                         let (new_available, eof) = {
@@ -1169,11 +1188,11 @@ async fn session_io_task(fd: i32) {
             None
         } else {
             session.shutdown_called = true;
-            session.callbacks.shutdown
+            session.callbacks.shutdown.clone()
         }
     };
     if let Some(cb) = shutdown_cb {
-        unsafe { cb(fd); }
+        cb(fd).await;
     }
     manager.remove_session(fd);
     tracing::info!("[session] fd={} closed", fd);
@@ -1194,12 +1213,12 @@ async fn shutdown_all_sessions() {
                     None
                 } else {
                     session.shutdown_called = true;
-                    session.callbacks.shutdown
+                    session.callbacks.shutdown.clone()
                 }
             };
             if let Some(cb) = shutdown_cb {
                 tracing::debug!("[rust_server] Calling shutdown callback for fd={}", fd);
-                unsafe { cb(fd); }
+                cb(fd).await;
             }
             manager.remove_session(fd);
         }
@@ -1427,11 +1446,11 @@ pub unsafe fn rust_session_set_default_accept(
 ) {
     tracing::info!("[FFI] Setting default accept callback");
     let manager = get_session_manager();
-    manager.default_callbacks.lock().unwrap().accept = Some(callback);
+    manager.default_callbacks.lock().unwrap().accept = Some(sync_callback(callback));
 }
 
-pub unsafe fn rust_session_set_default_parse(
-    callback: unsafe fn(i32) -> i32,
+pub fn rust_session_set_default_parse(
+    callback: AsyncCallback,
 ) {
     tracing::info!("[FFI] Setting default parse callback");
     let manager = get_session_manager();
@@ -1443,7 +1462,7 @@ pub unsafe fn rust_session_set_default_timeout(
 ) {
     tracing::info!("[FFI] Setting default timeout callback");
     let manager = get_session_manager();
-    manager.default_callbacks.lock().unwrap().timeout = Some(callback);
+    manager.default_callbacks.lock().unwrap().timeout = Some(sync_callback(callback));
 }
 
 pub unsafe fn rust_session_set_default_shutdown(
@@ -1451,7 +1470,7 @@ pub unsafe fn rust_session_set_default_shutdown(
 ) {
     tracing::info!("[FFI] Setting default shutdown callback");
     let manager = get_session_manager();
-    manager.default_callbacks.lock().unwrap().shutdown = Some(callback);
+    manager.default_callbacks.lock().unwrap().shutdown = Some(sync_callback(callback));
 }
 
 pub fn rust_session_get_data(fd: i32) -> *mut std::ffi::c_void {
@@ -1498,20 +1517,34 @@ pub unsafe fn rust_session_set_parse(
     fd: i32,
     callback: unsafe fn(i32) -> i32,
 ) {
-    with_session(fd, (), |session| { session.callbacks.parse = Some(callback); });
+    let cb = sync_callback(callback);
+    with_session(fd, (), |session| { session.callbacks.parse = Some(cb.clone()); });
 }
 
 pub unsafe fn rust_session_set_shutdown(
     fd: i32,
     callback: unsafe fn(i32) -> i32,
 ) {
-    with_session(fd, (), |session| { session.callbacks.shutdown = Some(callback); });
+    let cb = sync_callback(callback);
+    with_session(fd, (), |session| { session.callbacks.shutdown = Some(cb.clone()); });
 }
 
-pub fn rust_session_call_parse(fd: i32) {
-    let parse_cb = with_session(fd, None, |session| session.callbacks.parse);
+/// Invoke the async parse callback for session `fd`, awaiting its completion.
+///
+/// This function is `async` because `AsyncCallback` returns a future that cannot
+/// be driven without an async context.  It is NOT `#[no_mangle]` and is not
+/// called from C — all C-side parse dispatch was removed when `sl_compat.c` was
+/// migrated.  The only remaining Rust call site is `map_reset_timer` (in
+/// `map_server.rs`), which is a sync `TimerFn` callback and therefore uses
+/// `tokio::task::spawn_local` to schedule the async work on the current LocalSet.
+///
+/// Within the normal session read-loop (`session_task`) the callback is called
+/// with `cb(fd).await` directly — `rust_session_call_parse` is only needed when
+/// the call site is itself synchronous (i.e. cannot `.await`).
+pub async fn rust_session_call_parse(fd: i32) {
+    let parse_cb = with_session(fd, None, |session| session.callbacks.parse.clone());
     if let Some(cb) = parse_cb {
-        unsafe { cb(fd); }
+        cb(fd).await;
     }
 }
 

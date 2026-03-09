@@ -1890,7 +1890,7 @@ use crate::database::item_db::{
     rust_itemdb_name as rust_itemdb_name_cop, rust_itemdb_icon as rust_itemdb_icon_cop,
     rust_itemdb_iconcolor as rust_itemdb_iconcolor_cop, rust_itemdb_type as rust_itemdb_type_cop,
 };
-use crate::game::client::handlers::{clif_getName as clif_getName_cop, clif_isregistered as clif_isregistered_cop};
+use crate::game::client::handlers::{clif_getName, clif_isregistered};
 
 // map_id2sd in map_server returns *mut std::ffi::c_void — wrap with cast.
 #[inline]
@@ -1943,7 +1943,7 @@ unsafe fn replace_str_rust(src: *const i8, orig: &[u8], rep: *const i8) -> *cons
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 /// `bl` must be a valid, non-null pointer to a [`BlockList`] that belongs to a
 /// [`MapSessionData`] (i.e. `bl_type == BL_PC`), retrievable via `map_id2sd`.
-pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) -> i32 {
+pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) -> i32 {
     if sd.is_null() || bl.is_null() {
         return 0;
     }
@@ -2374,7 +2374,8 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
         wb(p, len + 7, lg.color as u8);
 
         if lg.tchaid > 0 {
-            let char_name = clif_getName_cop(lg.tchaid);
+            let tchaid = lg.tchaid;
+            let char_name = clif_getName(tchaid).await;
             let text_ptr  = lg.text.as_ptr() as *const i8;
             let bff = replace_str_rust(text_ptr, b"$player\0", char_name as *const i8);
             let bff_len = if bff.is_null() { 0 } else { libc::strlen(bff) };
@@ -2393,7 +2394,8 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
 
     // ── Gender byte + registered flag ─────────────────────────────────────────
     wb(p, len + 6, (3u8).wrapping_sub((*tsd).status.sex as u8));
-    wb(p, len + 7, if clif_isregistered_cop((*tsd).status.id) > 0 { 1 } else { 0 });
+    let tsd_id = (*tsd).status.id;
+    wb(p, len + 7, if clif_isregistered(tsd_id).await > 0 { 1 } else { 0 });
     len += 5;
 
     // ── Packet size field ─────────────────────────────────────────────────────

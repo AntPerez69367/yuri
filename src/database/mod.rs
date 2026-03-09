@@ -1,5 +1,28 @@
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::{Mutex, OnceLock};
+use std::task::{Context, Poll};
+
+/// Wraps a `!Send` future and asserts it is `Send`.
+///
+/// # Safety
+/// The caller must ensure that all data captured by the future is actually
+/// safe to send across threads (e.g., raw pointers to types that implement `Send`,
+/// accessed with the calling thread blocked via `blocking_run_async`'s join).
+pub(crate) struct AssertSend<F>(F);
+unsafe impl<F: Future> Send for AssertSend<F> {}
+impl<F: Future> Future for AssertSend<F> {
+    type Output = F::Output;
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
+        unsafe { self.map_unchecked_mut(|s| &mut s.0).poll(cx) }
+    }
+}
+/// # Safety
+/// The caller must ensure that all data captured in `f` is actually safe to
+/// send across threads. Concretely, raw pointers must point to types that
+/// implement `Send`, and the future must be driven by `blocking_run_async`
+/// (which joins before returning), not by `tokio::spawn` or `spawn_local`.
+pub(crate) fn assert_send<F: Future>(f: F) -> AssertSend<F> { AssertSend(f) }
 
 use sqlx::MySqlPool;
 use tokio::runtime::Runtime;
@@ -47,13 +70,20 @@ pub(crate) fn blocking_run<F: Future>(f: F) -> F::Output {
     }
 }
 
-/// Like `blocking_run`, but safe to call from within a Tokio async task (e.g. LocalSet).
+/// Sync-to-async bridge: drives a `Send + 'static` future to completion, safe from
+/// any calling context including `LocalSet` tasks.
 ///
-/// When called from inside a runtime (detected via `Handle::try_current`), the future
-/// is driven on a spawned OS thread using the existing runtime handle — no reactor
-/// re-registration needed, sqlx pool connections remain valid.
+/// When called inside a Tokio runtime, spawns a plain OS thread (not a Tokio worker)
+/// so it has no active runtime context; the DB_RUNTIME drives the future there, then
+/// the spawned thread is joined before this function returns.
+///
+/// Use this as the bridge for sync code (Lua callbacks, `_sync` wrappers, C FFI stubs)
+/// that needs to call async functions but cannot use `.await`. It does not panic from
+/// `LocalSet`, unlike `blocking_run`.
 ///
 /// The future must be `Send + 'static` because it crosses a thread boundary.
+/// For `!Send` futures capturing raw pointers, wrap with `assert_send` when the
+/// pointee type implements `Send` (e.g. `*mut MapSessionData`).
 pub(crate) fn blocking_run_async<F>(f: F) -> F::Output
 where
     F: Future + Send + 'static,
@@ -69,6 +99,7 @@ where
             .expect("blocking_run_async thread panicked"),
     }
 }
+
 
 /// Connect to the database. Called from ffi::database::rust_db_connect.
 ///

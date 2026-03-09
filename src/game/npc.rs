@@ -10,7 +10,7 @@ use crate::game::types::GfxViewer;
 #[cfg(not(test))]
 use crate::database::map_db::{WarpList, BLOCK_SIZE};
 #[cfg(not(test))]
-use crate::database::{blocking_run, get_pool};
+use crate::database::{blocking_run_async, get_pool};
 #[cfg(not(test))]
 use crate::database::map_db::{get_map_ptr, map_is_loaded};
 
@@ -610,7 +610,7 @@ pub async unsafe fn warp_init_async() -> i32 {
 /// Blocking wrapper. Must be called after the sqlx pool is initialized.
 #[cfg(not(test))]
 pub unsafe fn warp_init() -> i32 {
-    blocking_run(async { unsafe { warp_init_async().await } })
+    blocking_run_async(crate::database::assert_send(async { unsafe { warp_init_async().await } }))
 }
 
 // ---------------------------------------------------------------------------
@@ -837,7 +837,7 @@ pub async unsafe fn npc_init_async() -> i32 {
 /// Blocking wrapper. Must be called after the sqlx pool is initialized.
 #[cfg(not(test))]
 pub unsafe fn npc_init() -> i32 {
-    blocking_run(async { unsafe { npc_init_async().await } })
+    blocking_run_async(crate::database::assert_send(async { unsafe { npc_init_async().await } }))
 }
 
 // ---------------------------------------------------------------------------

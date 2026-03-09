@@ -414,21 +414,24 @@ pub unsafe fn mob_respawn_getstats(mob: *mut MobSpawnData) -> i32 {
 // ─── Spawn table loader ───────────────────────────────────────────────────────
 
 #[cfg(not(test))]
-use crate::database::{blocking_run_async, get_pool};
+use crate::database::get_pool;
 
 #[cfg(not(test))]
-pub unsafe fn mobspawn_read() -> i32 {
+async fn mobspawn_fetch(serverid_val: i32) -> Result<Vec<sqlx::mysql::MySqlRow>, sqlx::Error> {
+    let pool = get_pool();
+    let query = format!(
+        "SELECT `SpnMapId`, `SpnX`, `SpnY`, `SpnMobId`, \
+         `SpnLastDeath`, `SpnId`, `SpnStartTime`, `SpnEndTime`, \
+         `SpnMobIdReplace` FROM `Spawns{}` ORDER BY `SpnId`",
+        serverid_val
+    );
+    sqlx::query(&query).fetch_all(pool).await
+}
+
+#[cfg(not(test))]
+pub async unsafe fn mobspawn_read() -> i32 {
     let serverid_val = serverid;
-    let result = blocking_run_async(async move {
-        let pool = get_pool();
-        let query = format!(
-            "SELECT `SpnMapId`, `SpnX`, `SpnY`, `SpnMobId`, \
-             `SpnLastDeath`, `SpnId`, `SpnStartTime`, `SpnEndTime`, \
-             `SpnMobIdReplace` FROM `Spawns{}` ORDER BY `SpnId`",
-            serverid_val
-        );
-        sqlx::query(&query).fetch_all(pool).await
-    });
+    let result = mobspawn_fetch(serverid_val).await;
 
     let rows = match result {
         Ok(r) => r,
@@ -821,10 +824,10 @@ pub unsafe fn mob_warp(mob: *mut MobSpawnData, m: i32, x: i32, y: i32) -> i32 {
     0
 }
 
-pub unsafe fn kill_mob(mob: *mut MobSpawnData) -> i32 {
+pub async unsafe fn kill_mob(mob: *mut MobSpawnData) -> i32 {
     #[cfg(not(test))]
     {
-        clif_mob_kill(mob);
+        clif_mob_kill(mob).await;
         mob_flushmagic(mob);
     }
     0
@@ -2103,7 +2106,7 @@ pub unsafe fn mobspawn_onetime(
 
 /// Heal mob: fire on_healed Lua event then send the negative-damage health packet.
 #[cfg(not(test))]
-pub unsafe fn sl_mob_addhealth(mob: *mut MobSpawnData, damage: i32) {
+pub async unsafe fn sl_mob_addhealth(mob: *mut MobSpawnData, damage: i32) {
     use crate::game::map_parse::combat::clif_send_mob_healthscript;
     if mob.is_null() { return; }
     let bl = map_id2bl((*mob).attacker);
@@ -2129,12 +2132,12 @@ pub unsafe fn sl_mob_addhealth(mob: *mut MobSpawnData, damage: i32) {
         };
         sl_doscript_simple(yname, c"on_healed".as_ptr(), &raw mut (*mob).bl);
     }
-    clif_send_mob_healthscript(mob, -damage, 0);
+    clif_send_mob_healthscript(mob, -damage, 0).await;
 }
 
 /// Damage mob: set attacker/damage fields then send the health packet.
 #[cfg(not(test))]
-pub unsafe fn sl_mob_removehealth(mob: *mut MobSpawnData, damage: i32, caster_id: u32) {
+pub async unsafe fn sl_mob_removehealth(mob: *mut MobSpawnData, damage: i32, caster_id: u32) {
     use crate::game::map_parse::combat::clif_send_mob_healthscript;
     if mob.is_null() { return; }
     let bl = if caster_id > 0 {
@@ -2158,7 +2161,7 @@ pub unsafe fn sl_mob_removehealth(mob: *mut MobSpawnData, damage: i32, caster_id
         (*mob).critchance = 0;
     }
     if (*mob).state != MOB_DEAD {
-        clif_send_mob_healthscript(mob, damage, 0);
+        clif_send_mob_healthscript(mob, damage, 0).await;
     }
 }
 
@@ -2359,8 +2362,8 @@ mod tests {
 
 
 #[cfg(not(test))]
-pub unsafe fn rust_mobspawn_read() -> i32 {
-    mobspawn_read()
+pub async unsafe fn rust_mobspawn_read() -> i32 {
+    mobspawn_read().await
 }
 
 #[cfg(not(test))]
@@ -2409,8 +2412,8 @@ pub unsafe fn rust_mob_handle_sub(mob: *mut MobSpawnData) -> i32 {
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_kill_mob(mob: *mut MobSpawnData) -> i32 {
-    kill_mob(mob)
+pub async unsafe fn rust_kill_mob(mob: *mut MobSpawnData) -> i32 {
+    kill_mob(mob).await
 }
 
 #[cfg(not(test))]

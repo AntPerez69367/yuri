@@ -92,7 +92,7 @@ unsafe fn createdb_start(sd: *mut MapSessionData) {
 
 /// Main packet dispatcher.
 // clif_parse — ported to rust (src/game/map_parse/mod.rs)
-pub unsafe fn clif_parse(fd: i32) -> i32 {
+pub async unsafe fn clif_parse(fd: i32) -> i32 {
     if fd < 0 { return 0; }
     if rust_session_exists(fd) == 0 { return 0; }
 
@@ -102,7 +102,7 @@ pub unsafe fn clif_parse(fd: i32) -> i32 {
         if !sd.is_null() {
             libc::printf(b"[map] [session_eof] name=%s\n\0".as_ptr() as *const i8,
                 (*sd).status.name.as_ptr());
-            clif_handle_disconnect(sd);
+            clif_handle_disconnect(sd).await;
             clif_closeit(sd);
         }
         clif_print_disconnect(fd);
@@ -125,7 +125,7 @@ pub unsafe fn clif_parse(fd: i32) -> i32 {
     if sd.is_null() {
         match rfifob(fd, 3) {
             0x10 => {
-                clif_accept2(fd, rfifop(fd, 16) as *mut i8, rfifob(fd, 15) as i32);
+                clif_accept2(fd, rfifop(fd, 16) as *mut i8, rfifob(fd, 15) as i32).await;
             }
             _ => {}
         }
@@ -335,7 +335,7 @@ pub unsafe fn clif_parse(fd: i32) -> i32 {
         0x2D => {
             clif_cancelafk(sd);
             if rfifob((*sd).fd, 5) == 0 {
-                clif_mystaytus(sd);
+                clif_mystaytus(sd).await;
             } else {
                 clif_groupstatus(sd);
             }
@@ -377,7 +377,7 @@ pub unsafe fn clif_parse(fd: i32) -> i32 {
         }
         0x3B => {
             clif_cancelafk(sd);
-            clif_handle_boards(sd);
+            clif_handle_boards(sd).await;
         }
         0x3F => {
             pc_warp(sd,
@@ -395,7 +395,7 @@ pub unsafe fn clif_parse(fd: i32) -> i32 {
         }
         0x43 => {
             clif_cancelafk(sd);
-            clif_handle_clickgetinfo(sd);
+            clif_handle_clickgetinfo(sd).await;
         }
         0x4A => {
             clif_cancelafk(sd);
@@ -440,7 +440,7 @@ pub unsafe fn clif_parse(fd: i32) -> i32 {
             clif_cancelafk(sd);
             let name_ptr = rfifop((*sd).fd, 5) as *const i8;
             let name_len = swap16(rfifow((*sd).fd, 1)) as i32 - 5;
-            clif_parsefriends(sd, name_ptr, name_len);
+            clif_parsefriends(sd, name_ptr, name_len).await;
         }
         0x7B => {
             libc::printf(b"request: %u\n\0".as_ptr() as *const i8,
@@ -458,9 +458,9 @@ pub unsafe fn clif_parse(fd: i32) -> i32 {
         0x7D => {
             clif_cancelafk(sd);
             match rfifob(fd, 5) {
-                5 => { clif_sendRewardInfo(sd, fd); }
-                6 => { clif_getReward(sd, fd); }
-                _ => { rust_clif_parseranking(sd, fd); }
+                5 => { clif_sendRewardInfo(sd, fd).await; }
+                6 => { clif_getReward(sd, fd).await; }
+                _ => { rust_clif_parseranking(sd, fd).await; }
             }
         }
         0x82 => {
@@ -472,10 +472,10 @@ pub unsafe fn clif_parse(fd: i32) -> i32 {
         }
         0x84 => {
             clif_cancelafk(sd);
-            clif_huntertoggle(sd);
+            clif_huntertoggle(sd).await;
         }
         0x85 => {
-            clif_sendhunternote(sd);
+            clif_sendhunternote(sd).await;
             clif_cancelafk(sd);
         }
         _ => {

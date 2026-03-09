@@ -41,7 +41,7 @@ use std::sync::atomic::Ordering;
 // char_fd, sql_handle, and userlist are now Rust statics in src/game/map_server.rs.
 use crate::game::map_server::{char_fd, userlist};
 
-use crate::database::{blocking_run_async, get_pool};
+use crate::database::get_pool;
 
 type LuaState = std::ffi::c_void; // opaque
 
@@ -52,7 +52,7 @@ use crate::game::block::{map_respawnmobs, foreach_in_area, AreaType};
 // ── clif functions ─────────────────────────────────────────────────────────────
 use crate::game::map_parse::chat::{clif_sendminitext, clif_sendmsg, clif_broadcast, clif_playsound};
 use crate::game::map_parse::movement::clif_sendchararea;
-use crate::game::map_parse::player_state::{clif_getchararea, clif_sendstatus, clif_mystaytus, clif_refresh};
+use crate::game::map_parse::player_state::{clif_getchararea, clif_sendstatus, clif_mystaytus_by_addr, clif_refresh};
 use crate::game::client::visual::{broadcast_update_state, clif_sendweather, clif_sendurl};
 use crate::game::map_parse::combat::clif_sendanimation_inner;
 use crate::game::map_parse::visual::clif_lookgone;
@@ -60,7 +60,7 @@ use crate::game::client::handlers::clif_transfer_test;
 
 // ── pc functions (rust_pc_* names) ────────────────────────────────────────────
 use crate::game::pc::{
-    rust_pc_warp as pc_warp,
+    rust_pc_warp_sync as pc_warp,
     rust_pc_additem as pc_additem,
     rust_pc_delitem as pc_delitem,
     rust_pc_res as pc_res,
@@ -572,7 +572,9 @@ unsafe fn command_reloadmob(sd: *mut MapSessionData, _line: *mut i8, _s: *mut Lu
     0
 }
 unsafe fn command_reloadspawn(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
-    mobspawn_read();
+    // mobspawn_read is now async; fire-and-forget from LocalSet.
+    // The reload message is sent immediately; the actual reload completes shortly after.
+    tokio::task::spawn_local(async move { mobspawn_read().await });
     if sd.is_null() { return 0; }
     clif_sendminitext(sd, b"Spawn DB Reloaded\0".as_ptr() as *const i8);
     0
@@ -618,6 +620,20 @@ unsafe fn command_respawn(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaS
     }, (*sd).bl.m as i32, BL_MOB);
     0
 }
+async fn ban_character(name_str: String) {
+    sqlx::query("UPDATE `Character` SET `ChaBanned` = '1' WHERE `ChaName` = ?")
+        .bind(name_str)
+        .execute(get_pool())
+        .await
+        .ok();
+}
+async fn unban_character(name_str: String) {
+    sqlx::query("UPDATE `Character` SET `ChaBanned` = '0' WHERE `ChaName` = ?")
+        .bind(name_str)
+        .execute(get_pool())
+        .await
+        .ok();
+}
 unsafe fn command_ban(_sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     let name = match parse_str32(line) { Some(v) => v, None => return -1 };
     let tsd = map_name2sd(name.as_ptr());
@@ -625,13 +641,8 @@ unsafe fn command_ban(_sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState
         printf(b"Banning %s\n\0".as_ptr() as *const i8, name.as_ptr());
         let name_str = std::ffi::CStr::from_ptr(name.as_ptr())
             .to_str().unwrap_or("").to_owned();
-        blocking_run_async(async move {
-            sqlx::query("UPDATE `Character` SET `ChaBanned` = '1' WHERE `ChaName` = ?")
-                .bind(name_str)
-                .execute(get_pool())
-                .await
-                .ok();
-        });
+        // Fire-and-forget: DB write is independent of the disconnect below.
+        tokio::task::spawn_local(ban_character(name_str));
         rust_session_set_eof((*tsd).fd, 1);
     }
     0
@@ -641,13 +652,8 @@ unsafe fn command_unban(_sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaSta
     printf(b"Unbanning %s\n\0".as_ptr() as *const i8, name.as_ptr());
     let name_str = std::ffi::CStr::from_ptr(name.as_ptr())
         .to_str().unwrap_or("").to_owned();
-    blocking_run_async(async move {
-        sqlx::query("UPDATE `Character` SET `ChaBanned` = '0' WHERE `ChaName` = ?")
-            .bind(name_str)
-            .execute(get_pool())
-            .await
-            .ok();
-    });
+    // Fire-and-forget: DB write does not affect this command's return value.
+    tokio::task::spawn_local(unban_character(name_str));
     0
 }
 unsafe fn command_kc(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
@@ -978,6 +984,17 @@ unsafe fn command_cspells(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaSt
     }
     0
 }
+async fn set_job_class(class_val: u32, mark_val: u32, char_id: u32) {
+    sqlx::query(
+        "UPDATE `Character` SET `ChaPthId` = ?, `ChaMark` = ? WHERE `ChaId` = ?"
+    )
+    .bind(class_val)
+    .bind(mark_val)
+    .bind(char_id)
+    .execute(get_pool())
+    .await
+    .ok();
+}
 unsafe fn command_job(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let (mut job, mut subjob) = parse_two_ints(line).unwrap_or((0, 0));
@@ -988,18 +1005,14 @@ unsafe fn command_job(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState)
     let class_val = (*sd).status.class as u32;
     let mark_val = (*sd).status.mark as u32;
     let char_id = (*sd).status.id;
-    blocking_run_async(async move {
-        sqlx::query(
-            "UPDATE `Character` SET `ChaPthId` = ?, `ChaMark` = ? WHERE `ChaId` = ?"
-        )
-        .bind(class_val)
-        .bind(mark_val)
-        .bind(char_id)
-        .execute(get_pool())
-        .await
-        .ok();
-    });
-    clif_mystaytus(sd);
+    // Block until the DB write completes, then send the status update.
+    // `blocking_run_async` joins the OS thread before returning, so `sd` cannot
+    // be freed while `clif_mystaytus_by_addr` holds its `usize` pointer.
+    // Do NOT use `spawn_local` here — that is fire-and-forget and allows the
+    // session to be freed before the future runs (dangling pointer UB).
+    crate::database::blocking_run_async(set_job_class(class_val, mark_val, char_id));
+    let sd_usize = sd as usize;
+    crate::database::blocking_run_async(clif_mystaytus_by_addr(sd_usize));
     0
 }
 unsafe fn command_music(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {

@@ -35,46 +35,76 @@ pub unsafe fn map_readglobalreg_sd(sd: *mut std::ffi::c_void, attrname: *const i
 }
 
 /// Extract `bl.m` from a `USER*` (= `MapSessionData*`) and call `map_setglobalreg`.
-pub unsafe fn map_setglobalreg_sd(sd: *mut std::ffi::c_void, attrname: *const i8, val: i32) -> i32 {
-    let sd = sd as *const MapSessionData;
-    map_setglobalreg((*sd).bl.m as i32, attrname, val)
+///
+/// Note: callers from Lua boundaries should use `map_setglobalreg_str` directly with
+/// the extracted `m` index to avoid non-Send futures. This function is kept for callers
+/// that already have an async context and a raw `attrname` pointer.
+pub async unsafe fn map_setglobalreg_sd(sd: *mut std::ffi::c_void, attrname: *const i8, val: i32) -> i32 {
+    let m = (*(sd as *const MapSessionData)).bl.m as i32;
+    map_setglobalreg(m, attrname, val).await
 }
 
 /// Set weather on all maps matching `region`/`indoor`, broadcasting to sessions on each map.
 ///
-pub unsafe fn sl_g_setweather(region: u8, indoor: u8, weather: u8) {
+pub async unsafe fn sl_g_setweather(region: u8, indoor: u8, weather: u8) {
     let t = libc::time(std::ptr::null_mut()) as u32;
     for x in 0..65535u16 {
-        let ptr = get_map_ptr(x);
-        if ptr.is_null() || (*ptr).xs == 0 { continue; }
-        let mut timer = map_readglobalreg(x as i32, c"artificial_weather_timer".as_ptr()) as u32;
+        // Check map validity and read timer in a sync block — no raw ptr refs cross the await.
+        let (map_region, map_indoor, timer_before) = {
+            let ptr = get_map_ptr(x);
+            if ptr.is_null() || (*ptr).xs == 0 { continue; }
+            let timer = map_readglobalreg(x as i32, c"artificial_weather_timer".as_ptr()) as u32;
+            ((*ptr).region, (*ptr).indoor, timer)
+        };
+
+        let mut timer = timer_before;
         if timer > 0 && timer <= t {
-            map_setglobalreg(x as i32, c"artificial_weather_timer".as_ptr(), 0);
+            crate::game::map_server::map_setglobalreg_str(
+                x as i32, "artificial_weather_timer".to_string(), 0,
+            ).await;
             timer = 0;
         }
-        if (*ptr).region != region || (*ptr).indoor != indoor || timer != 0 { continue; }
-        (*ptr).weather = weather;
-        for i in 1..crate::session::get_fd_max() {
-            if rust_session_exists(i) == 0 { continue; }
-            let tsd = rust_session_get_data(i) as *mut MapSessionData;
-            if tsd.is_null() || rust_session_get_eof(i) != 0 { continue; }
-            if (*tsd).bl.m == x { clif_sendweather(tsd); }
+
+        if map_region != region || map_indoor != indoor || timer != 0 { continue; }
+
+        // Apply weather update and broadcast in a sync block.
+        {
+            let ptr = get_map_ptr(x);
+            if ptr.is_null() || (*ptr).xs == 0 { continue; }
+            (*ptr).weather = weather;
+            for i in 1..crate::session::get_fd_max() {
+                if rust_session_exists(i) == 0 { continue; }
+                let tsd = rust_session_get_data(i) as *mut MapSessionData;
+                if tsd.is_null() || rust_session_get_eof(i) != 0 { continue; }
+                if (*tsd).bl.m == x { clif_sendweather(tsd); }
+            }
         }
     }
 }
 
 /// Set weather on a single map, broadcasting to sessions on that map.
 ///
-pub unsafe fn sl_g_setweatherm(m: i32, weather: u8) {
-    let ptr = get_map_ptr(m as u16);
-    if ptr.is_null() || (*ptr).xs == 0 { return; }
+pub async unsafe fn sl_g_setweatherm(m: i32, weather: u8) {
+    // Read initial state synchronously — no raw ptr refs cross the await.
+    let timer_before = {
+        let ptr = get_map_ptr(m as u16);
+        if ptr.is_null() || (*ptr).xs == 0 { return; }
+        map_readglobalreg(m, c"artificial_weather_timer".as_ptr()) as u32
+    };
+
     let t = libc::time(std::ptr::null_mut()) as u32;
-    let mut timer = map_readglobalreg(m, c"artificial_weather_timer".as_ptr()) as u32;
+    let mut timer = timer_before;
     if timer > 0 && timer <= t {
-        map_setglobalreg(m, c"artificial_weather_timer".as_ptr(), 0);
+        crate::game::map_server::map_setglobalreg_str(
+            m, "artificial_weather_timer".to_string(), 0,
+        ).await;
         timer = 0;
     }
     if timer != 0 { return; }
+
+    // Apply weather update and broadcast.
+    let ptr = get_map_ptr(m as u16);
+    if ptr.is_null() || (*ptr).xs == 0 { return; }
     (*ptr).weather = weather;
     for i in 1..crate::session::get_fd_max() {
         if rust_session_exists(i) == 0 { continue; }
@@ -290,14 +320,15 @@ pub unsafe fn sl_g_sendparcel(
     let item_u = item as u32;
     let dura = crate::database::item_db::rust_itemdb_dura(item_u) as i32;
     let prot = crate::database::item_db::rust_itemdb_protected(item_u) as i32;
-    let _ = crate::database::blocking_run_async(async move {
+    // Fire-and-forget from LocalSet context: spawn_local avoids blocking the game thread.
+    tokio::task::spawn_local(async move {
         let newest: i32 = sqlx::query_scalar::<_, i32>(
             "SELECT COALESCE(MAX(`ParPosition`), -1) FROM `Parcels` WHERE `ParChaIdDestination`=?"
         )
         .bind(receiver_u)
         .fetch_one(crate::database::get_pool()).await
         .unwrap_or(-1);
-        sqlx::query(
+        let _ = sqlx::query(
             "INSERT INTO `Parcels` \
              (`ParChaIdDestination`,`ParSender`,`ParItmId`,`ParAmount`,`ParChaIdOwner`,\
               `ParEngrave`,`ParPosition`,`ParNpc`,\
@@ -310,12 +341,12 @@ pub unsafe fn sl_g_sendparcel(
         .bind(item_u)
         .bind(amount as u32)
         .bind(owner as u32)
-        .bind(&engrave_str)
+        .bind(engrave_str)
         .bind(newest + 1)
         .bind(npcflag)
         .bind(prot)
         .bind(dura)
-        .execute(crate::database::get_pool()).await
+        .execute(crate::database::get_pool()).await;
     });
 }
 

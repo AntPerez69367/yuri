@@ -97,13 +97,13 @@ type SD = *mut crate::game::pc::MapSessionData;
     crate::game::map_parse::chat::clif_isignore(src as SD, dst as SD)
 }
 #[inline] unsafe fn decrypt_fd(fd: i32) { decrypt(fd); }
-#[inline] unsafe fn clif_handle_disconnect(sd: *mut std::ffi::c_void) { crate::game::client::handlers::clif_handle_disconnect(sd as SD); }
+#[inline] async unsafe fn clif_handle_disconnect(sd: *mut std::ffi::c_void) { crate::game::client::handlers::clif_handle_disconnect(sd as SD).await; }
 #[inline] unsafe fn clif_closeit(sd: *mut std::ffi::c_void) { crate::game::map_parse::dialogs::clif_closeit(sd as SD); }
-#[inline] unsafe fn clif_mystaytus(sd: *mut std::ffi::c_void) { crate::game::map_parse::player_state::clif_mystaytus(sd as SD); }
+#[inline] async unsafe fn clif_mystaytus(sd: *mut std::ffi::c_void) { crate::game::map_parse::player_state::clif_mystaytus(sd as SD).await; }
 #[inline] unsafe fn clif_groupstatus(sd: *mut std::ffi::c_void) { crate::game::map_parse::groups::clif_groupstatus(sd as SD); }
 #[inline] unsafe fn clif_refresh(sd: *mut std::ffi::c_void) { crate::game::map_parse::player_state::clif_refresh(sd as SD); }
 #[inline] unsafe fn clif_changestatus(sd: *mut std::ffi::c_void, status: u8) { crate::game::client::handlers::clif_changestatus(sd as SD, status as i32); }
-#[inline] unsafe fn clif_accept2(fd: i32, name: *const i8, val: u8) { crate::game::client::handlers::clif_accept2(fd, name as *mut i8, val as i32); }
+#[inline] async unsafe fn clif_accept2(fd: i32, name: *const i8, val: u8) { crate::game::client::handlers::clif_accept2(fd, name as *mut i8, val as i32).await; }
 #[inline] unsafe fn clif_parsemap(sd: *mut std::ffi::c_void) { crate::game::map_parse::movement::clif_parsemap(sd as SD); }
 #[inline] unsafe fn clif_parsewalk(sd: *mut std::ffi::c_void) { crate::game::map_parse::movement::clif_parsewalk(sd as SD); }
 #[inline] unsafe fn clif_parsewalkpong(sd: *mut std::ffi::c_void) { crate::game::map_parse::movement::clif_parsewalkpong(sd as SD); }
@@ -111,14 +111,14 @@ type SD = *mut crate::game::pc::MapSessionData;
 #[inline] unsafe fn clif_parselookat(sd: *mut std::ffi::c_void) { crate::game::map_parse::movement::clif_parselookat(sd as SD); }
 #[inline] unsafe fn clif_parselookat_2(sd: *mut std::ffi::c_void) { crate::game::map_parse::movement::clif_parselookat_2(sd as SD); }
 #[inline] unsafe fn clif_open_sub(sd: *mut std::ffi::c_void) { crate::game::map_parse::items::clif_open_sub(sd as SD); }
-#[inline] unsafe fn clif_handle_clickgetinfo(sd: *mut std::ffi::c_void) { crate::game::map_parse::dialogs::clif_handle_clickgetinfo(sd as SD); }
+#[inline] async unsafe fn clif_handle_clickgetinfo(sd: *mut std::ffi::c_void) { crate::game::map_parse::dialogs::clif_handle_clickgetinfo(sd as SD).await; }
 #[inline] unsafe fn clif_parseviewchange(sd: *mut std::ffi::c_void) { crate::game::map_parse::movement::clif_parseviewchange(sd as SD); }
 #[inline] unsafe fn clif_parseside(sd: *mut std::ffi::c_void) { crate::game::map_parse::movement::clif_parseside(sd as SD); }
 #[inline] unsafe fn clif_parseemotion(sd: *mut std::ffi::c_void) { crate::game::map_parse::chat::clif_parseemotion(sd as SD); }
 #[inline] unsafe fn clif_parsesay(sd: *mut std::ffi::c_void) { crate::game::map_parse::chat::clif_parsesay(sd as SD); }
 #[inline] unsafe fn clif_parsewisp(sd: *mut std::ffi::c_void) { crate::game::map_parse::chat::clif_parsewisp(sd as SD); }
 #[inline] unsafe fn clif_parseignore(sd: *mut std::ffi::c_void) { crate::game::map_parse::chat::clif_parseignore(sd as SD); }
-#[inline] unsafe fn clif_parsefriends(sd: *mut std::ffi::c_void, list: *const i8, len: i32) { crate::game::client::handlers::clif_parsefriends(sd as SD, list, len); }
+#[inline] async unsafe fn clif_parsefriends(sd: *mut std::ffi::c_void, list: *const i8, len: i32) { crate::game::client::handlers::clif_parsefriends(sd as SD, list, len).await; }
 #[inline] unsafe fn clif_user_list(sd: *mut std::ffi::c_void) { crate::game::client::visual::clif_user_list(sd as SD); }
 #[inline] unsafe fn clif_addgroup(sd: *mut std::ffi::c_void) { crate::game::map_parse::groups::clif_addgroup(sd as SD); }
 #[inline] unsafe fn clif_parsegetitem(sd: *mut std::ffi::c_void) { crate::game::map_parse::items::clif_parsegetitem(sd as SD); }
@@ -141,17 +141,17 @@ type SD = *mut crate::game::pc::MapSessionData;
 #[inline] unsafe fn clif_paperpopupwrite_save(sd: *mut std::ffi::c_void) { crate::game::client::visual::clif_paperpopupwrite_save(sd as SD); }
 #[inline] unsafe fn clif_parsechangespell(sd: *mut std::ffi::c_void) { crate::game::map_parse::items::clif_parsechangespell(sd as SD); }
 #[inline] unsafe fn clif_parsechangepos(sd: *mut std::ffi::c_void) { crate::game::client::handlers::clif_parsechangepos(sd as SD); }
-#[inline] unsafe fn rust_pc_warp(sd: *mut std::ffi::c_void, m: i32, x: i32, y: i32) -> i32 { crate::game::pc::rust_pc_warp(sd as SD, m, x, y) }
+#[inline] async unsafe fn rust_pc_warp(sd: *mut std::ffi::c_void, m: i32, x: i32, y: i32) -> i32 { crate::game::pc::rust_pc_warp(sd as SD, m, x, y).await }
 #[inline] unsafe fn clif_changeprofile(sd: *mut std::ffi::c_void) { crate::game::client::visual::clif_changeprofile(sd as SD); }
-#[inline] unsafe fn clif_handle_boards(sd: *mut std::ffi::c_void) { crate::game::client::handlers::clif_handle_boards(sd as SD); }
+#[inline] async unsafe fn clif_handle_boards(sd: *mut std::ffi::c_void) { crate::game::client::handlers::clif_handle_boards(sd as SD).await; }
 #[inline] unsafe fn clif_handle_powerboards(sd: *mut std::ffi::c_void) { crate::game::client::handlers::clif_handle_powerboards(sd as SD); }
 #[inline] unsafe fn clif_parseparcel(sd: *mut std::ffi::c_void) { crate::game::map_parse::groups::clif_parseparcel(sd as SD); }
-#[inline] unsafe fn clif_parseranking(sd: *mut std::ffi::c_void, fd: i32) { crate::game::map_parse::events::clif_parseranking(sd as SD, fd); }
-#[inline] unsafe fn clif_sendRewardInfo(sd: *mut std::ffi::c_void, fd: i32) { crate::game::map_parse::events::clif_sendRewardInfo(sd as SD, fd); }
-#[inline] unsafe fn clif_getReward(sd: *mut std::ffi::c_void, fd: i32) { crate::game::map_parse::events::clif_getReward(sd as SD, fd); }
+#[inline] async unsafe fn clif_parseranking(sd: *mut std::ffi::c_void, fd: i32) { crate::game::map_parse::events::clif_parseranking(sd as SD, fd).await; }
+#[inline] async unsafe fn clif_sendRewardInfo(sd: *mut std::ffi::c_void, fd: i32) { crate::game::map_parse::events::clif_sendRewardInfo(sd as SD, fd).await; }
+#[inline] async unsafe fn clif_getReward(sd: *mut std::ffi::c_void, fd: i32) { crate::game::map_parse::events::clif_getReward(sd as SD, fd).await; }
 #[inline] unsafe fn clif_sendtowns(sd: *mut std::ffi::c_void) { crate::game::map_parse::dialogs::clif_sendtowns(sd as SD); }
-#[inline] unsafe fn clif_huntertoggle(sd: *mut std::ffi::c_void) { crate::game::map_parse::groups::clif_huntertoggle(sd as SD); }
-#[inline] unsafe fn clif_sendhunternote(sd: *mut std::ffi::c_void) { crate::game::map_parse::groups::clif_sendhunternote(sd as SD); }
+#[inline] async unsafe fn clif_huntertoggle(sd: *mut std::ffi::c_void) { crate::game::map_parse::groups::clif_huntertoggle(sd as SD).await; }
+#[inline] async unsafe fn clif_sendhunternote(sd: *mut std::ffi::c_void) { crate::game::map_parse::groups::clif_sendhunternote(sd as SD).await; }
 #[inline] unsafe fn clif_sendminimap(sd: *mut std::ffi::c_void) { crate::game::map_parse::player_state::clif_sendminimap(sd as SD); }
 #[inline] unsafe fn clif_parse_exchange(sd: *mut std::ffi::c_void) { crate::game::map_parse::trading::clif_parse_exchange(sd as SD); }
 #[inline] unsafe fn send_meta(sd: *mut std::ffi::c_void) { crate::network::crypt::send_meta(sd as SD); }
@@ -681,341 +681,343 @@ unsafe fn check_dual_login(fd: i32, sd: *mut std::ffi::c_void) -> bool {
 
 /// Rust replacement for C `clif_parse(int fd)`.
 /// Registered via `rust_session_set_default_parse` at map_server startup.
-pub unsafe fn rust_clif_parse(fd: i32) -> i32 {
-    if rust_session_exists(fd) == 0 {
-        return 0;
-    }
-
-    let sd = rust_session_get_data(fd);
-
-    // EOF → disconnect and clean up
-    if rust_session_get_eof(fd) != 0 {
-        tracing::info!("[map] [parse] fd={} eof reason={} sd_null={}", fd, rust_session_get_eof(fd), sd.is_null());
-        if !sd.is_null() {
-            clif_handle_disconnect(sd);
-            clif_closeit(sd);
+pub async fn rust_clif_parse(fd: i32) -> i32 {
+    unsafe {
+        if rust_session_exists(fd) == 0 {
+            return 0;
         }
-        visual::clif_print_disconnect(fd);
-        rust_session_set_eof(fd, 1);
-        return 0;
-    }
 
-    // Validate packet header: must start with 0xAA
-    let avail = rust_session_available(fd);
-    if avail > 0 && rbyte(fd, 0) != 0xAA {
-        tracing::warn!("[map] [parse] fd={} bad header byte0={:#04X} avail={}", fd, rbyte(fd, 0), avail);
-        rust_session_set_eof(fd, 13);
-        return 0;
-    }
-    if avail < 3 { return 0; }
+        let sd = rust_session_get_data(fd);
 
-    let pkt_len = rword_be(fd, 1) as usize + 3;
-    if avail < pkt_len { return 0; }
-
-    // Pre-login: only opcode 0x10 (character accept) is allowed
-    if sd.is_null() {
-        let op = rbyte(fd, 3);
-        if op == 0x10 {
-            tracing::debug!("[map] [parse] fd={} pre-login accept op=0x10", fd);
-            clif_accept2(fd, rptr(fd, 16), rbyte(fd, 15));
-        } else {
-            tracing::debug!("[map] [parse] fd={} pre-login op={:#04X} dropped (sd not set)", fd, op);
-        }
-        rust_session_skip(fd, pkt_len);
-        return 0;
-    }
-
-    // Dual-login check
-    if check_dual_login(fd, sd) {
-        rust_session_skip(fd, pkt_len);
-        return 0;
-    }
-
-    decrypt(fd);
-
-    tracing::debug!("[map] [parse] fd={} op={:#04X} pkt_len={}", fd, rbyte(fd, 3), pkt_len);
-    match rbyte(fd, 3) {
-        0x05 => {
-            clif_parsemap(sd);
-        }
-        0x06 => {
-            clif_cancelafk(sd);
-            clif_parsewalk(sd);
-        }
-        0x07 => {
-            clif_cancelafk(sd);
-            sl_pc_set_time(sd, sl_pc_time(sd) + 1);
-            if sl_pc_time(sd) < 4 {
-                clif_parsegetitem(sd);
+        // EOF → disconnect and clean up
+        if rust_session_get_eof(fd) != 0 {
+            tracing::info!("[map] [parse] fd={} eof reason={} sd_null={}", fd, rust_session_get_eof(fd), sd.is_null());
+            if !sd.is_null() {
+                clif_handle_disconnect(sd).await;
+                clif_closeit(sd);
             }
+            visual::clif_print_disconnect(fd);
+            rust_session_set_eof(fd, 1);
+            return 0;
         }
-        0x08 => {
-            clif_cancelafk(sd);
-            clif_parsedropitem(sd);
+
+        // Validate packet header: must start with 0xAA
+        let avail = rust_session_available(fd);
+        if avail > 0 && rbyte(fd, 0) != 0xAA {
+            tracing::warn!("[map] [parse] fd={} bad header byte0={:#04X} avail={}", fd, rbyte(fd, 0), avail);
+            rust_session_set_eof(fd, 13);
+            return 0;
         }
-        0x09 => {
-            clif_cancelafk(sd);
-            clif_parselookat_2(sd);
-        }
-        0x0A => {
-            clif_cancelafk(sd);
-            clif_parselookat(sd);
-        }
-        0x0B => {
-            clif_cancelafk(sd);
-            clif_closeit(sd);
-        }
-        0x0C => {
-            clif_handle_missingobject(sd);
-        }
-        0x0D => {
-            clif_parseignore(sd);
-        }
-        0x0E => {
-            clif_cancelafk(sd);
-            if sl_pc_status_gm_level(sd) != 0 {
-                clif_parsesay(sd);
+        if avail < 3 { return 0; }
+
+        let pkt_len = rword_be(fd, 1) as usize + 3;
+        if avail < pkt_len { return 0; }
+
+        // Pre-login: only opcode 0x10 (character accept) is allowed
+        if sd.is_null() {
+            let op = rbyte(fd, 3);
+            if op == 0x10 {
+                tracing::debug!("[map] [parse] fd={} pre-login accept op=0x10", fd);
+                clif_accept2(fd, rptr(fd, 16), rbyte(fd, 15)).await;
             } else {
-                sl_pc_set_chat_timer(sd, sl_pc_chat_timer(sd) + 1);
-                if sl_pc_chat_timer(sd) < 2 && sl_pc_status_mute(sd) == 0 {
-                    clif_parsesay(sd);
+                tracing::debug!("[map] [parse] fd={} pre-login op={:#04X} dropped (sd not set)", fd, op);
+            }
+            rust_session_skip(fd, pkt_len);
+            return 0;
+        }
+
+        // Dual-login check
+        if check_dual_login(fd, sd) {
+            rust_session_skip(fd, pkt_len);
+            return 0;
+        }
+
+        decrypt(fd);
+
+        tracing::debug!("[map] [parse] fd={} op={:#04X} pkt_len={}", fd, rbyte(fd, 3), pkt_len);
+        match rbyte(fd, 3) {
+            0x05 => {
+                clif_parsemap(sd);
+            }
+            0x06 => {
+                clif_cancelafk(sd);
+                clif_parsewalk(sd);
+            }
+            0x07 => {
+                clif_cancelafk(sd);
+                sl_pc_set_time(sd, sl_pc_time(sd) + 1);
+                if sl_pc_time(sd) < 4 {
+                    clif_parsegetitem(sd);
                 }
             }
-        }
-        0x0F => {
-            clif_cancelafk(sd);
-            sl_pc_set_time(sd, sl_pc_time(sd) + 1);
-            if sl_pc_paralyzed(sd) == 0 && sl_pc_sleep(sd) == 1 {
-                if sl_pc_time(sd) < 4 {
-                    if sl_map_spell(sl_pc_bl_m(sd)) != 0 || sl_pc_status_gm_level(sd) != 0 {
-                        clif_parsemagic(sd);
-                    } else {
-                        clif_sendminitext(
-                            sd,
-                            b"That doesn't work here.\0".as_ptr() as *const i8,
-                        );
+            0x08 => {
+                clif_cancelafk(sd);
+                clif_parsedropitem(sd);
+            }
+            0x09 => {
+                clif_cancelafk(sd);
+                clif_parselookat_2(sd);
+            }
+            0x0A => {
+                clif_cancelafk(sd);
+                clif_parselookat(sd);
+            }
+            0x0B => {
+                clif_cancelafk(sd);
+                clif_closeit(sd);
+            }
+            0x0C => {
+                clif_handle_missingobject(sd);
+            }
+            0x0D => {
+                clif_parseignore(sd);
+            }
+            0x0E => {
+                clif_cancelafk(sd);
+                if sl_pc_status_gm_level(sd) != 0 {
+                    clif_parsesay(sd);
+                } else {
+                    sl_pc_set_chat_timer(sd, sl_pc_chat_timer(sd) + 1);
+                    if sl_pc_chat_timer(sd) < 2 && sl_pc_status_mute(sd) == 0 {
+                        clif_parsesay(sd);
                     }
                 }
             }
-        }
-        0x11 => {
-            clif_cancelafk(sd);
-            clif_parseside(sd);
-        }
-        0x12 => {
-            clif_cancelafk(sd);
-            clif_parsewield(sd);
-        }
-        0x13 => {
-            clif_cancelafk(sd);
-            sl_pc_set_time(sd, sl_pc_time(sd) + 1);
-            if sl_pc_attacked(sd) != 1 && sl_pc_attack_speed(sd) > 0 {
-                sl_pc_set_attacked(sd, 1);
-                let spd = sl_pc_attack_speed(sd);
-                let delay = ((spd * 1000) / 60) as u32;
-                timer_insert(
-                    delay, delay, Some(rust_pc_atkspeed), sl_pc_status_id(sd), 0,
-                );
-                clif_parseattack(sd);
+            0x0F => {
+                clif_cancelafk(sd);
+                sl_pc_set_time(sd, sl_pc_time(sd) + 1);
+                if sl_pc_paralyzed(sd) == 0 && sl_pc_sleep(sd) == 1 {
+                    if sl_pc_time(sd) < 4 {
+                        if sl_map_spell(sl_pc_bl_m(sd)) != 0 || sl_pc_status_gm_level(sd) != 0 {
+                            clif_parsemagic(sd);
+                        } else {
+                            clif_sendminitext(
+                                sd,
+                                b"That doesn't work here.\0".as_ptr() as *const i8,
+                            );
+                        }
+                    }
+                }
             }
-        }
-        0x17 => {
-            clif_cancelafk(sd);
-            let pos = rbyte(fd, 6) as i32;
-            let confirm = rbyte(fd, 5);
-            if rust_itemdb_thrownconfirm(sl_pc_inventory_id(sd, pos - 1)) == 1 {
-                if confirm == 1 { clif_parsethrow(sd); } else { clif_throwconfirm(sd); }
-            } else {
-                clif_parsethrow(sd);
+            0x11 => {
+                clif_cancelafk(sd);
+                clif_parseside(sd);
             }
-        }
-        0x18 => {
-            clif_cancelafk(sd);
-            clif_user_list(sd);
-        }
-        0x19 => {
-            clif_cancelafk(sd);
-            clif_parsewisp(sd);
-        }
-        0x1A => {
-            clif_cancelafk(sd);
-            clif_parseeatitem(sd);
-        }
-        0x1B => {
-            if sl_pc_loaded(sd) != 0 {
-                clif_changestatus(sd, rbyte(fd, 6));
-            }
-        }
-        0x1C => {
-            clif_cancelafk(sd);
-            clif_parseuseitem(sd);
-        }
-        0x1D => {
-            clif_cancelafk(sd);
-            sl_pc_set_time(sd, sl_pc_time(sd) + 1);
-            if sl_pc_time(sd) < 4 {
-                clif_parseemotion(sd);
-            }
-        }
-        0x1E => {
-            clif_cancelafk(sd);
-            sl_pc_set_time(sd, sl_pc_time(sd) + 1);
-            if sl_pc_time(sd) < 4 {
+            0x12 => {
+                clif_cancelafk(sd);
                 clif_parsewield(sd);
             }
-        }
-        0x1F => {
-            clif_cancelafk(sd);
-            if sl_pc_time(sd) < 4 {
-                clif_parseunequip(sd);
+            0x13 => {
+                clif_cancelafk(sd);
+                sl_pc_set_time(sd, sl_pc_time(sd) + 1);
+                if sl_pc_attacked(sd) != 1 && sl_pc_attack_speed(sd) > 0 {
+                    sl_pc_set_attacked(sd, 1);
+                    let spd = sl_pc_attack_speed(sd);
+                    let delay = ((spd * 1000) / 60) as u32;
+                    timer_insert(
+                        delay, delay, Some(rust_pc_atkspeed), sl_pc_status_id(sd), 0,
+                    );
+                    clif_parseattack(sd);
+                }
+            }
+            0x17 => {
+                clif_cancelafk(sd);
+                let pos = rbyte(fd, 6) as i32;
+                let confirm = rbyte(fd, 5);
+                if rust_itemdb_thrownconfirm(sl_pc_inventory_id(sd, pos - 1)) == 1 {
+                    if confirm == 1 { clif_parsethrow(sd); } else { clif_throwconfirm(sd); }
+                } else {
+                    clif_parsethrow(sd);
+                }
+            }
+            0x18 => {
+                clif_cancelafk(sd);
+                clif_user_list(sd);
+            }
+            0x19 => {
+                clif_cancelafk(sd);
+                clif_parsewisp(sd);
+            }
+            0x1A => {
+                clif_cancelafk(sd);
+                clif_parseeatitem(sd);
+            }
+            0x1B => {
+                if sl_pc_loaded(sd) != 0 {
+                    clif_changestatus(sd, rbyte(fd, 6));
+                }
+            }
+            0x1C => {
+                clif_cancelafk(sd);
+                clif_parseuseitem(sd);
+            }
+            0x1D => {
+                clif_cancelafk(sd);
+                sl_pc_set_time(sd, sl_pc_time(sd) + 1);
+                if sl_pc_time(sd) < 4 {
+                    clif_parseemotion(sd);
+                }
+            }
+            0x1E => {
+                clif_cancelafk(sd);
+                sl_pc_set_time(sd, sl_pc_time(sd) + 1);
+                if sl_pc_time(sd) < 4 {
+                    clif_parsewield(sd);
+                }
+            }
+            0x1F => {
+                clif_cancelafk(sd);
+                if sl_pc_time(sd) < 4 {
+                    clif_parseunequip(sd);
+                }
+            }
+            0x20 => {
+                clif_cancelafk(sd);
+                clif_open_sub(sd);
+            }
+            0x23 => {
+                clif_paperpopupwrite_save(sd);
+            }
+            0x24 => {
+                clif_cancelafk(sd);
+                clif_dropgold(sd, rlong_be(fd, 5));
+            }
+            0x27 => {
+                clif_cancelafk(sd);
+                // Quest tab — no-op
+            }
+            0x29 => {
+                clif_cancelafk(sd);
+                clif_handitem(sd);
+            }
+            0x2A => {
+                clif_cancelafk(sd);
+                clif_handgold(sd);
+            }
+            0x2D => {
+                clif_cancelafk(sd);
+                if rbyte(fd, 5) == 0 { clif_mystaytus(sd).await; } else { clif_groupstatus(sd); }
+            }
+            0x2E => {
+                clif_cancelafk(sd);
+                clif_addgroup(sd);
+            }
+            0x30 => {
+                clif_cancelafk(sd);
+                if rbyte(fd, 5) == 1 { clif_parsechangespell(sd); } else { clif_parsechangepos(sd); }
+            }
+            0x32 => {
+                clif_cancelafk(sd);
+                clif_parsewalk(sd);
+            }
+            // 0x34 falls through to 0x38 in C — both fire
+            0x34 => {
+                clif_cancelafk(sd);
+                clif_postitem(sd);
+                clif_cancelafk(sd);
+                clif_refresh(sd);
+            }
+            0x38 => {
+                clif_cancelafk(sd);
+                clif_refresh(sd);
+            }
+            0x39 => {
+                clif_cancelafk(sd);
+                clif_handle_menuinput(sd);
+            }
+            0x3A => {
+                clif_cancelafk(sd);
+                clif_parsenpcdialog(sd);
+            }
+            0x3B => {
+                clif_cancelafk(sd);
+                clif_handle_boards(sd).await;
+            }
+            0x3F => {
+                rust_pc_warp(sd, rword_be(fd, 5) as i32, rword_be(fd, 7) as i32, rword_be(fd, 9) as i32).await;
+            }
+            0x41 => {
+                clif_cancelafk(sd);
+                clif_parseparcel(sd);
+            }
+            0x42 => { /* Client crash debug — no-op */ }
+            0x43 => {
+                clif_cancelafk(sd);
+                clif_handle_clickgetinfo(sd).await;
+            }
+            0x4A => {
+                clif_cancelafk(sd);
+                clif_parse_exchange(sd);
+            }
+            0x4C => {
+                clif_cancelafk(sd);
+                clif_handle_powerboards(sd);
+            }
+            0x4F => {
+                clif_cancelafk(sd);
+                clif_changeprofile(sd);
+            }
+            0x60 => { /* PING — no-op */ }
+            0x66 => {
+                clif_cancelafk(sd);
+                clif_sendtowns(sd);
+            }
+            0x69 => { /* Obstruction — no-op */ }
+            0x6B => {
+                clif_cancelafk(sd);
+                createdb_start(sd);
+            }
+            0x73 => {
+                if rbyte(fd, 5) == 0x04 {
+                    clif_sendprofile(sd);
+                } else if rbyte(fd, 5) == 0x00 {
+                    clif_sendboard(sd);
+                }
+            }
+            0x75 => {
+                clif_parsewalkpong(sd);
+            }
+            0x77 => {
+                clif_cancelafk(sd);
+                let friends_len = rword_be(fd, 1) as i32 - 5;
+                clif_parsefriends(sd, rptr(fd, 5), friends_len).await;
+            }
+            0x7B => match rbyte(fd, 5) {
+                0 => send_meta(sd),
+                1 => send_metalist(sd),
+                _ => {}
+            },
+            0x7C => {
+                clif_cancelafk(sd);
+                clif_sendminimap(sd);
+            }
+            0x7D => {
+                clif_cancelafk(sd);
+                match rbyte(fd, 5) {
+                    5 => clif_sendRewardInfo(sd, fd).await,
+                    6 => clif_getReward(sd, fd).await,
+                    _ => clif_parseranking(sd, fd).await,
+                }
+            }
+            0x82 => {
+                clif_cancelafk(sd);
+                clif_parseviewchange(sd);
+            }
+            0x83 => { /* Screenshots — no-op */ }
+            0x84 => {
+                clif_cancelafk(sd);
+                clif_huntertoggle(sd).await;
+            }
+            0x85 => {
+                clif_sendhunternote(sd).await;
+                clif_cancelafk(sd);
+            }
+            op => {
+                tracing::warn!("[map] [client] unknown packet op={:#04X}", op);
             }
         }
-        0x20 => {
-            clif_cancelafk(sd);
-            clif_open_sub(sd);
-        }
-        0x23 => {
-            clif_paperpopupwrite_save(sd);
-        }
-        0x24 => {
-            clif_cancelafk(sd);
-            clif_dropgold(sd, rlong_be(fd, 5));
-        }
-        0x27 => {
-            clif_cancelafk(sd);
-            // Quest tab — no-op
-        }
-        0x29 => {
-            clif_cancelafk(sd);
-            clif_handitem(sd);
-        }
-        0x2A => {
-            clif_cancelafk(sd);
-            clif_handgold(sd);
-        }
-        0x2D => {
-            clif_cancelafk(sd);
-            if rbyte(fd, 5) == 0 { clif_mystaytus(sd); } else { clif_groupstatus(sd); }
-        }
-        0x2E => {
-            clif_cancelafk(sd);
-            clif_addgroup(sd);
-        }
-        0x30 => {
-            clif_cancelafk(sd);
-            if rbyte(fd, 5) == 1 { clif_parsechangespell(sd); } else { clif_parsechangepos(sd); }
-        }
-        0x32 => {
-            clif_cancelafk(sd);
-            clif_parsewalk(sd);
-        }
-        // 0x34 falls through to 0x38 in C — both fire
-        0x34 => {
-            clif_cancelafk(sd);
-            clif_postitem(sd);
-            clif_cancelafk(sd);
-            clif_refresh(sd);
-        }
-        0x38 => {
-            clif_cancelafk(sd);
-            clif_refresh(sd);
-        }
-        0x39 => {
-            clif_cancelafk(sd);
-            clif_handle_menuinput(sd);
-        }
-        0x3A => {
-            clif_cancelafk(sd);
-            clif_parsenpcdialog(sd);
-        }
-        0x3B => {
-            clif_cancelafk(sd);
-            clif_handle_boards(sd);
-        }
-        0x3F => {
-            rust_pc_warp(sd, rword_be(fd, 5) as i32, rword_be(fd, 7) as i32, rword_be(fd, 9) as i32);
-        }
-        0x41 => {
-            clif_cancelafk(sd);
-            clif_parseparcel(sd);
-        }
-        0x42 => { /* Client crash debug — no-op */ }
-        0x43 => {
-            clif_cancelafk(sd);
-            clif_handle_clickgetinfo(sd);
-        }
-        0x4A => {
-            clif_cancelafk(sd);
-            clif_parse_exchange(sd);
-        }
-        0x4C => {
-            clif_cancelafk(sd);
-            clif_handle_powerboards(sd);
-        }
-        0x4F => {
-            clif_cancelafk(sd);
-            clif_changeprofile(sd);
-        }
-        0x60 => { /* PING — no-op */ }
-        0x66 => {
-            clif_cancelafk(sd);
-            clif_sendtowns(sd);
-        }
-        0x69 => { /* Obstruction — no-op */ }
-        0x6B => {
-            clif_cancelafk(sd);
-            createdb_start(sd);
-        }
-        0x73 => {
-            if rbyte(fd, 5) == 0x04 {
-                clif_sendprofile(sd);
-            } else if rbyte(fd, 5) == 0x00 {
-                clif_sendboard(sd);
-            }
-        }
-        0x75 => {
-            clif_parsewalkpong(sd);
-        }
-        0x77 => {
-            clif_cancelafk(sd);
-            let friends_len = rword_be(fd, 1) as i32 - 5;
-            clif_parsefriends(sd, rptr(fd, 5), friends_len);
-        }
-        0x7B => match rbyte(fd, 5) {
-            0 => send_meta(sd),
-            1 => send_metalist(sd),
-            _ => {}
-        },
-        0x7C => {
-            clif_cancelafk(sd);
-            clif_sendminimap(sd);
-        }
-        0x7D => {
-            clif_cancelafk(sd);
-            match rbyte(fd, 5) {
-                5 => clif_sendRewardInfo(sd, fd),
-                6 => clif_getReward(sd, fd),
-                _ => clif_parseranking(sd, fd),
-            }
-        }
-        0x82 => {
-            clif_cancelafk(sd);
-            clif_parseviewchange(sd);
-        }
-        0x83 => { /* Screenshots — no-op */ }
-        0x84 => {
-            clif_cancelafk(sd);
-            clif_huntertoggle(sd);
-        }
-        0x85 => {
-            clif_sendhunternote(sd);
-            clif_cancelafk(sd);
-        }
-        op => {
-            tracing::warn!("[map] [client] unknown packet op={:#04X}", op);
-        }
-    }
 
-    rust_session_skip(fd, pkt_len);
-    0
+        rust_session_skip(fd, pkt_len);
+        0
+    }
 }

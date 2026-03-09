@@ -3,7 +3,6 @@ use sqlx::mysql::MySqlPoolOptions;
 use std::ffi::CString;
 use std::sync::Arc;
 use yuri::config::ServerConfig;
-use yuri::game::client::rust_clif_parse;
 use yuri::game::block::map_initblock;
 use yuri::game::map_server::map_initiddb;
 use yuri::game::npc::{npc_init, warp_init};
@@ -140,7 +139,11 @@ async fn main() -> Result<()> {
                 rust_itemdb_init();
                 rust_recipedb_init();
                 rust_mobdb_init();
-                rust_mobspawn_read();
+                // rust_mobspawn_read is now async; drive it to completion from
+                // within spawn_blocking using block_in_place (safe: not in LocalSet).
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(rust_mobspawn_read())
+                });
                 rust_magicdb_init();
                 let data_dir_c = CString::new(data_dir.as_str()).unwrap();
                 rust_classdb_init(data_dir_c.as_ptr());
@@ -148,8 +151,16 @@ async fn main() -> Result<()> {
                 rust_boarddb_init();
                 yuri::game::map_server::object_flag_init();
                 rust_sl_init();
-                map_loadgameregistry();
-                rust_session_set_default_parse(rust_clif_parse);
+                // map_loadgameregistry is now async; drive it to completion from
+                // within spawn_blocking using block_in_place (safe: not in LocalSet).
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(map_loadgameregistry())
+                });
+                rust_session_set_default_parse(
+                    std::sync::Arc::new(|fd: i32| -> yuri::session::CallbackFuture {
+                        Box::pin(yuri::game::client::rust_clif_parse(fd))
+                    })
+                );
                 rust_session_set_default_timeout(clif_timeout);
                 rust_make_listen_port(map_port as i32);
 

@@ -135,7 +135,7 @@ use crate::game::map_parse::visual::{
 };
 use crate::game::map_parse::player_state::{clif_sendxy, clif_sendstatus};
 use crate::game::map_parse::chat::clif_sendminitext;
-use crate::game::pc::{rust_pc_warp as pc_warp, rust_pc_isequip as pc_isequip};
+use crate::game::pc::{rust_pc_warp_sync as pc_warp, rust_pc_isequip as pc_isequip};
 use crate::game::map_parse::groups::{clif_isingroup, clif_canmove_sub_inner};
 use crate::game::time_util::gettick;
 use crate::database::item_db::{

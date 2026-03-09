@@ -1282,6 +1282,28 @@ pub unsafe fn rust_pc_sendpong(id: i32, _none: i32) -> i32 {
 /// FLAG_MAIL / FLAG_PARCEL bits on `sd->flags`.
 ///
 #[cfg(not(test))]
+async fn check_new_mail(char_name: String) -> bool {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM `Mail` WHERE `MalNew` = 1 AND `MalChaNameDestination` = ?"
+    )
+    .bind(char_name)
+    .fetch_one(crate::database::get_pool())
+    .await
+    .unwrap_or(0) > 0
+}
+
+#[cfg(not(test))]
+async fn check_pending_parcels(char_id: u32) -> bool {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM `Parcels` WHERE `ParChaIdDestination` = ?"
+    )
+    .bind(char_id)
+    .fetch_one(crate::database::get_pool())
+    .await
+    .unwrap_or(0) > 0
+}
+
+#[cfg(not(test))]
 pub unsafe fn rust_pc_requestmp(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
@@ -1291,29 +1313,18 @@ pub unsafe fn rust_pc_requestmp(sd: *mut MapSessionData) -> i32 {
         .to_str().unwrap_or("").to_owned();
     let char_id = (*sd).status.id;
 
-    // Check for new mail
-    let has_mail = crate::database::blocking_run_async(async move {
-        sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM `Mail` WHERE `MalNew` = 1 AND `MalChaNameDestination` = ?"
-        )
-        .bind(char_name)
-        .fetch_one(crate::database::get_pool())
-        .await
-        .unwrap_or(0)
-    }) > 0;
-    if has_mail { (*sd).flags |= FLAG_MAIL; }
-
-    // Check for pending parcels
-    let has_parcel = crate::database::blocking_run_async(async move {
-        sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM `Parcels` WHERE `ParChaIdDestination` = ?"
-        )
-        .bind(char_id)
-        .fetch_one(crate::database::get_pool())
-        .await
-        .unwrap_or(0)
-    }) > 0;
-    if has_parcel { (*sd).flags |= FLAG_PARCEL; }
+    // EXEMPT from async conversion: this function is called from sync contexts
+    // (timer callback rust_pc_timer, Lua sl_pc_sendstatus, and the login sequence
+    // intif_mmo_tosd). The flags must be set before clif_sendstatus writes them
+    // into the login packet, so fire-and-forget is not safe here. Converting to
+    // native async would require cascading intif_mmo_tosd → async, which is a
+    // large refactor deferred to a later task.
+    if crate::database::blocking_run_async(check_new_mail(char_name)) {
+        (*sd).flags |= FLAG_MAIL;
+    }
+    if crate::database::blocking_run_async(check_pending_parcels(char_id)) {
+        (*sd).flags |= FLAG_PARCEL;
+    }
 
     0
 }
@@ -3671,7 +3682,20 @@ pub unsafe fn rust_pc_setpos(
 /// pre-warp Lua hooks, calls `clif_quit` / `pc_setpos` / `clif_spawn` /
 /// `clif_refresh`, then fires post-warp Lua hooks.
 #[cfg(not(test))]
-pub unsafe fn rust_pc_warp(
+async fn lookup_map_server(map_id: i32) -> Option<u32> {
+    sqlx::query_scalar::<_, Option<u32>>(
+        "SELECT `MapServer` FROM `Maps` WHERE `MapId` = ?"
+    )
+    .bind(map_id)
+    .fetch_optional(crate::database::get_pool())
+    .await
+    .ok()
+    .flatten()
+    .flatten()
+}
+
+#[cfg(not(test))]
+pub async unsafe fn rust_pc_warp(
     sd: *mut MapSessionData,
     mut m: i32,
     mut x: i32,
@@ -3694,18 +3718,7 @@ pub unsafe fn rust_pc_warp(
             return 0;
         }
 
-        let map_id = m;
-        let destsrv = crate::database::blocking_run_async(async move {
-            sqlx::query_scalar::<_, Option<u32>>(
-                "SELECT `MapServer` FROM `Maps` WHERE `MapId` = ?"
-            )
-            .bind(map_id)
-            .fetch_optional(crate::database::get_pool())
-            .await
-            .ok()
-            .flatten()
-            .flatten()
-        });
+        let destsrv = lookup_map_server(m).await;
 
         let destsrv = match destsrv {
             Some(srv) => srv as i32,
@@ -3985,6 +3998,17 @@ pub unsafe fn rust_pc_diescript(sd: *mut MapSessionData) -> i32 {
     0
 }
 
+/// Sync bridge for Lua/FFI callers that cannot `.await`.
+/// SAFETY: MapSessionData: Send; blocking_run_async joins before returning.
+#[cfg(not(test))]
+pub unsafe fn rust_pc_warp_sync(sd: *mut MapSessionData, m: i32, x: i32, y: i32) -> i32 {
+    let sd_usize = sd as usize;
+    crate::database::blocking_run_async(crate::database::assert_send(async move {
+        let sd = sd_usize as *mut MapSessionData;
+        rust_pc_warp(sd, m, x, y).await
+    }))
+}
+
 /// `int pc_res(USER* sd)` — resurrects the player in-place.
 ///
 /// Sets state to alive, restores 100 HP, sends an HP/MP status update, and
@@ -3995,7 +4019,7 @@ pub unsafe fn rust_pc_res(sd: *mut MapSessionData) -> i32 {
     (*sd).status.state = PC_ALIVE as i8;
     (*sd).status.hp    = 100;
     clif_sendstatus(sd, SFLAG_HPMP);
-    rust_pc_warp(sd, (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32);
+    rust_pc_warp_sync(sd, (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32);
     0
 }
 

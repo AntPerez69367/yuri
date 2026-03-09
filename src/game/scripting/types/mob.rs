@@ -149,9 +149,11 @@ impl UserData for MobObject {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
-                            unsafe {
-                                sl_mob_addhealth(ptr as *mut MobSpawnData, damage);
-                            }
+                            let ptr_usize = ptr as usize;
+                            // Fire-and-forget from LocalSet: spawn_local avoids Send requirement.
+                            tokio::task::spawn_local(async move {
+                                unsafe { sl_mob_addhealth(ptr_usize as *mut MobSpawnData, damage).await; }
+                            });
                             Ok(())
                         },
                     )?))
@@ -163,9 +165,10 @@ impl UserData for MobObject {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
-                            unsafe {
-                                sl_mob_removehealth(ptr as *mut MobSpawnData, damage, caster_id);
-                            }
+                            let ptr_usize = ptr as usize;
+                            tokio::task::spawn_local(async move {
+                                unsafe { sl_mob_removehealth(ptr_usize as *mut MobSpawnData, damage, caster_id).await; }
+                            });
                             Ok(())
                         },
                     )?))
@@ -251,9 +254,10 @@ impl UserData for MobObject {
                                 2 => 255,
                                 c => c,
                             };
-                            unsafe {
-                                clif_send_mob_healthscript(ptr as *mut MobSpawnData, damage, crit);
-                            }
+                            let ptr_usize = ptr as usize;
+                            tokio::task::spawn_local(async move {
+                                unsafe { clif_send_mob_healthscript(ptr_usize as *mut MobSpawnData, damage, crit).await; }
+                            });
                             Ok(())
                         },
                     )?))

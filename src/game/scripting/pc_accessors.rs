@@ -278,7 +278,7 @@ use crate::game::map_parse::combat::{
     clif_parseattack,
 };
 use crate::game::map_parse::player_state::{
-    clif_sendstatus, clif_sendminimap, clif_sendxychange, clif_mystaytus,
+    clif_sendstatus, clif_sendminimap, clif_sendxychange,
 };
 use crate::game::client::visual::{clif_sendupdatestatus_onequip, clif_sendurl};
 use crate::game::scripting::rust_sl_async_freeco as sl_async_freeco;
@@ -286,7 +286,7 @@ use crate::game::map_char::intif_save_impl::rust_sl_intif_save as sl_intif_save;
 use crate::game::pc::{
     rust_pc_diescript as pc_diescript, rust_pc_res as pc_res,
     rust_pc_calcstat as pc_calcstat, rust_pc_requestmp as pc_requestmp,
-    rust_pc_warp as pc_warp, rust_pc_setpos as pc_setpos,
+    rust_pc_warp_sync as pc_warp, rust_pc_setpos as pc_setpos,
     rust_pc_getitemscript as pc_getitemscript, rust_pc_loaditem as pc_loaditem,
     rust_pc_equipscript as pc_equipscript, rust_pc_unequipscript as pc_unequipscript,
     rust_pc_loadmagic as pc_loadmagic, rust_pc_checklevel as pc_checklevel,
@@ -306,7 +306,7 @@ use crate::game::map_parse::dialogs::clif_send_timer;
 // map lookups — use typed versions
 use crate::game::mob::map_id2bl;
 use crate::database::magic_db::{rust_magicdb_id as magicdb_id, rust_magicdb_name as magicdb_name, rust_magicdb_yname as magicdb_yname};
-use crate::game::client::handlers::{clif_isregistered, clif_getaccountemail};
+use crate::game::client::handlers::{clif_isregistered_sync as clif_isregistered, clif_getaccountemail_sync as clif_getaccountemail};
 use crate::database::clan_db::rust_clandb_name as clandb_name_ffi;
 use crate::database::class_db::{rust_classdb_path as classdb_path_ffi, rust_classdb_name as classdb_name_ffi};
 
@@ -701,7 +701,9 @@ pub unsafe fn sl_pc_sendstatus(sd: *mut std::ffi::c_void) {
 }
 
 pub unsafe fn sl_pc_status(sd: *mut std::ffi::c_void) -> i32 {
-    clif_mystaytus(sd as *mut MapSessionData)
+    crate::database::blocking_run_async(
+        crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as usize)
+    )
 }
 
 pub unsafe fn sl_pc_warp(sd: *mut std::ffi::c_void, m: i32, x: i32, y: i32) {
@@ -768,7 +770,9 @@ pub unsafe fn sl_pc_minirefresh(sd: *mut std::ffi::c_void) {
 
 pub unsafe fn sl_pc_refreshinventory(sd: *mut std::ffi::c_void) {
     let sd = sd as *mut MapSessionData;
-    for i in 0..MAX_INVENTORY as i32 { clif_sendadditem(sd, i); }
+    for i in 0..MAX_INVENTORY as i32 {
+        clif_sendadditem(sd, i);
+    }
 }
 
 pub unsafe fn sl_pc_updateinv(sd: *mut std::ffi::c_void) {

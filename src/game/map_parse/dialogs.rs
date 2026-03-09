@@ -945,7 +945,7 @@ pub unsafe fn clif_inputseq(
 const FLOOR: i32 = 1;
 
 /// Handle a click/getinfo request from the client.  Mirrors
-pub unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
+pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
     let fd = (*sd).fd;
 
     let bl: *mut BlockList = if rfifol(fd, 6) == 0 {
@@ -990,7 +990,7 @@ pub unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
                 }
             }
         }
-        clif_clickonplayer(sd, bl);
+        clif_clickonplayer(sd, bl).await;
     } else if bl_type == BL_NPC {
         let nd = bl as *mut NpcData;
         let mut radius = 10i32;
