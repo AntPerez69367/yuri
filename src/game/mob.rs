@@ -221,8 +221,6 @@ use crate::database::mob_db::{rust_mobdb_experience as mobdb_experience, rust_mo
 use crate::game::time_util::gettick;
 #[cfg(not(test))]
 use crate::game::map_server::cur_time;
-#[cfg(not(test))]
-use crate::config_globals::serverid;
 
 // groups[256][256] flat array — defined in map_server.rs as 
 #[cfg(not(test))]
@@ -430,7 +428,7 @@ async fn mobspawn_fetch(serverid_val: i32) -> Result<Vec<sqlx::mysql::MySqlRow>,
 
 #[cfg(not(test))]
 pub async unsafe fn mobspawn_read() -> i32 {
-    let serverid_val = serverid;
+    let serverid_val = crate::config_globals::global_config().serverid;
     let result = mobspawn_fetch(serverid_val).await;
 
     let rows = match result {
@@ -1700,6 +1698,7 @@ pub unsafe fn rust_mob_addtocurrent_inner(bl: *mut BlockList, def: *mut i32, _id
 /// Drop an item onto the ground at (m, x, y).
 /// Reads `attacker->group_count` and `groups[]` to populate floor-item looters.
 #[cfg(not(test))]
+#[allow(static_mut_refs)]
 pub unsafe fn rust_mob_dropitem(
     blockid: u32,
     id: u32,

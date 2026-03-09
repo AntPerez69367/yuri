@@ -10,7 +10,7 @@ pub const BL_ITEM: i32 = 0x08;
 pub const BL_ALL:  i32 = 0x0F;
 
 // ─── Globals ──────────────────────────────────────────────────────────────────
-pub use crate::config_globals::serverid;
+pub fn serverid() -> i32 { crate::config_globals::global_config().serverid }
 // Time globals are now AtomicI32; expose them directly (callers use .load()).
 pub use crate::game::map_server::{cur_year, cur_season, cur_day, cur_time};
 

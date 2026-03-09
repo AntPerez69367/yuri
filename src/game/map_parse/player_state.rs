@@ -7,7 +7,7 @@
 use std::ptr;
 
 use crate::database::map_db::BlockList;
-use crate::database::map_db::map;
+use crate::database::map_db::raw_map_ptr;
 use crate::session::{
     rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr,
 };
@@ -35,6 +35,7 @@ const BL_ALL:  i32 = 0x0F;  // all block-list types
 /// `rep` (NUL-terminated).  Uses a 4096-byte module-local static buffer —
 
 /// Not thread-safe (single-threaded map server loop).
+#[allow(static_mut_refs)]
 unsafe fn replace_str_local(src: *const i8, orig: &[u8], rep: *const i8) -> *const i8 {
     let orig_bytes = match orig.iter().position(|&b| b == 0) {
         Some(n) => &orig[..n],
@@ -251,7 +252,7 @@ pub unsafe fn clif_sendmapinfo(sd: *mut MapSessionData) -> i32 {
 
     // Safety: map[] is initialised by rust_map_init before any player can reach
     // Accessing map[sd->bl.m]:
-    let md = &*map.add(m);
+    let md = &*raw_map_ptr().add(m);
 
     // ── Packet 1: map header ─────────────────────────────────────────────────
     // Total payload length = 18 + len(title)
@@ -332,7 +333,7 @@ pub unsafe fn clif_sendxy(sd: *mut MapSessionData) -> i32 {
     }
     let fd = (*sd).fd;
     let m  = (*sd).bl.m as usize;
-    let md = &*map.add(m);
+    let md = &*raw_map_ptr().add(m);
     let x  = (*sd).bl.x as i32;
     let y  = (*sd).bl.y as i32;
 
@@ -393,7 +394,7 @@ pub unsafe fn clif_sendxynoclick(sd: *mut MapSessionData) -> i32 {
     }
     let fd = (*sd).fd;
     let m  = (*sd).bl.m as usize;
-    let md = &*map.add(m);
+    let md = &*raw_map_ptr().add(m);
     let x  = (*sd).bl.x as i32;
     let y  = (*sd).bl.y as i32;
 
@@ -444,7 +445,7 @@ pub unsafe fn clif_sendxychange(sd: *mut MapSessionData, dx: i32, dy: i32) -> i3
     }
     let fd  = (*sd).fd;
     let m   = (*sd).bl.m as usize;
-    let md  = &*map.add(m);
+    let md  = &*raw_map_ptr().add(m);
     let bx  = (*sd).bl.x as i32;
     let by  = (*sd).bl.y as i32;
 
@@ -970,7 +971,7 @@ pub unsafe fn clif_refresh(sd: *mut MapSessionData) -> i32 {
 
     // Enforce canGroup map restriction.
     let m = (*sd).bl.m as usize;
-    let can_group = (*map.add(m)).can_group;
+    let can_group = (*raw_map_ptr().add(m)).can_group;
     if can_group == 0 {
         let sf = (*sd).status.setting_flags as u32;
         // XOR toggles the flag.

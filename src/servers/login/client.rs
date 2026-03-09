@@ -329,7 +329,7 @@ async fn forward_to_char(
 
     let sent = {
         let tx_guard = state.char_tx.lock().await;
-        let has_char = tx_guard.is_some();
+        let _has_char = tx_guard.is_some();
         if let Some(tx) = &*tx_guard {
             tx.send(msg).await.is_ok()
         } else {

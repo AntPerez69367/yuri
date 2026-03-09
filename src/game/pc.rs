@@ -644,7 +644,7 @@ pub unsafe fn rust_pc_item_timer(id: i32, _none: i32) -> i32 {
 pub unsafe fn rust_pc_savetimer(id: i32, _none: i32) -> i32 {
     let sd = map_id2sd_pc(id as u32);
     if !sd.is_null() {
-        sl_pc_forcesave(sd as *mut std::ffi::c_void);
+        sl_pc_forcesave(sd);
     }
     0
 }
@@ -1143,6 +1143,7 @@ pub unsafe fn rust_pc_timer(id: i32, _none: i32) -> i32 {
 /// `int pc_scripttimer(int id, int none)` — 500ms script tick: updates UI bars,
 /// fires die script on death, fires Lua `pc_timer` tick/advice hooks.
 #[cfg(not(test))]
+#[allow(static_mut_refs)]
 pub unsafe fn rust_pc_scripttimer(id: i32, _none: i32) -> i32 {
     let sd = map_id2sd_pc(id as u32);
     if sd.is_null() { return 1; }

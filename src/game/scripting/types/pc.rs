@@ -14,7 +14,7 @@ use crate::game::scripting::types::registry::{
 use crate::game::scripting::types::shared;
 
 pub struct PcObject {
-    pub ptr: *mut std::ffi::c_void,
+    pub ptr: *mut crate::game::pc::MapSessionData,
 }
 unsafe impl Send for PcObject {}
 
@@ -95,6 +95,7 @@ impl UserData for PcObject {
             if sd.is_null() {
                 return Ok(mlua::Value::Nil);
             }
+            let sd_void = sd as *mut std::ffi::c_void;
             macro_rules! int_ {
                 ($f:expr) => {
                     Ok(mlua::Value::Integer(unsafe { $f(sd) } as i64))
@@ -339,11 +340,11 @@ impl UserData for PcObject {
                 // Alias: docs use "ac", implementation uses "armor"
                 "ac"              => int_!(sl_pc_armor),
                 // Registry sub-objects — mirroring pcl_init from scripting.c.
-                "registry" => return lua.pack(RegObject { ptr: sd }),
-                "registryString" => return lua.pack(RegStringObject { ptr: sd }),
-                "quest" => return lua.pack(QuestRegObject { ptr: sd }),
-                "npc" => return lua.pack(NpcRegObject { ptr: sd }),
-                "mapRegistry" => return lua.pack(MapRegObject { ptr: sd }),
+                "registry" => return lua.pack(RegObject { ptr: sd as *mut std::ffi::c_void }),
+                "registryString" => return lua.pack(RegStringObject { ptr: sd as *mut std::ffi::c_void }),
+                "quest" => return lua.pack(QuestRegObject { ptr: sd as *mut std::ffi::c_void }),
+                "npc" => return lua.pack(NpcRegObject { ptr: sd as *mut std::ffi::c_void }),
+                "mapRegistry" => return lua.pack(MapRegObject { ptr: sd as *mut std::ffi::c_void }),
                 "gameRegistry" => {
                     return lua.pack(GameRegObject {
                         ptr: std::ptr::null_mut(),
@@ -379,7 +380,7 @@ impl UserData for PcObject {
                 }
                 "getObjectsInArea" | "getAliveObjectsInArea"
                 | "getObjectsInSameMap" | "getAliveObjectsInSameMap" => {
-                    return shared::make_area_query_fn(lua, key.as_str(), sd)
+                    return shared::make_area_query_fn(lua, key.as_str(), sd_void)
                 }
                 "getPK" => {
                     return Ok(mlua::Value::Function(lua.create_function(
@@ -393,28 +394,28 @@ impl UserData for PcObject {
                     )?));
                 }
                 "getObjectsInMap" => return shared::make_map_query_fn(lua),
-                "sendAnimation"     => return shared::make_sendanimation_fn(lua, sd),
-                "playSound"         => return shared::make_playsound_fn(lua, sd),
-                "sendAction"        => return shared::make_sendaction_fn(lua, sd),
-                "msg"               => return shared::make_msg_fn(lua, sd),
-                "dropItem"          => return shared::make_dropitem_fn(lua, sd),
-                "dropItemXY"        => return shared::make_dropitemxy_fn(lua, sd),
-                "objectCanMove"     => return shared::make_objectcanmove_fn(lua, sd),
-                "objectCanMoveFrom" => return shared::make_objectcanmovefrom_fn(lua, sd),
-                "repeatAnimation"   => return shared::make_repeatanimation_fn(lua, sd),
-                "selfAnimation"     => return shared::make_selfanimation_fn(lua, sd),
-                "selfAnimationXY"   => return shared::make_selfanimationxy_fn(lua, sd),
-                "sendParcel"        => return shared::make_sendparcel_fn(lua, sd),
-                "throw"             => return shared::make_throwblock_fn(lua, sd),
+                "sendAnimation"     => return shared::make_sendanimation_fn(lua, sd_void),
+                "playSound"         => return shared::make_playsound_fn(lua, sd_void),
+                "sendAction"        => return shared::make_sendaction_fn(lua, sd_void),
+                "msg"               => return shared::make_msg_fn(lua, sd_void),
+                "dropItem"          => return shared::make_dropitem_fn(lua, sd_void),
+                "dropItemXY"        => return shared::make_dropitemxy_fn(lua, sd_void),
+                "objectCanMove"     => return shared::make_objectcanmove_fn(lua, sd_void),
+                "objectCanMoveFrom" => return shared::make_objectcanmovefrom_fn(lua, sd_void),
+                "repeatAnimation"   => return shared::make_repeatanimation_fn(lua, sd_void),
+                "selfAnimation"     => return shared::make_selfanimation_fn(lua, sd_void),
+                "selfAnimationXY"   => return shared::make_selfanimationxy_fn(lua, sd_void),
+                "sendParcel"        => return shared::make_sendparcel_fn(lua, sd_void),
+                "throw"             => return shared::make_throwblock_fn(lua, sd_void),
                 "delFromIDDB" => return Ok(mlua::Value::Function(lua.create_function(
                     move |_, _: mlua::MultiValue| {
-                        unsafe { sffi::sl_g_deliddb(sd); }
+                        unsafe { sffi::sl_g_deliddb(sd as *mut std::ffi::c_void); }
                         Ok(())
                     }
                 )?)),
                 "addPermanentSpawn" => return Ok(mlua::Value::Function(lua.create_function(
                     move |_, _: mlua::MultiValue| {
-                        unsafe { sffi::sl_g_addpermanentspawn(sd); }
+                        unsafe { sffi::sl_g_addpermanentspawn(sd as *mut std::ffi::c_void); }
                         Ok(())
                     }
                 )?)),
@@ -1257,7 +1258,7 @@ impl UserData for PcObject {
 
         // ── Combat ───────────────────────────────────────────────────────────────
         methods.add_method("giveXP",        |_, this, amount: i32| { unsafe { sl_pc_givexp(this.ptr, amount as u32) }; Ok(()) });
-        methods.add_method("updateState",   |_, this, ()| { unsafe { broadcast_update_state(this.ptr as *mut crate::game::pc::MapSessionData) }; Ok(()) });
+        methods.add_method("updateState",   |_, this, ()| { unsafe { broadcast_update_state(this.ptr) }; Ok(()) });
         methods.add_method("addMagic",      |_, this, amount: i32| { unsafe { sl_pc_addmagic(this.ptr, amount) }; Ok(()) });
         methods.add_method("addManaExtend", |_, this, amount: i32| { unsafe { sl_pc_addmanaextend(this.ptr, amount) }; Ok(()) });
         methods.add_method("setTimeValues", |_, this, newval: i32| { unsafe { sl_pc_settimevalues(this.ptr, newval as u32) }; Ok(()) });
@@ -1386,10 +1387,10 @@ impl UserData for PcObject {
         methods.add_async_method("input", |_, this, msg: String| {
             let ptr = this.ptr as usize;
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
                 unsafe { sffi::sl_pc_input_send(user, cs.as_ptr()); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Text(s)) => Ok(s),
                     _ => Ok(String::new()),
@@ -1404,8 +1405,8 @@ impl UserData for PcObject {
         methods.add_async_method("inputSeq", |lua, this, ()| {
             let ptr = this.ptr as usize;
             async move {
-                let user = ptr as *mut std::ffi::c_void;
-                let rx = crate::game::scripting::pending::register(user);
+                let user = ptr as *mut crate::game::pc::MapSessionData;
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Text(dir)) => {
                         let s = lua.create_string(&dir)?;
@@ -1430,10 +1431,10 @@ impl UserData for PcObject {
             // Collect data synchronously before async move.
             let gfx = lua_table_to_ints(&gfx_tbl).unwrap_or_default();
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
                 unsafe { sffi::sl_pc_dialog_send(user, cs.as_ptr(), gfx.as_ptr(), gfx.len() as i32); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Text(s)) => Ok(s),
                     _ => Ok(String::new()),
@@ -1460,10 +1461,10 @@ impl UserData for PcObject {
             // Elements 2..n are the dialog text strings.
             let strs = lua_table_to_cstrings_from(&entries_tbl, 2).unwrap_or_default();
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 let ptrs = cstring_ptrs(&strs);
                 unsafe { sffi::sl_pc_dialogseq_send(user, ptrs.as_ptr(), ptrs.len() as i32, can_continue as i32); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Text(s)) => Ok(s),
                     _ => Ok(String::new()),
@@ -1476,11 +1477,11 @@ impl UserData for PcObject {
             let ptr = this.ptr as usize;
             let strs = lua_table_to_cstrings(&opts_tbl).unwrap_or_default();
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
                 let ptrs = cstring_ptrs(&strs);
                 unsafe { sffi::sl_pc_menu_send(user, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Number(n)) => Ok(n as i32),
                     _ => Ok(0),
@@ -1493,11 +1494,11 @@ impl UserData for PcObject {
             let ptr = this.ptr as usize;
             let strs = lua_table_to_cstrings(&opts_tbl).unwrap_or_default();
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
                 let ptrs = cstring_ptrs(&strs);
                 unsafe { sffi::sl_pc_menuseq_send(user, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Number(n)) => Ok(n as i32),
                     _ => Ok(0),
@@ -1513,14 +1514,14 @@ impl UserData for PcObject {
                 .map(|c| c.to_str().unwrap_or("").to_owned())
                 .collect();
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
                 let ptrs = cstring_ptrs(&strs);
                 unsafe {
                     sffi::sl_pc_menustring_send(user, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
-                    crate::game::scripting::async_coro::store_menu_opts(user, strings);
+                    crate::game::scripting::async_coro::store_menu_opts(user as *mut std::ffi::c_void, strings);
                 }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Text(s)) => Ok(s),
                     _ => Ok(String::new()),
@@ -1536,14 +1537,14 @@ impl UserData for PcObject {
                 .map(|c| c.to_str().unwrap_or("").to_owned())
                 .collect();
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
                 let ptrs = cstring_ptrs(&strs);
                 unsafe {
                     sffi::sl_pc_menustring2_send(user, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
-                    crate::game::scripting::async_coro::store_menu_opts(user, strings);
+                    crate::game::scripting::async_coro::store_menu_opts(user as *mut std::ffi::c_void, strings);
                 }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Text(s)) => Ok(s),
                     _ => Ok(String::new()),
@@ -1560,7 +1561,7 @@ impl UserData for PcObject {
             let dn     = lua_table_to_cstrings(&dn_tbl).unwrap_or_default();
             let bt     = lua_table_to_cstrings(&bt_tbl).unwrap_or_default();
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
                 let dn_p = cstring_ptrs(&dn);
                 let bt_p = cstring_ptrs(&bt);
@@ -1569,7 +1570,7 @@ impl UserData for PcObject {
                         items.as_ptr(), values.as_ptr(),
                         dn_p.as_ptr(), bt_p.as_ptr(), items.len() as i32);
                 }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Text(s)) => Ok(s),
                     _ => Ok(String::new()),
@@ -1582,10 +1583,10 @@ impl UserData for PcObject {
             let ptr = this.ptr as usize;
             let items = lua_table_to_ints(&items_tbl).unwrap_or_default();
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
                 unsafe { sffi::sl_pc_buydialog_send(user, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Text(s)) => Ok(s),
                     _ => Ok(String::new()),
@@ -1601,13 +1602,13 @@ impl UserData for PcObject {
             let prices = lua_table_to_ints(&prices_tbl).unwrap_or_default();
             let maxs   = lua_table_to_ints(&max_tbl).unwrap_or_default();
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
                 unsafe {
                     sffi::sl_pc_buyextend_send(user, cs.as_ptr(),
                         items.as_ptr(), prices.as_ptr(), maxs.as_ptr(), items.len() as i32);
                 }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Text(s)) => Ok(s),
                     _ => Ok(String::new()),
@@ -1620,10 +1621,10 @@ impl UserData for PcObject {
             let ptr = this.ptr as usize;
             let items = lua_table_to_ints(&items_tbl).unwrap_or_default();
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
                 unsafe { sffi::sl_pc_sell_send(user, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Number(n)) => Ok(n as i32),
                     _ => Ok(0),
@@ -1636,10 +1637,10 @@ impl UserData for PcObject {
             let ptr = this.ptr as usize;
             let items = lua_table_to_ints(&items_tbl).unwrap_or_default();
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
                 unsafe { sffi::sl_pc_sell2_send(user, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Number(n)) => Ok(n as i32),
                     _ => Ok(0),
@@ -1652,10 +1653,10 @@ impl UserData for PcObject {
             let ptr = this.ptr as usize;
             let items = lua_table_to_ints(&items_tbl).unwrap_or_default();
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
                 unsafe { sffi::sl_pc_sellextend_send(user, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Number(n)) => Ok(n as i32),
                     _ => Ok(0),
@@ -1672,10 +1673,10 @@ impl UserData for PcObject {
         methods.add_async_method("showBank", |_, this, msg: String| {
             let ptr = this.ptr as usize;
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
                 unsafe { sffi::sl_pc_showbank_send(user, cs.as_ptr()); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Number(n)) => Ok(n as i32),
                     _ => Ok(0),
@@ -1685,9 +1686,9 @@ impl UserData for PcObject {
         methods.add_async_method("showBankAdd", |_, this, ()| {
             let ptr = this.ptr as usize;
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 unsafe { sffi::sl_pc_showbankadd_send(user); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Number(n)) => Ok(n as i32),
                     _ => Ok(0),
@@ -1697,9 +1698,9 @@ impl UserData for PcObject {
         methods.add_async_method("bankAddMoney", |_, this, ()| {
             let ptr = this.ptr as usize;
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 unsafe { sffi::sl_pc_bankaddmoney_send(user); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Number(n)) => Ok(n as i32),
                     _ => Ok(0),
@@ -1709,9 +1710,9 @@ impl UserData for PcObject {
         methods.add_async_method("bankWithdrawMoney", |_, this, ()| {
             let ptr = this.ptr as usize;
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 unsafe { sffi::sl_pc_bankwithdrawmoney_send(user); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Number(n)) => Ok(n as i32),
                     _ => Ok(0),
@@ -1721,10 +1722,10 @@ impl UserData for PcObject {
         methods.add_async_method("clanShowBank", |_, this, msg: String| {
             let ptr = this.ptr as usize;
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
                 unsafe { sffi::sl_pc_clanshowbank_send(user, cs.as_ptr()); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Number(n)) => Ok(n as i32),
                     _ => Ok(0),
@@ -1734,9 +1735,9 @@ impl UserData for PcObject {
         methods.add_async_method("clanShowBankAdd", |_, this, ()| {
             let ptr = this.ptr as usize;
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 unsafe { sffi::sl_pc_clanshowbankadd_send(user); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Number(n)) => Ok(n as i32),
                     _ => Ok(0),
@@ -1746,9 +1747,9 @@ impl UserData for PcObject {
         methods.add_async_method("clanBankAddMoney", |_, this, ()| {
             let ptr = this.ptr as usize;
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 unsafe { sffi::sl_pc_clanbankaddmoney_send(user); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Number(n)) => Ok(n as i32),
                     _ => Ok(0),
@@ -1758,9 +1759,9 @@ impl UserData for PcObject {
         methods.add_async_method("clanBankWithdrawMoney", |_, this, ()| {
             let ptr = this.ptr as usize;
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 unsafe { sffi::sl_pc_clanbankwithdrawmoney_send(user); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Number(n)) => Ok(n as i32),
                     _ => Ok(0),
@@ -1770,9 +1771,9 @@ impl UserData for PcObject {
         methods.add_async_method("clanViewBank", |_, this, ()| {
             let ptr = this.ptr as usize;
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 unsafe { sffi::sl_pc_clanviewbank_send(user); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Number(n)) => Ok(n as i32),
                     _ => Ok(0),
@@ -1782,9 +1783,9 @@ impl UserData for PcObject {
         methods.add_async_method("repairExtend", |_, this, ()| {
             let ptr = this.ptr as usize;
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 unsafe { sffi::sl_pc_repairextend_send(user); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Number(n)) => Ok(n as i32),
                     _ => Ok(0),
@@ -1799,10 +1800,10 @@ impl UserData for PcObject {
                 0usize
             };
             async move {
-                let user = ptr as *mut std::ffi::c_void;
+                let user = ptr as *mut crate::game::pc::MapSessionData;
                 let npc = npc_ptr as *mut std::ffi::c_void;
                 unsafe { sffi::sl_pc_repairall_send(user, npc); }
-                let rx = crate::game::scripting::pending::register(user);
+                let rx = crate::game::scripting::pending::register(user as *mut std::ffi::c_void);
                 match rx.await {
                     Ok(crate::game::scripting::pending::AsyncResponse::Number(n)) => Ok(n as i32),
                     _ => Ok(0),
@@ -1813,7 +1814,7 @@ impl UserData for PcObject {
 }
 
 fn extract_bl_ptr(ud: &mlua::AnyUserData) -> *mut std::ffi::c_void {
-    if let Ok(pc) = ud.borrow::<PcObject>() { return pc.ptr; }
+    if let Ok(pc) = ud.borrow::<PcObject>() { return pc.ptr as *mut std::ffi::c_void; }
     if let Ok(mob) = ud.borrow::<crate::game::scripting::types::mob::MobObject>() { return mob.ptr; }
     if let Ok(npc) = ud.borrow::<crate::game::scripting::types::npc::NpcObject>() { return npc.ptr; }
     std::ptr::null_mut()

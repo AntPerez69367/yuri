@@ -24,7 +24,6 @@ use super::packet::{
 
 // ─── External C globals ───────────────────────────────────────────────────────
 
-use crate::config_globals::{login_ip, login_port, xor_key, town_n, towns as TOWNS};
 
 
 use crate::game::map_server::{map_id2npc, map_id2bl as map_id2bl_ms};
@@ -291,14 +290,15 @@ pub unsafe fn clif_closeit(sd: *mut MapSessionData) -> i32 {
     wfifohead(fd, 255);
     wfifob(fd, 0, 0xAA);
     wfifob(fd, 3, 0x03);
-    wfifol(fd, 4, swap32(login_ip as u32));
-    wfifow(fd, 8, swap16(login_port as u16));
+    let gc = crate::config_globals::global_config();
+    wfifol(fd, 4, swap32(gc.login_ip as u32));
+    wfifow(fd, 8, swap16(gc.login_port as u16));
     wfifob(fd, 10, 0x16);
     wfifow(fd, 11, swap16(9));
     // copy xor_key (9 chars + null) into WFIFOP(sd->fd, 13)
     libc::strcpy(
         crate::session::rust_session_wdata_ptr(fd, 13) as *mut i8,
-        xor_key.as_ptr(),
+        gc.xor_key.as_ptr(),
     );
     let mut len = 11usize;
     let name_ptr = (*sd).status.name.as_ptr();
@@ -328,7 +328,8 @@ pub unsafe fn clif_sendtowns(sd: *mut MapSessionData) -> i32 {
         return 0;
     }
 
-    let n = town_n as usize;
+    let gc = crate::config_globals::global_config();
+    let n = gc.town_n as usize;
 
     wfifohead(fd, 0x59);
     wfifob(fd, 0, 0xAA);
@@ -340,7 +341,7 @@ pub unsafe fn clif_sendtowns(sd: *mut MapSessionData) -> i32 {
 
     let mut len = 0usize;
     for x in 0..n {
-        let name_ptr = TOWNS[x].name.as_ptr();
+        let name_ptr = gc.towns[x].name.as_ptr();
         let name_len = cstrlen(name_ptr as *const i8);
         wfifob(fd, len + 10, x as u8);
         wfifob(fd, len + 11, name_len as u8);

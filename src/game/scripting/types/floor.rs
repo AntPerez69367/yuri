@@ -87,7 +87,7 @@ impl UserData for FloorListObject {
 
             macro_rules! int  { ($e:expr) => { Ok(mlua::Value::Integer($e as i64)) }; }
             macro_rules! cstr { ($arr:expr) => {{
-                let s = unsafe { fixed_str($arr) };
+                let s = fixed_str($arr);
                 Ok(mlua::Value::String(lua.create_string(s)?))
             }}; }
             macro_rules! map_int { ($field:ident) => {{
@@ -224,9 +224,7 @@ impl UserData for FloorListObject {
                     )?));
                 }
                 _ => {
-                    let db = unsafe {
-                        crate::database::item_db::rust_itemdb_search(fl_ref.data.id)
-                    };
+                    let db = crate::database::item_db::rust_itemdb_search(fl_ref.data.id);
                     unsafe { item_data_getattr(lua, db, &key) }
                 }
             }

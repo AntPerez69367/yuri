@@ -201,11 +201,6 @@ pub fn icon(id: i32) -> i32 {
 }
 
 
-/// Exposed for C code that declares `extern struct class_data* cdata[20]`.
-// SAFETY: Array of raw pointers populated once in rust_classdb_init, read-only thereafter.
-// Single-threaded game loop — no concurrent access.
-pub static mut cdata: [*mut ClassData; 20] = [null_mut(); 20];
-
 pub unsafe fn rust_classdb_init(data_dir: *const i8) -> i32 {
     ffi_catch!(-1, unsafe { init(data_dir) })
 }

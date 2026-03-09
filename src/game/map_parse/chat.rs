@@ -4,7 +4,7 @@
 
 
 use crate::database::map_db::BlockList;
-use crate::database::map_db::map;
+use crate::database::map_db::raw_map_ptr;
 use crate::session::{
     rust_session_exists, rust_session_get_data, rust_session_set_eof,
 };
@@ -64,7 +64,7 @@ const SCRIPT: u8 = 0;
 
 #[inline]
 unsafe fn map_isloaded(m: usize) -> bool {
-    !(*map.add(m)).registry.is_null()
+    !(*raw_map_ptr().add(m)).registry.is_null()
 }
 
 // ─── inline helper: write big-endian u16 into a local byte buffer ─────────────
@@ -422,7 +422,7 @@ pub unsafe fn clif_sendwisp(
     combined.extend_from_slice(&buf2);
     combined.extend_from_slice(std::slice::from_raw_parts(msg as *const u8, msglen));
 
-    if (*map.add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
+    if (*raw_map_ptr().add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
         let cant = b"Your voice is carried away.\0";
         clif_sendminitext(sd, cant.as_ptr() as *const i8);
         return 0;
@@ -640,6 +640,7 @@ pub unsafe fn canwhisper(
 
 /// Send a party chat message to all group members.
 ///
+#[allow(static_mut_refs)]
 pub unsafe fn clif_sendgroupmessage(
     sd: *mut MapSessionData,
     msg: *mut u8,
@@ -653,7 +654,7 @@ pub unsafe fn clif_sendgroupmessage(
         return 0;
     }
 
-    if (*map.add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
+    if (*raw_map_ptr().add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
         let cant = b"Your voice is swept away by a strange wind.\0";
         clif_sendminitext(sd, cant.as_ptr() as *const i8);
         return 0;
@@ -695,7 +696,7 @@ pub unsafe fn clif_sendsubpathmessage(
         return 0;
     }
 
-    if (*map.add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
+    if (*raw_map_ptr().add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
         let cant = b"Your voice is swept away by a strange wind.\0";
         clif_sendminitext(sd, cant.as_ptr() as *const i8);
         return 0;
@@ -737,7 +738,7 @@ pub unsafe fn clif_sendclanmessage(
         return 0;
     }
 
-    if (*map.add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
+    if (*raw_map_ptr().add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
         let cant = b"Your voice is swept away by a strange wind.\0";
         clif_sendminitext(sd, cant.as_ptr() as *const i8);
         return 0;
@@ -779,7 +780,7 @@ pub unsafe fn clif_sendnovicemessage(
         return 0;
     }
 
-    if (*map.add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
+    if (*raw_map_ptr().add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
         let cant = b"Your voice is swept away by a strange wind.\0";
         clif_sendminitext(sd, cant.as_ptr() as *const i8);
         return 0;
@@ -843,7 +844,7 @@ pub unsafe fn clif_parsewisp(sd: *mut MapSessionData) -> i32 {
         return 0;
     }
 
-    if (*map.add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
+    if (*raw_map_ptr().add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
         let msg = b"Your voice is swept away by a strange wind.\0";
         clif_sendminitext(sd, msg.as_ptr() as *const i8);
         return 0;
@@ -1014,7 +1015,7 @@ pub unsafe fn clif_sendscriptsay(
 ) -> i32 {
     let namelen = libc_strlen((*sd).status.name.as_ptr() as *const i8);
 
-    if (*map.add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
+    if (*raw_map_ptr().add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
         let m = b"Your voice is swept away by a strange wind.\0";
         clif_sendminitext(sd, m.as_ptr() as *const i8);
         return 0;

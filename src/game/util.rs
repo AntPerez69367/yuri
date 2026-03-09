@@ -86,7 +86,7 @@ pub struct CPoint {
 
 /// C-callable wrapper around [`check_proximity`].
 ///
-
+#[allow(non_snake_case)]
 pub fn CheckProximity(one: CPoint, two: CPoint, radius: i32) -> i32 {
     let result = check_proximity(
         (one.m, one.x, one.y),

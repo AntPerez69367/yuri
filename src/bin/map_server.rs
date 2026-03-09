@@ -5,7 +5,7 @@ use std::sync::Arc;
 use yuri::config::ServerConfig;
 use yuri::game::block::map_initblock;
 use yuri::game::map_server::map_initiddb;
-use yuri::game::npc::{npc_init, warp_init};
+
 use yuri::game::scripting::rust_sl_init;
 use yuri::game::map_server::{lang_read, map_do_term, map_loadgameregistry};
 use yuri::game::client::visual::clif_timeout;
@@ -38,12 +38,10 @@ async fn main() -> Result<()> {
         .init();
 
     // Initialize core state.
-    unsafe {
-        rust_core_init();
-        // fd_max is now owned by session.rs (get_fd_max()); no external callback needed.
-        // db_init() is now a no-op stub defined above
-        // timer_init() was a no-op — removed
-    }
+    rust_core_init();
+    // fd_max is now owned by session.rs (get_fd_max()); no external callback needed.
+    // db_init() is now a no-op stub defined above
+    // timer_init() was a no-op — removed
 
     let mut conf_file = "conf/server.yaml".to_string();
     let mut lang_file = "conf/lang.yaml".to_string();
@@ -134,8 +132,21 @@ async fn main() -> Result<()> {
             unsafe {
                 map_initblock();
                 map_initiddb();
-                npc_init();
-                warp_init();
+                // Drive npc_init_async and warp_init_async via block_in_place (main
+                // runtime reactor) instead of their blocking_run_async wrappers.
+                // Those wrappers use DB_RUNTIME (a separate current_thread runtime),
+                // which registers connection sockets with its own reactor.  Any
+                // connection returned to the pool from DB_RUNTIME is then
+                // reactor-mismatched when reused by blocking_run / block_in_place
+                // (main runtime) in the subsequent *_init calls, causing a 30-second
+                // pool acquire timeout.  block_in_place is safe here because this
+                // closure runs inside spawn_blocking, not a LocalSet task.
+                tokio::task::block_in_place(|| {
+                    tokio::runtime::Handle::current().block_on(async {
+                        yuri::game::npc::npc_init_async().await;
+                        yuri::game::npc::warp_init_async().await;
+                    })
+                });
                 rust_itemdb_init();
                 rust_recipedb_init();
                 rust_mobdb_init();

@@ -50,7 +50,6 @@ use crate::game::map_parse::combat::clif_sendaction;
 use crate::database::item_db::{rust_itemdb_droppable as itemdb_droppable, rust_itemdb_yname as itemdb_yname};
 use crate::database::magic_db::rust_magicdb_yname as magicdb_yname;
 use crate::session::{rust_session_exists, rust_session_set_eof};
-use crate::config_globals::map_ip;
 
 use crate::game::block::{foreach_in_area, AreaType};
 use crate::game::map_parse::visual::clif_object_look_sub_inner;
@@ -74,8 +73,8 @@ unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::dat
 
 #[inline]
 unsafe fn read_obj(m: i32, x: i32, y: i32) -> u16 {
-    use crate::database::map_db::map;
-    let md = &*map.add(m as usize);
+    use crate::database::map_db::raw_map_ptr;
+    let md = &*raw_map_ptr().add(m as usize);
     if md.obj.is_null() { return 0; }
     *md.obj.add(x as usize + y as usize * md.xs as usize)
 }
@@ -594,6 +593,7 @@ pub unsafe fn clif_parsedropitem(sd: *mut MapSessionData) -> i32 {
 
 // ─── Constants needed by handler functions ─────────────────────────────────
 
+#[allow(dead_code)]
 const SAMEAREA: i32 = 6;
 const BL_ALL:   i32 = 0x0F;
 const LOOK_GET:  i32 = 0;
@@ -610,6 +610,7 @@ pub struct BoardQuestionaire {
 // ─── WFIFO write helpers ────────────────────────────────────────────────────
 
 /// Write big-endian u16 at `pos` in the send-FIFO.
+#[allow(dead_code)]
 #[inline]
 unsafe fn wbe16(fd: i32, pos: usize, val: u16) {
     use crate::session::rust_session_wdata_ptr;
@@ -618,6 +619,7 @@ unsafe fn wbe16(fd: i32, pos: usize, val: u16) {
 }
 
 /// Write big-endian u32 at `pos` in the send-FIFO.
+#[allow(dead_code)]
 #[inline]
 unsafe fn wbe32(fd: i32, pos: usize, val: u32) {
     use crate::session::rust_session_wdata_ptr;
@@ -626,6 +628,7 @@ unsafe fn wbe32(fd: i32, pos: usize, val: u32) {
 }
 
 /// Copy null-terminated string bytes starting at `pos`.
+#[allow(dead_code)]
 #[inline]
 unsafe fn wfifo_strcpy(fd: i32, pos: usize, s: &[u8]) {
     use crate::session::rust_session_wdata_ptr;
@@ -733,7 +736,7 @@ pub unsafe fn clif_transfer(
     *w(0) = 0xAA;
     *w(3) = 0x03;
     // SWAP32(map_ip) — network-order IP → host-order, then LE write = network bytes on wire
-    (w(4) as *mut u32).write_unaligned(map_ip.swap_bytes());
+    (w(4) as *mut u32).write_unaligned(crate::config_globals::global_config().map_ip.swap_bytes());
     (w(8) as *mut u16).write_unaligned(dest_port.to_be());
     *w(10) = 0x16;
     (w(11) as *mut u16).write_unaligned(9u16.to_be());

@@ -2,13 +2,17 @@
 //!
 //! Moved from `crate::timer` (src/timer.rs) — pure Rust timer system with no C dependencies.
 //!
-//! # Safety model
-//! The map server is single-threaded on its event-loop thread.  All timer
-//! callbacks fire from `timer_do`, which is called from the event loop.
-//! The global `TIMER_STATE` is accessed only from that thread; no locking is
-//! needed.
+//! # Locking model
+//! The map server runs its event loop on a single thread, so `TIMER_STATE`
+//! is never accessed concurrently.  A `Mutex` is present only to satisfy the
+//! `OnceLock<T>: Sync` bound — it will never actually contend.
+//!
+//! **Important:** `timer_do` must release the `MutexGuard` before invoking a
+//! timer callback, because callbacks may call `timer_insert` / `timer_remove`,
+//! which re-acquire the same `Mutex`.  `std::sync::Mutex` is non-reentrant;
+//! holding the guard across the call would deadlock the thread.
 
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -32,10 +36,6 @@ pub fn gettick_nocache() -> u32 {
 pub fn gettick() -> u32 {
     get_tick_ms()
 }
-
-// ──────────────────────────────────────────────────────────────────────────────
-// Date/time helpers (also defined in timer.c, used from Lua via yuri.h)
-// ──────────────────────────────────────────────────────────────────────────────
 
 /// Returns day-of-week adjusted for the original server's
 /// timezone offset (UTC-5, mapped so Monday=4 … Sunday=3).
@@ -115,6 +115,7 @@ struct TimerData {
     /// Combination of TIMER_* flags.
     typ: u8,
     interval: u32,
+    #[allow(dead_code)]
     id: i32,
     data1: i32,
     data2: i32,
@@ -135,7 +136,9 @@ impl TimerData {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Global timer state (single-threaded event loop, no locking required)
+// Global timer state
+// Single-threaded game loop — the Mutex never actually contends; it exists
+// solely to satisfy the OnceLock<T>: Sync bound.  See module-level doc.
 // ──────────────────────────────────────────────────────────────────────────────
 
 struct TimerState {
@@ -187,15 +190,13 @@ impl TimerState {
     }
 }
 
-// SAFETY: Option<TimerState> initialised once by timer_init, then mutated only from within timer
-// callbacks, which all run on the game thread. Single-threaded game loop — no concurrent access.
-static mut TIMER_STATE: Option<TimerState> = None;
+static TIMER_STATE: OnceLock<Mutex<TimerState>> = OnceLock::new();
 
-unsafe fn state() -> &'static mut TimerState {
-    if TIMER_STATE.is_none() {
-        TIMER_STATE = Some(TimerState::new());
-    }
-    TIMER_STATE.as_mut().unwrap()
+fn state() -> std::sync::MutexGuard<'static, TimerState> {
+    TIMER_STATE
+        .get_or_init(|| Mutex::new(TimerState::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -206,22 +207,29 @@ unsafe fn state() -> &'static mut TimerState {
 pub fn timer_init() {}
 
 /// `int timer_clear(void)` — free all timer memory.
-pub unsafe fn timer_clear() -> i32 {
-    TIMER_STATE = None;
+///
+/// Clears the three vecs (preserving their heap allocations) rather than
+/// dropping and recreating `TimerState`, because `OnceLock` does not permit
+/// replacing its value once initialised.
+pub fn timer_clear() -> i32 {
+    let mut ts = state();
+    ts.data.clear();
+    ts.heap.clear();
+    ts.free_list.clear();
     0
 }
 
 /// `int timer_insert(uint32_t initial_delay_ms, uint32_t interval_ms, fn, id, data) -> timer_id`
 ///
 /// First arg is the initial delay (added to gettick()), second is the repeat interval.
-pub unsafe fn timer_insert(
+pub fn timer_insert(
     tick_delay: u32,
     interval: u32,
     func: Option<TimerFn>,
     id: i32,
     data: i32,
 ) -> i32 {
-    let s = state();
+    let mut s = state();
     let tid = s.acquire();
     s.data[tid] = TimerData {
         tick: get_tick_ms().wrapping_add(tick_delay),
@@ -237,8 +245,8 @@ pub unsafe fn timer_insert(
 }
 
 /// `int timer_remove(int tid)` — mark a timer for deletion.
-pub unsafe fn timer_remove(tid: i32) -> i32 {
-    let s = state();
+pub fn timer_remove(tid: i32) -> i32 {
+    let mut s = state();
     let tid = tid as usize;
     if tid >= s.data.len() {
         return -1;
@@ -249,21 +257,24 @@ pub unsafe fn timer_remove(tid: i32) -> i32 {
 }
 
 /// `const struct TimerData* get_timer(int tid)` — returns NULL (only used for debug checks).
-pub unsafe fn get_timer(_tid: i32) -> *const () {
+pub fn get_timer(_tid: i32) -> *const () {
     std::ptr::null()
 }
 
 /// `int timer_do(uint32_t tick)` — fire all expired timers, return ms to next.
 ///
 /// Must be called from the event loop every ~10 ms.
-pub unsafe fn timer_do(tick: u32) -> i32 {
+pub fn timer_do(tick: u32) -> i32 {
     const TIMER_MIN_INTERVAL: i32 = 50;
     const TIMER_MAX_INTERVAL: i32 = 1000;
 
-    let s = state();
     let mut diff: i32 = 1000;
 
     loop {
+        // Acquire the lock at the top of each iteration so that we can release
+        // it before invoking the callback (see locking model in module docs).
+        let mut s = state();
+
         // The heap is sorted highest-first; the last element is the smallest tick.
         let tid = match s.heap.last() {
             Some(&t) => t,
@@ -278,11 +289,31 @@ pub unsafe fn timer_do(tick: u32) -> i32 {
         s.heap.pop();
         s.data[tid].typ |= TIMER_REMOVE_HEAP;
 
-        let to_del = if let Some(f) = s.data[tid].func {
-            f(s.data[tid].data1, s.data[tid].data2) != 0
+        // Extract callback data before releasing the lock.  Callbacks
+        // (e.g. rust_mob_timer_spawns, rust_pc_timer) may call timer_insert /
+        // timer_remove, which also call state().lock().  std::sync::Mutex is
+        // non-reentrant, so holding the guard across the call would deadlock.
+        let (f, d1, d2) = {
+            let entry = &s.data[tid];
+            (entry.func, entry.data1, entry.data2)
+        };
+        drop(s); // release lock — callbacks are now free to modify timer state
+
+        let to_del = if let Some(f) = f {
+            // SAFETY: timer callbacks are C-ABI unsafe fn pointers registered
+            // by game logic on the single-threaded event loop.
+            unsafe { f(d1, d2) != 0 }
         } else {
             false
         };
+        // Note: the callback may have called timer_remove(tid) during the
+        // lock-free window, setting typ = TIMER_ONCE_AUTODEL and clearing func.
+        // The to_del path below is still safe: it only ORs in TIMER_REMOVE_HEAP
+        // on a slot already marked TIMER_ONCE_AUTODEL, which is idempotent and
+        // causes the slot to be freed in the TIMER_ONCE_AUTODEL arm below.
+
+        // Re-acquire for post-callback bookkeeping.
+        let mut s = state();
 
         if to_del {
             // mark for one-shot deletion
@@ -305,13 +336,12 @@ pub unsafe fn timer_do(tick: u32) -> i32 {
                     } else {
                         s.data[tid].tick = s.data[tid].tick.wrapping_add(s.data[tid].interval);
                     }
-                    s.data[tid].typ &= !TIMER_REMOVE_HEAP;
-                    let tid_copy = tid;
-                    s.heap_push(tid_copy);
+                    s.heap_push(tid);
                 }
                 _ => {}
             }
         }
+        // Guard `s` drops here at end of iteration, before next state() call.
     }
 
     diff.clamp(TIMER_MIN_INTERVAL, TIMER_MAX_INTERVAL)

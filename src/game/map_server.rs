@@ -1,4 +1,7 @@
 //! Map server utility functions.
+#![allow(non_upper_case_globals)]
+#![allow(non_snake_case)]
+#![allow(static_mut_refs)]
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
@@ -216,14 +219,14 @@ pub unsafe fn map_freeblock_unlock() -> i32 {
 ///
 ///
 /// # Safety
-/// `crate::database::map_db::map` must be a valid initialized pointer (non-null, pointing to at
+/// `crate::database::map_db::raw_map_ptr()` must be a valid initialized pointer (non-null, pointing to at
 /// least `MAP_SLOTS` slots). Call only after `rust_map_init` has completed.
 pub unsafe fn map_setmapip(id: i32, ip: u32, port: u16) -> i32 {
     if id < 0 || id as usize >= crate::database::map_db::MAP_SLOTS {
         return 1;
     }
-    (*crate::database::map_db::map.add(id as usize)).ip = ip;
-    (*crate::database::map_db::map.add(id as usize)).port = port;
+    (*crate::database::map_db::raw_map_ptr().add(id as usize)).ip = ip;
+    (*crate::database::map_db::raw_map_ptr().add(id as usize)).port = port;
     0
 }
 
@@ -495,7 +498,6 @@ pub async unsafe fn mmo_setonline(id: u32, val: i32) {
 // Block grid helpers — map_canmove, map_addmob
 // ---------------------------------------------------------------------------
 
-use crate::config_globals::serverid;
 
 /// Returns 1 if the cell `(x, y)` on map `m` is passable, 0 otherwise.
 ///
@@ -508,7 +510,7 @@ use crate::config_globals::serverid;
 /// `m` must be a valid loaded map index. `x` and `y` must be within bounds.
 pub unsafe fn map_canmove(m: i32, x: i32, y: i32) -> i32 {
     // read_pass(m, x, y) expands to map[m].pass[x + y * map[m].xs]
-    let slot = &*crate::database::map_db::map.add(m as usize);
+    let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
     let pass_val = *slot.pass.add(x as usize + y as usize * slot.xs as usize);
 
     if pass_val != 0 {
@@ -539,7 +541,7 @@ pub async unsafe fn map_addmob(
     let m     = (*sd).bl.m  as i32;
     let x     = (*sd).bl.x  as i32;
     let y     = (*sd).bl.y  as i32;
-    let sid   = serverid;
+    let sid   = crate::config_globals::global_config().serverid;
 
     let sql = format!(
         "INSERT INTO `Spawns{sid}` \
@@ -1664,11 +1666,8 @@ pub static mut objectFlags: *mut u8 = std::ptr::null_mut();
 /// # Safety
 /// and point to a null-terminated string.
 pub unsafe fn object_flag_init() -> i32 {
-    use crate::config_globals::data_dir;
-
     let filename = b"static_objects.tbl\0";
-    let dir_cstr = std::ffi::CStr::from_ptr(data_dir);
-    let dir_bytes = dir_cstr.to_bytes();
+    let dir_bytes = crate::config_globals::global_config().data_dir.as_bytes();
 
     // Build full path: data_dir + filename (without the extra NUL added by CString).
     let mut path_bytes: Vec<u8> = Vec::with_capacity(dir_bytes.len() + filename.len() - 1);
@@ -1706,7 +1705,7 @@ pub unsafe fn object_flag_init() -> i32 {
     let mut flag: i8 = 0;
     libc::fread(std::ptr::addr_of_mut!(flag).cast(), 1, 1, fi);
 
-    let mut z: i32 = 1;
+    let mut _z: i32 = 1;
     while libc::feof(fi) == 0 {
         let mut count: i8 = 0;
         libc::fread(std::ptr::addr_of_mut!(count).cast(), 1, 1, fi);
@@ -1720,8 +1719,8 @@ pub unsafe fn object_flag_init() -> i32 {
         let mut nothing = [0u8; 5];
         libc::fread(nothing.as_mut_ptr().cast(), 5, 1, fi);
         libc::fread(std::ptr::addr_of_mut!(flag).cast(), 1, 1, fi);
-        // objectFlags[z as usize] = flag as u8;  // intentionally not assigned, matching C
-        z += 1;
+        // objectFlags[_z as usize] = flag as u8;  // intentionally not assigned, matching C
+        _z += 1;
     }
 
     libc::fclose(fi);
@@ -1981,7 +1980,7 @@ unsafe fn copy_cstr_to_reg_str(dest: &mut [i8; 64], src: *const i8) {
 ///
 ///
 /// # Safety
-/// `crate::database::map_db::map` must be a valid initialised pointer.  `m` must be a
+/// `crate::database::map_db::raw_map_ptr()` must be a valid initialised pointer.  `m` must be a
 /// loaded map index and `i` must be within `[0, MAX_MAPREG)`.
 pub async unsafe fn map_registrysave(m: i32, i: i32) -> i32 {
     use crate::database::map_db::{GlobalReg, MAP_SLOTS, MAX_MAPREG};
@@ -1992,7 +1991,7 @@ pub async unsafe fn map_registrysave(m: i32, i: i32) -> i32 {
     // Extract all data into owned/Copy values before the first .await to ensure
     // the future is Send (raw pointer refs cannot cross await points safely).
     let (identifier, val, m_u32, i_u32) = {
-        let slot = &mut *crate::database::map_db::map.add(m as usize);
+        let slot = &mut *crate::database::map_db::raw_map_ptr().add(m as usize);
         if slot.registry.is_null() { return 0; }
 
         let p: &GlobalReg = &*slot.registry.add(i as usize);
@@ -2079,7 +2078,7 @@ pub async unsafe fn map_registrysave(m: i32, i: i32) -> i32 {
 ///
 ///
 /// # Safety
-/// `crate::database::map_db::map` must be a valid initialised pointer.  `m` must be within
+/// `crate::database::map_db::raw_map_ptr()` must be a valid initialised pointer.  `m` must be within
 /// `[0, MAP_SLOTS)`.  `reg` must be a valid non-null null-terminated C string.
 pub async unsafe fn map_setglobalreg(m: i32, reg: *const i8, val: i32) -> i32 {
     use crate::database::map_db::MAP_SLOTS;
@@ -2092,7 +2091,7 @@ pub async unsafe fn map_setglobalreg(m: i32, reg: *const i8, val: i32) -> i32 {
     // Returns: Some((save_idx, clear_str)) where clear_str means entry.str should
     // be zeroed after the DB persist, or None if nothing to save.
     let save_info: Option<(i32, bool)> = {
-        let slot = &mut *crate::database::map_db::map.add(m as usize);
+        let slot = &mut *crate::database::map_db::raw_map_ptr().add(m as usize);
         if slot.registry.is_null() {
             return 0;
         }
@@ -2144,7 +2143,7 @@ pub async unsafe fn map_setglobalreg(m: i32, reg: *const i8, val: i32) -> i32 {
         map_registrysave(m, save_idx).await;
         if clear_str {
             // Clear the entry str after persisting val==0.
-            let slot = &mut *crate::database::map_db::map.add(m as usize);
+            let slot = &mut *crate::database::map_db::raw_map_ptr().add(m as usize);
             if !slot.registry.is_null() {
                 let entry = &mut *slot.registry.add(save_idx as usize);
                 entry.str = [0i8; 64];
@@ -2162,14 +2161,14 @@ pub async unsafe fn map_setglobalreg(m: i32, reg: *const i8, val: i32) -> i32 {
 /// boundaries via `blocking_run_async`.
 ///
 /// # Safety
-/// `crate::database::map_db::map` must be a valid initialised pointer and `m` within
+/// `crate::database::map_db::raw_map_ptr()` must be a valid initialised pointer and `m` within
 /// `[0, MAP_SLOTS)`.
 pub async unsafe fn map_setglobalreg_str(m: i32, reg_name: String, val: i32) -> i32 {
     use crate::database::map_db::MAP_SLOTS;
     if m < 0 || m as usize >= MAP_SLOTS { return 0; }
 
     let save_info: Option<(i32, bool)> = {
-        let slot = &mut *crate::database::map_db::map.add(m as usize);
+        let slot = &mut *crate::database::map_db::raw_map_ptr().add(m as usize);
         if slot.registry.is_null() { return 0; }
         let num = slot.registry_num as usize;
 
@@ -2222,7 +2221,7 @@ pub async unsafe fn map_setglobalreg_str(m: i32, reg_name: String, val: i32) -> 
     if let Some((save_idx, clear_str)) = save_info {
         map_registrysave(m, save_idx).await;
         if clear_str {
-            let slot = &mut *crate::database::map_db::map.add(m as usize);
+            let slot = &mut *crate::database::map_db::raw_map_ptr().add(m as usize);
             if !slot.registry.is_null() {
                 let entry = &mut *slot.registry.add(save_idx as usize);
                 entry.str = [0i8; 64];
@@ -2255,6 +2254,7 @@ pub async unsafe fn map_setglobalgamereg_str(reg_name: String, val: i32) -> i32 
 
         if let Some(idx) = exist {
             let entry = &mut *gamereg.registry.add(idx);
+            if entry.val == val { return 0; } // value unchanged — skip save
             entry.val = val;
             Some((idx as i32, val == 0))
         } else {
@@ -2307,13 +2307,13 @@ pub async unsafe fn map_setglobalgamereg_str(reg_name: String, val: i32) -> i32 
 ///
 ///
 /// # Safety
-/// `crate::database::map_db::map` must be a valid initialised pointer.  `m` must be within
+/// `crate::database::map_db::raw_map_ptr()` must be a valid initialised pointer.  `m` must be within
 /// `[0, MAP_SLOTS)`.  `reg` must be a valid non-null null-terminated C string.
 pub unsafe fn map_readglobalreg(m: i32, reg: *const i8) -> i32 {
     use crate::database::map_db::MAP_SLOTS;
 
     if m < 0 || m as usize >= MAP_SLOTS { return 0; }
-    let slot = &*crate::database::map_db::map.add(m as usize);
+    let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
     if slot.registry.is_null() { return 0; }
 
     let num = slot.registry_num as usize;
@@ -2347,7 +2347,7 @@ pub async unsafe fn map_loadgameregistry() -> i32 {
         grg_value: u32, // INT UNSIGNED in schema
     }
 
-    let sid = serverid;
+    let sid = crate::config_globals::global_config().serverid;
     let limit = MAX_GAMEREG as u32;
 
     gamereg.registry_num = 0;
@@ -2425,7 +2425,7 @@ pub async unsafe fn map_savegameregistry(i: i32) -> i32 {
     // Extract all data into owned/Copy types before the first .await to ensure
     // the future is Send (raw pointer refs cannot cross await points).
     let (sid, identifier, val) = {
-        let sid = serverid;
+        let sid = crate::config_globals::global_config().serverid;
         let entry = &*gamereg.registry.add(i as usize);
         let identifier = {
             let bytes: &[u8] = std::slice::from_raw_parts(entry.str.as_ptr() as *const u8, 64);
@@ -2523,6 +2523,7 @@ pub async unsafe fn map_setglobalgamereg(reg: *const i8, val: i32) -> i32 {
 
         if let Some(idx) = exist {
             let entry = &mut *gamereg.registry.add(idx);
+            if entry.val == val { return 0; } // value unchanged — skip save
             entry.val = val;
             Some((idx as i32, val == 0))
         } else {
@@ -2662,7 +2663,7 @@ pub async unsafe fn map_lastdeath_mob(
         let starty     = (*p).starty as i32;
         let map_id     = (*p).bl.m  as i32;
         let mob_id     = (*p).bl.id as i32;
-        let sid        = serverid;
+        let sid        = crate::config_globals::global_config().serverid;
         (last_death, startx, starty, map_id, mob_id, sid)
     }; // p ref dropped here
 
@@ -2736,8 +2737,8 @@ pub unsafe fn map_do_term() {
     map_termiddb();
 
     // Free per-slot tile arrays (Rust Vec alloc) and block grid arrays.
-    if !crate::database::map_db::map.is_null() {
-        let slots = std::slice::from_raw_parts_mut(crate::database::map_db::map, MAP_SLOTS);
+    if !crate::database::map_db::raw_map_ptr().is_null() {
+        let slots = std::slice::from_raw_parts_mut(crate::database::map_db::raw_map_ptr(), MAP_SLOTS);
         for slot in slots.iter_mut() {
             let cells  = slot.xs as usize * slot.ys as usize;
             let bcells = slot.bxs as usize * slot.bys as usize;
@@ -2835,13 +2836,15 @@ pub static bl_list_count: AtomicI32 = AtomicI32::new(0);
 ///
 ///
 /// # Safety
-/// Must be called on the game thread. `maps_dir` and `serverid` must be valid
-/// C globals (provided by `src/ffi/config_globals.rs`).
+/// Must be called on the game thread. `maps_dir` and `serverid` are read from
+/// `src/config_globals.rs` via `global_config()`.
 pub unsafe fn map_reload() -> i32 {
-    use crate::config_globals::maps_dir;
     use crate::database::map_db::rust_map_reload;
 
-    if rust_map_reload(maps_dir, serverid) != 0 {
+    let gc = crate::config_globals::global_config();
+    let maps_dir_c = std::ffi::CString::new(gc.maps_dir.as_str()).unwrap();
+    let serverid = gc.serverid;
+    if rust_map_reload(maps_dir_c.as_ptr(), serverid) != 0 {
         tracing::error!("[map] rust_map_reload failed");
         return -1;
     }
@@ -2850,7 +2853,7 @@ pub unsafe fn map_reload() -> i32 {
     // Map IDs are sparse — must iterate all slots, not just 0..map_n.
     for i in 0..crate::database::map_db::MAP_SLOTS {
         // map_isloaded(i): registry pointer is non-null iff the map was loaded.
-        let slot = &*crate::database::map_db::map.add(i);
+        let slot = &*crate::database::map_db::raw_map_ptr().add(i);
         if !slot.registry.is_null() {
             crate::game::block::foreach_in_area(
                 i as i32,

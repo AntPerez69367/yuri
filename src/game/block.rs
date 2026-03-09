@@ -10,20 +10,34 @@
 //! - `m` is a valid, loaded map slot index.
 //! - Entity pointers returned by callbacks are not stored across any mutation of the
 //!   block grid (add/del/move).
+#![allow(non_upper_case_globals)]
+#![allow(static_mut_refs)]
 
 use crate::database::map_db::{BlockList, MAP_SLOTS, BLOCK_SIZE};
-#[cfg(not(test))]
-use crate::database::map_db::map;
 use crate::game::mob::{BL_MOB, MOB_DEAD, MobSpawnData};
 
 // In test builds crate::ffi is absent.  We provide local substitutes:
-//   - a module-level `map` static (same name as the production global)
+//   - a module-level `map` static used in place of `raw_map_ptr()` from the production path
 //   - BL_LIST_MAX constant matching ffi::block::BL_LIST_MAX
 //   - a sentinel BlockList node standing in for ffi::block::bl_head
-// SAFETY: Test-only mirror of database::map_db::map for block grid lookups.
+// SAFETY: Test-only substitute for `raw_map_ptr()` in block grid lookups.
 // Set once in map_initblock. Single-threaded game loop — no concurrent access.
 #[cfg(test)]
 static mut map: *mut crate::database::map_db::MapData = std::ptr::null_mut();
+
+/// Returns the live map pointer.
+/// In production, delegates to `map_db::raw_map_ptr()` (backed by `OnceLock<MapPtr>`).
+/// In tests, reads the module-local `map` static so tests can inject their own slot.
+#[cfg(not(test))]
+#[inline(always)]
+fn map_ptr() -> *mut crate::database::map_db::MapData {
+    crate::database::map_db::raw_map_ptr()
+}
+#[cfg(test)]
+#[inline(always)]
+unsafe fn map_ptr() -> *mut crate::database::map_db::MapData {
+    map
+}
 
 /// Entity list capacity cap — matches `ffi::block::BL_LIST_MAX`.
 /// In non-test builds we read the authoritative constant from the ffi module.
@@ -79,14 +93,14 @@ pub enum AreaType {
 /// # Safety
 /// `map` global must be initialized.
 pub unsafe fn map_is_loaded(m: i32) -> bool {
-    if m < 0 || map.is_null() {
+    if m < 0 || map_ptr().is_null() {
         return false;
     }
     let m_idx = m as usize;
     if m_idx >= MAP_SLOTS {
         return false;
     }
-    let slot = &*map.add(m_idx);
+    let slot = &*map_ptr().add(m_idx);
     !slot.registry.is_null()
 }
 
@@ -113,10 +127,10 @@ where
     F: FnMut(*mut BlockList) -> i32,
 {
     let m_idx = m as usize;
-    if m < 0 || map.is_null() || m_idx >= MAP_SLOTS {
+    if m < 0 || map_ptr().is_null() || m_idx >= MAP_SLOTS {
         return 0;
     }
-    let slot = &*map.add(m_idx);
+    let slot = &*map_ptr().add(m_idx);
     if slot.registry.is_null() {
         return 0;
     }
@@ -225,10 +239,10 @@ where
     const NY: i32 = 16; // AREAY_SIZE
 
     let m_idx = m as usize;
-    if m < 0 || map.is_null() || m_idx >= MAP_SLOTS {
+    if m < 0 || map_ptr().is_null() || m_idx >= MAP_SLOTS {
         return 0;
     }
-    let slot = &*map.add(m_idx);
+    let slot = &*map_ptr().add(m_idx);
     if slot.registry.is_null() {
         return 0;
     }
@@ -310,10 +324,10 @@ where
     F: FnMut(*mut BlockList) -> i32,
 {
     let m_idx = m as usize;
-    if m < 0 || map.is_null() || m_idx >= MAP_SLOTS {
+    if m < 0 || map_ptr().is_null() || m_idx >= MAP_SLOTS {
         return 0;
     }
-    let slot = &*map.add(m_idx);
+    let slot = &*map_ptr().add(m_idx);
     if slot.registry.is_null() {
         return 0;
     }
@@ -580,10 +594,10 @@ mod tests {
     use crate::database::map_db::{BlockList, MapData, GlobalReg, WarpList, BLOCK_SIZE};
     use crate::game::mob::{BL_MOB, BL_PC, MOB_ALIVE, MOB_DEAD, MobSpawnData};
     use std::ptr;
+    use std::sync::Mutex;
 
-    // SAFETY NOTE: These tests mutate the `map` global pointer and must run sequentially.
-    // Run with: cargo test -- block 2>&1 (tests are safe individually)
-    // For parallel test runs use: -- --test-threads=1
+    // Serializes tests that mutate the `map` global so parallel test threads don't race.
+    static MAP_MUTEX: Mutex<()> = Mutex::new(());
 
     /// Allocate a zeroed MapData on the heap and set up minimum fields for a
     /// 100×100 map at slot `slot_id`.  Returns the box so the caller can
@@ -667,6 +681,7 @@ mod tests {
     /// when no entity has been inserted into the grid.
     #[test]
     fn test_foreach_in_cell_empty() {
+        let _guard = MAP_MUTEX.lock().unwrap();
         unsafe {
             let slot = make_test_map(100, 100);
             let slot_ptr = Box::into_raw(slot);
@@ -716,6 +731,7 @@ mod tests {
     /// requested mask and whose coords match exactly is counted once.
     #[test]
     fn test_foreach_in_cell_one_pc() {
+        let _guard = MAP_MUTEX.lock().unwrap();
         unsafe {
             let mut slot = make_test_map(100, 100);
             let mut bl_node = make_bl_node(BL_PC as u8, 50, 50);
@@ -765,6 +781,7 @@ mod tests {
     /// reads `(*mob).state`; a dead mob must not fire the callback.
     #[test]
     fn test_foreach_in_cell_dead_mob_skipped() {
+        let _guard = MAP_MUTEX.lock().unwrap();
         unsafe {
             let mut slot = make_test_map(100, 100);
 
@@ -823,6 +840,7 @@ mod tests {
     /// 0..ys-1) and that entities in different block grid cells are all found.
     #[test]
     fn test_foreach_in_area_samemap_three_pcs() {
+        let _guard = MAP_MUTEX.lock().unwrap();
         unsafe {
             let mut slot = make_test_map(100, 100);
 
@@ -876,6 +894,7 @@ mod tests {
     /// Places 5 PCs on the map, requests max=3, verifies vec length is 3.
     #[test]
     fn test_collect_entities_max_cap() {
+        let _guard = MAP_MUTEX.lock().unwrap();
         unsafe {
             let mut slot = make_test_map(100, 100);
 
@@ -932,6 +951,7 @@ mod tests {
     /// Counterpart to test 3: verifies that MOB_ALIVE mobs are not skipped.
     #[test]
     fn test_foreach_in_cell_alive_mob_found() {
+        let _guard = MAP_MUTEX.lock().unwrap();
         unsafe {
             let mut slot = make_test_map(100, 100);
 
@@ -1028,8 +1048,8 @@ fn alloc_ptr_array<T>(len: usize) -> *mut *mut T {
 /// Allocate block/block_mob/warp arrays for every loaded map slot.
 #[cfg(not(test))]
 pub unsafe fn map_initblock() {
-    if crate::database::map_db::map.is_null() { return; }
-    let slots = std::slice::from_raw_parts_mut(crate::database::map_db::map, crate::database::map_db::MAP_SLOTS);
+    if map_ptr().is_null() { return; }
+    let slots = std::slice::from_raw_parts_mut(map_ptr(), crate::database::map_db::MAP_SLOTS);
     for slot in slots.iter_mut() {
         if slot.bxs == 0 || slot.bys == 0 { continue; }
         let cells = slot.bxs as usize * slot.bys as usize;
@@ -1055,11 +1075,11 @@ pub unsafe fn map_addblock(bl: *mut crate::database::map_db::BlockList) -> i32 {
     }
 
     let m = bl.m as usize;
-    if m >= crate::database::map_db::MAP_SLOTS || crate::database::map_db::map.is_null() {
+    if m >= crate::database::map_db::MAP_SLOTS || map_ptr().is_null() {
         tracing::error!("[map_addblock] invalid map id id={} m={m}", bl.id);
         return 1;
     }
-    let slot = unsafe { &mut *crate::database::map_db::map.add(m) };
+    let slot = unsafe { &mut *map_ptr().add(m) };
 
     if slot.registry.is_null() {
         tracing::error!("[map_addblock] map not loaded id={} m={m}", bl.id);
@@ -1108,12 +1128,12 @@ pub unsafe fn map_delblock(bl: *mut crate::database::map_db::BlockList) -> i32 {
 
     let m = bl.m as usize;
     let pos = (bl.x as usize / crate::database::map_db::BLOCK_SIZE) + (bl.y as usize / crate::database::map_db::BLOCK_SIZE)
-        * unsafe { (*crate::database::map_db::map.add(m)).bxs as usize };
+        * unsafe { (*map_ptr().add(m)).bxs as usize };
 
     if !bl.next.is_null() { (*bl.next).prev = bl.prev; }
 
     if bl.prev == std::ptr::addr_of_mut!(bl_head) {
-        let slot = &mut *crate::database::map_db::map.add(m);
+        let slot = &mut *map_ptr().add(m);
         if bl.bl_type as i32 == crate::game::mob::BL_MOB {
             *slot.block_mob.add(pos) = bl.next;
         } else {
@@ -1124,7 +1144,7 @@ pub unsafe fn map_delblock(bl: *mut crate::database::map_db::BlockList) -> i32 {
     }
 
     if bl.bl_type as i32 == crate::game::mob::BL_PC {
-        let slot = &mut *crate::database::map_db::map.add(m);
+        let slot = &mut *map_ptr().add(m);
         slot.user -= 1;
     }
 
@@ -1170,10 +1190,10 @@ unsafe fn first_mob_in_cell(
 pub unsafe fn map_firstincell(
     m: i32, x: i32, y: i32, bl_type: i32,
 ) -> *mut crate::database::map_db::BlockList {
-    if m < 0 || crate::database::map_db::map.is_null() { return std::ptr::null_mut(); }
+    if m < 0 || map_ptr().is_null() { return std::ptr::null_mut(); }
     let m_idx = m as usize;
     if m_idx >= crate::database::map_db::MAP_SLOTS { return std::ptr::null_mut(); }
-    let slot = &*crate::database::map_db::map.add(m_idx);
+    let slot = &*map_ptr().add(m_idx);
     if slot.registry.is_null() { return std::ptr::null_mut(); }
 
     let x = x.clamp(0, slot.xs as i32 - 1);
@@ -1208,10 +1228,10 @@ pub unsafe fn map_firstincell(
 pub unsafe fn map_respawnmobs<F: FnMut(*mut crate::database::map_db::BlockList) -> i32>(
     mut func: F, m: i32, bl_type: i32,
 ) -> i32 {
-    if m < 0 || crate::database::map_db::map.is_null() { return 0; }
+    if m < 0 || map_ptr().is_null() { return 0; }
     let m_idx = m as usize;
     if m_idx >= crate::database::map_db::MAP_SLOTS { return 0; }
-    let slot = &*crate::database::map_db::map.add(m_idx);
+    let slot = &*map_ptr().add(m_idx);
     if slot.registry.is_null() { return 0; }
 
     let x1 = slot.xs as usize;
@@ -1250,10 +1270,10 @@ pub unsafe fn map_respawnmobs<F: FnMut(*mut crate::database::map_db::BlockList) 
 pub unsafe fn map_firstincellwithtraps(
     m: i32, x: i32, y: i32, bl_type: i32,
 ) -> *mut crate::database::map_db::BlockList {
-    if m < 0 || crate::database::map_db::map.is_null() { return std::ptr::null_mut(); }
+    if m < 0 || map_ptr().is_null() { return std::ptr::null_mut(); }
     let m_idx = m as usize;
     if m_idx >= crate::database::map_db::MAP_SLOTS { return std::ptr::null_mut(); }
-    let slot = &*crate::database::map_db::map.add(m_idx);
+    let slot = &*map_ptr().add(m_idx);
     if slot.registry.is_null() { return std::ptr::null_mut(); }
 
     let x = x.clamp(0, slot.xs as i32 - 1);

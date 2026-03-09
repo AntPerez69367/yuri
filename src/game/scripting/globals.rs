@@ -6,7 +6,6 @@ use mlua::{Lua, Value};
 use crate::database::get_pool;
 use crate::database::map_db::get_map_ptr;
 use crate::game::scripting::ffi as sffi;
-use crate::game::scripting::types;
 
 /// Register all 91 Lua globals on the given Lua state.
 pub fn register(lua: &Lua) -> mlua::Result<()> {
@@ -33,7 +32,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // Tick / time
     // -----------------------------------------------------------------------
     g.set("getTick", lua.create_function(|_, ()| {
-        Ok(unsafe { crate::game::time_util::gettick() } as i64)
+        Ok(crate::game::time_util::gettick() as i64)
     })?)?;
 
     g.set("timeMS", lua.create_function(|_, ()| {
@@ -51,7 +50,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("curServer", lua.create_function(|_, ()| {
-        Ok(unsafe { sffi::serverid } as i64)
+        Ok(sffi::serverid() as i64)
     })?)?;
 
     g.set("curYear", lua.create_function(|_, ()| {
@@ -105,28 +104,28 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("getMapIsLoaded", lua.create_function(|_, m: i32| {
         if m < 0 { return Ok(false); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() { return Ok(false); }
         Ok(unsafe { !(*mp).registry.is_null() })
     })?)?;
 
     g.set("getMapUsers", lua.create_function(|_, m: i32| {
         if m < 0 { return Ok(0i64); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
         Ok(unsafe { (*mp).user as i64 })
     })?)?;
 
     g.set("getMapXMax", lua.create_function(|_, m: i32| {
         if m < 0 { return Ok(0i64); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
         Ok(unsafe { (*mp).xs as i64 - 1 })
     })?)?;
 
     g.set("getMapYMax", lua.create_function(|_, m: i32| {
         if m < 0 { return Ok(0i64); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
         Ok(unsafe { (*mp).ys as i64 - 1 })
     })?)?;
@@ -141,7 +140,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("getObject", lua.create_function(|_, (m, x, y): (i32, i32, i32)| {
         if m < 0 { return Ok(Value::Nil); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(Value::Nil); }
         let md = unsafe { &*mp };
         if x < 0 || y < 0 || x >= md.xs as i32 || y >= md.ys as i32 { return Ok(Value::Nil); }
@@ -151,7 +150,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("setObject", lua.create_function(|_, (m, x, y, val): (i32, i32, i32, i32)| {
         if m < 0 { return Ok(()); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(()); }
         let md = unsafe { &*mp };
         if x < 0 || y < 0 || x >= md.xs as i32 || y >= md.ys as i32 { return Ok(()); }
@@ -163,7 +162,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("getTile", lua.create_function(|_, (m, x, y): (i32, i32, i32)| {
         if m < 0 { return Ok(Value::Nil); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(Value::Nil); }
         let md = unsafe { &*mp };
         if x < 0 || y < 0 || x >= md.xs as i32 || y >= md.ys as i32 { return Ok(Value::Nil); }
@@ -173,7 +172,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("setTile", lua.create_function(|_, (m, x, y, val): (i32, i32, i32, i32)| {
         if m < 0 { return Ok(()); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(()); }
         let md = unsafe { &*mp };
         if x < 0 || y < 0 || x >= md.xs as i32 || y >= md.ys as i32 { return Ok(()); }
@@ -184,7 +183,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("setPass", lua.create_function(|_, (m, x, y, val): (i32, i32, i32, i32)| {
         if m < 0 { return Ok(()); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(()); }
         let md = unsafe { &*mp };
         if x < 0 || y < 0 || x >= md.xs as i32 || y >= md.ys as i32 { return Ok(()); }
@@ -195,7 +194,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("getPass", lua.create_function(|_, (m, x, y): (i32, i32, i32)| {
         if m < 0 { return Ok(Value::Nil); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(Value::Nil); }
         let md = unsafe { &*mp };
         if x < 0 || y < 0 || x >= md.xs as i32 || y >= md.ys as i32 { return Ok(Value::Nil); }
@@ -208,7 +207,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("getMapTitle", lua.create_function(|_, m: i32| {
         if m < 0 { return Ok(String::new()); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(String::new()); }
         let s = unsafe { CStr::from_ptr((*mp).title.as_ptr()).to_string_lossy().into_owned() };
         Ok(s)
@@ -216,7 +215,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("setMapTitle", lua.create_function(|_, (m, title): (i32, String)| {
         if m < 0 { return Ok(()); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(()); }
         let bytes = title.as_bytes();
         let len = bytes.len().min(63);
@@ -230,14 +229,14 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("getMapPvP", lua.create_function(|_, m: i32| {
         if m < 0 { return Ok(0i64); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
         Ok(unsafe { (*mp).pvp as i64 })
     })?)?;
 
     g.set("setMapPvP", lua.create_function(|_, (m, pvp): (i32, i32)| {
         if m < 0 { return Ok(()); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(()); }
         unsafe { (*mp).pvp = pvp as u8; }
         Ok(())
@@ -245,7 +244,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("getWeatherM", lua.create_function(|_, m: i32| {
         if m < 0 { return Ok(0i64); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
         Ok(unsafe { (*mp).weather as i64 })
     })?)?;
@@ -257,7 +256,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("getWeather", lua.create_function(|_, (region, indoor): (i32, i32)| {
         for id in 0..crate::database::map_db::MAP_SLOTS as u16 {
-            let ptr = unsafe { get_map_ptr(id) };
+            let ptr = get_map_ptr(id);
             if ptr.is_null() { continue; }
             let md = unsafe { &*ptr };
             if md.xs == 0 { continue; }
@@ -275,7 +274,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("setLight", lua.create_function(|_, (region, indoor, light): (i32, i32, i32)| {
         for id in 0..crate::database::map_db::MAP_SLOTS as u16 {
-            let ptr = unsafe { get_map_ptr(id) };
+            let ptr = get_map_ptr(id);
             if ptr.is_null() { continue; }
             let md = unsafe { &mut *ptr };
             if md.xs == 0 { continue; }
@@ -288,7 +287,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("getMapRegistry", lua.create_function(|_, (m, key): (i32, String)| {
         if m < 0 { return Ok(0i64); }
-        let ptr = unsafe { get_map_ptr(m as u16) };
+        let ptr = get_map_ptr(m as u16);
         if ptr.is_null() { return Ok(0i64); }
         let md = unsafe { &*ptr };
         if md.registry.is_null() { return Ok(0i64); }
@@ -312,7 +311,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("getMapAttribute", lua.create_function(|lua, (m, attr): (i32, String)| {
         if m < 0 { return Ok(Value::Nil); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(Value::Nil); }
         let md = unsafe { &*mp };
         match attr.as_str() {
@@ -348,7 +347,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("setMapAttribute", lua.create_function(|_, (m, attr, val): (i32, String, Value)| {
         if m < 0 { return Ok(()); }
-        let mp = unsafe { get_map_ptr(m as u16) };
+        let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(()); }
         let md = unsafe { &mut *mp };
         let ival = match &val {
@@ -430,7 +429,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("saveMap", lua.create_function(|_, (m, path): (i32, String)| {
         if m < 0 { return Ok(false); }
-        let ptr = unsafe { get_map_ptr(m as u16) };
+        let ptr = get_map_ptr(m as u16);
         if ptr.is_null() { return Ok(false); }
         let md = unsafe { &*ptr };
         if md.xs == 0 || md.tile.is_null() || md.pass.is_null() || md.obj.is_null() { return Ok(false); }
@@ -458,7 +457,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     g.set("getWarp", lua.create_function(|_, (m, x, y): (i32, i32, i32)| {
         use crate::database::map_db::{BLOCK_SIZE, MAP_SLOTS};
         if m < 0 || m as usize >= MAP_SLOTS { return Ok(false); }
-        let ptr = unsafe { get_map_ptr(m as u16) };
+        let ptr = get_map_ptr(m as u16);
         if ptr.is_null() { return Ok(false); }
         let md = unsafe { &*ptr };
         if md.xs == 0 || md.warp.is_null() { return Ok(false); }
@@ -478,8 +477,8 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         use crate::database::map_db::{BLOCK_SIZE, MAP_SLOTS, WarpList};
         if mm < 0 || mm as usize >= MAP_SLOTS { return Ok(false); }
         if tm < 0 || tm as usize >= MAP_SLOTS { return Ok(false); }
-        let mm_ptr = unsafe { get_map_ptr(mm as u16) };
-        let tm_ptr = unsafe { get_map_ptr(tm as u16) };
+        let mm_ptr = get_map_ptr(mm as u16);
+        let tm_ptr = get_map_ptr(tm as u16);
         if mm_ptr.is_null() || tm_ptr.is_null() { return Ok(false); }
         let md = unsafe { &mut *mm_ptr };
         if md.xs == 0 || unsafe { (*tm_ptr).xs } == 0 { return Ok(false); }
@@ -514,7 +513,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("getMobAttributes", lua.create_function(|lua, id: u32| {
         let tbl = lua.create_table()?;
-        let db = unsafe { sffi::rust_mobdb_search(id as u32) };
+        let db = sffi::rust_mobdb_search(id as u32);
         if !db.is_null() {
             let d = unsafe { &*db };
             tbl.set(1,  d.vita as i64)?;
@@ -539,7 +538,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("addMob", lua.create_async_function(|_, (m, x, y, mobid): (i32, i32, i32, i32)| async move {
         if !unsafe { crate::database::map_db::map_is_loaded(m as u16) } { return Ok(false); }
-        let sid = unsafe { sffi::serverid };
+        let sid = sffi::serverid();
         let ok = sqlx::query(&format!(
             "INSERT INTO `Spawns{}` (`SpnMapId`,`SpnX`,`SpnY`,`SpnMobId`,\
              `SpnLastDeath`,`SpnStartTime`,`SpnEndTime`,`SpnMobIdReplace`) \
@@ -695,7 +694,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         ).execute(get_pool()).await;
         // Update in-memory ClanData if the clan is currently loaded.
         // Pointer access done after DB await — the pointer is valid for the lifetime of the server.
-        let ptr = unsafe { crate::database::clan_db::searchexist(clan) };
+        let ptr = crate::database::clan_db::searchexist(clan);
         if !ptr.is_null() {
             let dst = unsafe { &mut (*ptr).name };
             let bytes = name.as_bytes();

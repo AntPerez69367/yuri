@@ -6,7 +6,7 @@
 
 use crate::database::map_db::BlockList;
 use crate::database::mob_db::MobDbData;
-use crate::database::map_db::map;
+use crate::database::map_db::raw_map_ptr;
 use crate::session::{rust_session_exists, rust_session_set_eof};
 use crate::game::mob::{MobSpawnData, MOB_DEAD, MAX_MAGIC_TIMERS, MAX_THREATCOUNT};
 use crate::game::pc::{
@@ -785,7 +785,7 @@ pub async unsafe fn clif_send_mob_healthscript(mob: *mut MobSpawnData, damage: i
         currentvita = maxvita;
     }
 
-    let mut percentage: f32 = if currentvita <= 0 {
+    let percentage: f32 = if currentvita <= 0 {
         0.0f32
     } else {
         let p = (currentvita as f32 / maxvita as f32) * 100.0f32;
@@ -1393,7 +1393,7 @@ pub unsafe fn clif_deductdura(sd: *mut MapSessionData, equip: i32, val: i32) -> 
     if (*sd).status.equip[equip_idx].id == 0 { return 0; }
 
     let m = (*sd).bl.m as usize;
-    if (*map.add(m)).pvp != 0 { return 0; }
+    if (*raw_map_ptr().add(m)).pvp != 0 { return 0; }
 
     let eth = rust_itemdb_ethereal((*sd).status.equip[equip_idx].id);
     if eth == 0 {
@@ -1545,7 +1545,7 @@ pub unsafe fn clif_deductduraequip(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
     let m = (*sd).bl.m as usize;
-    if (*map.add(m)).pvp != 0 { return 0; }
+    if (*raw_map_ptr().add(m)).pvp != 0 { return 0; }
 
     for equip in 0..14usize {
         if (*sd).status.equip[equip].id == 0 { continue; }

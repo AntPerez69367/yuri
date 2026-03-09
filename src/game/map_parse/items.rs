@@ -4,7 +4,7 @@
 
 
 use crate::database::map_db::{BlockList, WarpList, BLOCK_SIZE};
-use crate::database::map_db::map;
+use crate::database::map_db::raw_map_ptr;
 use crate::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr};
 use crate::game::mob::MOB_DEAD;
 use crate::game::pc::{
@@ -1139,7 +1139,7 @@ pub unsafe fn clif_parsethrow(sd: *mut MapSessionData) -> i32 {
     }
 
     let m = (*sd).bl.m as i32;
-    let map_data = &*map.add(m as usize);
+    let map_data = &*raw_map_ptr().add(m as usize);
 
     'search: for i in 0..max {
         let mut x1: i32 = (*sd).bl.x as i32 + (i * xmod) + xmod;
@@ -1153,8 +1153,8 @@ pub unsafe fn clif_parsethrow(sd: *mut MapSessionData) -> i32 {
         foreach_in_cell(m, x1, y1, BL_PC,  |bl| clif_throw_check_inner(bl, found.as_mut_ptr()));
         foreach_in_cell(m, x1, y1, BL_MOB, |bl| clif_throw_check_inner(bl, found.as_mut_ptr()));
         // read_pass(m, x, y) — accesses map[m].pass[x + y*xs]
-        let pass_val = if map.is_null() { 0 } else {
-            let md = &*map.add(m as usize);
+        let pass_val = if raw_map_ptr().is_null() { 0 } else {
+            let md = &*raw_map_ptr().add(m as usize);
             if md.pass.is_null() { 0 } else { *md.pass.add(x1 as usize + y1 as usize * md.xs as usize) as i32 }
         };
         found[0] += pass_val;

@@ -884,109 +884,132 @@ pub unsafe fn rust_config_free_string(ptr: *mut i8) {
     }
 }
 
-/// Town data struct for config population.
-#[cfg(not(test))]
-struct TownDataFfi {
-    name: [i8; 32],
-}
-
 #[cfg(not(test))]
 pub unsafe fn rust_config_populate_c_globals() {
-    use crate::config_globals::{
-        sql_id, sql_pw, sql_ip, sql_db, sql_port,
-        login_id, login_pw, login_ip, login_port,
-        char_id, char_pw, char_ip, char_port,
-        map_ip, map_port,
-        xor_key, start_pos,
-        serverid, require_reg, nex_version, nex_deep,
-        save_time, xp_rate, d_rate,
-        meta_file, metamax, town_n,
-    };
-    // towns in config_globals uses TownData {name:[i8;32]} — same layout as TownDataFfi.
-    // Use a raw pointer cast to avoid shadowing the static.
-    let towns_ptr = std::ptr::addr_of_mut!(crate::config_globals::towns) as *mut [TownDataFfi; 255];
+    use crate::config_globals::{GlobalConfig, TownData, set_global_config, XP_RATE, D_RATE};
+    use std::sync::atomic::Ordering;
 
-    unsafe fn copy_string_to_buffer<const N: usize>(ptr: *const i8, buffer_ptr: *mut [i8; N]) {
+    unsafe fn copy_cstr<const N: usize>(ptr: *const i8, buf: &mut [i8; N]) {
         if !ptr.is_null() {
             let cstr = CStr::from_ptr(ptr);
             let bytes = cstr.to_bytes();
             let len = bytes.len().min(N - 1);
-            ptr::copy_nonoverlapping(bytes.as_ptr(), buffer_ptr as *mut u8, len);
-            (*(buffer_ptr as *mut [i8; N]))[len] = 0;
+            ptr::copy_nonoverlapping(bytes.as_ptr(), buf.as_mut_ptr() as *mut u8, len);
+            buf[len] = 0;
             rust_config_free_string(ptr as *mut i8);
         }
     }
 
-    unsafe {
-        copy_string_to_buffer(rust_config_get_sql_id(), ptr::addr_of_mut!(sql_id));
-        copy_string_to_buffer(rust_config_get_sql_pw(), ptr::addr_of_mut!(sql_pw));
-        copy_string_to_buffer(rust_config_get_sql_ip(), ptr::addr_of_mut!(sql_ip));
-        copy_string_to_buffer(rust_config_get_sql_db(), ptr::addr_of_mut!(sql_db));
-        sql_port = rust_config_get_sql_port() as i32;
+    let mut cfg = GlobalConfig {
+        xor_key:     [0; 10],
+        start_pos:   crate::config::Point { m: 0, x: 0, y: 0 },
+        login_id:    [0; 33],
+        login_pw:    [0; 33],
+        login_ip:    0,
+        login_port:  2000,
+        char_id:     [0; 33],
+        char_pw:     [0; 33],
+        char_ip:     0,
+        char_port:   2005,
+        map_ip:      0,
+        map_port:    0,
+        sql_id:      [0; 32],
+        sql_pw:      [0; 32],
+        sql_ip:      [0; 32],
+        sql_db:      [0; 32],
+        sql_port:    3306,
+        serverid:    0,
+        require_reg: 1,
+        nex_version: 0,
+        nex_deep:    0,
+        save_time:   60000,
+        meta_file:   [[0; 256]; 20],
+        metamax:     0,
+        towns:       [TownData { name: [0; 32] }; 255],
+        town_n:      0,
+        data_dir:    String::from("./data/"),
+        lua_dir:     String::from("./data/lua/"),
+        maps_dir:    String::from("./data/maps/"),
+        meta_dir:    String::from("./data/meta/"),
+    };
 
-        let cfg = get_config();
-        if let Some(config) = cfg {
+    unsafe {
+        copy_cstr(rust_config_get_sql_id(), &mut cfg.sql_id);
+        copy_cstr(rust_config_get_sql_pw(), &mut cfg.sql_pw);
+        copy_cstr(rust_config_get_sql_ip(), &mut cfg.sql_ip);
+        copy_cstr(rust_config_get_sql_db(), &mut cfg.sql_db);
+        cfg.sql_port = rust_config_get_sql_port() as i32;
+
+        let config_opt = get_config();
+        if let Some(config) = config_opt {
             if let Ok(s) = CString::new(config.login_id.clone()) {
-                copy_string_to_buffer(s.into_raw(), ptr::addr_of_mut!(login_id));
+                copy_cstr(s.into_raw(), &mut cfg.login_id);
             }
             if let Ok(s) = CString::new(config.login_pw.clone()) {
-                copy_string_to_buffer(s.into_raw(), ptr::addr_of_mut!(login_pw));
+                copy_cstr(s.into_raw(), &mut cfg.login_pw);
             }
-            login_port = config.login_port as i32;
+            cfg.login_port = config.login_port as i32;
             if let Ok(addr) = config.login_ip.parse::<Ipv4Addr>() {
-                login_ip = u32::from_le_bytes(addr.octets()) as i32;
+                cfg.login_ip = u32::from_le_bytes(addr.octets()) as i32;
             }
 
             if let Ok(s) = CString::new(config.char_id.clone()) {
-                copy_string_to_buffer(s.into_raw(), ptr::addr_of_mut!(char_id));
+                copy_cstr(s.into_raw(), &mut cfg.char_id);
             }
             if let Ok(s) = CString::new(config.char_pw.clone()) {
-                copy_string_to_buffer(s.into_raw(), ptr::addr_of_mut!(char_pw));
+                copy_cstr(s.into_raw(), &mut cfg.char_pw);
             }
-            char_port = config.char_port as i32;
+            cfg.char_port = config.char_port as i32;
             if let Ok(addr) = config.char_ip.parse::<Ipv4Addr>() {
-                char_ip = u32::from_le_bytes(addr.octets()) as i32;
+                cfg.char_ip = u32::from_le_bytes(addr.octets()) as i32;
             }
 
-            map_port = config.map_port as u32;
+            cfg.map_port = config.map_port as u32;
             if let Ok(addr) = config.map_ip.parse::<Ipv4Addr>() {
-                map_ip = u32::from_le_bytes(addr.octets());
+                cfg.map_ip = u32::from_le_bytes(addr.octets());
             }
 
             if let Ok(s) = CString::new(config.xor_key.clone()) {
-                copy_string_to_buffer(s.into_raw(), ptr::addr_of_mut!(xor_key));
+                copy_cstr(s.into_raw(), &mut cfg.xor_key);
             }
 
-            start_pos = config.start_point;
-            serverid = config.server_id as i32;
-            require_reg = config.require_reg as i32;
-            nex_version = config.version as i32;
-            nex_deep = config.deep as i32;
-            save_time = (config.save_time * 1000) as i32;
-            xp_rate = config.xprate as i32;
-            d_rate = config.droprate as i32;
+            cfg.start_pos   = config.start_point;
+            cfg.serverid    = config.server_id as i32;
+            cfg.require_reg = config.require_reg as i32;
+            cfg.nex_version = config.version as i32;
+            cfg.nex_deep    = config.deep as i32;
+            cfg.save_time   = (config.save_time * 1000) as i32;
 
-            metamax = config.meta.len().min(20) as i32;
+            // XP_RATE and D_RATE are AtomicI32 (written at runtime by GM commands).
+            XP_RATE.store(config.xprate as i32, Ordering::Relaxed);
+            D_RATE.store(config.droprate as i32, Ordering::Relaxed);
+
+            cfg.metamax = config.meta.len().min(20) as i32;
             for (i, meta) in config.meta.iter().take(20).enumerate() {
                 if let Ok(s) = CString::new(meta.clone()) {
-                    let bytes = s.as_bytes_with_nul();
-                    let len = bytes.len().min(256);
-                    let dest = ptr::addr_of_mut!(meta_file[i]) as *mut u8;
-                    ptr::copy_nonoverlapping(bytes.as_ptr(), dest, len);
+                    let bytes = s.as_bytes();
+                    let len = bytes.len().min(255);
+                    ptr::copy_nonoverlapping(bytes.as_ptr(), cfg.meta_file[i].as_mut_ptr() as *mut u8, len);
+                    cfg.meta_file[i][len] = 0;
                 }
             }
 
-            town_n = config.town.len().min(255) as i32;
+            cfg.town_n = config.town.len().min(255) as i32;
             for (i, town) in config.town.iter().take(255).enumerate() {
                 if let Ok(s) = CString::new(town.clone()) {
                     let bytes = s.as_bytes();
                     let len = bytes.len().min(31);
-                    let dest = ptr::addr_of_mut!((*towns_ptr)[i].name) as *mut u8;
-                    ptr::copy_nonoverlapping(bytes.as_ptr(), dest, len);
-                    let name_ptr = ptr::addr_of_mut!((*towns_ptr)[i].name) as *mut i8;
-                    *name_ptr.add(len) = 0;
+                    ptr::copy_nonoverlapping(bytes.as_ptr(), cfg.towns[i].name.as_mut_ptr() as *mut u8, len);
+                    cfg.towns[i].name[len] = 0;
                 }
             }
+
+            cfg.data_dir  = config.data_dir.clone();
+            cfg.lua_dir   = config.lua_dir.clone();
+            cfg.maps_dir  = config.maps_dir.clone();
+            cfg.meta_dir  = config.meta_dir.clone();
         }
     }
+
+    set_global_config(cfg);
 }

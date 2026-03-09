@@ -1,8 +1,10 @@
 //! Map data structures and loader.
 //!
 //! Map and global registry data structures.
+#![allow(non_upper_case_globals)]
 
 use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
@@ -119,15 +121,15 @@ pub struct MapData {
 
 /// Tile arrays parsed from a single .map file. Raw pointers are independently
 /// heap-allocated — no aliases — so safe to move across threads.
-pub(crate) struct ParsedTiles {
-    pub(crate) xs: u16,
-    pub(crate) ys: u16,
-    pub(crate) bxs: u16,
-    pub(crate) bys: u16,
-    pub(crate) tile: *mut u16,
-    pub(crate) pass: *mut u16,
-    pub(crate) obj: *mut u16,
-    pub(crate) map: *mut u8,
+pub struct ParsedTiles {
+    pub xs: u16,
+    pub ys: u16,
+    pub bxs: u16,
+    pub bys: u16,
+    pub tile: *mut u16,
+    pub pass: *mut u16,
+    pub obj: *mut u16,
+    pub map: *mut u8,
 }
 // Each pointer is a uniquely-owned allocation with no aliases.
 unsafe impl Send for ParsedTiles {}
@@ -632,12 +634,22 @@ mod layout_tests {
 
 use std::ffi::CStr;
 
-// Rust owns these globals. Exported to C so map_server.c can read map[id].* unchanged.
-// SAFETY: Raw pointer to heap-allocated MapData array. Allocated once in rust_map_init,
-// never reallocated. All accesses on the game thread. Single-threaded game loop — no concurrent access.
-pub static mut map: *mut MapData = std::ptr::null_mut();
+/// Newtype wrapping the heap-allocated MapData array pointer.
+/// `unsafe impl Send + Sync`: set once at startup before any concurrent access;
+/// thereafter read-only from the game thread.
+struct MapPtr(*mut MapData);
+unsafe impl Send for MapPtr {}
+unsafe impl Sync for MapPtr {}
+
+static MAP_PTR: OnceLock<MapPtr> = OnceLock::new();
 /// Count of loaded map slots. Written once in `rust_map_init` during startup.
 pub static map_n: AtomicI32 = AtomicI32::new(0);
+
+/// Returns the raw base pointer to the map array, or null if not yet initialized.
+/// Safe to call; dereferencing the returned pointer requires `unsafe`.
+pub fn raw_map_ptr() -> *mut MapData {
+    MAP_PTR.get().map(|m| m.0).unwrap_or(std::ptr::null_mut())
+}
 
 /// Allocate the 65535-slot map array, load all maps from DB + files, set C globals.
 pub unsafe fn rust_map_init(maps_dir: *const i8, server_id: i32) -> i32 {
@@ -658,10 +670,15 @@ pub unsafe fn rust_map_init(maps_dir: *const i8, server_id: i32) -> i32 {
 
         match load_maps(dir, server_id, unsafe { &mut *(raw as *mut [MapData; MAP_SLOTS]) }) {
             Ok(count) => {
-                unsafe {
-                    map = raw;
-                    map_n.store(count as i32, Ordering::Relaxed);
+                if MAP_PTR.set(MapPtr(raw)).is_err() {
+                    tracing::warn!("[map] rust_map_init called more than once — ignoring duplicate init");
+                    unsafe {
+                        let layout = std::alloc::Layout::new::<[MapData; MAP_SLOTS]>();
+                        std::alloc::dealloc(raw as *mut u8, layout);
+                    }
+                    return 0;
                 }
+                map_n.store(count as i32, Ordering::Relaxed);
                 tracing::info!("[map] map data loaded count={count}");
                 0
             }
@@ -680,12 +697,12 @@ pub unsafe fn rust_map_init(maps_dir: *const i8, server_id: i32) -> i32 {
 /// Reload map metadata + registry in-place.
 pub unsafe fn rust_map_reload(maps_dir: *const i8, server_id: i32) -> i32 {
     ffi_catch!(-1, {
-        if unsafe { map.is_null() } { return -1; }
+        if raw_map_ptr().is_null() { return -1; }
         let dir = match unsafe { CStr::from_ptr(maps_dir) }.to_str() {
             Ok(s) => s,
             Err(_) => return -1,
         };
-        let slots = unsafe { &mut *(map as *mut [MapData; MAP_SLOTS]) };
+        let slots = unsafe { &mut *(raw_map_ptr() as *mut [MapData; MAP_SLOTS]) };
         match reload_maps(dir, server_id, slots) {
             Ok(_) => 0,
             Err(e) => { tracing::error!("[map] rust_map_reload failed: {e:#}"); -1 }
@@ -694,11 +711,13 @@ pub unsafe fn rust_map_reload(maps_dir: *const i8, server_id: i32) -> i32 {
 }
 
 /// Returns a raw pointer to the MapData slot for `id`, or null if out of range.
-pub unsafe fn get_map_ptr(id: u16) -> *mut MapData {
-    if map.is_null() || id as usize >= MAP_SLOTS {
+/// Safe to call; dereferencing the returned pointer requires `unsafe`.
+pub fn get_map_ptr(id: u16) -> *mut MapData {
+    let base = raw_map_ptr();
+    if base.is_null() || id as usize >= MAP_SLOTS {
         std::ptr::null_mut()
     } else {
-        map.add(id as usize)
+        unsafe { base.add(id as usize) }
     }
 }
 
@@ -727,10 +746,10 @@ pub unsafe fn map_is_loaded(id: u16) -> bool {
 /// Reload the MapRegistry for a single map.
 pub unsafe fn rust_map_loadregistry(map_id: i32) -> i32 {
     ffi_catch!(-1, {
-        if unsafe { map.is_null() } { return -1; }
+        if raw_map_ptr().is_null() { return -1; }
         let id = map_id as usize;
         if id >= MAP_SLOTS { return -1; }
-        let slot = unsafe { &mut *map.add(id) };
+        let slot = unsafe { &mut *raw_map_ptr().add(id) };
         match load_registry(slot, map_id as u32) {
             Ok(_) => 0,
             Err(e) => { tracing::error!("[map] rust_map_loadregistry map_id={map_id} failed: {e:#}"); -1 }

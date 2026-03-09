@@ -99,10 +99,11 @@ impl UserData for MobObject {
             }
             macro_rules! cstr {
                 ($arr:expr) => {{
-                    let s = unsafe { fixed_str($arr) };
+                    let s = fixed_str($arr);
                     Ok(mlua::Value::String(lua.create_string(s)?))
                 }};
             }
+            #[allow(unused_macros)]
             macro_rules! map_int {
                 ($field:ident) => {{
                     let mp = unsafe { mob_map(mob as *const MobSpawnData) };

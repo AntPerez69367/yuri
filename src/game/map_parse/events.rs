@@ -252,6 +252,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 /// award parcels, send a mail confirmation, and update the claim flag.
 ///
 /// C line 4186.
+#[allow(unused_assignments)]
 pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: i32) -> i32 {
     let eventid = rfifob(fd, 7) as i32;
     let g_cur_year   = cur_year.load(AtomicOrd::Relaxed);
@@ -591,6 +592,7 @@ You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewar
 ///
 /// Iterates `rewardranks` times, writing per-rank legend title, icon, and
 /// item reward information into the WFIFO.  C line 4561.
+#[allow(unused_assignments)]
 pub async unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: i32) -> i32 {
     let g_cur_year = cur_year.load(AtomicOrd::Relaxed);
     wfifohead(fd, 0);

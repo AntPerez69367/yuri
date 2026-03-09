@@ -771,7 +771,7 @@ pub unsafe fn clif_getlvlxp(level: i32) -> u32 {
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-/// `crate::database::map_db::map` must be initialised before calling this function.
+/// `crate::database::map_db::raw_map_ptr()` must be initialised before calling this function.
 pub unsafe fn clif_sendweather(
     sd: *mut crate::game::pc::MapSessionData,
 ) -> i32 {
@@ -789,7 +789,7 @@ pub unsafe fn clif_sendweather(
     // FLAG_WEATHER = 32 (mmo.h line 45). setting_flags is u16.
     const FLAG_WEATHER: u16 = 32;
     let weather_byte: u8 = if sdr.status.setting_flags & FLAG_WEATHER != 0 {
-        let map_ptr = crate::database::map_db::map;
+        let map_ptr = crate::database::map_db::raw_map_ptr();
         if map_ptr.is_null() {
             0
         } else {
@@ -836,7 +836,7 @@ pub unsafe fn clif_sendweather(
 ///
 /// # Safety
 /// Both `sd` and `tsd` must be valid, non-null pointers to initialised [`MapSessionData`].
-/// `crate::database::map_db::map` must be initialised before calling this function.
+/// `crate::database::map_db::raw_map_ptr()` must be initialised before calling this function.
 pub unsafe fn clif_show_ghost(
     sd: *mut crate::game::pc::MapSessionData,
     tsd: *mut crate::game::pc::MapSessionData,
@@ -851,7 +851,7 @@ pub unsafe fn clif_show_ghost(
         return 1;
     }
 
-    let map_ptr = crate::database::map_db::map;
+    let map_ptr = crate::database::map_db::raw_map_ptr();
     if map_ptr.is_null() {
         return 1;
     }
@@ -1825,7 +1825,7 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
 
     // Ghost logic — after the packet is sent, handle "show_ghosts" map setting.
     {
-        let map_ptr = crate::database::map_db::map;
+        let map_ptr = crate::database::map_db::raw_map_ptr();
         if !map_ptr.is_null() {
             let sd_r = &*sd;
             let src_r = &*src_sd;
@@ -1904,6 +1904,7 @@ unsafe fn map_id2sd_cop(id: u32) -> *mut MapSessionData {
 /// # Safety
 /// All pointer arguments must be valid, null-terminated C strings for the duration
 /// of the call.  The returned pointer is valid until the next call.
+#[allow(static_mut_refs)]
 unsafe fn replace_str_rust(src: *const i8, orig: &[u8], rep: *const i8) -> *const i8 {
     // Strip trailing NUL(s) from orig so orig_len is the actual string length.
     // Callers may pass NUL-terminated byte literals (e.g. b"$player\0"); strstr

@@ -58,7 +58,7 @@ fn output_meta(filename: &str, num: usize, list: &[u32]) -> Result<()> {
         let id = list[x];
 
         // name (u8-length-prefixed)
-        let name_ptr = unsafe { item_db::search(id) };
+        let name_ptr = item_db::search(id);
         let name_bytes = if !name_ptr.is_null() {
             let cstr = unsafe { CStr::from_ptr((*name_ptr).name.as_ptr()) };
             cstr.to_bytes().to_vec()

@@ -33,7 +33,7 @@ const MAX_MAP_PER_SERVER: i32 = 65535;
 const MAX_KILLREG: usize = 5000;
 
 // All other formerly-C globals are now Rust statics accessible via direct paths.
-use crate::config_globals::{xp_rate, d_rate};
+use crate::config_globals::{XP_RATE, D_RATE};
 use crate::database::map_db::map_n;
 use crate::game::mob::{MOB_SPAWN_START, MOB_SPAWN_MAX, MOB_ONETIME_START, MOB_ONETIME_MAX};
 use std::sync::atomic::Ordering;
@@ -378,7 +378,7 @@ unsafe fn command_deletespell(sd: *mut MapSessionData, line: *mut i8, _s: *mut L
 unsafe fn command_xprate(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let rate = match parse_int(line) { Some(v) => v, None => return -1 };
-    xp_rate = rate;
+    XP_RATE.store(rate, Ordering::Relaxed);
     let mut buf = [0i8; 256];
     let msg = format!("Experience rate: {}x\0", rate);
     for (i, b) in msg.bytes().take(255).enumerate() { buf[i] = b as i8; }
@@ -403,7 +403,7 @@ unsafe fn command_randomspawn   (_sd: *mut MapSessionData, _line: *mut i8, _s: *
 unsafe fn command_drate(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let rate = match parse_int(line) { Some(v) => v, None => return -1 };
-    d_rate = rate;
+    D_RATE.store(rate, Ordering::Relaxed);
     let mut buf = [0i8; 256];
     let msg = format!("Drop rate: {} x\0", rate);
     for (i, b) in msg.bytes().take(255).enumerate() { buf[i] = b as i8; }
@@ -505,6 +505,7 @@ unsafe fn command_makegm(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaSta
     }
     0
 }
+#[allow(static_mut_refs)]
 unsafe fn command_who(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let mut buf = [0i8; 256];

@@ -52,7 +52,7 @@ async fn handle_accept(state: &Arc<MapState>, pkt: &[u8]) {
     // map[i].tile != NULL means the map was loaded (same check as C gm_command.c:1504).
     #[cfg(not(test))]
     let map_ids: Vec<u16> = unsafe {
-        let map_ptr = crate::database::map_db::map;
+        let map_ptr = crate::database::map_db::raw_map_ptr();
         let map_n   = crate::database::map_db::map_n.load(std::sync::atomic::Ordering::Relaxed) as usize;
         if map_ptr.is_null() {
             vec![]
@@ -182,11 +182,11 @@ async fn handle_checkonline(_state: &Arc<MapState>, pkt: &[u8]) {
 
     let manager = crate::session::get_session_manager();
     for fd in manager.get_all_fds() {
-        let tsd = unsafe { rust_session_get_data(fd) };
+        let tsd = rust_session_get_data(fd) as *mut crate::game::pc::MapSessionData;
         if tsd.is_null() { continue; }
         if unsafe { sl_pc_status_id(tsd) } as u32 == char_id {
             tracing::warn!("[map] [charif] checkonline: kicking char_id={} fd={}", char_id, fd);
-            unsafe { rust_session_set_eof(fd, 1); }
+            rust_session_set_eof(fd, 1);
             return;
         }
     }

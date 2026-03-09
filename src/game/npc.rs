@@ -619,7 +619,7 @@ pub unsafe fn warp_init() -> i32 {
 
 #[cfg(not(test))]
 fn server_id() -> u32 {
-    unsafe { crate::config_globals::serverid as u32 }
+    crate::config_globals::global_config().serverid as u32
 }
 
 #[cfg(not(test))]

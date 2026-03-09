@@ -17,7 +17,7 @@
 use std::ptr;
 
 use crate::database::map_db::{BlockList, WarpList, BLOCK_SIZE};
-use crate::database::map_db::map;
+use crate::database::map_db::raw_map_ptr;
 use crate::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr};
 use crate::game::pc::{
     MapSessionData,
@@ -169,7 +169,7 @@ unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::dat
 /// `read_tile(m, x, y)` — tile ID at cell (x, y) on map m.
 #[inline]
 unsafe fn read_tile(m: i32, x: i32, y: i32) -> u16 {
-    let md = &*map.add(m as usize);
+    let md = &*raw_map_ptr().add(m as usize);
     if md.tile.is_null() { return 0; }
     *md.tile.add(x as usize + y as usize * md.xs as usize)
 }
@@ -177,7 +177,7 @@ unsafe fn read_tile(m: i32, x: i32, y: i32) -> u16 {
 /// `read_obj(m, x, y)` — object ID at cell (x, y) on map m.
 #[inline]
 unsafe fn read_obj(m: i32, x: i32, y: i32) -> u16 {
-    let md = &*map.add(m as usize);
+    let md = &*raw_map_ptr().add(m as usize);
     if md.obj.is_null() { return 0; }
     *md.obj.add(x as usize + y as usize * md.xs as usize)
 }
@@ -186,7 +186,7 @@ unsafe fn read_obj(m: i32, x: i32, y: i32) -> u16 {
 /// Non-zero means blocked.
 #[inline]
 unsafe fn read_pass(m: i32, x: i32, y: i32) -> u16 {
-    let md = &*map.add(m as usize);
+    let md = &*raw_map_ptr().add(m as usize);
     if md.pass.is_null() { return 0; }
     *md.pass.add(x as usize + y as usize * md.xs as usize)
 }
@@ -270,8 +270,8 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Ghost visibility: dead players hidden from non-ghost viewers
-    if !map.is_null() {
-        let md = &*map.add((*sd).bl.m as usize);
+    if !raw_map_ptr().is_null() {
+        let md = &*raw_map_ptr().add((*sd).bl.m as usize);
         if md.show_ghosts != 0
             && (*sd).status.state == PC_DIE
             && (*sd).bl.id != (*src_sd).bl.id
@@ -645,7 +645,7 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
 
     let fd = (*sd).fd;
     let m  = (*sd).bl.m as i32;
-    let md = &*map.add(m as usize);
+    let md = &*raw_map_ptr().add(m as usize);
 
     // Dismount on non-mount maps
     if md.can_mount == 0 && (*sd).status.state == PC_MOUNTED && (*sd).status.gm_level == 0 {
@@ -852,7 +852,7 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> i32 {
     if sd.is_null() { return 0; }
 
     let m  = (*sd).bl.m as i32;
-    let md = &*map.add(m as usize);
+    let md = &*raw_map_ptr().add(m as usize);
 
     let xold = (*sd).bl.x as i32;
     let yold = (*sd).bl.y as i32;
@@ -1132,7 +1132,7 @@ pub unsafe fn clif_sendmapdata(
         return 0;
     }
 
-    let md = &*map.add(m as usize);
+    let md = &*raw_map_ptr().add(m as usize);
     if x0 < 0 { x0 = 0; }
     if y0 < 0 { y0 = 0; }
     if x1 > md.xs as i32 { x1 = md.xs as i32; }
@@ -1273,7 +1273,7 @@ pub unsafe fn clif_parseside(sd: *mut MapSessionData) -> i32 {
 #[inline]
 unsafe fn do_warp_check(sd: *mut MapSessionData) {
     let fm = (*sd).bl.m as i32;
-    let fmd = &*map.add(fm as usize);
+    let fmd = &*raw_map_ptr().add(fm as usize);
 
     let mut fx = (*sd).bl.x as i32;
     let mut fy = (*sd).bl.y as i32;
@@ -1299,7 +1299,7 @@ unsafe fn do_warp_check(sd: *mut MapSessionData) {
 
     if zx == 0 && zy == 0 && zm == 0 { return; }
 
-    let zmd = &*map.add(zm as usize);
+    let zmd = &*raw_map_ptr().add(zm as usize);
 
     // Level / vita / mana / mark / path minimum requirements
     let below_min = ((*sd).status.level as u32) < zmd.reqlvl
@@ -1531,7 +1531,7 @@ pub unsafe fn clif_parselookat(sd: *mut MapSessionData) -> i32 {
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 #[cfg(not(test))]
 pub unsafe fn clif_refreshnoclick(sd: *mut MapSessionData) -> i32 {
-    use crate::database::map_db::map;
+    use crate::database::map_db::raw_map_ptr;
     use crate::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
     use crate::game::map_parse::player_state::{clif_sendmapinfo, clif_sendxynoclick};
     use crate::game::client::visual::clif_destroyold;
@@ -1568,7 +1568,7 @@ pub unsafe fn clif_refreshnoclick(sd: *mut MapSessionData) -> i32 {
     let n = set_packet_indexes(&mut buf);  // appends 3 index bytes, updates [1-2]
     rust_session_commit((*sd).fd, n);
 
-    let md = &*map.add((*sd).bl.m as usize);
+    let md = &*raw_map_ptr().add((*sd).bl.m as usize);
     if md.can_group == 0 {
         use crate::game::map_parse::groups::clif_leavegroup;
         (*sd).status.setting_flags ^= FLAG_GROUP as u16;

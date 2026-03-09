@@ -1,5 +1,5 @@
 //! Lua scripting engine.
-#![allow(non_snake_case, dead_code, unused_variables)]
+#![allow(non_snake_case, dead_code, unused_variables, non_upper_case_globals, static_mut_refs)]
 
 pub mod async_coro;
 pub mod ffi;
@@ -91,7 +91,7 @@ macro_rules! ctor {
 
 fn register_types(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
-    g.set("PC",       ctor!(lua, PcObject))?;
+    g.set("PC", lua.create_function(|_, v: mlua::Value| Ok(PcObject { ptr: lua_val_to_ptr(v) as *mut crate::game::pc::MapSessionData }))?)?;
     g.set("MOB", lua.create_function(|_, v: mlua::Value| Ok(MobObject {
         ptr: lua_val_to_ptr(v),
         deleted: Arc::new(AtomicBool::new(false)),
@@ -143,7 +143,7 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
             _ => std::ptr::null_mut(),
         };
         if ptr.is_null() { return Ok(mlua::Value::Nil); }
-        Ok(mlua::Value::UserData(lua.create_userdata(PcObject { ptr })?))
+        Ok(mlua::Value::UserData(lua.create_userdata(PcObject { ptr: ptr as *mut crate::game::pc::MapSessionData })?))
     })?)?;
     player_tbl.set_metatable(Some(player_mt));
     g.set("Player", player_tbl)?;
@@ -181,11 +181,11 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
         let ptr: *mut std::ffi::c_void = match v {
             mlua::Value::Integer(id) => {
                 if id < 0 || id > u32::MAX as i64 { return Ok(mlua::Value::Nil); }
-                unsafe { crate::database::item_db::rust_itemdb_search(id as u32) as *mut std::ffi::c_void }
+                crate::database::item_db::rust_itemdb_search(id as u32) as *mut std::ffi::c_void
             }
             mlua::Value::Number(f) => {
                 if !f.is_finite() || f < 0.0 || f > u32::MAX as f64 { return Ok(mlua::Value::Nil); }
-                unsafe { crate::database::item_db::rust_itemdb_search(f as u32) as *mut std::ffi::c_void }
+                crate::database::item_db::rust_itemdb_search(f as u32) as *mut std::ffi::c_void
             }
             mlua::Value::String(ref s) => {
                 let text = s.to_str()?;
@@ -204,11 +204,11 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
         let ptr: *mut std::ffi::c_void = match v {
             mlua::Value::Integer(id) => {
                 if id < 0 || id > u32::MAX as i64 { return Ok(mlua::Value::Nil); }
-                unsafe { crate::database::recipe_db::rust_recipedb_search(id as u32) as *mut std::ffi::c_void }
+                crate::database::recipe_db::rust_recipedb_search(id as u32) as *mut std::ffi::c_void
             }
             mlua::Value::Number(f) => {
                 if !f.is_finite() || f < 0.0 || f > u32::MAX as f64 { return Ok(mlua::Value::Nil); }
-                unsafe { crate::database::recipe_db::rust_recipedb_search(f as u32) as *mut std::ffi::c_void }
+                crate::database::recipe_db::rust_recipedb_search(f as u32) as *mut std::ffi::c_void
             }
             mlua::Value::String(ref s) => {
                 let text = s.to_str()?;
@@ -306,7 +306,7 @@ pub(crate) unsafe fn bl_to_lua(lua: &Lua, bl: *mut std::ffi::c_void) -> mlua::Re
     if bl.is_null() { return Ok(mlua::Value::Nil); }
     let bl_type = (*(bl as *const BlockList)).bl_type as i32;
     match bl_type {
-        ffi::BL_PC   => lua.pack(PcObject       { ptr: bl }),
+        ffi::BL_PC   => lua.pack(PcObject       { ptr: bl as *mut crate::game::pc::MapSessionData }),
         ffi::BL_MOB  => lua.pack(MobObject      { ptr: bl, deleted: Arc::new(AtomicBool::new(false)) }),
         ffi::BL_NPC  => lua.pack(NpcObject      { ptr: bl }),
         ffi::BL_ITEM => lua.pack(FloorListObject::new(bl)),

@@ -199,16 +199,16 @@ pub unsafe fn item_data_getattr(
         "protection"   => int!(d.protection),
         "reqMight"     => int!(d.mightreq),
         "rank" => {
-            let path = unsafe { crate::database::class_db::rust_classdb_path(d.class as i32) };
-            let ptr = unsafe { crate::database::class_db::rust_classdb_name(path, d.rank) };
+            let path = crate::database::class_db::rust_classdb_path(d.class as i32);
+            let ptr = crate::database::class_db::rust_classdb_name(path, d.rank);
             let s = classdb_name_to_string(ptr);
             Ok(mlua::Value::String(lua.create_string(s)?))
         }
         "baseClass" => {
-            int!(unsafe { crate::database::class_db::rust_classdb_path(d.class as i32) })
+            int!(crate::database::class_db::rust_classdb_path(d.class as i32))
         }
         "className" => {
-            let ptr = unsafe { crate::database::class_db::rust_classdb_name(d.class as i32, d.rank) };
+            let ptr = crate::database::class_db::rust_classdb_name(d.class as i32, d.rank);
             let s = classdb_name_to_string(ptr);
             Ok(mlua::Value::String(lua.create_string(s)?))
         }
@@ -262,7 +262,7 @@ impl UserData for BItemObject {
                 "customIconColor" => int!(bi.custom_icon_color),
                 "note"            => cstr!(&bi.note),
                 _ => {
-                    let db = unsafe { crate::database::item_db::rust_itemdb_search(bi.id) };
+                    let db = crate::database::item_db::rust_itemdb_search(bi.id);
                     unsafe { item_data_getattr(lua, db, &key) }
                 }
             }
@@ -327,7 +327,7 @@ impl UserData for BankItemObject {
                 "customIconColor" => int!(bd.custom_icon_color),
                 "note"            => cstr!(&bd.note),
                 _ => {
-                    let db = unsafe { crate::database::item_db::rust_itemdb_search(bd.item_id) };
+                    let db = crate::database::item_db::rust_itemdb_search(bd.item_id);
                     unsafe { item_data_getattr(lua, db, &key) }
                 }
             }
@@ -388,7 +388,7 @@ impl UserData for ParcelObject {
                 "pos"       => int!(p.pos),
                 "npcFlag"   => int!(p.npcflag),
                 _ => {
-                    let db = unsafe { crate::database::item_db::rust_itemdb_search(p.data.id) };
+                    let db = crate::database::item_db::rust_itemdb_search(p.data.id);
                     unsafe { item_data_getattr(lua, db, &key) }
                 }
             }
