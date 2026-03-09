@@ -1,21 +1,16 @@
-//! Port of trading/exchange handling from `c_src/map_parse.c`.
-//!
-//! Functions declared `pub unsafe extern "C"` so they remain
-//! callable from any remaining C code that has not yet been ported.
 //!
 //! Exchange field types in `MapSessionData` (verified from `src/game/pc.rs`):
-//! - `exchange_on: c_int`  — flag (not used by these functions directly)
+//! - `exchange_on: i32`  — flag (not used by these functions directly)
 //! - `exchange: PcExchange` — embedded struct with:
 //!     - `item: [Item; 52]`
-//!     - `item_count: c_int`
-//!     - `exchange_done: c_int`
-//!     - `list_count: c_int`
-//!     - `gold: c_uint`
-//!     - `target: c_uint` — character ID of exchange partner (NOT a pointer)
+//!     - `item_count: i32`
+//!     - `exchange_done: i32`
+//!     - `list_count: i32`
+//!     - `gold: u32`
+//!     - `target: u32` — character ID of exchange partner (NOT a pointer)
 
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
-use std::ffi::{c_char, c_int, c_uint, c_ulong};
 
 use crate::database::map_db::BlockList;
 use crate::session::{rust_session_exists, rust_session_set_eof};
@@ -26,7 +21,7 @@ use crate::game::pc::{
 };
 
 // BL_ALL: all block-list types (from map_server.h enum)
-const BL_ALL: c_int = 0x0F;
+const BL_ALL: i32 = 0x0F;
 use crate::servers::char::charstatus::MAX_INVENTORY;
 
 use super::packet::{
@@ -37,9 +32,8 @@ use super::packet::{
 
 // ─── optFlag_stealth (from map_server.h) ─────────────────────────────────────
 
-const OPT_FLAG_STEALTH: c_ulong = 32;
+const OPT_FLAG_STEALTH: u64 = 32;
 
-// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
 
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::map_parse::player_state::clif_sendstatus;
@@ -58,28 +52,28 @@ use crate::database::item_db::{
 };
 use crate::database::class_db::rust_classdb_name as classdb_name;
 
-// map_id2sd in map_server returns *mut c_void — wrap with cast.
+// map_id2sd in map_server returns *mut std::ffi::c_void — wrap with cast.
 #[inline]
-unsafe fn map_id2sd(id: c_uint) -> *mut MapSessionData {
+unsafe fn map_id2sd(id: u32) -> *mut MapSessionData {
     crate::game::map_server::map_id2sd(id) as *mut MapSessionData
 }
 
 /// Dispatch a Lua event with two block_list arguments.
 #[cfg(not(test))]
 #[allow(dead_code)]
-unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
 }
 
 
 // SFLAG_XPMONEY (from map_server.h)
-const SFLAG_XPMONEY: c_int = 4;
+const SFLAG_XPMONEY: i32 = 4;
 
 // Item type constants (from item_db.h)
-const ITM_SMOKE:  c_int = 23;
-const ITM_BAG:    c_int = 25;
-const ITM_MAP:    c_int = 24;
-const ITM_QUIVER: c_int = 26;
+const ITM_SMOKE:  i32 = 23;
+const ITM_BAG:    i32 = 25;
+const ITM_MAP:    i32 = 24;
+const ITM_QUIVER: i32 = 26;
 
 // ─── string_truncate: mirror of C stringTruncate ─────────────────────────────
 
@@ -94,7 +88,7 @@ unsafe fn string_truncate(buf: &mut [i8], max_len: usize) {
 // ─── clif_exchange_cleanup ───────────────────────────────────────────────────
 
 /// Reset the exchange state on one side.  C lines 9316-9321.
-pub unsafe fn clif_exchange_cleanup(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_exchange_cleanup(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     let sd = &mut *sd;
     sd.exchange.exchange_done = 0;
@@ -108,10 +102,10 @@ pub unsafe fn clif_exchange_cleanup(sd: *mut MapSessionData) -> c_int {
 /// Send an exchange status message to one player.  C lines 9389-9412.
 pub unsafe fn clif_exchange_message(
     sd:      *mut MapSessionData,
-    message: *const c_char,
-    kind:    c_int,
-    extra:   c_int,
-) -> c_int {
+    message: *const i8,
+    kind:    i32,
+    extra:   i32,
+) -> i32 {
     if sd.is_null() { return 0; }
     let sd = &*sd;
     let extra = if extra > 1 { 0 } else { extra };
@@ -149,12 +143,12 @@ pub unsafe fn clif_exchange_message(
 pub unsafe fn clif_exchange_finalize(
     sd:  *mut MapSessionData,
     tsd: *mut MapSessionData,
-) -> c_int {
+) -> i32 {
     if sd.is_null() || tsd.is_null() { return 0; }
 
     {
-        let script = b"characterLog\0".as_ptr() as *const c_char;
-        let func   = b"exchangeLogWrite\0".as_ptr() as *const c_char;
+        let script = b"characterLog\0".as_ptr() as *const i8;
+        let func   = b"exchangeLogWrite\0".as_ptr() as *const i8;
         sl_doscript_2(script, func, &mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList);
     }
 
@@ -189,13 +183,13 @@ pub unsafe fn clif_exchange_finalize(
 pub unsafe fn clif_exchange_sendok(
     sd:  *mut MapSessionData,
     tsd: *mut MapSessionData,
-) -> c_int {
+) -> i32 {
     if sd.is_null() || tsd.is_null() { return 0; }
 
     if (*tsd).exchange.exchange_done == 1 {
         clif_exchange_finalize(sd, tsd);
 
-        let msg = b"You exchanged, and gave away ownership of the items.\0".as_ptr() as *const c_char;
+        let msg = b"You exchanged, and gave away ownership of the items.\0".as_ptr() as *const i8;
         clif_exchange_message(sd,  msg, 5, 0);
         clif_exchange_message(tsd, msg, 5, 0);
 
@@ -203,7 +197,7 @@ pub unsafe fn clif_exchange_sendok(
         clif_exchange_cleanup(tsd);
     } else {
         (*sd).exchange.exchange_done = 1;
-        let msg = b"You exchanged, and gave away ownership of the items.\0".as_ptr() as *const c_char;
+        let msg = b"You exchanged, and gave away ownership of the items.\0".as_ptr() as *const i8;
         clif_exchange_message(tsd, msg, 5, 1);
         clif_exchange_message(sd,  msg, 5, 1);
     }
@@ -215,12 +209,12 @@ pub unsafe fn clif_exchange_sendok(
 /// Initiate a trade window between two players.  C lines 9545-9634.
 pub unsafe fn clif_startexchange(
     sd:     *mut MapSessionData,
-    target: c_uint,
-) -> c_int {
+    target: u32,
+) -> i32 {
     if sd.is_null() { return 0; }
 
     if target == (*sd).bl.id {
-        let msg = b"You move your items from one hand to another, but quickly get bored.\0".as_ptr() as *const c_char;
+        let msg = b"You move your items from one hand to another, but quickly get bored.\0".as_ptr() as *const i8;
         clif_sendminitext(sd, msg);
         return 0;
     }
@@ -231,16 +225,16 @@ pub unsafe fn clif_startexchange(
     (*sd).exchange.target  = target;
     (*tsd).exchange.target = (*sd).bl.id;
 
-    if (*tsd).status.setting_flags as c_uint & FLAG_EXCHANGE != 0 {
+    if (*tsd).status.setting_flags as u32 & FLAG_EXCHANGE != 0 {
         let mut buff = [0i8; 256];
 
         // Build name string for sd (to send to tsd)
-        let tsd_class_name = classdb_name((*tsd).status.class as c_int, (*tsd).status.mark as c_int);
+        let tsd_class_name = classdb_name((*tsd).status.class as i32, (*tsd).status.mark as i32);
         if !tsd_class_name.is_null() {
             libc::snprintf(
                 buff.as_mut_ptr(),
                 buff.len(),
-                b"%s(%s)\0".as_ptr() as *const c_char,
+                b"%s(%s)\0".as_ptr() as *const i8,
                 (*tsd).status.name.as_ptr(),
                 tsd_class_name,
             );
@@ -248,7 +242,7 @@ pub unsafe fn clif_startexchange(
             libc::snprintf(
                 buff.as_mut_ptr(),
                 buff.len(),
-                b"%s()\0".as_ptr() as *const c_char,
+                b"%s()\0".as_ptr() as *const i8,
                 (*tsd).status.name.as_ptr(),
             );
         }
@@ -289,12 +283,12 @@ pub unsafe fn clif_startexchange(
         }
 
         // Build name string for tsd (to send to sd)
-        let sd_class_name = classdb_name((*sd).status.class as c_int, (*sd).status.mark as c_int);
+        let sd_class_name = classdb_name((*sd).status.class as i32, (*sd).status.mark as i32);
         if !sd_class_name.is_null() {
             libc::snprintf(
                 buff.as_mut_ptr(),
                 buff.len(),
-                b"%s(%s)\0".as_ptr() as *const c_char,
+                b"%s(%s)\0".as_ptr() as *const i8,
                 (*sd).status.name.as_ptr(),
                 sd_class_name,
             );
@@ -302,7 +296,7 @@ pub unsafe fn clif_startexchange(
             libc::snprintf(
                 buff.as_mut_ptr(),
                 buff.len(),
-                b"%s()\0".as_ptr() as *const c_char,
+                b"%s()\0".as_ptr() as *const i8,
                 (*sd).status.name.as_ptr(),
             );
         }
@@ -339,7 +333,7 @@ pub unsafe fn clif_startexchange(
         (*sd).exchange.list_count  = 0;
         (*tsd).exchange.list_count = 1;
     } else {
-        let msg = b"They have refused to exchange with you\0".as_ptr() as *const c_char;
+        let msg = b"They have refused to exchange with you\0".as_ptr() as *const i8;
         clif_sendminitext(sd, msg);
     }
     0
@@ -351,8 +345,8 @@ pub unsafe fn clif_startexchange(
 pub unsafe fn clif_exchange_additem_else(
     sd:  *mut MapSessionData,
     tsd: *mut MapSessionData,
-    _id: c_int,
-) -> c_int {
+    _id: i32,
+) -> i32 {
     if sd.is_null()  { return 0; }
     if tsd.is_null() { return 0; }
 
@@ -431,9 +425,9 @@ pub unsafe fn clif_exchange_additem_else(
 pub unsafe fn clif_exchange_additem(
     sd:     *mut MapSessionData,
     tsd:    *mut MapSessionData,
-    id:     c_int,
-    amount: c_int,
-) -> c_int {
+    id:     i32,
+    amount: i32,
+) -> i32 {
     if sd.is_null()  { return 0; }
     if tsd.is_null() { return 0; }
 
@@ -445,7 +439,7 @@ pub unsafe fn clif_exchange_additem(
 
     if item_id != 0 {
         if itemdb_exchangeable(item_id) != 0 {
-            let msg = b"You cannot exchange that.\0".as_ptr() as *const c_char;
+            let msg = b"You cannot exchange that.\0".as_ptr() as *const i8;
             clif_sendminitext(sd, msg);
             return 0;
         }
@@ -455,16 +449,16 @@ pub unsafe fn clif_exchange_additem(
     let inv = &(*sd).status.inventory[slot];
     let space = pc_isinvenspace(
         tsd,
-        item_id as c_int,
-        inv.owner as c_int,
+        item_id as i32,
+        inv.owner as i32,
         inv.real_name.as_ptr(),
         inv.custom_look,
         inv.custom_look_color,
         inv.custom_icon,
         inv.custom_icon_color,
     );
-    if space >= (*tsd).status.maxinv as c_int {
-        let msg = b"Receiving player does not have enough inventory space.\0".as_ptr() as *const c_char;
+    if space >= (*tsd).status.maxinv as i32 {
+        let msg = b"Receiving player does not have enough inventory space.\0".as_ptr() as *const i8;
         clif_sendminitext(sd, msg);
         return 0;
     }
@@ -500,13 +494,13 @@ pub unsafe fn clif_exchange_additem(
     if amount > 1 {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s(%d)\0".as_ptr() as *const c_char,
+            b"%s(%d)\0".as_ptr() as *const i8,
             nameof.as_ptr(), amount,
         );
     } else {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s\0".as_ptr() as *const c_char,
+            b"%s\0".as_ptr() as *const i8,
             nameof.as_ptr(),
         );
     }
@@ -518,32 +512,32 @@ pub unsafe fn clif_exchange_additem(
         } else { 0.0 };
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s (%d%%)\0".as_ptr() as *const c_char,
-            nameof.as_ptr(), percentage as c_int,
+            b"%s (%d%%)\0".as_ptr() as *const i8,
+            nameof.as_ptr(), percentage as i32,
         );
     } else if ex_type == ITM_SMOKE {
         let txt = itemdb_text(ex_item.id);
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s [%d %s]\0".as_ptr() as *const c_char,
+            b"%s [%d %s]\0".as_ptr() as *const i8,
             nameof.as_ptr(), ex_dura, txt,
         );
     } else if ex_type == ITM_BAG {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s [%d]\0".as_ptr() as *const c_char,
+            b"%s [%d]\0".as_ptr() as *const i8,
             nameof.as_ptr(), ex_dura,
         );
     } else if ex_type == ITM_MAP {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"[T%d] %s\0".as_ptr() as *const c_char,
+            b"[T%d] %s\0".as_ptr() as *const i8,
             ex_dura, nameof.as_ptr(),
         );
     } else if ex_type == ITM_QUIVER {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s [%d]\0".as_ptr() as *const c_char,
+            b"%s [%d]\0".as_ptr() as *const i8,
             nameof.as_ptr(), ex_dura,
         );
     }
@@ -593,13 +587,13 @@ pub unsafe fn clif_exchange_additem(
     if amount > 1 {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s (%d)\0".as_ptr() as *const c_char,
+            b"%s (%d)\0".as_ptr() as *const i8,
             nameof.as_ptr(), amount,
         );
     } else {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s\0".as_ptr() as *const c_char,
+            b"%s\0".as_ptr() as *const i8,
             nameof.as_ptr(),
         );
     }
@@ -611,32 +605,32 @@ pub unsafe fn clif_exchange_additem(
         } else { 0.0 };
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s (%d%%)\0".as_ptr() as *const c_char,
-            nameof.as_ptr(), percentage as c_int,
+            b"%s (%d%%)\0".as_ptr() as *const i8,
+            nameof.as_ptr(), percentage as i32,
         );
     } else if ex_type == ITM_SMOKE {
         let txt = itemdb_text(ex_item.id);
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s [%d %s]\0".as_ptr() as *const c_char,
+            b"%s [%d %s]\0".as_ptr() as *const i8,
             nameof.as_ptr(), ex_dura, txt,
         );
     } else if ex_type == ITM_BAG {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s [%d]\0".as_ptr() as *const c_char,
+            b"%s [%d]\0".as_ptr() as *const i8,
             nameof.as_ptr(), ex_dura,
         );
     } else if ex_type == ITM_MAP {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"[T%d] %s\0".as_ptr() as *const c_char,
+            b"[T%d] %s\0".as_ptr() as *const i8,
             ex_dura, nameof.as_ptr(),
         );
     } else if ex_type == ITM_QUIVER {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s [%d]\0".as_ptr() as *const c_char,
+            b"%s [%d]\0".as_ptr() as *const i8,
             nameof.as_ptr(), ex_dura,
         );
     }
@@ -690,7 +684,7 @@ pub unsafe fn clif_exchange_additem(
 pub unsafe fn clif_exchange_money(
     sd:  *mut MapSessionData,
     tsd: *mut MapSessionData,
-) -> c_int {
+) -> i32 {
     if sd.is_null()  { return 0; }
     if tsd.is_null() { return 0; }
 
@@ -744,7 +738,7 @@ pub unsafe fn clif_exchange_money(
 // ─── clif_exchange_close ─────────────────────────────────────────────────────
 
 /// Cancel the exchange and return all held items.  C lines 9906-9926.
-pub unsafe fn clif_exchange_close(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_exchange_close(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
     (*sd).exchange.target = 0;
@@ -761,7 +755,7 @@ pub unsafe fn clif_exchange_close(sd: *mut MapSessionData) -> c_int {
 // ─── clif_handgold ───────────────────────────────────────────────────────────
 
 /// Handle a "hand gold" packet — offer gold from adjacent cell.  C lines 9090-9155.
-pub unsafe fn clif_handgold(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_handgold(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
     let gold = {
@@ -778,18 +772,18 @@ pub unsafe fn clif_handgold(sd: *mut MapSessionData) -> c_int {
     // Compute adjacent cell based on facing direction
     let (x, y) = side_cell(&*sd);
 
-    let bl = map_firstincell((*sd).bl.m as c_int, x, y, BL_ALL);
+    let bl = map_firstincell((*sd).bl.m as i32, x, y, BL_ALL);
 
     (*sd).exchange.gold = gold;
 
     if !bl.is_null() {
-        if (*bl).bl_type as c_int == BL_PC {
+        if (*bl).bl_type as i32 == BL_PC {
             let tsd = map_id2sd((*bl).id);
-            if !tsd.is_null() && (*tsd).status.setting_flags as c_uint & FLAG_EXCHANGE != 0 {
+            if !tsd.is_null() && (*tsd).status.setting_flags as u32 & FLAG_EXCHANGE != 0 {
                 clif_startexchange(sd, (*bl).id);
                 clif_exchange_money(sd, tsd);
             } else {
-                let msg = b"They have refused to exchange with you\0".as_ptr() as *const c_char;
+                let msg = b"They have refused to exchange with you\0".as_ptr() as *const i8;
                 clif_sendminitext(sd, msg);
             }
         }
@@ -800,12 +794,12 @@ pub unsafe fn clif_handgold(sd: *mut MapSessionData) -> c_int {
 // ─── clif_handitem ───────────────────────────────────────────────────────────
 
 /// Handle a "hand item" packet — offer/give item from adjacent cell.  C lines 9206-9314.
-pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
     let slot      = rfifob((*sd).fd, 5).saturating_sub(1) as usize;
     let handgive  = rfifob((*sd).fd, 6);
-    let amount: c_int = if handgive == 0 {
+    let amount: i32 = if handgive == 0 {
         1
     } else {
         (*sd).status.inventory[slot].amount
@@ -815,22 +809,22 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> c_int {
 
     (*sd).invslot = slot as u8;
 
-    let bl = map_firstincell((*sd).bl.m as c_int, x, y, BL_ALL);
+    let bl = map_firstincell((*sd).bl.m as i32, x, y, BL_ALL);
 
     if bl.is_null() { return 0; }
 
-    if (*bl).bl_type as c_int == BL_PC {
+    if (*bl).bl_type as i32 == BL_PC {
         let tsd = map_id2sd((*bl).id);
-        if !tsd.is_null() && (*tsd).status.setting_flags as c_uint & FLAG_EXCHANGE != 0 {
+        if !tsd.is_null() && (*tsd).status.setting_flags as u32 & FLAG_EXCHANGE != 0 {
             clif_startexchange(sd, (*bl).id);
-            clif_exchange_additem(sd, tsd, slot as c_int, amount);
+            clif_exchange_additem(sd, tsd, slot as i32, amount);
         } else {
-            let msg = b"They have refused to exchange with you\0".as_ptr() as *const c_char;
+            let msg = b"They have refused to exchange with you\0".as_ptr() as *const i8;
             clif_sendminitext(sd, msg);
         }
     }
 
-    if (*bl).bl_type as c_int == BL_MOB {
+    if (*bl).bl_type as i32 == BL_MOB {
         let mob = map_id2mob((*bl).id);
         if mob.is_null() { return 0; }
 
@@ -863,10 +857,10 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> c_int {
             }
         }
         let _ = found;
-        pc_delitem(sd, slot as c_int, amount, 9);
+        pc_delitem(sd, slot as i32, amount, 9);
     }
 
-    if (*bl).bl_type as c_int == BL_NPC {
+    if (*bl).bl_type as i32 == BL_NPC {
         let nd = map_id2npc((*bl).id);
         if nd.is_null() { return 0; }
 
@@ -875,7 +869,7 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> c_int {
         struct NpcMinimal {
             bl:          BlockList,
             name:        [i8; 24],
-            receive_item: c_int,
+            receive_item: i32,
         }
         let nd_min = nd as *mut NpcMinimal;
 
@@ -885,14 +879,14 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> c_int {
         }
 
         if (*nd_min).receive_item == 1 {
-            let func = b"handItem\0".as_ptr() as *const c_char;
+            let func = b"handItem\0".as_ptr() as *const i8;
             sl_doscript_2((*nd_min).name.as_ptr(), func, &mut (*sd).bl as *mut BlockList, &mut (*nd_min).bl as *mut BlockList);
         } else {
             let item_name = itemdb_name(inv_id);
             let mut msg = [0i8; 128];
             libc::snprintf(
                 msg.as_mut_ptr(), msg.len(),
-                b"What are you trying to do? Keep your junky %s with you!\0".as_ptr() as *const c_char,
+                b"What are you trying to do? Keep your junky %s with you!\0".as_ptr() as *const i8,
                 item_name,
             );
             let msg_len = libc::strlen(msg.as_ptr());
@@ -929,12 +923,12 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> c_int {
 // ─── clif_parse_exchange ─────────────────────────────────────────────────────
 
 /// Dispatch incoming exchange sub-packet by type byte.  C lines 9438-9543.
-pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
-    let kind = rfifob((*sd).fd, 5) as c_int;
+    let kind = rfifob((*sd).fd, 5) as i32;
 
-    let reg_str = b"goldbardupe\0".as_ptr() as *const c_char;
+    let reg_str = b"goldbardupe\0".as_ptr() as *const i8;
     let _dupe_times = pc_readglobalreg(sd, reg_str);
     // C has a commented-out quarantine block here; no-op as in C.
 
@@ -946,7 +940,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> c_int {
             let tsd = map_id2sd(target_id);
             if tsd.is_null()
                 || (*sd).bl.m != (*tsd).bl.m
-                || (*tsd).bl.bl_type as c_int != BL_PC
+                || (*tsd).bl.bl_type as i32 != BL_PC
             {
                 return 0;
             }
@@ -980,7 +974,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> c_int {
                 let raw = rfifol((*sd).fd, 6);
                 let target_id = u32::from_be_bytes(raw.to_le_bytes());
                 let tsd = map_id2sd(target_id);
-                clif_exchange_additem(sd, tsd, id as c_int, 1);
+                clif_exchange_additem(sd, tsd, id as i32, 1);
             }
             // else: blank slot hack attempt — do nothing (matching C)
         }
@@ -990,7 +984,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> c_int {
             if id >= (*sd).status.maxinv as usize {
                 return 0;
             }
-            let amount = rfifob((*sd).fd, 11) as c_int;
+            let amount = rfifob((*sd).fd, 11) as i32;
             let raw = rfifol((*sd).fd, 6);
             let target_id = u32::from_be_bytes(raw.to_le_bytes());
             let tsd = map_id2sd(target_id);
@@ -998,7 +992,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> c_int {
                 && (*sd).status.inventory[id].id != 0
                 && amount <= (*sd).status.inventory[id].amount
             {
-                clif_exchange_additem(sd, tsd, id as c_int, amount);
+                clif_exchange_additem(sd, tsd, id as i32, amount);
             }
             // else: blank slot or zero amount — do nothing
         }
@@ -1021,7 +1015,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> c_int {
             let raw = rfifol((*sd).fd, 6);
             let target_id = u32::from_be_bytes(raw.to_le_bytes());
             let tsd = map_id2sd(target_id);
-            let msg = b"Exchange cancelled.\0".as_ptr() as *const c_char;
+            let msg = b"Exchange cancelled.\0".as_ptr() as *const i8;
             clif_exchange_message(sd, msg, 4, 0);
             if !tsd.is_null() {
                 clif_exchange_message(tsd, msg, 4, 0);
@@ -1039,7 +1033,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> c_int {
 
             if (*sd).exchange.target != target_id {
                 clif_exchange_close(sd);
-                let msg = b"Exchange cancelled.\0".as_ptr() as *const c_char;
+                let msg = b"Exchange cancelled.\0".as_ptr() as *const i8;
                 clif_exchange_message(sd, msg, 4, 0);
                 if !tsd.is_null() && (*tsd).exchange.target == (*sd).bl.id {
                     clif_exchange_message(tsd, msg, 4, 0);
@@ -1048,8 +1042,8 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> c_int {
                 }
                 return 0;
             }
-            let msg_no_gold = b"You do not have that amount.\0".as_ptr() as *const c_char;
-            let msg_cancel  = b"Exchange cancelled.\0".as_ptr() as *const c_char;
+            let msg_no_gold = b"You do not have that amount.\0".as_ptr() as *const i8;
+            let msg_cancel  = b"Exchange cancelled.\0".as_ptr() as *const i8;
             if (*sd).exchange.gold > (*sd).status.money {
                 clif_exchange_message(sd, msg_no_gold, 4, 0);
                 clif_exchange_message(tsd, msg_cancel,  4, 0);
@@ -1070,13 +1064,13 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> c_int {
 
 /// Return the (x, y) of the cell in front of the player based on `status.side`.
 /// Matches the repeated side==0..3 pattern in clif_handgold / clif_handitem.
-unsafe fn side_cell(sd: &MapSessionData) -> (c_int, c_int) {
+unsafe fn side_cell(sd: &MapSessionData) -> (i32, i32) {
     match sd.status.side {
-        0 => (sd.bl.x as c_int,     sd.bl.y as c_int - 1),
-        1 => (sd.bl.x as c_int + 1, sd.bl.y as c_int),
-        2 => (sd.bl.x as c_int,     sd.bl.y as c_int + 1),
-        3 => (sd.bl.x as c_int - 1, sd.bl.y as c_int),
-        _ => (sd.bl.x as c_int,     sd.bl.y as c_int),
+        0 => (sd.bl.x as i32,     sd.bl.y as i32 - 1),
+        1 => (sd.bl.x as i32 + 1, sd.bl.y as i32),
+        2 => (sd.bl.x as i32,     sd.bl.y as i32 + 1),
+        3 => (sd.bl.x as i32 - 1, sd.bl.y as i32),
+        _ => (sd.bl.x as i32,     sd.bl.y as i32),
     }
 }
 

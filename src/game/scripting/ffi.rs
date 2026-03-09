@@ -2,14 +2,12 @@
 //! The sffi:: namespace used throughout the scripting module is preserved so callers
 //! do not need to be changed.
 
-use std::ffi::{c_char, c_int, c_uint, c_ulong};
-use std::os::raw::c_void;
 
-pub const BL_PC:   c_int = 0x01;
-pub const BL_MOB:  c_int = 0x02;
-pub const BL_NPC:  c_int = 0x04;
-pub const BL_ITEM: c_int = 0x08;
-pub const BL_ALL:  c_int = 0x0F;
+pub const BL_PC:   i32 = 0x01;
+pub const BL_MOB:  i32 = 0x02;
+pub const BL_NPC:  i32 = 0x04;
+pub const BL_ITEM: i32 = 0x08;
+pub const BL_ALL:  i32 = 0x0F;
 
 // ─── Globals ──────────────────────────────────────────────────────────────────
 pub use crate::config_globals::serverid;
@@ -22,59 +20,59 @@ pub use crate::game::map_server::{
     map_setglobalreg, map_readglobalgamereg, map_setglobalgamereg,
 };
 
-pub unsafe fn map_id2sd(id: c_uint) -> *mut c_void {
+pub unsafe fn map_id2sd(id: u32) -> *mut std::ffi::c_void {
     crate::game::map_server::map_id2sd(id)
 }
-pub unsafe fn map_name2sd(name: *const c_char) -> *mut c_void {
-    crate::game::map_server::map_name2sd(name) as *mut c_void
+pub unsafe fn map_name2sd(name: *const i8) -> *mut std::ffi::c_void {
+    crate::game::map_server::map_name2sd(name) as *mut std::ffi::c_void
 }
-pub unsafe fn map_name2npc(name: *const c_char) -> *mut c_void {
+pub unsafe fn map_name2npc(name: *const i8) -> *mut std::ffi::c_void {
     crate::game::map_server::map_name2npc(name)
 }
-pub unsafe fn map_id2mob(id: c_uint) -> *mut c_void {
-    crate::game::map_server::map_id2mob(id) as *mut c_void
+pub unsafe fn map_id2mob(id: u32) -> *mut std::ffi::c_void {
+    crate::game::map_server::map_id2mob(id) as *mut std::ffi::c_void
 }
 
 // ─── PC registries ────────────────────────────────────────────────────────────
-pub unsafe fn rust_pc_readglobalreg(sd: *mut c_void, attrname: *const c_char) -> c_int {
+pub unsafe fn rust_pc_readglobalreg(sd: *mut std::ffi::c_void, attrname: *const i8) -> i32 {
     crate::game::pc::rust_pc_readglobalreg(sd as *mut _, attrname as *const i8)
 }
-pub unsafe fn rust_pc_setglobalreg(sd: *mut c_void, attrname: *const c_char, val: c_ulong) -> c_int {
+pub unsafe fn rust_pc_setglobalreg(sd: *mut std::ffi::c_void, attrname: *const i8, val: u64) -> i32 {
     crate::game::pc::rust_pc_setglobalreg(sd as *mut _, attrname as *const i8, val)
 }
-pub unsafe fn rust_pc_readglobalregstring(sd: *mut c_void, attrname: *const c_char) -> *const c_char {
-    crate::game::pc::rust_pc_readglobalregstring(sd as *mut _, attrname as *const i8) as *const c_char
+pub unsafe fn rust_pc_readglobalregstring(sd: *mut std::ffi::c_void, attrname: *const i8) -> *const i8 {
+    crate::game::pc::rust_pc_readglobalregstring(sd as *mut _, attrname as *const i8) as *const i8
 }
-pub unsafe fn rust_pc_setglobalregstring(sd: *mut c_void, attrname: *const c_char, val: *const c_char) -> c_int {
+pub unsafe fn rust_pc_setglobalregstring(sd: *mut std::ffi::c_void, attrname: *const i8, val: *const i8) -> i32 {
     crate::game::pc::rust_pc_setglobalregstring(sd as *mut _, attrname as *const i8, val as *const i8)
 }
-pub unsafe fn rust_pc_readquestreg(sd: *mut c_void, attrname: *const c_char) -> c_int {
+pub unsafe fn rust_pc_readquestreg(sd: *mut std::ffi::c_void, attrname: *const i8) -> i32 {
     crate::game::pc::rust_pc_readquestreg(sd as *mut _, attrname)
 }
-pub unsafe fn rust_pc_setquestreg(sd: *mut c_void, attrname: *const c_char, val: c_int) -> c_int {
+pub unsafe fn rust_pc_setquestreg(sd: *mut std::ffi::c_void, attrname: *const i8, val: i32) -> i32 {
     crate::game::pc::rust_pc_setquestreg(sd as *mut _, attrname, val)
 }
 
 // ─── NPC registries ───────────────────────────────────────────────────────────
-pub unsafe fn npc_readglobalreg_ffi(nd: *mut c_void, attrname: *const c_char) -> c_int {
+pub unsafe fn npc_readglobalreg_ffi(nd: *mut std::ffi::c_void, attrname: *const i8) -> i32 {
     crate::game::npc::npc_readglobalreg_ffi(nd as *mut _, attrname)
 }
-pub unsafe fn npc_setglobalreg_ffi(nd: *mut c_void, attrname: *const c_char, val: c_int) -> c_int {
+pub unsafe fn npc_setglobalreg_ffi(nd: *mut std::ffi::c_void, attrname: *const i8, val: i32) -> i32 {
     crate::game::npc::npc_setglobalreg_ffi(nd as *mut _, attrname, val)
 }
 
 // ─── Mob registries ───────────────────────────────────────────────────────────
-pub unsafe fn rust_mob_readglobalreg(mob: *mut c_void, attrname: *const c_char) -> c_int {
+pub unsafe fn rust_mob_readglobalreg(mob: *mut std::ffi::c_void, attrname: *const i8) -> i32 {
     crate::game::mob::rust_mob_readglobalreg(mob as *mut _, attrname)
 }
-pub unsafe fn rust_mob_setglobalreg(mob: *mut c_void, attrname: *const c_char, val: c_int) -> c_int {
+pub unsafe fn rust_mob_setglobalreg(mob: *mut std::ffi::c_void, attrname: *const i8, val: i32) -> i32 {
     crate::game::mob::rust_mob_setglobalreg(mob as *mut _, attrname, val)
 }
 
 // ─── Broadcast / player state ─────────────────────────────────────────────────
 pub use crate::game::map_parse::chat::{clif_broadcast, clif_gmbroadcast};
 
-pub unsafe fn clif_mystaytus(sd: *mut c_void) {
+pub unsafe fn clif_mystaytus(sd: *mut std::ffi::c_void) {
     crate::game::map_parse::player_state::clif_mystaytus(sd as *mut _);
 }
 
@@ -104,7 +102,6 @@ pub use crate::game::scripting::object_collect::{
     sl_g_getobjectsinmap,
 };
 
-// ─── sl_pc_* — in pc_accessors.rs (EXCEPTION: keep extern "C" + ) ──
 // These are accessed via sffi:: namespace in types/pc.rs.
 // They are defined in pc_accessors.rs with , so we can pub use them directly.
 pub use crate::game::scripting::pc_accessors::{

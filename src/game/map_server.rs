@@ -1,11 +1,6 @@
-//! Rust ports of `c_src/map_server.c` utility functions.
-//!
-//! Pure Rust — all C dependencies removed. Each function is a direct Rust replacement
-//! of its former C counterpart.
+//! Map server utility functions.
 
 use std::collections::HashMap;
-use std::ffi::{c_char, c_void};
-use std::os::raw::{c_int, c_uchar, c_uint, c_ushort};
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -22,7 +17,6 @@ use crate::session::{
     rust_session_rdata_ptr,
 };
 
-// Direct Rust imports (replacing extern "C" declarations).
 use crate::session::{
     rust_session_exists, rust_session_get_eof, rust_session_get_client_ip,
     rust_session_set_eof, rust_session_get_data,
@@ -36,11 +30,7 @@ use crate::core::rust_request_shutdown;
 use crate::game::map_char::intif_save_impl::rust_sl_intif_save as sl_intif_save;
 
 // ---------------------------------------------------------------------------
-// In-game time globals — ported from `c_src/map_server.c`.
-//
-// These are exported with `` so that C translation units that
-// reference `cur_time`, `cur_day`, `cur_season`, `cur_year`, and `old_time`
-// via the `extern int` declarations in `map_server.h` continue to link.
+// In-game time globals.
 // ---------------------------------------------------------------------------
 
 /// Current in-game hour (0–23).  Incremented by `change_time_char` every game hour.
@@ -59,30 +49,19 @@ pub static cur_year: AtomicI32 = AtomicI32::new(0);
 pub static old_time: AtomicI32 = AtomicI32::new(0);
 
 // ---------------------------------------------------------------------------
-// Network / session globals — moved from `c_src/map_server.c`.
-//
-// These are `` so that C TUs (sl_compat.c, map_server_stubs.c)
-// that reference them via the extern declarations in mmo.h / map_server.h
-// continue to link against the single Rust-owned instance.
+// Network / session globals.
 // ---------------------------------------------------------------------------
 
 /// File descriptor for the char-server connection.
-/// Written by `map_char.c` / the Rust map_char handler on connect.
-/// Declared `extern int char_fd` in `c_src/mmo.h`.
 pub static char_fd: AtomicI32 = AtomicI32::new(0);
 
 /// File descriptor for the map network socket (map listen port).
-/// Declared `extern int map_fd` in `c_src/map_server.h`.
 pub static map_fd: AtomicI32 = AtomicI32::new(0);
 
 /// Online user list (count + per-slot char-id array).
-/// Declared `extern struct userlist_data userlist` in `c_src/map_server.h`.
-/// `userlist_data` is `{ unsigned int user_count; unsigned int user[10000]; }`.
-/// We store it as a flat C-layout array; the Rust side only reads `user_count`.
-#[repr(C)]
 pub struct UserlistData {
-    pub user_count: c_uint,
-    pub user: [c_uint; 10000],
+    pub user_count: u32,
+    pub user: [u32; 10000],
 }
 
 // SAFETY: Login authentication queue. Accessed only during the login handshake on the game thread.
@@ -93,15 +72,13 @@ pub static mut userlist: UserlistData = UserlistData {
 };
 
 /// Authentication-attempt counter.
-/// Declared `extern int auth_n` in `c_src/map_server.h`.
 pub static auth_n: AtomicI32 = AtomicI32::new(0);
 
 // ---------------------------------------------------------------------------
-// Floor item ID pool — mirrors `object[]` / `object_n` in C map_server.c
+// Floor item ID pool.
 // ---------------------------------------------------------------------------
 
 /// Upper bound on simultaneously active floor items.
-/// Matches `MAX_FLOORITEM` in `c_src/map_server.h`.
 const MAX_FLOORITEM: usize = 100_000_000;
 
 /// Bitmap tracking which floor item slots are in use (1 = occupied, 0 = free).
@@ -115,7 +92,6 @@ static OBJECT_N: AtomicUsize = AtomicUsize::new(0);
 
 /// Free all floor item ID slots and release the backing memory.
 ///
-/// Replaces `map_clritem` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// Must be called on the game thread. `OBJECT` must be null or a pointer
@@ -135,11 +111,10 @@ pub unsafe fn map_clritem() {
 /// node. The node was allocated with `libc::calloc` by `map_additem` callers
 /// (see `mob.rs`, `pc.rs`), so it is freed with `libc::free`.
 ///
-/// Replaces `map_delitem` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// `id` must be a valid floor item ID currently registered in the ID database.
-pub unsafe fn map_delitem(id: c_uint) {
+pub unsafe fn map_delitem(id: u32) {
     use crate::game::block::map_delblock;
     let bl = map_id2bl(id) as *mut BlockList;
     if bl.is_null() {
@@ -161,7 +136,6 @@ pub unsafe fn map_delitem(id: c_uint) {
 /// Scans the bitmap for the first free slot, grows the bitmap if necessary,
 /// assigns the item's ID, then registers it in the ID database and block grid.
 ///
-/// Replaces `map_additem` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// - `bl` must be a valid non-null pointer to a `FloorItemData` (cast to `BlockList`),
@@ -211,7 +185,7 @@ pub unsafe fn map_additem(bl: *mut BlockList) {
     *OBJECT.add(i) = 1;
     let id = (i as u32).wrapping_add(crate::game::mob::FLOORITEM_START_NUM);
     (*bl).id      = id;
-    (*bl).bl_type = crate::game::mob::BL_ITEM as c_uchar;
+    (*bl).bl_type = crate::game::mob::BL_ITEM as u8;
     (*bl).prev    = std::ptr::null_mut();
     (*bl).next    = std::ptr::null_mut();
     map_addiddb(bl);
@@ -223,8 +197,7 @@ pub unsafe fn map_additem(bl: *mut BlockList) {
 /// The original C implementation was commented out entirely; call sites are
 /// also commented out. This is a no-op that returns 0 for ABI compatibility.
 ///
-/// Replaces `map_freeblock_lock` stub in `c_src/map_server.c`.
-pub unsafe fn map_freeblock_lock() -> c_int {
+pub unsafe fn map_freeblock_lock() -> i32 {
     0
 }
 
@@ -233,8 +206,7 @@ pub unsafe fn map_freeblock_lock() -> c_int {
 /// The original C implementation was commented out entirely; call sites are
 /// also commented out. This is a no-op that returns 0 for ABI compatibility.
 ///
-/// Replaces `map_freeblock_unlock` stub in `c_src/map_server.c`.
-pub unsafe fn map_freeblock_unlock() -> c_int {
+pub unsafe fn map_freeblock_unlock() -> i32 {
     0
 }
 
@@ -242,12 +214,11 @@ pub unsafe fn map_freeblock_unlock() -> c_int {
 ///
 /// Returns 0 on success, 1 if `id` is out of range.
 ///
-/// Replaces `map_setmapip` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// `crate::database::map_db::map` must be a valid initialized pointer (non-null, pointing to at
 /// least `MAP_SLOTS` slots). Call only after `rust_map_init` has completed.
-pub unsafe fn map_setmapip(id: c_int, ip: c_uint, port: c_ushort) -> c_int {
+pub unsafe fn map_setmapip(id: i32, ip: u32, port: u16) -> i32 {
     if id < 0 || id as usize >= crate::database::map_db::MAP_SLOTS {
         return 1;
     }
@@ -258,21 +229,17 @@ pub unsafe fn map_setmapip(id: c_int, ip: c_uint, port: c_ushort) -> c_int {
 
 /// Free a block-list pointer.
 ///
-/// The original C implementation was commented out (the entire freeblock/lock/unlock
-/// block is inside `/* ... */` in `c_src/map_server.c`).  Since `map_freeblock_lock`
-/// and `map_freeblock_unlock` are no-op stubs, the lock counter is always 0, so the
-/// deferred-free path is unreachable.  This implementation matches the C behaviour for
-/// lock == 0: free the pointer immediately with `libc::free` (matching the C `FREE`
-/// macro which expands to `free()`).
+/// Since `map_freeblock_lock` and `map_freeblock_unlock` are no-op stubs, the lock
+/// counter is always 0, so the deferred-free path is unreachable. Frees the pointer
+/// immediately with `libc::free`.
 ///
 /// Returns 0 (the lock value), matching the original C return convention.
 ///
-/// Provides the ABI symbol declared in `c_src/map_server.h`.
 ///
 /// # Safety
 /// `bl`, if non-null, must have been allocated by the C heap allocator (`malloc`/`calloc`/
 /// `realloc`) and must not be freed again after this call.
-pub unsafe fn map_freeblock(bl: *mut c_void) -> c_int {
+pub unsafe fn map_freeblock(bl: *mut std::ffi::c_void) -> i32 {
     if !bl.is_null() {
         libc::free(bl);
     }
@@ -280,14 +247,14 @@ pub unsafe fn map_freeblock(bl: *mut c_void) -> c_int {
 }
 
 // ---------------------------------------------------------------------------
-// ID database — replaces C uidb_* hash table in map_server.c
+// ID database — entity lookup by ID and name
 // ---------------------------------------------------------------------------
 
 // SAFETY: Option<HashMap> used as a deferred-init singleton. Initialized on first use via
 // map_initiddb, then read/write on the game thread only. Single-threaded game loop — no concurrent access.
-static mut ID_DB: Option<HashMap<u32, *mut c_void>> = None;
+static mut ID_DB: Option<HashMap<u32, *mut std::ffi::c_void>> = None;
 
-unsafe fn id_db() -> &'static mut HashMap<u32, *mut c_void> {
+unsafe fn id_db() -> &'static mut HashMap<u32, *mut std::ffi::c_void> {
     ID_DB.get_or_insert_with(HashMap::new)
 }
 
@@ -301,18 +268,18 @@ pub unsafe fn map_termiddb() {
 
 /// Returns a raw pointer to any game object (USER*, MOB*, NPC*, FLOORITEM*) by ID.
 /// Returns null if not found. Callers cast the result to the appropriate type.
-pub unsafe fn map_id2bl(id: c_uint) -> *mut c_void {
+pub unsafe fn map_id2bl(id: u32) -> *mut std::ffi::c_void {
     id_db().get(&id).copied().unwrap_or(std::ptr::null_mut())
 }
 
 /// Returns the USER* for a player by character ID. NULL if not found or not a player.
-pub unsafe fn map_id2sd(id: c_uint) -> *mut c_void {
+pub unsafe fn map_id2sd(id: u32) -> *mut std::ffi::c_void {
     map_id2bl(id) // C caller casts to USER*; same raw pointer
 }
 
 pub unsafe fn map_addiddb(bl: *mut BlockList) {
     if bl.is_null() { return; }
-    id_db().insert((*bl).id, bl as *mut c_void);
+    id_db().insert((*bl).id, bl as *mut std::ffi::c_void);
 }
 
 pub unsafe fn map_deliddb(bl: *mut BlockList) {
@@ -322,39 +289,35 @@ pub unsafe fn map_deliddb(bl: *mut BlockList) {
 
 /// Returns the MOB* for an entity by ID. Adjusts IDs below MOB_START_NUM.
 ///
-/// Mirrors `map_id2mob` in `c_src/map_server_stubs.c`.
-pub unsafe fn map_id2mob(mut id: c_uint) -> *mut crate::game::mob::MobSpawnData {
+pub unsafe fn map_id2mob(mut id: u32) -> *mut crate::game::mob::MobSpawnData {
     use crate::game::mob::{MOB_START_NUM, BL_MOB};
     if id < MOB_START_NUM { id = id.saturating_add(MOB_START_NUM - 1); }
     let bl = map_id2bl(id) as *mut BlockList;
     if bl.is_null() { return std::ptr::null_mut(); }
-    if (*bl).bl_type as c_int == BL_MOB { bl as *mut crate::game::mob::MobSpawnData } else { std::ptr::null_mut() }
+    if (*bl).bl_type as i32 == BL_MOB { bl as *mut crate::game::mob::MobSpawnData } else { std::ptr::null_mut() }
 }
 
 /// Returns the NPC* for an entity by ID. Adjusts IDs below NPC_START_NUM.
 ///
-/// Mirrors `map_id2npc` in `c_src/map_server_stubs.c`.
-pub unsafe fn map_id2npc(id: c_uint) -> *mut crate::game::npc::NpcData {
+pub unsafe fn map_id2npc(id: u32) -> *mut crate::game::npc::NpcData {
     use crate::game::npc::NPC_START_NUM;
     let adj_id = if id < NPC_START_NUM { id.saturating_add(NPC_START_NUM - 2) } else { id };
     let bl = map_id2bl(adj_id) as *mut BlockList;
     if bl.is_null() { return std::ptr::null_mut(); }
-    if (*bl).bl_type as c_int == crate::game::pc::BL_NPC { bl as *mut crate::game::npc::NpcData } else { std::ptr::null_mut() }
+    if (*bl).bl_type as i32 == crate::game::pc::BL_NPC { bl as *mut crate::game::npc::NpcData } else { std::ptr::null_mut() }
 }
 
 /// Returns the FLOORITEM* for an entity by ID.
 ///
-/// Mirrors `map_id2fl` in `c_src/map_server_stubs.c`.
-pub unsafe fn map_id2fl(id: c_uint) -> *mut c_void {
+pub unsafe fn map_id2fl(id: u32) -> *mut std::ffi::c_void {
     let bl = map_id2bl(id) as *mut BlockList;
     if bl.is_null() { return std::ptr::null_mut(); }
-    if (*bl).bl_type as c_int == crate::game::pc::BL_ITEM { bl as *mut c_void } else { std::ptr::null_mut() }
+    if (*bl).bl_type as i32 == crate::game::pc::BL_ITEM { bl as *mut std::ffi::c_void } else { std::ptr::null_mut() }
 }
 
 /// Find a player session by name (case-insensitive).
 ///
-/// Mirrors `map_name2sd` in `c_src/map_server_stubs.c`.
-pub unsafe fn map_name2sd(name: *const c_char) -> *mut MapSessionData {
+pub unsafe fn map_name2sd(name: *const i8) -> *mut MapSessionData {
     use crate::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof};
     if name.is_null() { return std::ptr::null_mut(); }
     for i in 0..crate::session::get_fd_max() {
@@ -371,17 +334,16 @@ pub unsafe fn map_name2sd(name: *const c_char) -> *mut MapSessionData {
 
 /// Find an NPC by name (case-insensitive). Iterates NPC ID range.
 ///
-/// Mirrors `map_name2npc` in `c_src/map_server_stubs.c`.
-pub unsafe fn map_name2npc(name: *const c_char) -> *mut c_void {
+pub unsafe fn map_name2npc(name: *const i8) -> *mut std::ffi::c_void {
     use crate::game::npc::{NPC_ID, NPC_START_NUM};
     use std::sync::atomic::Ordering;
     if name.is_null() { return std::ptr::null_mut(); }
-    let mut i = NPC_START_NUM as c_uint;
+    let mut i = NPC_START_NUM as u32;
     let npc_hi = NPC_ID.load(Ordering::Relaxed);
     while i <= npc_hi {
         let nd = map_id2npc(i);
         if !nd.is_null() && libc::strcasecmp((*nd).npc_name.as_ptr(), name) == 0 {
-            return nd as *mut c_void;
+            return nd as *mut std::ffi::c_void;
         }
         i += 1;
     }
@@ -390,15 +352,14 @@ pub unsafe fn map_name2npc(name: *const c_char) -> *mut c_void {
 
 /// Reload the map registry for a single map — thin shim over `rust_map_loadregistry`.
 ///
-/// Mirrors the C shim `map_loadregistry` in `c_src/map_server_stubs.c`.
-pub unsafe fn map_loadregistry(id: c_int) -> c_int {
+/// Loads the global player registry from the database.
+pub unsafe fn map_loadregistry(id: i32) -> i32 {
     crate::database::map_db::rust_map_loadregistry(id)
 }
 
 /// Read a game-global registry value by name (case-insensitive).
 ///
-/// Mirrors `map_readglobalgamereg` in `c_src/map_server_stubs.c`.
-pub unsafe fn map_readglobalgamereg(reg: *const c_char) -> c_int {
+pub unsafe fn map_readglobalgamereg(reg: *const i8) -> i32 {
     if reg.is_null() || gamereg.registry.is_null() { return 0; }
     for i in 0..gamereg.registry_num as usize {
         let entry = &*gamereg.registry.add(i);
@@ -408,11 +369,10 @@ pub unsafe fn map_readglobalgamereg(reg: *const c_char) -> c_int {
 }
 
 /// Timer callback — runs Lua cron hooks based on wall-clock seconds.
-/// Replaces `map_cronjob` in `c_src/map_server.c`.
 ///
 /// Registered every 1000 ms via `timer_insert` in `map_server.rs`.
 /// Must be called on the Lua-owning thread (LocalSet).
-pub unsafe fn rust_map_cronjob(_id: c_int, _n: c_int) -> c_int {
+pub unsafe fn rust_map_cronjob(_id: i32, _n: i32) -> i32 {
     let t = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -430,14 +390,14 @@ pub unsafe fn rust_map_cronjob(_id: c_int, _n: c_int) -> c_int {
 /// Dispatch a Lua event with a single block_list argument.
 #[cfg(not(test))]
 #[allow(dead_code)]
-unsafe fn sl_doscript_simple(root: *const c_char, method: *const c_char, bl: *mut crate::database::map_db::BlockList) -> c_int {
+unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
 }
 
 #[inline]
 unsafe fn cron(name: &[u8]) {
     crate::game::scripting::doscript_blargs(
-        name.as_ptr() as *const c_char,
+        name.as_ptr() as *const i8,
         std::ptr::null(),
         &[],
     );
@@ -448,22 +408,20 @@ unsafe fn cron(name: &[u8]) {
 // ---------------------------------------------------------------------------
 
 /// Returns 1 if `sd` is non-null and has an active session.
-/// Mirrors `isPlayerActive` in `c_src/map_server.c`.
-pub unsafe fn isPlayerActive(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn isPlayerActive(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
     if fd == 0 { return 0; }
     if rust_session_exists(fd) == 0 {
         let name = std::ffi::CStr::from_ptr((*sd).status.name.as_ptr());
-        eprintln!("[map] isPlayerActive: player exists but session does not ({})", name.to_string_lossy());
+        tracing::warn!("[map] isPlayerActive: player exists but session does not ({})", name.to_string_lossy());
         return 0;
     }
     1
 }
 
 /// Returns 1 if `sd` has a live session with no EOF flag set.
-/// Mirrors `isActive` in `c_src/map_server.c`.
-pub unsafe fn isActive(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn isActive(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
     if rust_session_exists(fd) == 0 { return 0; }
@@ -476,8 +434,7 @@ pub unsafe fn isActive(sd: *mut MapSessionData) -> c_int {
 // ---------------------------------------------------------------------------
 
 /// Updates `Character.ChaOnline`/`ChaLastIP` and fires the "login" Lua hook on first login.
-/// Mirrors `mmo_setonline` in `c_src/map_server.c`.
-pub unsafe fn mmo_setonline(id: c_uint, val: c_int) {
+pub unsafe fn mmo_setonline(id: u32, val: i32) {
     let sd = map_id2sd(id) as *mut MapSessionData;
     if sd.is_null() { return; }
 
@@ -508,14 +465,14 @@ pub unsafe fn mmo_setonline(id: c_uint, val: c_int) {
 
     if exists && val != 0 {
         // status.name is [i8; 16] — convert to CStr for display.
-        let name_ptr = (*sd).status.name.as_ptr() as *const std::ffi::c_char;
+        let name_ptr = (*sd).status.name.as_ptr() as *const i8;
         println!("[map] [login] name={} addr={}",
             std::ffi::CStr::from_ptr(name_ptr).to_string_lossy(), addr);
 
         // Fire "login" Lua hook: doscript_blargs("login", NULL, &[bl])
         let bl_ptr = std::ptr::addr_of_mut!((*sd).bl);
         crate::game::scripting::doscript_blargs(
-            b"login\0".as_ptr() as *const std::ffi::c_char,
+            b"login\0".as_ptr() as *const i8,
             std::ptr::null(),
             &[bl_ptr],
         );
@@ -547,18 +504,17 @@ use crate::config_globals::serverid;
 /// (non-zero means occupied). A cell with a player is treated as blocked unless
 /// that player has `uFlag_unphysical` set.
 ///
-/// Mirrors `map_canmove` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// `m` must be a valid loaded map index. `x` and `y` must be within bounds.
-pub unsafe fn map_canmove(m: c_int, x: c_int, y: c_int) -> c_int {
+pub unsafe fn map_canmove(m: i32, x: i32, y: i32) -> i32 {
     // read_pass(m, x, y) expands to map[m].pass[x + y * map[m].xs]
     let slot = &*crate::database::map_db::map.add(m as usize);
     let pass_val = *slot.pass.add(x as usize + y as usize * slot.xs as usize);
 
     if pass_val != 0 {
         // A player ID is stored in the pass cell. Look them up.
-        let sd = map_id2sd(pass_val as c_uint) as *mut MapSessionData;
+        let sd = map_id2sd(pass_val as u32) as *mut MapSessionData;
         if sd.is_null() || ((*sd).uFlags & U_FLAG_UNPHYSICAL) == 0 {
             // Cell is occupied by a physical player — blocked.
             return 1;
@@ -571,17 +527,16 @@ pub unsafe fn map_canmove(m: c_int, x: c_int, y: c_int) -> c_int {
 /// Insert a new mob spawn record for the map/position of `sd` into the
 /// `Spawns<serverid>` DB table.
 ///
-/// Mirrors `map_addmob` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// `sd` must be a valid, non-null `MapSessionData` pointer.
 pub unsafe fn map_addmob(
     sd:      *mut MapSessionData,
-    id:      c_uint,
-    start:   c_int,
-    end:     c_int,
-    replace: c_uint,
-) -> c_int {
+    id:      u32,
+    start:   i32,
+    end:     i32,
+    replace: u32,
+) -> i32 {
     let m     = (*sd).bl.m  as i32;
     let x     = (*sd).bl.x  as i32;
     let y     = (*sd).bl.y  as i32;
@@ -612,47 +567,45 @@ pub unsafe fn map_addmob(
 }
 
 // ---------------------------------------------------------------------------
-// Board / N-Mail packet constants (from mmo.h / map_server.h)
+// Board / N-Mail packet constants
 // ---------------------------------------------------------------------------
 
-const BOARD_CAN_WRITE: c_int = 1;
-const BOARD_CAN_DEL:   c_int = 2;
+const BOARD_CAN_WRITE: i32 = 1;
+const BOARD_CAN_DEL:   i32 = 2;
 
 // ---------------------------------------------------------------------------
 // Board / N-Mail inter-server struct layouts
 //
-// These #[repr(C)] structs mirror the C structs in mmo.h exactly.  They are
-// only used to build inter-server packets that are memcpy'd into the WFIFO
-// buffer; they are never exported through cbindgen (all excluded below).
+// Only used to build inter-server packets memcpy'd into the WFIFO buffer.
 // ---------------------------------------------------------------------------
 
-/// `struct board_show_0` from mmo.h — inter-server packet body for 0x3009.
+/// inter-server packet body for 0x3009.
 #[repr(C)]
 struct BoardShow0 {
-    fd:     c_int,
-    board:  c_int,
-    bcount: c_int,
-    flags:  c_int,
+    fd:     i32,
+    board:  i32,
+    bcount: i32,
+    flags:  i32,
     popup:  i8,
     name:   [i8; 16],
 }
 
-/// `struct boards_read_post_0` from mmo.h — inter-server packet body for 0x300A.
+/// inter-server packet body for 0x300A.
 #[repr(C)]
 struct BoardsReadPost0 {
     name:   [i8; 16],
-    fd:     c_int,
-    post:   c_int,
-    board:  c_int,
-    flags:  c_int,
+    fd:     i32,
+    post:   i32,
+    board:  i32,
+    flags:  i32,
 }
 
-/// `struct boards_post_0` from mmo.h — inter-server packet body for 0x300C.
+/// inter-server packet body for 0x300C.
 #[repr(C)]
 struct BoardsPost0 {
-    fd:    c_int,
-    board: c_int,
-    nval:  c_int,
+    fd:    i32,
+    board: i32,
+    nval:  i32,
     name:  [i8; 16],
     topic: [i8; 53],
     post:  [i8; 4001],
@@ -681,7 +634,6 @@ unsafe fn wfifop_copy_char(pos: usize, src: *const u8, count: usize) {
 // ---------------------------------------------------------------------------
 // nmail_sendmessage — sends a notification message packet to the player's fd.
 //
-// Mirrors `nmail_sendmessage` in `c_src/map_server.c`.
 // Packet layout (pre-encryption):
 //   [0]     = 0xAA  (magic)
 //   [1..2]  = SWAP16(len+5)  (big-endian total payload len)
@@ -696,10 +648,10 @@ unsafe fn wfifop_copy_char(pos: usize, src: *const u8, count: usize) {
 
 pub unsafe fn nmail_sendmessage(
     sd:      *mut MapSessionData,
-    message: *const c_char,
-    other:   c_int,
-    r#type:  c_int,
-) -> c_int {
+    message: *const i8,
+    other:   i32,
+    r#type:  i32,
+) -> i32 {
     if isPlayerActive(sd) == 0 { return 0; }
 
     let fd = (*sd).fd;
@@ -740,17 +692,16 @@ pub unsafe fn nmail_sendmessage(
 // ---------------------------------------------------------------------------
 // boards_delete — forwards delete request to char-server (packet 0x3008).
 //
-// Mirrors `boards_delete` in `c_src/map_server.c`.
 // ---------------------------------------------------------------------------
 
-pub unsafe fn boards_delete(sd: *mut MapSessionData, board: c_int) -> c_int {
+pub unsafe fn boards_delete(sd: *mut MapSessionData, board: i32) -> i32 {
     if sd.is_null() { return 0; }
 
     // Read the post id from the player's recv buffer (big-endian u16 at offset 8).
     let post = {
         let p = rust_session_rdata_ptr((*sd).fd, 8) as *const u16;
         if p.is_null() { return 0; }
-        u16::from_be(p.read_unaligned()) as c_int
+        u16::from_be(p.read_unaligned()) as i32
     };
 
     let cfd = char_fd.load(Ordering::Relaxed);
@@ -780,13 +731,12 @@ pub unsafe fn boards_delete(sd: *mut MapSessionData, board: c_int) -> c_int {
 // ---------------------------------------------------------------------------
 // boards_showposts — sets board flags on `sd`, then forwards to char-server.
 //
-// Mirrors `boards_showposts` in `c_src/map_server.c`.
 // ---------------------------------------------------------------------------
 
 pub unsafe fn boards_showposts(
     sd:    *mut MapSessionData,
-    board: c_int,
-) -> c_int {
+    board: i32,
+) -> i32 {
     if sd.is_null() { return 0; }
 
     (*sd).board_canwrite = 0;
@@ -801,7 +751,7 @@ pub unsafe fn boards_showposts(
         (*sd).board = board;
         if rust_boarddb_script(board) != 0 {
             let yname = rust_boarddb_yname(board);
-            sl_doscript_simple(yname, b"check\0".as_ptr() as *const c_char, std::ptr::addr_of_mut!((*sd).bl));
+            sl_doscript_simple(yname, b"check\0".as_ptr() as *const i8, std::ptr::addr_of_mut!((*sd).bl));
         } else {
             (*sd).board_canwrite = 1;
         }
@@ -811,7 +761,7 @@ pub unsafe fn boards_showposts(
         }
     }
 
-    let mut flags: c_int = 0;
+    let mut flags: i32 = 0;
     if (*sd).board_canwrite != 0 {
         if (*sd).board_canwrite == 6 {
             flags = 6; // special write flag
@@ -855,19 +805,18 @@ pub unsafe fn boards_showposts(
 // ---------------------------------------------------------------------------
 // boards_readpost — sets board flags and forwards read-post request.
 //
-// Mirrors `boards_readpost` in `c_src/map_server.c`.
 // ---------------------------------------------------------------------------
 
 pub unsafe fn boards_readpost(
     sd:    *mut MapSessionData,
-    board: c_int,
-    post:  c_int,
-) -> c_int {
+    board: i32,
+    post:  i32,
+) -> i32 {
     if board != 0 {
         (*sd).board = board;
         if rust_boarddb_script(board) != 0 {
             let yname = rust_boarddb_yname(board);
-            sl_doscript_simple(yname, b"check\0".as_ptr() as *const c_char, std::ptr::addr_of_mut!((*sd).bl));
+            sl_doscript_simple(yname, b"check\0".as_ptr() as *const i8, std::ptr::addr_of_mut!((*sd).bl));
         } else {
             (*sd).board_canwrite = 1;
         }
@@ -877,7 +826,7 @@ pub unsafe fn boards_readpost(
         }
     }
 
-    let mut flags: c_int = 0;
+    let mut flags: i32 = 0;
     if (*sd).board_canwrite != 0 { flags |= BOARD_CAN_WRITE; }
     if (*sd).board_candel   != 0 { flags |= BOARD_CAN_DEL;   }
 
@@ -913,10 +862,9 @@ pub unsafe fn boards_readpost(
 // boards_post — reads post data from the player's recv buffer, validates it,
 // and forwards to char-server (packet 0x300C).
 //
-// Mirrors `boards_post` in `c_src/map_server.c`.
 // ---------------------------------------------------------------------------
 
-pub unsafe fn boards_post(sd: *mut MapSessionData, board: c_int) -> c_int {
+pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
     if sd.is_null() { return 0; }
 
     let fd = (*sd).fd;
@@ -924,8 +872,8 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: c_int) -> c_int {
     let topiclen = *rust_session_rdata_ptr(fd, 8) as usize;
     if topiclen > 52 {
         clif_Hacker(
-            (*sd).status.name.as_mut_ptr() as *mut c_char,
-            b"Board hacking: TOPIC HACK\0".as_ptr() as *const c_char,
+            (*sd).status.name.as_mut_ptr() as *mut i8,
+            b"Board hacking: TOPIC HACK\0".as_ptr() as *const i8,
         );
         return 0;
     }
@@ -937,8 +885,8 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: c_int) -> c_int {
     };
     if postlen > 4000 {
         clif_Hacker(
-            (*sd).status.name.as_mut_ptr() as *mut c_char,
-            b"Board hacking: POST(BODY) HACK\0".as_ptr() as *const c_char,
+            (*sd).status.name.as_mut_ptr() as *mut i8,
+            b"Board hacking: POST(BODY) HACK\0".as_ptr() as *const i8,
         );
         return 0;
     }
@@ -946,7 +894,7 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: c_int) -> c_int {
     if topiclen == 0 {
         nmail_sendmessage(
             sd,
-            b"Post must contain subject.\0".as_ptr() as *const c_char,
+            b"Post must contain subject.\0".as_ptr() as *const i8,
             6, 0,
         );
         return 0;
@@ -954,7 +902,7 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: c_int) -> c_int {
     if postlen == 0 {
         nmail_sendmessage(
             sd,
-            b"Post must contain a body.\0".as_ptr() as *const c_char,
+            b"Post must contain a body.\0".as_ptr() as *const i8,
             6, 0,
         );
         return 0;
@@ -963,7 +911,7 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: c_int) -> c_int {
     let mut header = BoardsPost0 {
         fd: (*sd).fd,
         board,
-        nval: (*sd).boardnameval as c_int,
+        nval: (*sd).boardnameval as i32,
         name:  [0i8; 16],
         topic: [0i8; 53],
         post:  [0i8; 4001],
@@ -1002,12 +950,11 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: c_int) -> c_int {
 // ---------------------------------------------------------------------------
 // nmail_read — body is entirely commented out in C; stub that returns 0.
 //
-// Mirrors `nmail_read` in `c_src/map_server.c`.
 // The original SQL implementation was removed long ago (left as commented-out
 // code). This function is kept as a noop stub.
 // ---------------------------------------------------------------------------
 
-pub unsafe fn nmail_read(_sd: *mut MapSessionData, _post: c_int) -> c_int {
+pub unsafe fn nmail_read(_sd: *mut MapSessionData, _post: i32) -> i32 {
     0
 }
 
@@ -1015,15 +962,14 @@ pub unsafe fn nmail_read(_sd: *mut MapSessionData, _post: c_int) -> c_int {
 // nmail_luascript — inserts a Lua-mail record and runs `sl_exec`.
 //
 // Uses sqlx for database access.
-// Mirrors `nmail_luascript` in `c_src/map_server.c`.
 // ---------------------------------------------------------------------------
 
 pub unsafe fn nmail_luascript(
     sd:     *mut MapSessionData,
-    to:     c_int,
-    topic:  c_int,
-    msg:    c_int,
-) -> c_int {
+    to:     i32,
+    topic:  i32,
+    msg:    i32,
+) -> i32 {
     let fd = (*sd).fd;
     let mut message = [0i8; 4000];
 
@@ -1050,7 +996,7 @@ pub unsafe fn nmail_luascript(
     });
     if !ok { return 0; }
 
-    sl_exec(sd as *mut c_void, message.as_mut_ptr());
+    sl_exec(sd as *mut std::ffi::c_void, message.as_mut_ptr());
     0
 }
 
@@ -1058,22 +1004,21 @@ pub unsafe fn nmail_luascript(
 // nmail_poemscript — validates, deduplicates, and inserts a poem board post.
 //
 // Uses sqlx for database access.
-// Mirrors `nmail_poemscript` in `c_src/map_server.c`.
 // ---------------------------------------------------------------------------
 
 pub unsafe fn nmail_poemscript(
     sd:      *mut MapSessionData,
-    topic:   *const c_char,
-    message: *const c_char,
-) -> c_int {
+    topic:   *const i8,
+    message: *const i8,
+) -> i32 {
     use chrono::Datelike as _;
 
     // Use chrono::Local::now() to match C's localtime(&t) behaviour.
     // month0() is 0-based (January = 0), matching C's tm_mon.
     // day()   is 1-based (1..=31),      matching C's tm_mday.
     let now   = chrono::Local::now();
-    let month = now.month0() as c_int;
-    let day   = now.day()    as c_int;
+    let month = now.month0() as i32;
+    let day   = now.day()    as i32;
 
     let char_id = (*sd).status.id as i32;
 
@@ -1093,13 +1038,13 @@ pub unsafe fn nmail_poemscript(
     if already_submitted {
         nmail_sendmessage(
             sd,
-            b"You have already submitted a poem.\0".as_ptr() as *const c_char,
+            b"You have already submitted a poem.\0".as_ptr() as *const i8,
             6, 1,
         );
         return 0;
     }
 
-    // topic and message are *const c_char passed by C caller — convert to owned Strings.
+    // topic and message are *const i8 passed by C caller — convert to owned Strings.
     let topic_str = std::ffi::CStr::from_ptr(topic)
         .to_str().unwrap_or("").to_owned();
     let message_str = std::ffi::CStr::from_ptr(message)
@@ -1136,7 +1081,7 @@ pub unsafe fn nmail_poemscript(
 
     nmail_sendmessage(
         sd,
-        b"Poem submitted.\0".as_ptr() as *const c_char,
+        b"Poem submitted.\0".as_ptr() as *const i8,
         6, 1,
     );
     0
@@ -1145,7 +1090,6 @@ pub unsafe fn nmail_poemscript(
 // ---------------------------------------------------------------------------
 // nmail_sendmailcopy — forwards a copy-to-self mail to the char-server.
 //
-// Mirrors `nmail_sendmailcopy` in `c_src/map_server.c`.
 // Packet 0x300F:
 //   [0..1]     = 0x300F
 //   [2..3]     = sd->fd
@@ -1158,10 +1102,10 @@ pub unsafe fn nmail_poemscript(
 
 pub unsafe fn nmail_sendmailcopy(
     sd:      *mut MapSessionData,
-    to_user: *const c_char,
-    topic:   *const c_char,
-    message: *const c_char,
-) -> c_int {
+    to_user: *const i8,
+    topic:   *const i8,
+    message: *const i8,
+) -> i32 {
     if libc_strlen(to_user) > 16
         || libc_strlen(topic) > 52
         || libc_strlen(message) > 4000
@@ -1186,26 +1130,25 @@ pub unsafe fn nmail_sendmailcopy(
 // ---------------------------------------------------------------------------
 // nmail_write — parses incoming mail write packet, dispatches to Lua/poem/mail.
 //
-// Mirrors `nmail_write` in `c_src/map_server.c`.
 // ---------------------------------------------------------------------------
 
-pub unsafe fn nmail_write(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
 
     let tolen = *rust_session_rdata_ptr(fd, 8) as usize;
     if tolen > 52 {
         clif_Hacker(
-            (*sd).status.name.as_mut_ptr() as *mut c_char,
-            b"NMAIL: To User\0".as_ptr() as *const c_char,
+            (*sd).status.name.as_mut_ptr() as *mut i8,
+            b"NMAIL: To User\0".as_ptr() as *const i8,
         );
         return 0;
     }
     let topiclen = *rust_session_rdata_ptr(fd, tolen + 9) as usize;
     if topiclen > 52 {
         clif_Hacker(
-            (*sd).status.name.as_mut_ptr() as *mut c_char,
-            b"NMAIL: Topic\0".as_ptr() as *const c_char,
+            (*sd).status.name.as_mut_ptr() as *mut i8,
+            b"NMAIL: Topic\0".as_ptr() as *const i8,
         );
         return 0;
     }
@@ -1216,8 +1159,8 @@ pub unsafe fn nmail_write(sd: *mut MapSessionData) -> c_int {
     };
     if messagelen > 4000 {
         clif_Hacker(
-            (*sd).status.name.as_mut_ptr() as *mut c_char,
-            b"NMAIL: Message\0".as_ptr() as *const c_char,
+            (*sd).status.name.as_mut_ptr() as *mut i8,
+            b"NMAIL: Message\0".as_ptr() as *const i8,
         );
         return 0;
     }
@@ -1238,7 +1181,7 @@ pub unsafe fn nmail_write(sd: *mut MapSessionData) -> c_int {
         rust_session_rdata_ptr(fd, topiclen + tolen + 12) as *const i8,
         message.as_mut_ptr(), messagelen,
     );
-    let send_copy = *rust_session_rdata_ptr(fd, topiclen + tolen + 12 + messagelen) as c_int;
+    let send_copy = *rust_session_rdata_ptr(fd, topiclen + tolen + 12 + messagelen) as i32;
 
     // Case: "lua" — run Lua script mail
     let to_user_cstr = std::ffi::CStr::from_ptr(to_user.as_ptr());
@@ -1251,12 +1194,12 @@ pub unsafe fn nmail_write(sd: *mut MapSessionData) -> c_int {
             messagelen.min((*sd).mail.len()),
         );
         (*sd).luaexec = 0;
-        sl_doscript_simple(b"canRunLuaMail\0".as_ptr() as *const c_char, std::ptr::null(), std::ptr::addr_of_mut!((*sd).bl));
+        sl_doscript_simple(b"canRunLuaMail\0".as_ptr() as *const i8, std::ptr::null(), std::ptr::addr_of_mut!((*sd).bl));
         if (*sd).status.gm_level == 99 || (*sd).luaexec != 0 {
-            nmail_luascript(sd, tolen as c_int, topiclen as c_int, messagelen as c_int);
+            nmail_luascript(sd, tolen as i32, topiclen as i32, messagelen as i32);
             nmail_sendmessage(
                 sd,
-                b"LUA script ran!\0".as_ptr() as *const c_char,
+                b"LUA script ran!\0".as_ptr() as *const i8,
                 6, 1,
             );
             return 0; // only return if we actually handled the Lua mail
@@ -1266,10 +1209,10 @@ pub unsafe fn nmail_write(sd: *mut MapSessionData) -> c_int {
 
     // Case: "poems" / "poem"
     if to_user_lower == "poems" || to_user_lower == "poem" {
-        if map_readglobalgamereg(b"poemAccept\0".as_ptr() as *const c_char) == 0 {
+        if map_readglobalgamereg(b"poemAccept\0".as_ptr() as *const i8) == 0 {
             nmail_sendmessage(
                 sd,
-                b"Currently not accepting poem submissions.\0".as_ptr() as *const c_char,
+                b"Currently not accepting poem submissions.\0".as_ptr() as *const i8,
                 6, 0,
             );
             return 0;
@@ -1284,7 +1227,7 @@ pub unsafe fn nmail_write(sd: *mut MapSessionData) -> c_int {
         if topiclen == 0 {
             nmail_sendmessage(
                 sd,
-                b"Mail must contain a subject.\0".as_ptr() as *const c_char,
+                b"Mail must contain a subject.\0".as_ptr() as *const i8,
                 6, 0,
             );
             return 0;
@@ -1292,7 +1235,7 @@ pub unsafe fn nmail_write(sd: *mut MapSessionData) -> c_int {
         if messagelen == 0 {
             nmail_sendmessage(
                 sd,
-                b"Mail must contain a body.\0".as_ptr() as *const c_char,
+                b"Mail must contain a body.\0".as_ptr() as *const i8,
                 6, 0,
             );
             return 0;
@@ -1306,7 +1249,7 @@ pub unsafe fn nmail_write(sd: *mut MapSessionData) -> c_int {
     if topiclen == 0 {
         nmail_sendmessage(
             sd,
-            b"Mail must contain a subject.\0".as_ptr() as *const c_char,
+            b"Mail must contain a subject.\0".as_ptr() as *const i8,
             6, 0,
         );
         return 0;
@@ -1314,7 +1257,7 @@ pub unsafe fn nmail_write(sd: *mut MapSessionData) -> c_int {
     if messagelen == 0 {
         nmail_sendmessage(
             sd,
-            b"Mail must contain a body.\0".as_ptr() as *const c_char,
+            b"Mail must contain a body.\0".as_ptr() as *const i8,
             6, 0,
         );
         return 0;
@@ -1331,7 +1274,7 @@ pub unsafe fn nmail_write(sd: *mut MapSessionData) -> c_int {
         let a_topic_c = std::ffi::CString::new(a_topic).unwrap_or_default();
         nmail_sendmailcopy(
             sd,
-            (*sd).status.name.as_ptr() as *const c_char,
+            (*sd).status.name.as_ptr() as *const i8,
             a_topic_c.as_ptr(),
             message.as_ptr(),
         );
@@ -1344,15 +1287,14 @@ pub unsafe fn nmail_write(sd: *mut MapSessionData) -> c_int {
 // nmail_sendmail — forwards a mail message to the char-server (packet 0x300D).
 //
 // Packet layout is identical to nmail_sendmailcopy (0x300F) but uses 0x300D.
-// Mirrors `nmail_sendmail` in `c_src/map_server.c`.
 // ---------------------------------------------------------------------------
 
 pub unsafe fn nmail_sendmail(
     sd:      *mut MapSessionData,
-    to_user: *const c_char,
-    topic:   *const c_char,
-    message: *const c_char,
-) -> c_int {
+    to_user: *const i8,
+    topic:   *const i8,
+    message: *const i8,
+) -> i32 {
     if libc_strlen(to_user) > 16
         || libc_strlen(topic) > 52
         || libc_strlen(message) > 4000
@@ -1378,14 +1320,13 @@ pub unsafe fn nmail_sendmail(
 // map_changepostcolor — SQL UPDATE to set board post highlight color.
 //
 // Uses sqlx for database access.
-// Mirrors `map_changepostcolor` in `c_src/map_server.c`.
 // ---------------------------------------------------------------------------
 
 pub unsafe fn map_changepostcolor(
-    board: c_int,
-    post:  c_int,
-    color: c_int,
-) -> c_int {
+    board: i32,
+    post:  i32,
+    color: i32,
+) -> i32 {
     blocking_run(async move {
         sqlx::query(
             "UPDATE `Boards` SET `BrdHighlighted` = ? WHERE `BrdBnmId` = ? AND `BrdPosition` = ?"
@@ -1404,10 +1345,9 @@ pub unsafe fn map_changepostcolor(
 // map_getpostcolor — SQL SELECT to retrieve board post highlight color.
 //
 // Uses sqlx for database access.
-// Mirrors `map_getpostcolor` in `c_src/map_server.c`.
 // ---------------------------------------------------------------------------
 
-pub unsafe fn map_getpostcolor(board: c_int, post: c_int) -> c_int {
+pub unsafe fn map_getpostcolor(board: i32, post: i32) -> i32 {
     blocking_run(async move {
         sqlx::query_scalar::<_, Option<i32>>(
             "SELECT `BrdHighlighted` FROM `Boards` WHERE `BrdBnmId` = ? AND `BrdPosition` = ?"
@@ -1424,12 +1364,12 @@ pub unsafe fn map_getpostcolor(board: c_int, post: c_int) -> c_int {
 }
 
 // ---------------------------------------------------------------------------
-// libc_strlen — safe strlen wrapper for *const c_char inputs.
+// libc_strlen — safe strlen wrapper for *const i8 inputs.
 // Used by length-check guards in nmail_sendmail/nmail_sendmailcopy.
 // ---------------------------------------------------------------------------
 
 #[inline]
-unsafe fn libc_strlen(s: *const c_char) -> usize {
+unsafe fn libc_strlen(s: *const i8) -> usize {
     if s.is_null() { return 0; }
     std::ffi::CStr::from_ptr(s).to_bytes().len()
 }
@@ -1444,31 +1384,24 @@ use crate::game::client::handlers::clif_Hacker;
 // Language / message table — map_msg[] and lang_read
 // ---------------------------------------------------------------------------
 //
-// Previously defined in `c_src/map_server.c`.  C callers access `map_msg[]`
-// via the `extern struct map_msg_data { … } map_msg[MSG_MAX]` declaration in
-// `c_src/map_server.h`.
-
-/// Number of named message slots.  Matches `MSG_MAX` in `c_src/map_server.h`.
+/// Number of named message slots.
 ///
 /// Enum values (0-based): MAP_WHISPFAIL…MAP_ERRSUMMON = 29 entries, then MSG_MAX = 30.
 pub const MSG_MAX: usize = 30;
 
 /// One message entry in the language table.
 ///
-/// Layout must exactly match `struct map_msg_data` in `c_src/map_server.h`:
 /// ```c
 /// struct map_msg_data { char message[256]; int len; };
 /// ```
 #[repr(C)]
 pub struct MapMsgData {
-    pub message: [libc::c_char; 256],
-    pub len:     c_int,
+    pub message: [i8; 256],
+    pub len:     i32,
 }
 
 /// The global language message table.
 ///
-/// Exported as `map_msg` so C translation units that include `map_server.h`
-/// (`extern struct map_msg_data map_msg[MSG_MAX]`) link against this symbol.
 ///
 /// Entries are populated by `lang_read`.  The `message` field is a
 /// null-terminated, fixed-length C string stored directly in the struct
@@ -1483,7 +1416,7 @@ pub static mut map_msg: [MapMsgData; MSG_MAX] = {
 
 /// Mapping from the string key used in the lang file to the `map_msg` slot index.
 ///
-/// Mirrors the `map_msg_db[]` table inside the C `lang_read` function.
+/// Default message database used when no lang file is loaded.
 static LANG_KEY_MAP: &[(&str, usize)] = &[
     ("MAP_WHISPFAIL",  0),
     ("MAP_ERRGHOST",   1),
@@ -1526,7 +1459,6 @@ static LANG_KEY_MAP: &[(&str, usize)] = &[
 /// - Matching entries are written into `map_msg[index].message` (truncated to 255
 ///   bytes) and `map_msg[index].len` is set accordingly.
 ///
-/// Replaces `lang_read` in `c_src/map_server.c`.
 ///
 /// Returns 0 on success, 1 if the file cannot be opened.
 ///
@@ -1534,7 +1466,7 @@ static LANG_KEY_MAP: &[(&str, usize)] = &[
 /// `cfg_file` must be a valid, non-null, null-terminated C string.  This
 /// function must only be called from the game thread (no concurrent access to
 /// `map_msg`).
-pub unsafe fn lang_read(cfg_file: *const c_char) -> c_int {
+pub unsafe fn lang_read(cfg_file: *const i8) -> i32 {
     use std::io::BufRead as _;
 
     let path = std::ffi::CStr::from_ptr(cfg_file).to_string_lossy();
@@ -1577,10 +1509,10 @@ pub unsafe fn lang_read(cfg_file: *const c_char) -> c_int {
         // Zero the whole buffer first (matches strncpy semantics for short strings).
         slot.message = [0; 256];
         for (i, &b) in bytes[..copy_len].iter().enumerate() {
-            slot.message[i] = b as libc::c_char;
+            slot.message[i] = b as i8;
         }
         slot.message[copy_len] = 0; // null terminator (already zero, but be explicit)
-        slot.len = copy_len as c_int;
+        slot.len = copy_len as i32;
     }
 
     println!("[map] [lang_read] file={path}");
@@ -1588,7 +1520,7 @@ pub unsafe fn lang_read(cfg_file: *const c_char) -> c_int {
 }
 
 // ---------------------------------------------------------------------------
-// In-game time functions — ported from `c_src/map_server.c`.
+// In-game time functions.
 // ---------------------------------------------------------------------------
 
 /// Advance the in-game clock by one hour and broadcast the new time to all
@@ -1599,11 +1531,10 @@ pub unsafe fn lang_read(cfg_file: *const c_char) -> c_int {
 /// advances `cur_year`.  After updating globals the new values are written to
 /// the `Time` table and `clif_sendtime` is called for every active session.
 ///
-/// Replaces `change_time_char` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// Must be called on the game thread.  `crate::session::get_fd_max()` must reflect the current session table bounds.
-pub unsafe fn change_time_char(_id: c_int, _n: c_int) -> c_int {
+pub unsafe fn change_time_char(_id: i32, _n: i32) -> i32 {
     let t = cur_time.fetch_add(1, Ordering::Relaxed) + 1;
 
     if t == 24 {
@@ -1658,17 +1589,16 @@ pub unsafe fn change_time_char(_id: c_int, _n: c_int) -> c_int {
 /// Reads the first row of the `Time` table.  If the query fails or no row is
 /// returned the globals are left at their previous values (zero on startup).
 ///
-/// Replaces `get_time_thing` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// Must be called on the game thread.
-pub unsafe fn get_time_thing() -> c_int {
+pub unsafe fn get_time_thing() -> i32 {
     #[derive(sqlx::FromRow)]
     struct TimeRow {
-        #[sqlx(rename = "TimHour")]   hour:   i32,
-        #[sqlx(rename = "TimDay")]    day:    i32,
-        #[sqlx(rename = "TimSeason")] season: i32,
-        #[sqlx(rename = "TimYear")]   year:   i32,
+        #[sqlx(rename = "TimHour")]   hour:   u32,
+        #[sqlx(rename = "TimDay")]    day:    u32,
+        #[sqlx(rename = "TimSeason")] season: u32,
+        #[sqlx(rename = "TimYear")]   year:   u32,
     }
 
     if let Some(row) = blocking_run(async {
@@ -1680,11 +1610,11 @@ pub unsafe fn get_time_thing() -> c_int {
         .ok()
         .flatten()
     }) {
-        old_time.store(row.hour, Ordering::Relaxed);
-        cur_time.store(row.hour, Ordering::Relaxed);
-        cur_day.store(row.day, Ordering::Relaxed);
-        cur_season.store(row.season, Ordering::Relaxed);
-        cur_year.store(row.year, Ordering::Relaxed);
+        old_time.store(row.hour as i32, Ordering::Relaxed);
+        cur_time.store(row.hour as i32, Ordering::Relaxed);
+        cur_day.store(row.day as i32, Ordering::Relaxed);
+        cur_season.store(row.season as i32, Ordering::Relaxed);
+        cur_year.store(row.year as i32, Ordering::Relaxed);
     }
 
     0
@@ -1695,15 +1625,14 @@ pub unsafe fn get_time_thing() -> c_int {
 ///
 /// Deletes the existing row then inserts the current `time(NULL)` value.
 ///
-/// Replaces `uptime` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// Must be called on the game thread.
-pub unsafe fn uptime() -> c_int {
+pub unsafe fn uptime() -> i32 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as c_int)
+        .map(|d| d.as_secs() as i32)
         .unwrap_or(0);
 
     blocking_run(async move {
@@ -1728,14 +1657,11 @@ pub unsafe fn uptime() -> c_int {
 // `objectFlags` is a heap-allocated byte array indexed by a tile/object ID.
 // Each byte encodes directional movement flags (OBJ_UP / OBJ_RIGHT / OBJ_DOWN /
 // OBJ_LEFT) for its corresponding object.  The C extern declaration in
-// `c_src/map_server.h` (`extern unsigned char *objectFlags;`) is satisfied by
-// the `` static below; `sl_compat.c` indexes it directly.
 // ---------------------------------------------------------------------------
 
 /// Pointer to the static object flag table allocated by `object_flag_init`.
 ///
-/// C extern: `extern unsigned char *objectFlags;` in `map_server.h`.
-/// `sl_compat.c` reads `objectFlags[object]` for directional collision checks.
+/// Bitmap of directional collision flags for each floor item object slot.
 // SAFETY: Raw pointer to heap buffer allocated once during init, read-only pattern thereafter.
 // Single-threaded game loop — no concurrent access.
 pub static mut objectFlags: *mut u8 = std::ptr::null_mut();
@@ -1755,13 +1681,10 @@ pub static mut objectFlags: *mut u8 = std::ptr::null_mut();
 /// The actual per-object flag assignment is intentionally left commented out,
 /// preserving the original C behaviour (table allocated but entries stay zero).
 ///
-/// Replaces `object_flag_init` in `c_src/map_server.c`.
 ///
 /// # Safety
-/// Must be called on the game thread before any `sl_compat.c` function that
-/// reads `objectFlags`.  `data_dir` (C global from `config.c`) must be valid
 /// and point to a null-terminated string.
-pub unsafe fn object_flag_init() -> c_int {
+pub unsafe fn object_flag_init() -> i32 {
     use crate::config_globals::data_dir;
 
     let filename = b"static_objects.tbl\0";
@@ -1775,7 +1698,7 @@ pub unsafe fn object_flag_init() -> c_int {
     let path_cstr = match std::ffi::CString::new(path_bytes) {
         Ok(s) => s,
         Err(_) => {
-            eprintln!("[map] [object_flag_init] path contains interior nul byte");
+            tracing::error!("[map] [object_flag_init] path contains interior nul byte");
             std::process::exit(1);
         }
     };
@@ -1788,7 +1711,7 @@ pub unsafe fn object_flag_init() -> c_int {
 
     let fi = libc::fopen(path_cstr.as_ptr(), b"rb\0".as_ptr().cast());
     if fi.is_null() {
-        eprintln!(
+        tracing::error!(
             "[map] [error] cannot read static object table path={}",
             path_str
         );
@@ -1827,18 +1750,16 @@ pub unsafe fn object_flag_init() -> c_int {
 }
 
 // ---------------------------------------------------------------------------
-// map_src linked-list — ported from `c_src/map_server.c`
+// map_src linked-list
 //
 // The C implementation used a `struct map_src_list` singly-linked list with
 // heap-allocated nodes.  Replaced here with a `Vec<MapSrcEntry>` for safety.
 // `map_src_clear` frees the list; `map_src_add` appends one parsed entry.
 //
-// These functions are declared in `c_src/map_server.h` and may be called from
 // C (currently unused in the codebase, but retained for ABI completeness).
 // ---------------------------------------------------------------------------
 
 // Retained for ABI compatibility — map_src_add/map_src_clear are declared in
-// map_server.h; callers may be external or future script paths.
 #[allow(dead_code)]
 /// One entry in the map source list (equivalent to C `struct map_src_list`).
 #[derive(Debug)]
@@ -1862,26 +1783,20 @@ struct MapSrcEntry {
 }
 
 // Retained for ABI compatibility — map_src_add/map_src_clear are declared in
-// map_server.h; callers may be external or future script paths.
+
 #[allow(dead_code)]
-/// The parsed map source list, replacing the C `map_src_first` / `map_src_last`
-/// singly-linked list.
+/// The parsed map source list.
 // SAFETY: Vec populated once by map loader, read-only thereafter.
 // Single-threaded game loop — no concurrent access.
 static mut MAP_SRC_LIST: Vec<MapSrcEntry> = Vec::new();
 
 /// Free all entries in the map source list.
 ///
-/// Equivalent to the C `map_src_clear()` which walked the linked list and
-/// freed each node and its `mapfile` string.  Dropping `MAP_SRC_LIST` via
-/// `clear()` releases all `MapSrcEntry` allocations automatically.
-///
-/// Replaces `map_src_clear` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// Must be called on the game thread.  No other thread may concurrently access
 /// `MAP_SRC_LIST`.
-pub unsafe fn map_src_clear() -> c_int {
+pub unsafe fn map_src_clear() -> i32 {
     MAP_SRC_LIST.clear();
     0
 }
@@ -1897,12 +1812,11 @@ pub unsafe fn map_src_clear() -> c_int {
 ///
 /// Returns `0` on success, `-1` if fewer than 13 fields can be parsed.
 ///
-/// Replaces `map_src_add` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// `r1` must be a valid, non-null, null-terminated C string.
 /// Must be called on the game thread.
-pub unsafe fn map_src_add(r1: *const c_char) -> c_int {
+pub unsafe fn map_src_add(r1: *const i8) -> i32 {
     let line = std::ffi::CStr::from_ptr(r1).to_string_lossy();
 
     // Split on commas, matching the C sscanf format (15 fields max).
@@ -1985,20 +1899,15 @@ pub unsafe fn map_src_add(r1: *const c_char) -> c_int {
 }
 
 // ---------------------------------------------------------------------------
-// gamereg — game-global registry (replaces `struct game_data gamereg` in C)
+// gamereg — game-global registry
 //
-// `gamereg` is the server-wide key/value integer store backed by the
-// `GameRegistry<serverid>` table.  The C definition at the top of
-// `c_src/map_server.c` (`struct game_data gamereg;`) is deleted and replaced
-// by this `` Rust static so that both Rust and C (via
-// `map_readglobalgamereg`) link against a single symbol.
+// Server-wide key/value integer store backed by the `GameRegistry<serverid>` table.
 // ---------------------------------------------------------------------------
 
-/// Capacity of the game-global registry.  Mirrors `MAX_GAMEREG` in `map_server.h`.
+/// Capacity of the game-global registry.
 const MAX_GAMEREG: usize = 5000;
 
-/// Mirrors `struct game_data` from `c_src/map_server.h`.
-/// Must be `#[repr(C)]` and match the C layout exactly.
+/// Game-global registry entry.
 ///
 /// ```c
 /// struct game_data {
@@ -2009,7 +1918,7 @@ const MAX_GAMEREG: usize = 5000;
 #[repr(C)]
 pub struct GameData {
     pub registry:     *mut crate::database::map_db::GlobalReg,
-    pub registry_num: c_int,
+    pub registry_num: i32,
 }
 
 // SAFETY: `gamereg` is only accessed on the single-threaded game loop.
@@ -2020,7 +1929,7 @@ unsafe impl Sync for GameData {}
 /// The game-wide registry global.
 ///
 /// Exported as `gamereg` so the remaining C function `map_readglobalgamereg`
-/// in `map_server.c` can access it without change.  Populated by
+/// Populated by
 /// `map_loadgameregistry` and mutated by `map_setglobalgamereg`.
 // SAFETY: Global game registry (season, time, rates). Written by rust_map_cronjob on the game thread.
 // Single-threaded game loop — no concurrent access.
@@ -2045,7 +1954,7 @@ fn alloc_zeroed_gamereg_registry(len: usize) -> *mut crate::database::map_db::Gl
 ///
 /// Returns `true` if the two null-terminated byte sequences are equal ignoring ASCII case.
 /// Equivalent to `strcasecmp` used in the C registry search loops.
-unsafe fn reg_str_eq(arr: &[i8; 64], cstr: *const c_char) -> bool {
+unsafe fn reg_str_eq(arr: &[i8; 64], cstr: *const i8) -> bool {
     if cstr.is_null() {
         return false;
     }
@@ -2063,7 +1972,7 @@ unsafe fn reg_str_eq(arr: &[i8; 64], cstr: *const c_char) -> bool {
 }
 
 /// Copy a C string into a `[i8; 64]` field, null-terminating. Truncates at 63 chars.
-unsafe fn copy_cstr_to_reg_str(dest: &mut [i8; 64], src: *const c_char) {
+unsafe fn copy_cstr_to_reg_str(dest: &mut [i8; 64], src: *const i8) {
     let mut i = 0usize;
     while i < 63 {
         let b = *src.add(i) as i8;
@@ -2079,7 +1988,6 @@ unsafe fn copy_cstr_to_reg_str(dest: &mut [i8; 64], src: *const c_char) {
 // ---------------------------------------------------------------------------
 // map_registrysave — persist one map registry slot to the `MapRegistry` table.
 //
-// Mirrors `map_registrysave` in `c_src/map_server.c`.
 //
 // Logic:
 //   - SELECT MrgPosition WHERE MrgMapId=m AND MrgIdentifier=str → save_id (-1 if not found)
@@ -2092,12 +2000,11 @@ unsafe fn copy_cstr_to_reg_str(dest: &mut [i8; 64], src: *const c_char) {
 
 /// Persist one map registry slot at index `i` on map `m` to the `MapRegistry` table.
 ///
-/// Replaces `map_registrysave` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// `crate::database::map_db::map` must be a valid initialised pointer.  `m` must be a
 /// loaded map index and `i` must be within `[0, MAX_MAPREG)`.
-pub unsafe fn map_registrysave(m: c_int, i: c_int) -> c_int {
+pub unsafe fn map_registrysave(m: i32, i: i32) -> i32 {
     use crate::database::map_db::{GlobalReg, MAP_SLOTS, MAX_MAPREG};
 
     if m < 0 || m as usize >= MAP_SLOTS { return 0; }
@@ -2184,7 +2091,6 @@ pub unsafe fn map_registrysave(m: c_int, i: c_int) -> c_int {
 // ---------------------------------------------------------------------------
 // map_setglobalreg — set a map-level registry key/value in memory and persist.
 //
-// Mirrors `map_setglobalreg` in `c_src/map_server.c`.
 //
 // Uses the `map_isloaded` guard (registry != null), then:
 //   1. Linear search for an existing entry with the same name (strcasecmp).
@@ -2194,12 +2100,11 @@ pub unsafe fn map_registrysave(m: c_int, i: c_int) -> c_int {
 
 /// Set a key/value pair in the per-map registry for map `m`, then persist to DB.
 ///
-/// Replaces `map_setglobalreg` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// `crate::database::map_db::map` must be a valid initialised pointer.  `m` must be within
 /// `[0, MAP_SLOTS)`.  `reg` must be a valid non-null null-terminated C string.
-pub unsafe fn map_setglobalreg(m: c_int, reg: *const c_char, val: c_int) -> c_int {
+pub unsafe fn map_setglobalreg(m: i32, reg: *const i8, val: i32) -> i32 {
     use crate::database::map_db::MAP_SLOTS;
 
     if reg.is_null() { return 0; }
@@ -2223,7 +2128,7 @@ pub unsafe fn map_setglobalreg(m: c_int, reg: *const c_char, val: c_int) -> c_in
     if let Some(idx) = exist {
         let entry = &mut *slot.registry.add(idx);
         entry.val = val;
-        map_registrysave(m, idx as c_int);
+        map_registrysave(m, idx as i32);
         if val == 0 {
             entry.str = [0i8; 64]; // empty registry slot
         }
@@ -2237,7 +2142,7 @@ pub unsafe fn map_setglobalreg(m: c_int, reg: *const c_char, val: c_int) -> c_in
             let entry = &mut *slot.registry.add(idx);
             copy_cstr_to_reg_str(&mut entry.str, reg);
             entry.val = val;
-            map_registrysave(m, idx as c_int);
+            map_registrysave(m, idx as i32);
             return 0;
         }
     }
@@ -2245,11 +2150,11 @@ pub unsafe fn map_setglobalreg(m: c_int, reg: *const c_char, val: c_int) -> c_in
     // Extend if capacity allows.
     if num < crate::database::map_db::MAX_MAPREG {
         let new_num = num + 1;
-        slot.registry_num = new_num as c_int;
+        slot.registry_num = new_num as i32;
         let entry = &mut *slot.registry.add(num);
         copy_cstr_to_reg_str(&mut entry.str, reg);
         entry.val = val;
-        map_registrysave(m, num as c_int);
+        map_registrysave(m, num as i32);
     }
 
     0
@@ -2258,17 +2163,15 @@ pub unsafe fn map_setglobalreg(m: c_int, reg: *const c_char, val: c_int) -> c_in
 // ---------------------------------------------------------------------------
 // map_readglobalreg — read a map-level registry value from memory.
 //
-// Mirrors `map_readglobalreg` in `c_src/map_server.c`.
 // ---------------------------------------------------------------------------
 
 /// Return the value for registry key `reg` on map `m`, or 0 if not found.
 ///
-/// Replaces `map_readglobalreg` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// `crate::database::map_db::map` must be a valid initialised pointer.  `m` must be within
 /// `[0, MAP_SLOTS)`.  `reg` must be a valid non-null null-terminated C string.
-pub unsafe fn map_readglobalreg(m: c_int, reg: *const c_char) -> c_int {
+pub unsafe fn map_readglobalreg(m: i32, reg: *const i8) -> i32 {
     use crate::database::map_db::MAP_SLOTS;
 
     if m < 0 || m as usize >= MAP_SLOTS { return 0; }
@@ -2288,19 +2191,16 @@ pub unsafe fn map_readglobalreg(m: c_int, reg: *const c_char) -> c_int {
 // ---------------------------------------------------------------------------
 // map_loadgameregistry — load game-global registry from `GameRegistry<id>` table.
 //
-// Mirrors `map_loadgameregistry` in `c_src/map_server.c`.
 //
 // Allocates gamereg.registry, queries all rows, copies them into the array.
 // ---------------------------------------------------------------------------
 
 /// Load the game-global registry from the `GameRegistry<serverid>` table.
 ///
-/// Replaces `map_loadgameregistry` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// Must be called on the game thread after the database pool is initialised.
-/// `serverid` must be a valid C extern int.
-pub unsafe fn map_loadgameregistry() -> c_int {
+pub unsafe fn map_loadgameregistry() -> i32 {
     let sid = serverid;
     let limit = MAX_GAMEREG as u32;
 
@@ -2325,7 +2225,7 @@ pub unsafe fn map_loadgameregistry() -> c_int {
         #[sqlx(rename = "GrgIdentifier")]
         grg_identifier: String,
         #[sqlx(rename = "GrgValue")]
-        grg_value: i32,
+        grg_value: u32, // INT UNSIGNED in schema
     }
 
     let rows: Vec<GrgRow> = match blocking_run(
@@ -2339,7 +2239,7 @@ pub unsafe fn map_loadgameregistry() -> c_int {
     };
 
     let count = rows.len().min(MAX_GAMEREG);
-    gamereg.registry_num = count as c_int;
+    gamereg.registry_num = count as i32;
 
     for (i, row) in rows.iter().take(count).enumerate() {
         let entry = &mut *gamereg.registry.add(i);
@@ -2351,7 +2251,7 @@ pub unsafe fn map_loadgameregistry() -> c_int {
             copy_len,
         );
         entry.str[copy_len] = 0;
-        entry.val = row.grg_value;
+        entry.val = row.grg_value as i32;
     }
 
     tracing::info!("[map] [load_game_registry] count={count}");
@@ -2361,7 +2261,6 @@ pub unsafe fn map_loadgameregistry() -> c_int {
 // ---------------------------------------------------------------------------
 // map_savegameregistry — persist one game-global registry slot to DB.
 //
-// Mirrors `map_savegameregistry` in `c_src/map_server.c`.
 //
 // Logic:
 //   - SELECT GrgId WHERE GrgIdentifier=str → save_id (0 if not found)
@@ -2374,12 +2273,11 @@ pub unsafe fn map_loadgameregistry() -> c_int {
 
 /// Persist one game-global registry slot at index `i` to `GameRegistry<serverid>`.
 ///
-/// Replaces `map_savegameregistry` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// Must be called on the game thread.  `i` must be within `[0, registry_num)`.
 /// `gamereg.registry` must be a valid allocated array.
-pub unsafe fn map_savegameregistry(i: c_int) -> c_int {
+pub unsafe fn map_savegameregistry(i: i32) -> i32 {
     if gamereg.registry.is_null() { return 0; }
     if i < 0 || i as usize >= gamereg.registry_num as usize { return 0; }
 
@@ -2448,7 +2346,6 @@ pub unsafe fn map_savegameregistry(i: c_int) -> c_int {
 // ---------------------------------------------------------------------------
 // map_setglobalgamereg — set a game-global registry key/value and persist.
 //
-// Mirrors `map_setglobalgamereg` in `c_src/map_server.c`.
 //
 // Same three-phase logic as map_setglobalreg but operates on `gamereg`.
 // Uses MAX_GLOBALREG as the capacity limit (== MAX_GAMEREG == 5000).
@@ -2456,12 +2353,11 @@ pub unsafe fn map_savegameregistry(i: c_int) -> c_int {
 
 /// Set a key/value pair in the game-global registry, then persist to DB.
 ///
-/// Replaces `map_setglobalgamereg` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// Must be called on the game thread.  `reg` must be a valid non-null
 /// null-terminated C string.  `gamereg.registry` must be initialised.
-pub unsafe fn map_setglobalgamereg(reg: *const c_char, val: c_int) -> c_int {
+pub unsafe fn map_setglobalgamereg(reg: *const i8, val: i32) -> i32 {
     if reg.is_null() { return 0; }
     if gamereg.registry.is_null() { return 0; }
 
@@ -2480,7 +2376,7 @@ pub unsafe fn map_setglobalgamereg(reg: *const c_char, val: c_int) -> c_int {
     if let Some(idx) = exist {
         let entry = &mut *gamereg.registry.add(idx);
         entry.val = val;
-        map_savegameregistry(idx as c_int);
+        map_savegameregistry(idx as i32);
         if val == 0 {
             entry.str = [0i8; 64]; // empty slot
         }
@@ -2494,18 +2390,18 @@ pub unsafe fn map_setglobalgamereg(reg: *const c_char, val: c_int) -> c_int {
             let entry = &mut *gamereg.registry.add(idx);
             copy_cstr_to_reg_str(&mut entry.str, reg);
             entry.val = val;
-            map_savegameregistry(idx as c_int);
+            map_savegameregistry(idx as i32);
             return 0;
         }
     }
 
     // Extend if capacity allows (C used MAX_GLOBALREG == 5000 == MAX_GAMEREG).
     if num < MAX_GAMEREG {
-        gamereg.registry_num = (num + 1) as c_int;
+        gamereg.registry_num = (num + 1) as i32;
         let entry = &mut *gamereg.registry.add(num);
         copy_cstr_to_reg_str(&mut entry.str, reg);
         entry.val = val;
-        map_savegameregistry(num as c_int);
+        map_savegameregistry(num as i32);
     }
 
     0
@@ -2514,21 +2410,17 @@ pub unsafe fn map_setglobalgamereg(reg: *const c_char, val: c_int) -> c_int {
 // ---------------------------------------------------------------------------
 // map_registrydelete — no-op stub for ABI completeness.
 //
-// `c_src/map_server.h` declares `int map_registrydelete(int, int)` but the
-// original C implementation was commented out and has no current callers.
-// The stub prevents linker failures if any translation unit ever calls it.
 // ---------------------------------------------------------------------------
 
 /// Lookup a character's name by ID; allocates a 255-byte heap buffer (caller must free).
 /// Returns "None" for id=0, empty string if not found.
 ///
-/// Mirrors `map_id2name` in `c_src/map_server_stubs.c`.
-pub unsafe fn map_id2name(id: c_uint) -> *mut c_char {
-    let buf = libc::calloc(255, 1) as *mut c_char;
+pub unsafe fn map_id2name(id: u32) -> *mut i8 {
+    let buf = libc::calloc(255, 1) as *mut i8;
     if buf.is_null() { return buf; }
     if id == 0 {
         let none = b"None\0";
-        std::ptr::copy_nonoverlapping(none.as_ptr() as *const c_char, buf, none.len());
+        std::ptr::copy_nonoverlapping(none.as_ptr() as *const i8, buf, none.len());
         return buf;
     }
     let name: Option<String> = crate::database::blocking_run(async move {
@@ -2543,7 +2435,7 @@ pub unsafe fn map_id2name(id: c_uint) -> *mut c_char {
     if let Some(s) = name {
         let bytes = s.as_bytes();
         let len = bytes.len().min(254);
-        std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const c_char, buf, len);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const i8, buf, len);
         *buf.add(len) = 0;
     }
     buf
@@ -2551,8 +2443,7 @@ pub unsafe fn map_id2name(id: c_uint) -> *mut c_char {
 
 /// Trigger the mapWeather Lua hook when the in-game hour changes.
 ///
-/// Mirrors `map_weather` in `c_src/map_server_stubs.c`.
-pub unsafe fn map_weather(_id: c_int, _n: c_int) -> c_int {
+pub unsafe fn map_weather(_id: i32, _n: i32) -> i32 {
     let ot = old_time.load(Ordering::Relaxed);
     let ct = cur_time.load(Ordering::Relaxed);
     if ot != ct {
@@ -2566,8 +2457,7 @@ pub unsafe fn map_weather(_id: c_int, _n: c_int) -> c_int {
 
 /// Save all online character sessions to the char server.
 ///
-/// Mirrors `map_savechars` in `c_src/map_server_stubs.c`.
-pub unsafe fn map_savechars(_none: c_int, _nonetoo: c_int) -> c_int {
+pub unsafe fn map_savechars(_none: i32, _nonetoo: i32) -> i32 {
     for x in 0..crate::session::get_fd_max() {
         if rust_session_exists(x) == 0 { continue; }
         if rust_session_get_eof(x) != 0 { continue; }
@@ -2580,14 +2470,13 @@ pub unsafe fn map_savechars(_none: c_int, _nonetoo: c_int) -> c_int {
 /// No-op stub — `map_registrydelete` was commented out in C and has no current callers.
 /// Retained for ABI completeness.
 #[allow(dead_code)]
-pub unsafe fn map_registrydelete(_m: c_int, _i: c_int) -> c_int {
+pub unsafe fn map_registrydelete(_m: i32, _i: i32) -> i32 {
     0
 }
 
 // ---------------------------------------------------------------------------
 // map_lastdeath_mob — record a mob's last-death time in the Spawns table.
 //
-// Mirrors `map_lastdeath_mob` in `c_src/map_server.c`.
 //
 // SQL: UPDATE `Spawns<serverid>` SET SpnLastDeath=last_death
 //      WHERE SpnX=startx AND SpnY=starty AND SpnMapId=bl.m AND SpnId=id
@@ -2595,14 +2484,13 @@ pub unsafe fn map_registrydelete(_m: c_int, _i: c_int) -> c_int {
 
 /// Record the mob's last-death timestamp in the `Spawns<serverid>` DB table.
 ///
-/// Replaces `map_lastdeath_mob` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// `p` must be a valid non-null pointer to a `MobSpawnData` struct.
 /// Must be called on the game thread after the DB pool is initialised.
 pub unsafe fn map_lastdeath_mob(
     p: *mut crate::game::mob::MobSpawnData,
-) -> c_int {
+) -> i32 {
     if p.is_null() { return 0; }
 
     let last_death = (*p).last_death;
@@ -2636,18 +2524,17 @@ pub unsafe fn map_lastdeath_mob(
 }
 
 // ---------------------------------------------------------------------------
-// hasCoref — ported from `c_src/map_server.c`
+// hasCoref
 // ---------------------------------------------------------------------------
 
 /// Returns 1 if the player `sd` has an active co-reference or is contained
 /// inside another player that is still in the ID database.  Returns 0 otherwise.
 ///
-/// Replaces `hasCoref` in `c_src/map_server.c`.
 ///
 /// # Safety
 /// `sd` must be a valid non-null pointer to a `MapSessionData` that is
 /// currently registered in the game world.  Must be called on the game thread.
-pub unsafe fn hasCoref(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn hasCoref(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -2666,13 +2553,12 @@ pub unsafe fn hasCoref(sd: *mut MapSessionData) -> c_int {
 }
 
 // ---------------------------------------------------------------------------
-// map_do_term — ported from `c_src/map_server_stubs.c`
+// map_do_term
 // ---------------------------------------------------------------------------
 
 /// Shuts down the map server: save characters, free all map tile/grid
 /// allocations, and terminate all subsystem databases.
 ///
-/// Replaces `map_do_term()` in `c_src/map_server_stubs.c`.
 ///
 /// # Safety
 /// Must be called exactly once at shutdown, on the game thread, after all
@@ -2736,85 +2622,58 @@ pub unsafe fn map_do_term() {
 }
 
 // ---------------------------------------------------------------------------
-// Globals ported from c_src/map_server_stubs.c (Task 2.3)
-//
-// These were previously C globals in map_server_stubs.c. They are now Rust
-// statics so C code that references them via extern declarations
-// in map_server.h / mmo.h continues to link.
+// Map server globals.
 // ---------------------------------------------------------------------------
 
-/// Mob search DBMap — was used by mob search lookups. No Rust callers found;
-/// kept as a null pointer stub for C ABI compatibility in case any C code links
-/// against this symbol. Previously: `DBMap* mobsearch_db;` in map_server_stubs.c.
-// SAFETY: Raw *mut c_void handle to an in-memory mob lookup structure. Null stub kept for ABI.
+/// Mob search DBMap — null pointer stub (no active callers).
+// SAFETY: Raw *mut std::ffi::c_void handle. Written once at startup, read-only thereafter.
 // Single-threaded game loop — no concurrent access.
 pub static mut mobsearch_db: *mut std::ffi::c_void = std::ptr::null_mut();
 
-/// Party/group member ID table. Flat 2-D: groups[MAX_GROUPS][MAX_GROUP_MEMBERS]
-/// = groups[256][256]. Rust code accesses this via `#[link_name = "groups"]`.
-/// Previously defined in map_server_stubs.c (moved there from sl_compat.c).
-/// 256 * 256 = 65536 elements.
+/// Party/group member ID table. Flat 2-D: groups[256][256] = 65536 elements.
 // SAFETY: u32 array mapping entity ID to group ID. Read/write on the game thread only.
 // Single-threaded game loop — no concurrent access.
-pub static mut groups: [c_uint; 65536] = [0u32; 65536];
+pub static mut groups: [u32; 65536] = [0u32; 65536];
 
 /// File descriptor for the logging socket (unused in current build; kept for ABI).
-/// Previously: `int log_fd;` in map_server_stubs.c.
 pub static log_fd: AtomicI32 = AtomicI32::new(0);
 
 /// Maximum map ID seen during load; used by map scan loops.
-/// Previously: `int map_max = 0;` in map_server_stubs.c.
 pub static map_max: AtomicI32 = AtomicI32::new(0);
 
 /// Map server public IP string (dotted-decimal, e.g. "127.0.0.1").
-/// Previously: `char map_ip_s[16];` in map_server_stubs.c.
 // SAFETY: Byte array for IP display string, written once at startup.
 // Single-threaded game loop — no concurrent access.
 pub static mut map_ip_s: [u8; 16] = [0u8; 16];
 
 /// Logging server IP string (dotted-decimal).
-/// Previously: `char log_ip_s[16];` in map_server_stubs.c.
 // SAFETY: Byte array for IP display string, written once at startup.
 // Single-threaded game loop — no concurrent access.
 pub static mut log_ip_s: [u8; 16] = [0u8; 16];
 
 /// Hour value from the previous cron-job tick; used to detect hour changes.
-/// Previously: `int oldHour;` in map_server_stubs.c.
 pub static oldHour: AtomicI32 = AtomicI32::new(0);
 
 /// Minute value from the previous cron-job tick; used to detect minute changes.
-/// Previously: `int oldMinute;` in map_server_stubs.c.
 pub static oldMinute: AtomicI32 = AtomicI32::new(0);
 
 /// Timer ID returned by timer_insert for the cron-job callback.
-/// Previously: `int cronjobtimer;` in map_server_stubs.c.
 pub static cronjobtimer: AtomicI32 = AtomicI32::new(0);
 
 /// Current count of block-list entries being iterated. Used by the block-grid
-/// sweep to avoid re-entrant modification. Previously: `int bl_list_count = 0;`
-/// in map_server_stubs.c (with `#define BL_LIST_MAX 32768` guarding it).
 pub static bl_list_count: AtomicI32 = AtomicI32::new(0);
 
 // ---------------------------------------------------------------------------
-// Task 2.1: map_reload — ported from c_src/map_server_stubs.c
-//
-// Reloads all map data by calling rust_map_reload(), then iterates every
-// loaded map and calls sl_updatepeople on every BL_PC entity via
-// foreach_in_area(SameMap). sl_updatepeople_impl is currently a no-op but
-// will be filled in once map_parse.c is fully ported.
-//
-// Called from C (gm_command.rs extern "C" block at line 63), so must be
-// extern "C".
+
 // ---------------------------------------------------------------------------
 
 /// Reload all map data (tile, registry) and notify all online players.
 ///
-/// Replaces `map_reload` in `c_src/map_server_stubs.c`.
 ///
 /// # Safety
 /// Must be called on the game thread. `maps_dir` and `serverid` must be valid
 /// C globals (provided by `src/ffi/config_globals.rs`).
-pub unsafe fn map_reload() -> c_int {
+pub unsafe fn map_reload() -> i32 {
     use crate::config_globals::maps_dir;
     use crate::database::map_db::rust_map_reload;
 
@@ -2850,22 +2709,18 @@ pub unsafe fn map_reload() -> c_int {
 }
 
 // ---------------------------------------------------------------------------
-// Task 2.2: map_reset_timer — ported from c_src/map_server_stubs.c
+
 //
 // Countdown broadcast/disconnect function. Called every 250 ms by timer_insert
 // (set up in gm_command.rs shutdown handler). Uses two module-level statics
 // to replace C's `static int reset` and `static int diff` local statics.
 //
-// Called from C (gm_command.rs extern "C" block at line 167), so must be
-// extern "C".
 // ---------------------------------------------------------------------------
 
 /// Running countdown value (milliseconds remaining until shutdown).
-/// Replaces `static int reset` inside `map_reset_timer` in C.
 static RESET_TIMER_REMAINING: AtomicI32 = AtomicI32::new(0);
 
 /// Accumulated elapsed ms since the last broadcast.
-/// Replaces `static int diff` inside `map_reset_timer` in C.
 static RESET_TIMER_DIFF: AtomicI32 = AtomicI32::new(0);
 
 /// Shutdown countdown timer callback.
@@ -2875,12 +2730,11 @@ static RESET_TIMER_DIFF: AtomicI32 = AtomicI32::new(0);
 ///
 /// Returns 1 when shutdown is triggered, 0 otherwise.
 ///
-/// Replaces `map_reset_timer` in `c_src/map_server_stubs.c`.
 ///
 /// # Safety
 /// Must be called on the game thread. Accesses the global session table and
 /// `crate::session::get_fd_max()`. Both are single-threaded game globals.
-pub unsafe fn map_reset_timer(v1: c_int, v2: c_int) -> c_int {
+pub unsafe fn map_reset_timer(v1: i32, v2: i32) -> i32 {
     let mut remaining = RESET_TIMER_REMAINING.load(Ordering::Relaxed);
     let mut diff      = RESET_TIMER_DIFF.load(Ordering::Relaxed);
 
@@ -2920,19 +2774,19 @@ pub unsafe fn map_reset_timer(v1: c_int, v2: c_int) -> c_int {
     if remaining <= 60_000 {
         if diff >= 10_000 {
             let msg = format!("Reset in {} seconds\0", remaining / 1000);
-            crate::game::map_parse::chat::clif_broadcast(msg.as_ptr() as *const c_char, -1);
+            crate::game::map_parse::chat::clif_broadcast(msg.as_ptr() as *const i8, -1);
             RESET_TIMER_DIFF.store(0, Ordering::Relaxed);
         }
     } else if remaining <= 3_600_000 {
         if diff >= 300_000 {
             let msg = format!("Reset in {} minutes\0", remaining / 60_000);
-            crate::game::map_parse::chat::clif_broadcast(msg.as_ptr() as *const c_char, -1);
+            crate::game::map_parse::chat::clif_broadcast(msg.as_ptr() as *const i8, -1);
             RESET_TIMER_DIFF.store(0, Ordering::Relaxed);
         }
     } else if remaining > 3_600_000 {
         if diff >= 3_600_000 {
             let msg = format!("Reset in {} hours\0", remaining / 3_600_000);
-            crate::game::map_parse::chat::clif_broadcast(msg.as_ptr() as *const c_char, -1);
+            crate::game::map_parse::chat::clif_broadcast(msg.as_ptr() as *const i8, -1);
             RESET_TIMER_DIFF.store(0, Ordering::Relaxed);
         }
     }

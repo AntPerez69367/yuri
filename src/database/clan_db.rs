@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::ffi::CStr;
-use std::os::raw::{c_char, c_int, c_uint};
 use std::ptr::null_mut;
 use std::sync::{Mutex, OnceLock};
 
@@ -10,29 +9,27 @@ use sqlx::Row;
 use super::item_db::str_to_fixed;
 use super::{blocking_run, get_pool};
 
-#[repr(C)]
 pub struct ClanBank {
-    pub item_id: c_uint,
-    pub amount: c_uint,
-    pub owner: c_uint,
-    pub time: c_uint,
-    pub custom_icon: c_uint,
-    pub custom_look: c_uint,
-    pub pos: c_uint,
-    pub real_name: [c_char; 64],
-    pub custom_look_color: c_uint,
-    pub custom_icon_color: c_uint,
-    pub protected_flag: c_uint,
-    pub note: [c_char; 300],
+    pub item_id: u32,
+    pub amount: u32,
+    pub owner: u32,
+    pub time: u32,
+    pub custom_icon: u32,
+    pub custom_look: u32,
+    pub pos: u32,
+    pub real_name: [i8; 64],
+    pub custom_look_color: u32,
+    pub custom_icon_color: u32,
+    pub protected_flag: u32,
+    pub note: [i8; 300],
 }
 
-#[repr(C)]
 pub struct ClanData {
-    pub id: c_int,
-    pub name: [c_char; 64],
-    pub maxslots: c_int,
-    pub maxperslot: c_int,
-    pub level: c_int,
+    pub id: i32,
+    pub name: [i8; 64],
+    pub maxslots: i32,
+    pub maxperslot: i32,
+    pub level: i32,
     /// Set to null on init; map_loadclanbank() fills this in after init.
     pub clanbanks: *mut ClanBank,
 }
@@ -90,7 +87,7 @@ async fn load_clans() -> Result<usize, sqlx::Error> {
 
 // ─── Public interface ────────────────────────────────────────────────────────
 
-pub fn init() -> c_int {
+pub fn init() -> i32 {
     CLAN_DB.get_or_init(|| Mutex::new(HashMap::new()));
     match blocking_run(load_clans()) {
         Ok(n) => {
@@ -146,7 +143,7 @@ pub fn searchexist(id: i32) -> *mut ClanData {
     }
 }
 
-pub unsafe fn searchname(s: *const c_char) -> *mut ClanData {
+pub unsafe fn searchname(s: *const i8) -> *mut ClanData {
     if s.is_null() {
         return null_mut();
     }
@@ -183,27 +180,26 @@ pub unsafe fn searchname(s: *const c_char) -> *mut ClanData {
 /// all map entries and invalidates every pointer previously returned by
 /// `name()`, `search()`, or `searchexist()`. See also `db()` for the
 /// underlying store that governs the lifetime of all returned pointers.
-pub fn name(id: i32) -> *const c_char {
+pub fn name(id: i32) -> *const i8 {
     let map = db().lock().unwrap();
     match map.get(&id) {
-        Some(c) => c.name.as_ptr() as *const c_char,
-        None => b"??\0".as_ptr() as *const c_char,
+        Some(c) => c.name.as_ptr(),
+        None => b"??\0".as_ptr() as *const i8,
     }
 }
 
-// ─── FFI bridge (moved from src/ffi/clan_db.rs) ───────────────────────────
 
-pub fn rust_clandb_init() -> c_int { ffi_catch!(-1, init()) }
+pub fn rust_clandb_init() -> i32 { ffi_catch!(-1, init()) }
 
 pub fn rust_clandb_term() { ffi_catch!((), term()) }
 
-pub fn rust_clandb_search(id: c_int) -> *mut ClanData { ffi_catch!(null_mut(), search(id)) }
+pub fn rust_clandb_search(id: i32) -> *mut ClanData { ffi_catch!(null_mut(), search(id)) }
 
-pub fn rust_clandb_searchexist(id: c_int) -> *mut ClanData { ffi_catch!(null_mut(), searchexist(id)) }
+pub fn rust_clandb_searchexist(id: i32) -> *mut ClanData { ffi_catch!(null_mut(), searchexist(id)) }
 
-pub unsafe fn rust_clandb_searchname(s: *const c_char) -> *mut ClanData {
+pub unsafe fn rust_clandb_searchname(s: *const i8) -> *mut ClanData {
     if s.is_null() { return null_mut(); }
     ffi_catch!(null_mut(), unsafe { searchname(s) })
 }
 
-pub fn rust_clandb_name(id: c_int) -> *const c_char { ffi_catch!(b"??\0".as_ptr() as *const c_char, name(id)) }
+pub fn rust_clandb_name(id: i32) -> *const i8 { ffi_catch!(b"??\0".as_ptr() as *const i8, name(id)) }

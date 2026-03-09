@@ -1,11 +1,7 @@
-//! Port of item/equipment handling from `c_src/map_parse.c`.
-//!
-//! Functions declared `pub unsafe extern "C"` so they remain
-//! callable from any remaining C code that has not yet been ported.
+//! Item and equipment packet handlers.
 
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
-use std::ffi::{c_char, c_int, c_uint, c_void};
 
 use crate::database::map_db::{BlockList, WarpList, BLOCK_SIZE};
 use crate::database::map_db::map;
@@ -21,7 +17,7 @@ use crate::game::pc::{
     LOOK_SEND,
 };
 
-// MAP_EQ* message indices (from c_src/map_server.h enum, after MAP_ERRMOUNT=12)
+// MAP_EQ* message indices
 const MAP_EQHELM:     usize = 13;
 const MAP_EQWEAP:     usize = 14;
 const MAP_EQARMOR:    usize = 15;
@@ -50,12 +46,11 @@ use super::packet::{
 };
 
 // optFlag_stealth = 32 (from map_server.h)
-const OPT_FLAG_STEALTH: c_int = 32;
+const OPT_FLAG_STEALTH: i32 = 32;
 
 // SCRIPT subtype constant (enum { SCRIPT=0, FLOOR=1 } in map_server.h)
 const SCRIPT: u8 = 0;
 
-// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
 
 use crate::game::map_parse::player_state::clif_sendstatus;
 use crate::game::map_parse::chat::{clif_sendmsg, clif_sendminitext};
@@ -75,7 +70,7 @@ use crate::database::item_db::{
 use crate::database::magic_db::rust_magicdb_yname;
 
 
-// Direct imports from Rust — no extern "C" block needed since same crate.
+
 use crate::game::pc::rust_pc_addtocurrent_inner;
 use crate::game::block::{foreach_in_area, foreach_in_cell, AreaType};
 use crate::game::map_parse::visual::clif_object_look_sub2_inner;
@@ -85,32 +80,32 @@ use crate::game::map_parse::visual::clif_object_look_sub2_inner;
 /// Dispatch a Lua event with a single block_list argument.
 #[cfg(not(test))]
 #[allow(dead_code)]
-unsafe fn sl_doscript_simple(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl: *mut BlockList) -> std::ffi::c_int {
+unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
 }
 
 /// Dispatch a Lua event with two block_list arguments.
 #[cfg(not(test))]
 #[allow(dead_code)]
-unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl1: *mut BlockList, bl2: *mut BlockList) -> std::ffi::c_int {
+unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut BlockList, bl2: *mut BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
 }
 
 // ─── libc helpers ─────────────────────────────────────────────────────────────
 
-unsafe fn strcasecmp_rs(a: *const c_char, b: *const u8) -> c_int {
+unsafe fn strcasecmp_rs(a: *const i8, b: *const u8) -> i32 {
     libc::strcasecmp(a, b.cast())
 }
 
-unsafe fn strlen_cstr(p: *const c_char) -> usize {
+unsafe fn strlen_cstr(p: *const i8) -> usize {
     libc::strlen(p)
 }
 
-unsafe fn strcpy_cstr(dst: *mut u8, src: *const c_char) {
+unsafe fn strcpy_cstr(dst: *mut u8, src: *const i8) {
     libc::strcpy(dst.cast(), src);
 }
 
-unsafe fn sprintf_buf(dst: &mut [i8; 128], fmt: &[u8], arg: *const c_char) {
+unsafe fn sprintf_buf(dst: &mut [i8; 128], fmt: &[u8], arg: *const i8) {
     // Used only for formatting name strings into fixed buffers.
     // We call libc snprintf for safety.
     libc::snprintf(dst.as_mut_ptr(), 128, fmt.as_ptr().cast(), arg);
@@ -120,8 +115,7 @@ unsafe fn sprintf_buf(dst: &mut [i8; 128], fmt: &[u8], arg: *const c_char) {
 
 /// Validate inventory on death: break or restore items as needed.
 ///
-/// Mirrors `clif_checkinvbod` from `c_src/map_parse.c` ~line 5632.
-pub unsafe fn clif_checkinvbod(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_checkinvbod(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
     for x in 0..MAX_INVENTORY {
@@ -175,7 +169,7 @@ pub unsafe fn clif_checkinvbod(sd: *mut MapSessionData) -> c_int {
             sl_doscript_simple(b"onBreak\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl);
             sl_doscript_simple(rust_itemdb_yname(id), b"on_break\0".as_ptr().cast(), &raw mut (*sd).bl);
 
-            rust_pc_delitem(sd, x as c_int, 1, 9);
+            rust_pc_delitem(sd, x as i32, 1, 9);
             clif_sendmsg(sd, 5, buf.as_ptr());
         }
 
@@ -192,8 +186,7 @@ pub unsafe fn clif_checkinvbod(sd: *mut MapSessionData) -> c_int {
 
 /// Remove an item from the client inventory view.
 ///
-/// Mirrors `clif_senddelitem` from `c_src/map_parse.c` ~line 5695.
-pub unsafe fn clif_senddelitem(sd: *mut MapSessionData, num: c_int, r#type: c_int) -> c_int {
+pub unsafe fn clif_senddelitem(sd: *mut MapSessionData, num: i32, r#type: i32) -> i32 {
     let n = num as usize;
     (*sd).status.inventory[n].id = 0;
     (*sd).status.inventory[n].dura = 0;
@@ -232,8 +225,7 @@ pub unsafe fn clif_senddelitem(sd: *mut MapSessionData, num: c_int, r#type: c_in
 
 /// Send an inventory item to the client.
 ///
-/// Mirrors `clif_sendadditem` from `c_src/map_parse.c` ~line 5738.
-pub unsafe fn clif_sendadditem(sd: *mut MapSessionData, num: c_int) -> c_int {
+pub unsafe fn clif_sendadditem(sd: *mut MapSessionData, num: i32) -> i32 {
     let n = num as usize;
     let id = (*sd).status.inventory[n].id;
 
@@ -261,7 +253,7 @@ pub unsafe fn clif_sendadditem(sd: *mut MapSessionData, num: c_int) -> c_int {
     }
 
     // Choose display name
-    let name_ptr: *const c_char = if (*sd).status.inventory[n].real_name[0] != 0 {
+    let name_ptr: *const i8 = if (*sd).status.inventory[n].real_name[0] != 0 {
         (*sd).status.inventory[n].real_name.as_ptr()
     } else {
         item_name
@@ -273,7 +265,7 @@ pub unsafe fn clif_sendadditem(sd: *mut MapSessionData, num: c_int) -> c_int {
         let item_type = rust_itemdb_type(id);
         let dura = (*sd).status.inventory[n].dura;
         let amount = (*sd).status.inventory[n].amount;
-        // ITM_SMOKE=2, ITM_BAG=21, ITM_MAP=22, ITM_QUIVER=23 (from c_src/item_db.h enum)
+        // ITM_SMOKE=2, ITM_BAG=21, ITM_MAP=22, ITM_QUIVER=23
         // These are handled via format string exactly as in C.
         if amount > 1 {
             libc::snprintf(
@@ -426,7 +418,7 @@ pub unsafe fn clif_sendadditem(sd: *mut MapSessionData, num: c_int) -> c_int {
     0
 }
 
-unsafe fn libc_free(p: *mut c_void) {
+unsafe fn libc_free(p: *mut std::ffi::c_void) {
     libc::free(p);
 }
 
@@ -434,11 +426,10 @@ unsafe fn libc_free(p: *mut c_void) {
 
 /// Send an equip slot item to the client.
 ///
-/// Mirrors `clif_equipit` from `c_src/map_parse.c` ~line 5870.
-pub unsafe fn clif_equipit(sd: *mut MapSessionData, id: c_int) -> c_int {
+pub unsafe fn clif_equipit(sd: *mut MapSessionData, id: i32) -> i32 {
     let slot = id as usize;
 
-    let nameof: *const c_char = if (*sd).status.equip[slot].real_name[0] != 0 {
+    let nameof: *const i8 = if (*sd).status.equip[slot].real_name[0] != 0 {
         (*sd).status.equip[slot].real_name.as_ptr()
     } else {
         rust_itemdb_name((*sd).status.equip[slot].id)
@@ -495,8 +486,7 @@ pub unsafe fn clif_equipit(sd: *mut MapSessionData, id: c_int) -> c_int {
 
 /// Equip an item and send a confirmation message to the client.
 ///
-/// Mirrors `clif_sendequip` from `c_src/map_parse.c` ~line 5912.
-pub unsafe fn clif_sendequip(sd: *mut MapSessionData, id: c_int) -> c_int {
+pub unsafe fn clif_sendequip(sd: *mut MapSessionData, id: i32) -> i32 {
     let slot = id as usize;
 
     let msgnum: usize = match id {
@@ -530,7 +520,7 @@ pub unsafe fn clif_sendequip(sd: *mut MapSessionData, id: c_int) -> c_int {
         return 0;
     }
 
-    let name: *const c_char = if (*sd).status.equip[slot].real_name[0] != 0 {
+    let name: *const i8 = if (*sd).status.equip[slot].real_name[0] != 0 {
         (*sd).status.equip[slot].real_name.as_ptr()
     } else {
         rust_itemdb_name((*sd).status.equip[slot].id)
@@ -552,9 +542,8 @@ pub unsafe fn clif_sendequip(sd: *mut MapSessionData, id: c_int) -> c_int {
 
 /// Handle a use-item packet from the client.
 ///
-/// Mirrors `clif_parseuseitem` from `c_src/map_parse.c` ~line 6452.
-pub unsafe fn clif_parseuseitem(sd: *mut MapSessionData) -> c_int {
-    rust_pc_useitem(sd, rfifob((*sd).fd, 5) as c_int - 1);
+pub unsafe fn clif_parseuseitem(sd: *mut MapSessionData) -> i32 {
+    rust_pc_useitem(sd, rfifob((*sd).fd, 5) as i32 - 1);
     0
 }
 
@@ -562,13 +551,12 @@ pub unsafe fn clif_parseuseitem(sd: *mut MapSessionData) -> c_int {
 
 /// Handle an eat-item packet; only processes items of type ITM_EAT.
 ///
-/// Mirrors `clif_parseeatitem` from `c_src/map_parse.c` ~line 6457.
-pub unsafe fn clif_parseeatitem(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parseeatitem(sd: *mut MapSessionData) -> i32 {
     let slot = rfifob((*sd).fd, 5) as usize - 1;
     let id = (*sd).status.inventory[slot].id;
     // ITM_EAT = 0 (first entry in item_db.h enum)
     if rust_itemdb_type(id) == 0 {
-        rust_pc_useitem(sd, slot as c_int);
+        rust_pc_useitem(sd, slot as i32);
     } else {
         clif_sendminitext(sd, b"That item is not edible.\0".as_ptr().cast());
     }
@@ -579,8 +567,7 @@ pub unsafe fn clif_parseeatitem(sd: *mut MapSessionData) -> c_int {
 
 /// Handle a pick-up-item packet from the client.
 ///
-/// Mirrors `clif_parsegetitem` from `c_src/map_parse.c` ~line 6467.
-pub unsafe fn clif_parsegetitem(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsegetitem(sd: *mut MapSessionData) -> i32 {
     if (*sd).status.state == 1 || (*sd).status.state == 3 {
         return 0; // dead can't pick up
     }
@@ -599,7 +586,7 @@ pub unsafe fn clif_parsegetitem(sd: *mut MapSessionData) -> c_int {
         if (*sd).status.dura_aether[x].id > 0
             && (*sd).status.dura_aether[x].duration > 0
         {
-            sl_doscript_simple(rust_magicdb_yname((*sd).status.dura_aether[x].id as c_int), b"on_pickup_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl);
+            sl_doscript_simple(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), b"on_pickup_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl);
         }
     }
 
@@ -612,8 +599,7 @@ pub unsafe fn clif_parsegetitem(sd: *mut MapSessionData) -> c_int {
 
 /// Send an unequip confirmation to the client.
 ///
-/// Mirrors `clif_unequipit` from `c_src/map_parse.c` ~line 6495.
-pub unsafe fn clif_unequipit(sd: *mut MapSessionData, spot: c_int) -> c_int {
+pub unsafe fn clif_unequipit(sd: *mut MapSessionData, spot: i32) -> i32 {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -635,12 +621,11 @@ pub unsafe fn clif_unequipit(sd: *mut MapSessionData, spot: c_int) -> c_int {
 
 /// Handle an unequip packet from the client.
 ///
-/// Mirrors `clif_parseunequip` from `c_src/map_parse.c` ~line 6511.
-pub unsafe fn clif_parseunequip(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parseunequip(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
-    let slot_byte = rfifob((*sd).fd, 5) as c_int;
-    let eq_type: c_int = match slot_byte {
+    let slot_byte = rfifob((*sd).fd, 5) as i32;
+    let eq_type: i32 = match slot_byte {
         0x01 => EQ_WEAP,
         0x02 => EQ_ARMOR,
         0x03 => EQ_SHIELD,
@@ -683,14 +668,13 @@ pub unsafe fn clif_parseunequip(sd: *mut MapSessionData) -> c_int {
 
 /// Handle a wield (equip) packet from the client.
 ///
-/// Mirrors `clif_parsewield` from `c_src/map_parse.c` ~line 6796.
-pub unsafe fn clif_parsewield(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsewield(sd: *mut MapSessionData) -> i32 {
     let pos = rfifob((*sd).fd, 5) as usize - 1;
     let id = (*sd).status.inventory[pos].id;
     let item_type = rust_itemdb_type(id);
 
     if item_type >= 3 && item_type <= 16 {
-        rust_pc_useitem(sd, pos as c_int);
+        rust_pc_useitem(sd, pos as i32);
     } else {
         clif_sendminitext(sd, b"You cannot wield that!\0".as_ptr().cast());
     }
@@ -702,8 +686,7 @@ pub unsafe fn clif_parsewield(sd: *mut MapSessionData) -> c_int {
 
 /// foreach_in_cell callback: add gold to an existing floor item.
 ///
-/// Mirrors `clif_addtocurrent` from `c_src/map_parse.c` ~line 6808.
-pub unsafe fn clif_addtocurrent_inner(bl: *mut BlockList, def: *mut c_int, amount: c_uint, _sd: *mut MapSessionData) -> i32 {
+pub unsafe fn clif_addtocurrent_inner(bl: *mut BlockList, def: *mut i32, amount: u32, _sd: *mut MapSessionData) -> i32 {
     if bl.is_null() { return 0; }
     let fl = bl as *mut FloorItemData;
 
@@ -721,8 +704,7 @@ pub unsafe fn clif_addtocurrent_inner(bl: *mut BlockList, def: *mut c_int, amoun
 
 /// Drop gold coins onto the current cell.
 ///
-/// Mirrors `clif_dropgold` from `c_src/map_parse.c` ~line 6828.
-pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint) -> c_int {
+pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
     let reg_str = b"goldbardupe\0";
     let dupe_times = pc_readglobalreg(sd, reg_str.as_ptr().cast());
     if dupe_times != 0 {
@@ -779,7 +761,7 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint) -> c_int {
         if (*sd).status.dura_aether[x].id > 0
             && (*sd).status.dura_aether[x].duration > 0
         {
-            sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as c_int), b"on_drop_gold_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
+            sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), b"on_drop_gold_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
         }
     }
 
@@ -787,7 +769,7 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint) -> c_int {
         if (*sd).status.dura_aether[x].id > 0
             && (*sd).status.dura_aether[x].aether > 0
         {
-            sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as c_int), b"on_drop_gold_while_aether\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
+            sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), b"on_drop_gold_while_aether\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
         }
     }
 
@@ -817,7 +799,7 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint) -> c_int {
             if (*sd).status.dura_aether[x].id > 0
                 && (*sd).status.dura_aether[x].duration > 0
             {
-                sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as c_int), b"after_drop_gold_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
+                sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), b"after_drop_gold_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
             }
         }
 
@@ -825,7 +807,7 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint) -> c_int {
             if (*sd).status.dura_aether[x].id > 0
                 && (*sd).status.dura_aether[x].aether > 0
             {
-                sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as c_int), b"after_drop_gold_while_aether\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
+                sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), b"after_drop_gold_while_aether\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
             }
         }
 
@@ -850,8 +832,7 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint) -> c_int {
 
 /// Trigger the onOpen script hook.
 ///
-/// Mirrors `clif_open_sub` from `c_src/map_parse.c` ~line 6960.
-pub unsafe fn clif_open_sub(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_open_sub(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     sl_doscript_simple(b"onOpen\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl);
     0
@@ -861,8 +842,7 @@ pub unsafe fn clif_open_sub(sd: *mut MapSessionData) -> c_int {
 
 /// Send a remove-spell packet to the client.
 ///
-/// Mirrors `clif_removespell` from `c_src/map_parse.c` ~line 6985.
-pub unsafe fn clif_removespell(sd: *mut MapSessionData, pos: c_int) -> c_int {
+pub unsafe fn clif_removespell(sd: *mut MapSessionData, pos: i32) -> i32 {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -883,16 +863,15 @@ pub unsafe fn clif_removespell(sd: *mut MapSessionData, pos: c_int) -> c_int {
 
 /// Handle a swap-spell-slots packet from the client.
 ///
-/// Mirrors `clif_parsechangespell` from `c_src/map_parse.c` ~line 6967.
-pub unsafe fn clif_parsechangespell(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsechangespell(sd: *mut MapSessionData) -> i32 {
     let start_pos = rfifob((*sd).fd, 6) as usize - 1;
     let stop_pos  = rfifob((*sd).fd, 7) as usize - 1;
 
     let start_id = (*sd).status.skill[start_pos];
     let stop_id  = (*sd).status.skill[stop_pos];
 
-    clif_removespell(sd, start_pos as c_int);
-    clif_removespell(sd, stop_pos as c_int);
+    clif_removespell(sd, start_pos as i32);
+    clif_removespell(sd, stop_pos as i32);
 
     (*sd).status.skill[start_pos] = stop_id;
     (*sd).status.skill[stop_pos]  = start_id;
@@ -907,15 +886,14 @@ pub unsafe fn clif_parsechangespell(sd: *mut MapSessionData) -> c_int {
 
 /// Execute a throw: fire the onThrow script with source/destination floor items.
 ///
-/// Mirrors `clif_throwitem_sub` from `c_src/map_parse.c` ~line 7000.
 /// Note: this is NOT a foreachinarea callback; it is called directly.
 pub unsafe fn clif_throwitem_sub(
     sd: *mut MapSessionData,
-    id: c_int,
-    _type: c_int,
-    x: c_int,
-    y: c_int,
-) -> c_int {
+    id: i32,
+    _type: i32,
+    x: i32,
+    y: i32,
+) -> i32 {
     if (*sd).status.inventory[id as usize].id == 0 { return 0; }
 
     if (*sd).status.inventory[id as usize].amount <= 0 {
@@ -948,11 +926,10 @@ pub unsafe fn clif_throwitem_sub(
 
 /// Complete a throw action after script approval.
 ///
-/// Mirrors `clif_throwitem_script` from `c_src/map_parse.c` ~line 7023.
-pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
     let id   = (*sd).invslot as usize;
-    let x    = (*sd).throwx as c_int;
-    let y    = (*sd).throwy as c_int;
+    let x    = (*sd).throwx as i32;
+    let y    = (*sd).throwy as i32;
     let item_type = 0i32;
 
     let fl = libc::calloc(1, std::mem::size_of::<FloorItemData>()) as *mut FloorItemData;
@@ -972,7 +949,7 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> c_int {
         foreach_in_cell(
             (*sd).bl.m as i32, x, y,
             BL_ITEM,
-            |bl| rust_pc_addtocurrent_inner(bl, def.as_mut_ptr(), id as c_int, item_type, sd),
+            |bl| rust_pc_addtocurrent_inner(bl, def.as_mut_ptr(), id as i32, item_type, sd),
         );
     }
 
@@ -986,13 +963,13 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> c_int {
             traps_table: [0; 100], buytext: [0; 64], note: [0; 300],
             repair: 0, real_name: [0; 64], _pad1: [0; 3],
         };
-        clif_senddelitem(sd, id as c_int, 4);
+        clif_senddelitem(sd, id as i32, 4);
     } else {
         (*fl).data.amount = 1;
-        clif_sendadditem(sd, id as c_int);
+        clif_sendadditem(sd, id as i32);
     }
 
-    if (*sd).bl.x as c_int != x {
+    if (*sd).bl.x as i32 != x {
         let mut sndbuf = [0u8; 48];
         sndbuf[0] = 0xAA;
         let len_be = 0x1Bu16.to_be_bytes();
@@ -1010,10 +987,10 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> c_int {
             sndbuf[10] = icon_be[1];
             sndbuf[11] = (*fl).data.custom_icon_color as u8;
         } else {
-            let icon_be = (rust_itemdb_icon((*fl).data.id as c_uint) as u16).to_be_bytes();
+            let icon_be = (rust_itemdb_icon((*fl).data.id as u32) as u16).to_be_bytes();
             sndbuf[9]  = icon_be[0];
             sndbuf[10] = icon_be[1];
-            sndbuf[11] = rust_itemdb_iconcolor((*fl).data.id as c_uint) as u8;
+            sndbuf[11] = rust_itemdb_iconcolor((*fl).data.id as u32) as u8;
         }
 
         let fl_id_be = if def[0] != 0 {
@@ -1060,8 +1037,7 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> c_int {
 
 /// foreach_in_cell callback: check if a cell is blocked for throwing.
 ///
-/// Mirrors `clif_throw_check` from `c_src/map_parse.c` ~line 7106.
-pub unsafe fn clif_throw_check_inner(bl: *mut BlockList, found: *mut c_int) -> i32 {
+pub unsafe fn clif_throw_check_inner(bl: *mut BlockList, found: *mut i32) -> i32 {
     if bl.is_null() { return 0; }
 
     if !found.is_null() && *found != 0 { return 0; }
@@ -1089,8 +1065,7 @@ pub unsafe fn clif_throw_check_inner(bl: *mut BlockList, found: *mut c_int) -> i
 
 /// Send a throw-confirm packet to the client.
 ///
-/// Mirrors `clif_throwconfirm` from `c_src/map_parse.c` ~line 7129.
-pub unsafe fn clif_throwconfirm(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_throwconfirm(sd: *mut MapSessionData) -> i32 {
     let fd = (*sd).fd;
     wfifob(fd, 0, 0xAA);
     wfifow(fd, 1, 7u16.swap_bytes());
@@ -1106,8 +1081,7 @@ pub unsafe fn clif_throwconfirm(sd: *mut MapSessionData) -> c_int {
 
 /// Handle a throw-item packet from the client.
 ///
-/// Mirrors `clif_parsethrow` from `c_src/map_parse.c` ~line 7141.
-pub unsafe fn clif_parsethrow(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsethrow(sd: *mut MapSessionData) -> i32 {
     let reg_str = b"goldbardupe\0";
     let dupe_times = pc_readglobalreg(sd, reg_str.as_ptr().cast());
     if dupe_times != 0 {
@@ -1136,10 +1110,10 @@ pub unsafe fn clif_parsethrow(sd: *mut MapSessionData) -> c_int {
     }
 
     let max = 8i32;
-    let mut newx: c_int = (*sd).bl.x as c_int;
-    let mut newy: c_int = (*sd).bl.y as c_int;
-    let mut xmod: c_int = 0;
-    let mut ymod: c_int = 0;
+    let mut newx: i32 = (*sd).bl.x as i32;
+    let mut newy: i32 = (*sd).bl.y as i32;
+    let mut xmod: i32 = 0;
+    let mut ymod: i32 = 0;
     let mut found = [0i32; 1];
 
     match (*sd).status.side {
@@ -1150,28 +1124,28 @@ pub unsafe fn clif_parsethrow(sd: *mut MapSessionData) -> c_int {
         _ => {}
     }
 
-    let m = (*sd).bl.m as c_int;
+    let m = (*sd).bl.m as i32;
     let map_data = &*map.add(m as usize);
 
     'search: for i in 0..max {
-        let mut x1: c_int = (*sd).bl.x as c_int + (i * xmod) + xmod;
-        let mut y1: c_int = (*sd).bl.y as c_int + (i * ymod) + ymod;
+        let mut x1: i32 = (*sd).bl.x as i32 + (i * xmod) + xmod;
+        let mut y1: i32 = (*sd).bl.y as i32 + (i * ymod) + ymod;
         if x1 < 0 { x1 = 0; }
         if y1 < 0 { y1 = 0; }
-        if x1 >= map_data.xs as c_int { x1 = map_data.xs as c_int - 1; }
-        if y1 >= map_data.ys as c_int { y1 = map_data.ys as c_int - 1; }
+        if x1 >= map_data.xs as i32 { x1 = map_data.xs as i32 - 1; }
+        if y1 >= map_data.ys as i32 { y1 = map_data.ys as i32 - 1; }
 
         foreach_in_cell(m, x1, y1, BL_NPC, |bl| clif_throw_check_inner(bl, found.as_mut_ptr()));
         foreach_in_cell(m, x1, y1, BL_PC,  |bl| clif_throw_check_inner(bl, found.as_mut_ptr()));
         foreach_in_cell(m, x1, y1, BL_MOB, |bl| clif_throw_check_inner(bl, found.as_mut_ptr()));
-        // read_pass(m, x, y) — mirrors map[m].pass[x + y*xs]
+        // read_pass(m, x, y) — accesses map[m].pass[x + y*xs]
         let pass_val = if map.is_null() { 0 } else {
             let md = &*map.add(m as usize);
-            if md.pass.is_null() { 0 } else { *md.pass.add(x1 as usize + y1 as usize * md.xs as usize) as c_int }
+            if md.pass.is_null() { 0 } else { *md.pass.add(x1 as usize + y1 as usize * md.xs as usize) as i32 }
         };
         found[0] += pass_val;
-        found[0] += clif_object_canmove(m, x1, y1, (*sd).status.side as c_int);
-        found[0] += clif_object_canmove_from(m, x1, y1, (*sd).status.side as c_int);
+        found[0] += clif_object_canmove(m, x1, y1, (*sd).status.side as i32);
+        found[0] += clif_object_canmove_from(m, x1, y1, (*sd).status.side as i32);
 
         // Check warp list at this block cell
         if !map_data.warp.is_null() {
@@ -1192,5 +1166,5 @@ pub unsafe fn clif_parsethrow(sd: *mut MapSessionData) -> c_int {
         newy = y1;
     }
 
-    clif_throwitem_sub(sd, pos as c_int, 0, newx, newy)
+    clif_throwitem_sub(sd, pos as i32, 0, newx, newy)
 }

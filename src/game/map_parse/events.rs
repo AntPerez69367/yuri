@@ -1,11 +1,6 @@
-//! Port of event/ranking functions from `c_src/map_parse.c`.
-//!
-//! Functions declared `pub unsafe extern "C"` so they remain
-//! callable from any remaining C code that has not yet been ported.
 
 #![allow(non_snake_case, clippy::wildcard_imports, clippy::too_many_lines)]
 
-use std::ffi::{c_char, c_int, c_uint};
 
 use crate::database::{blocking_run, get_pool};
 
@@ -19,7 +14,6 @@ use super::packet::{
     encrypt,
 };
 
-// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
 
 use crate::database::item_db::{
     rust_itemdb_name as itemdb_name, rust_itemdb_icon as itemdb_icon,
@@ -35,7 +29,7 @@ use crate::session::rust_session_wdata_ptr;
 
 /// Copy `len` bytes from `src` into the send-buffer at `pos`.
 #[inline]
-unsafe fn wfifop_copy(fd: c_int, pos: usize, src: *const u8, len: usize) {
+unsafe fn wfifop_copy(fd: i32, pos: usize, src: *const u8, len: usize) {
     let dst = rust_session_wdata_ptr(fd, pos);
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(src, dst, len);
@@ -44,14 +38,14 @@ unsafe fn wfifop_copy(fd: c_int, pos: usize, src: *const u8, len: usize) {
 
 /// Write a big-endian u16 into the send buffer at `pos`.
 #[inline]
-unsafe fn wfifow_be(fd: c_int, pos: usize, val: u16) {
+unsafe fn wfifow_be(fd: i32, pos: usize, val: u16) {
     let p = rust_session_wdata_ptr(fd, pos) as *mut u16;
     if !p.is_null() { p.write_unaligned(val.to_be()); }
 }
 
 /// Write a big-endian u32 into the send buffer at `pos`.
 #[inline]
-unsafe fn wfifol_be(fd: c_int, pos: usize, val: u32) {
+unsafe fn wfifol_be(fd: i32, pos: usize, val: u32) {
     let p = rust_session_wdata_ptr(fd, pos) as *mut u32;
     if !p.is_null() { p.write_unaligned(val.to_be()); }
 }
@@ -153,7 +147,7 @@ struct EventDates {
 /// - otherwise: write four bytes (big-endian) at `field - 3`
 ///
 /// C line 4883.
-pub unsafe fn clif_intcheck(number: c_int, field: c_int, fd: c_int) {
+pub unsafe fn clif_intcheck(number: i32, field: i32, fd: i32) {
     if field != 0 {
         if number > 254 {
             if number > 65535 {
@@ -175,15 +169,15 @@ pub unsafe fn clif_intcheck(number: c_int, field: c_int, fd: c_int) {
 /// inserts a new row one slot higher.  C line 4100.
 pub unsafe fn sendRewardParcel(
     sd:           *mut MapSessionData,
-    eventid:      c_int,
-    rank:         c_int,
-    rewarditem:   c_int,
-    rewardamount: c_int,
-) -> c_int {
+    eventid:      i32,
+    rank:         i32,
+    rewarditem:   i32,
+    rewardamount: i32,
+) -> i32 {
     let _ = eventid; // used in reward message only (via sprintf); not in SQL directly
 
-    let receiver = (*sd).status.id as c_uint;
-    let rewarditem_u = rewarditem as c_uint;
+    let receiver = (*sd).status.id as u32;
+    let rewarditem_u = rewarditem as u32;
 
     // Build escape string: "name,\nCongratulations on attaining Rank N!\nHere is your reward: (amount) name"
     let mut escape = [0i8; 255];
@@ -192,7 +186,7 @@ pub unsafe fn sendRewardParcel(
         libc::sprintf(
             escape.as_mut_ptr(),
             b"%s,\nCongratulations on attaining Rank %i!\nHere is your reward: (%i) %s\0"
-                .as_ptr() as *const c_char,
+                .as_ptr() as *const i8,
             (*sd).status.name.as_ptr(),
             rank,
             rewardamount,
@@ -207,13 +201,13 @@ pub unsafe fn sendRewardParcel(
         libc::strcpy(engrave.as_mut_ptr(), item_name);
     }
 
-    let sender: c_uint = 1;
-    let owner:  c_uint = 0;
-    let npcflag: c_int = 1;
+    let sender: u32 = 1;
+    let owner:  u32 = 0;
+    let npcflag: i32 = 1;
 
     // Find highest existing position for this receiver.
     // ParPosition is int(10) unsigned — query_scalar must use u32.
-    let newest: c_int = (blocking_run(async move {
+    let newest: i32 = (blocking_run(async move {
         sqlx::query_scalar::<_, Option<u32>>(
             "SELECT MAX(`ParPosition`) FROM `Parcels` WHERE `ParChaIdDestination` = ?"
         )
@@ -262,8 +256,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 /// award parcels, send a mail confirmation, and update the claim flag.
 ///
 /// C line 4186.
-pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: c_int) -> c_int {
-    let eventid = rfifob(fd, 7) as c_int;
+pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: i32) -> i32 {
+    let eventid = rfifob(fd, 7) as i32;
     let g_cur_year   = cur_year.load(AtomicOrd::Relaxed);
     let g_cur_season = cur_season.load(AtomicOrd::Relaxed);
 
@@ -274,7 +268,7 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: c_int) -> c_int {
 
     libc::sprintf(
         monthyear.as_mut_ptr(),
-        b"Moon %i\0".as_ptr() as *const c_char,
+        b"Moon %i\0".as_ptr() as *const i8,
         g_cur_year,
     );
 
@@ -396,21 +390,21 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: c_int) -> c_int {
     }) else { return 0; };
 
     // Determine season string
-    if g_cur_season == 1 { libc::strcpy(season.as_mut_ptr(), b"Winter\0".as_ptr() as *const c_char); }
-    if g_cur_season == 2 { libc::strcpy(season.as_mut_ptr(), b"Spring\0".as_ptr() as *const c_char); }
-    if g_cur_season == 3 { libc::strcpy(season.as_mut_ptr(), b"Summer\0".as_ptr() as *const c_char); }
-    if g_cur_season == 4 { libc::strcpy(season.as_mut_ptr(), b"Fall\0".as_ptr()   as *const c_char); }
+    if g_cur_season == 1 { libc::strcpy(season.as_mut_ptr(), b"Winter\0".as_ptr() as *const i8); }
+    if g_cur_season == 2 { libc::strcpy(season.as_mut_ptr(), b"Spring\0".as_ptr() as *const i8); }
+    if g_cur_season == 3 { libc::strcpy(season.as_mut_ptr(), b"Summer\0".as_ptr() as *const i8); }
+    if g_cur_season == 4 { libc::strcpy(season.as_mut_ptr(), b"Fall\0".as_ptr()   as *const i8); }
 
-    if rank == 1 { libc::strcpy(rankname.as_mut_ptr(), b"1st\0".as_ptr() as *const c_char); }
-    if rank == 2 { libc::strcpy(rankname.as_mut_ptr(), b"2nd\0".as_ptr() as *const c_char); }
-    if rank == 3 { libc::strcpy(rankname.as_mut_ptr(), b"3rd\0".as_ptr() as *const c_char); }
-    if rank == 4 { libc::strcpy(rankname.as_mut_ptr(), b"4th\0".as_ptr() as *const c_char); }
-    if rank == 5 { libc::strcpy(rankname.as_mut_ptr(), b"5th\0".as_ptr() as *const c_char); }
-    if rank == 6 { libc::strcpy(rankname.as_mut_ptr(), b"6th\0".as_ptr() as *const c_char); }
+    if rank == 1 { libc::strcpy(rankname.as_mut_ptr(), b"1st\0".as_ptr() as *const i8); }
+    if rank == 2 { libc::strcpy(rankname.as_mut_ptr(), b"2nd\0".as_ptr() as *const i8); }
+    if rank == 3 { libc::strcpy(rankname.as_mut_ptr(), b"3rd\0".as_ptr() as *const i8); }
+    if rank == 4 { libc::strcpy(rankname.as_mut_ptr(), b"4th\0".as_ptr() as *const i8); }
+    if rank == 5 { libc::strcpy(rankname.as_mut_ptr(), b"5th\0".as_ptr() as *const i8); }
+    if rank == 6 { libc::strcpy(rankname.as_mut_ptr(), b"6th\0".as_ptr() as *const i8); }
 
     match rank {
         1 => {
-            libc::sprintf(legendbuf.as_mut_ptr(), b"%s [%s] (Moon %i, %s)\0".as_ptr() as *const c_char, legend.as_ptr(), rankname.as_ptr(), g_cur_year, season.as_ptr());
+            libc::sprintf(legendbuf.as_mut_ptr(), b"%s [%s] (Moon %i, %s)\0".as_ptr() as *const i8, legend.as_ptr(), rankname.as_ptr(), g_cur_year, season.as_ptr());
             legendicon      = legendicon1;
             legendiconcolor = legendicon1color;
             reward1item     = _1stPlaceReward1_ItmId;
@@ -419,7 +413,7 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: c_int) -> c_int {
             reward2amount   = _1stPlaceReward2_Amount;
         }
         2 => {
-            libc::sprintf(legendbuf.as_mut_ptr(), b"%s [%s] (Moon %i, %s)\0".as_ptr() as *const c_char, legend.as_ptr(), rankname.as_ptr(), g_cur_year, season.as_ptr());
+            libc::sprintf(legendbuf.as_mut_ptr(), b"%s [%s] (Moon %i, %s)\0".as_ptr() as *const i8, legend.as_ptr(), rankname.as_ptr(), g_cur_year, season.as_ptr());
             legendicon      = legendicon2;
             legendiconcolor = legendicon2color;
             reward1item     = _2ndPlaceReward1_ItmId;
@@ -428,7 +422,7 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: c_int) -> c_int {
             reward2amount   = _2ndPlaceReward2_Amount;
         }
         3 => {
-            libc::sprintf(legendbuf.as_mut_ptr(), b"%s [%s] (Moon %i, %s)\0".as_ptr() as *const c_char, legend.as_ptr(), rankname.as_ptr(), g_cur_year, season.as_ptr());
+            libc::sprintf(legendbuf.as_mut_ptr(), b"%s [%s] (Moon %i, %s)\0".as_ptr() as *const i8, legend.as_ptr(), rankname.as_ptr(), g_cur_year, season.as_ptr());
             legendicon      = legendicon3;
             legendiconcolor = legendicon3color;
             reward1item     = _3rdPlaceReward1_ItmId;
@@ -437,7 +431,7 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: c_int) -> c_int {
             reward2amount   = _3rdPlaceReward2_Amount;
         }
         4 => {
-            libc::sprintf(legendbuf.as_mut_ptr(), b"%s [%s] (Moon %i, %s)\0".as_ptr() as *const c_char, legend.as_ptr(), rankname.as_ptr(), g_cur_year, season.as_ptr());
+            libc::sprintf(legendbuf.as_mut_ptr(), b"%s [%s] (Moon %i, %s)\0".as_ptr() as *const i8, legend.as_ptr(), rankname.as_ptr(), g_cur_year, season.as_ptr());
             legendicon      = legendicon4;
             legendiconcolor = legendicon4color;
             reward1item     = _4thPlaceReward1_ItmId;
@@ -446,7 +440,7 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: c_int) -> c_int {
             reward2amount   = _4thPlaceReward2_Amount;
         }
         _ => {
-            libc::sprintf(legendbuf.as_mut_ptr(), b"%s [%s] (Moon %i, %s)\0".as_ptr() as *const c_char, legend.as_ptr(), rankname.as_ptr(), g_cur_year, season.as_ptr());
+            libc::sprintf(legendbuf.as_mut_ptr(), b"%s [%s] (Moon %i, %s)\0".as_ptr() as *const i8, legend.as_ptr(), rankname.as_ptr(), g_cur_year, season.as_ptr());
             legendicon      = legendicon5;
             legendiconcolor = legendicon5color;
             reward1item     = _5thPlaceReward1_ItmId;
@@ -465,13 +459,13 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: c_int) -> c_int {
         let leg_name_ptr  = (*sd).status.legends[i].name.as_ptr();
         let leg_name1_ptr = if i + 1 < MAX_LEGENDS { (*sd).status.legends[i + 1].name.as_ptr() } else { b"\0".as_ptr() as *const i8 };
 
-        if libc::strcmp(leg_name_ptr, b"\0".as_ptr() as *const c_char) == 0
-            && libc::strcasecmp(leg_name1_ptr, b"\0".as_ptr() as *const c_char) == 0
+        if libc::strcmp(leg_name_ptr, b"\0".as_ptr() as *const i8) == 0
+            && libc::strcasecmp(leg_name1_ptr, b"\0".as_ptr() as *const i8) == 0
         {
             libc::strcpy((*sd).status.legends[i].text.as_mut_ptr(), legendbuf.as_ptr());
             libc::sprintf(
                 (*sd).status.legends[i].name.as_mut_ptr(),
-                b"Event %i Place: %i\0".as_ptr() as *const c_char,
+                b"Event %i Place: %i\0".as_ptr() as *const i8,
                 eventid, rank,
             );
             (*sd).status.legends[i].icon  = legendicon as u16;
@@ -482,11 +476,11 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: c_int) -> c_int {
 
     libc::sprintf(
         topic.as_mut_ptr(),
-        b"%s Prize\0".as_ptr() as *const c_char,
+        b"%s Prize\0".as_ptr() as *const i8,
         eventname.as_ptr(),
     );
 
-    let mut sent_parcel_success: c_int = 0;
+    let mut sent_parcel_success: i32 = 0;
 
     if reward1amount >= 1 && reward2amount >= 1 {
         sent_parcel_success  = sendRewardParcel(sd, eventid, rank, reward1item, reward1amount);
@@ -502,15 +496,15 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: c_int) -> c_int {
                 message.as_mut_ptr(),
                 b"Congratulations on winning the %s Event, %s!\n\nYou have been rewarded: \
 (%i) %s, (%i) %s.\n\nPlease continue to play for more great rewards!\0"
-                    .as_ptr() as *const c_char,
+                    .as_ptr() as *const i8,
                 eventname.as_ptr(), (*sd).status.name.as_ptr(),
-                reward1amount, itemdb_name(reward1item as c_uint),
-                reward2amount, itemdb_name(reward2item as c_uint),
+                reward1amount, itemdb_name(reward1item as u32),
+                reward2amount, itemdb_name(reward2item as u32),
             );
             libc::sprintf(
                 msg.as_mut_ptr(),
                 b"Congratulations on winning the event, %s! Please visit your post office to collect your winnings.\0"
-                    .as_ptr() as *const c_char,
+                    .as_ptr() as *const i8,
                 (*sd).status.name.as_ptr(),
             );
             nmail_sendmail(sd, (*sd).status.name.as_ptr(), topic.as_ptr(), message.as_ptr());
@@ -519,15 +513,15 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: c_int) -> c_int {
                 message.as_mut_ptr(),
                 b"Thanks for participating in the %s Event, %s.\n\nRank:%s Place\n\n\
 You have been rewarded: (%i) %s, (%i) %s.\n\nPlease continue to play for more great rewards!\0"
-                    .as_ptr() as *const c_char,
+                    .as_ptr() as *const i8,
                 eventname.as_ptr(), (*sd).status.name.as_ptr(), rankname.as_ptr(),
-                reward1amount, itemdb_name(reward1item as c_uint),
-                reward2amount, itemdb_name(reward2item as c_uint),
+                reward1amount, itemdb_name(reward1item as u32),
+                reward2amount, itemdb_name(reward2item as u32),
             );
             libc::sprintf(
                 msg.as_mut_ptr(),
                 b"Thanks for participating in the Event, %s! Please visit your post office to collect your winnings.\0"
-                    .as_ptr() as *const c_char,
+                    .as_ptr() as *const i8,
                 (*sd).status.name.as_ptr(),
             );
             nmail_sendmail(sd, (*sd).status.name.as_ptr(), topic.as_ptr(), message.as_ptr());
@@ -540,14 +534,14 @@ You have been rewarded: (%i) %s, (%i) %s.\n\nPlease continue to play for more gr
                 message.as_mut_ptr(),
                 b"Congratulations on winning the %s Event, %s!\n\nYou have been rewarded: \
 (%i) %s.\n\nPlease continue to play for more great rewards!\0"
-                    .as_ptr() as *const c_char,
+                    .as_ptr() as *const i8,
                 eventname.as_ptr(), (*sd).status.name.as_ptr(),
-                reward1amount, itemdb_name(reward1item as c_uint),
+                reward1amount, itemdb_name(reward1item as u32),
             );
             libc::sprintf(
                 msg.as_mut_ptr(),
                 b"Congratulations on winning the event, %s! Please visit your post office to collect your winnings.\0"
-                    .as_ptr() as *const c_char,
+                    .as_ptr() as *const i8,
                 (*sd).status.name.as_ptr(),
             );
             nmail_sendmail(sd, (*sd).status.name.as_ptr(), topic.as_ptr(), message.as_ptr());
@@ -556,14 +550,14 @@ You have been rewarded: (%i) %s, (%i) %s.\n\nPlease continue to play for more gr
                 message.as_mut_ptr(),
                 b"Thanks for participating in the %s Event, %s.\n\nRank:%s Place\n\n\
 You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewards!\0"
-                    .as_ptr() as *const c_char,
+                    .as_ptr() as *const i8,
                 eventname.as_ptr(), (*sd).status.name.as_ptr(), rankname.as_ptr(),
-                reward1amount, itemdb_name(reward1item as c_uint),
+                reward1amount, itemdb_name(reward1item as u32),
             );
             libc::sprintf(
                 msg.as_mut_ptr(),
                 b"Thanks for participating in the event, %s. Please visit your post office to collect your winnings.\0"
-                    .as_ptr() as *const c_char,
+                    .as_ptr() as *const i8,
                 (*sd).status.name.as_ptr(),
             );
             nmail_sendmail(sd, (*sd).status.name.as_ptr(), topic.as_ptr(), message.as_ptr());
@@ -574,7 +568,7 @@ You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewar
         libc::sprintf(
             msg.as_mut_ptr(),
             b"Sorry %s, there was an error encountered while attempting to send your rewards in a parcel. Please contact a GM for assistance.\0"
-                .as_ptr() as *const c_char,
+                .as_ptr() as *const i8,
             (*sd).status.name.as_ptr(),
         );
     }
@@ -607,7 +601,7 @@ You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewar
 ///
 /// Iterates `rewardranks` times, writing per-rank legend title, icon, and
 /// item reward information into the WFIFO.  C line 4561.
-pub unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: c_int) -> c_int {
+pub unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: i32) -> i32 {
     let g_cur_year = cur_year.load(AtomicOrd::Relaxed);
     wfifohead(fd, 0);
     wfifob(fd, 0, 0xAA);
@@ -629,11 +623,11 @@ pub unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: c_int) -> c_int {
 
     libc::sprintf(
         monthyear.as_mut_ptr(),
-        b"Moon %i\0".as_ptr() as *const c_char,
+        b"Moon %i\0".as_ptr() as *const i8,
         g_cur_year,
     );
 
-    let eventid = rfifob(fd, 7) as c_uint;
+    let eventid = rfifob(fd, 7) as u32;
 
     let mut rewardranks = 0i32;
     let mut legendicon1 = 0i32; let mut legendicon1color = 0i32;
@@ -736,7 +730,7 @@ pub unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: c_int) -> c_int {
 
     for i in 0..rewardranks as usize {
         let rank = (i as u8) + 49; // '1'..'5' etc.
-        let rank_num = (i as c_int) + 1;
+        let rank_num = (i as i32) + 1;
 
         wfifob(fd, pos,     rank); // Rank 1st #
         wfifob(fd, pos + 1, 1);   // squigley
@@ -749,31 +743,31 @@ pub unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: c_int) -> c_int {
 
         match rank_num {
             1 => {
-                libc::sprintf(buf.as_mut_ptr(), b"%s [%ist] %s\0".as_ptr() as *const c_char, legend.as_ptr(), rank_num, monthyear.as_ptr());
+                libc::sprintf(buf.as_mut_ptr(), b"%s [%ist] %s\0".as_ptr() as *const i8, legend.as_ptr(), rank_num, monthyear.as_ptr());
                 legendicon = legendicon1; legendiconcolor = legendicon1color;
                 rewarditm = _1stPlaceReward1_ItmId; rewardamount = _1stPlaceReward1_Amount;
                 reward2itm = _1stPlaceReward2_ItmId; reward2amount = _1stPlaceReward2_Amount;
             }
             2 => {
-                libc::sprintf(buf.as_mut_ptr(), b"%s [%ind] %s\0".as_ptr() as *const c_char, legend.as_ptr(), rank_num, monthyear.as_ptr());
+                libc::sprintf(buf.as_mut_ptr(), b"%s [%ind] %s\0".as_ptr() as *const i8, legend.as_ptr(), rank_num, monthyear.as_ptr());
                 legendicon = legendicon2; legendiconcolor = legendicon2color;
                 rewarditm = _2ndPlaceReward1_ItmId; rewardamount = _2ndPlaceReward1_Amount;
                 reward2itm = _2ndPlaceReward2_ItmId; reward2amount = _2ndPlaceReward2_Amount;
             }
             3 => {
-                libc::sprintf(buf.as_mut_ptr(), b"%s [%ird] %s\0".as_ptr() as *const c_char, legend.as_ptr(), rank_num, monthyear.as_ptr());
+                libc::sprintf(buf.as_mut_ptr(), b"%s [%ird] %s\0".as_ptr() as *const i8, legend.as_ptr(), rank_num, monthyear.as_ptr());
                 legendicon = legendicon3; legendiconcolor = legendicon3color;
                 rewarditm = _3rdPlaceReward1_ItmId; rewardamount = _3rdPlaceReward1_Amount;
                 reward2itm = _3rdPlaceReward2_ItmId; reward2amount = _3rdPlaceReward2_Amount;
             }
             4 => {
-                libc::sprintf(buf.as_mut_ptr(), b"%s [%ith] %s\0".as_ptr() as *const c_char, legend.as_ptr(), rank_num, monthyear.as_ptr());
+                libc::sprintf(buf.as_mut_ptr(), b"%s [%ith] %s\0".as_ptr() as *const i8, legend.as_ptr(), rank_num, monthyear.as_ptr());
                 legendicon = legendicon4; legendiconcolor = legendicon4color;
                 rewarditm = _4thPlaceReward1_ItmId; rewardamount = _4thPlaceReward1_Amount;
                 reward2itm = _4thPlaceReward2_ItmId; reward2amount = _4thPlaceReward2_Amount;
             }
             _ => {
-                libc::sprintf(buf.as_mut_ptr(), b"%s [%ith] %s\0".as_ptr() as *const c_char, legend.as_ptr(), rank_num, monthyear.as_ptr());
+                libc::sprintf(buf.as_mut_ptr(), b"%s [%ith] %s\0".as_ptr() as *const i8, legend.as_ptr(), rank_num, monthyear.as_ptr());
                 legendicon = legendicon5; legendiconcolor = legendicon5color;
                 rewarditm = _5thPlaceReward1_ItmId; rewardamount = _5thPlaceReward1_Amount;
                 reward2itm = _5thPlaceReward2_ItmId; reward2amount = _5thPlaceReward2_Amount;
@@ -799,7 +793,7 @@ pub unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: c_int) -> c_int {
         pos += 1;
 
         // Reward 1 name
-        libc::sprintf(buf.as_mut_ptr(), b"%s\0".as_ptr() as *const c_char, itemdb_name(rewarditm as c_uint));
+        libc::sprintf(buf.as_mut_ptr(), b"%s\0".as_ptr() as *const i8, itemdb_name(rewarditm as u32));
         let buf_len = libc::strlen(buf.as_ptr());
         wfifob(fd, pos, buf_len as u8);
         pos += 1;
@@ -807,11 +801,11 @@ pub unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: c_int) -> c_int {
         pos += buf_len;
         pos += 3; // padding
 
-        clif_intcheck(rewardamount, pos as c_int, fd);
+        clif_intcheck(rewardamount, pos as i32, fd);
         pos += 2;
-        clif_intcheck(itemdb_icon(rewarditm as c_uint) - 49152, pos as c_int, fd);
+        clif_intcheck(itemdb_icon(rewarditm as u32) - 49152, pos as i32, fd);
         pos += 1;
-        wfifob(fd, pos, itemdb_iconcolor(rewarditm as c_uint) as u8);
+        wfifob(fd, pos, itemdb_iconcolor(rewarditm as u32) as u8);
         pos += 1;
 
         if reward2amount == 0 {
@@ -821,7 +815,7 @@ pub unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: c_int) -> c_int {
         }
 
         // Reward 2 name
-        libc::sprintf(buf.as_mut_ptr(), b"%s\0".as_ptr() as *const c_char, itemdb_name(reward2itm as c_uint));
+        libc::sprintf(buf.as_mut_ptr(), b"%s\0".as_ptr() as *const i8, itemdb_name(reward2itm as u32));
         let buf_len = libc::strlen(buf.as_ptr());
         wfifob(fd, pos, buf_len as u8);
         pos += 1;
@@ -829,11 +823,11 @@ pub unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: c_int) -> c_int {
         pos += buf_len;
         pos += 3;
 
-        clif_intcheck(reward2amount, pos as c_int, fd);
+        clif_intcheck(reward2amount, pos as i32, fd);
         pos += 2;
-        clif_intcheck(itemdb_icon(reward2itm as c_uint) - 49152, pos as c_int, fd);
+        clif_intcheck(itemdb_icon(reward2itm as u32) - 49152, pos as i32, fd);
         pos += 1;
-        wfifob(fd, pos, itemdb_iconcolor(reward2itm as c_uint) as u8);
+        wfifob(fd, pos, itemdb_iconcolor(reward2itm as u32) as u8);
         pos += 1;
         wfifob(fd, pos, 1);
         pos += 1;
@@ -852,7 +846,7 @@ pub unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: c_int) -> c_int {
 ///
 /// Writes 4 ints via `clif_intcheck` at `pos+7`, `pos+11`, `pos+15`, `pos+19`.
 /// C line 4900.
-pub unsafe fn retrieveEventDates(eventid: c_int, pos: c_int, fd: c_int) {
+pub unsafe fn retrieveEventDates(eventid: i32, pos: i32, fd: i32) {
     let event_id_u = eventid as u32;
     let Some(dates) = blocking_run(async move {
         sqlx::query_as::<_, EventDates>(
@@ -876,7 +870,7 @@ pub unsafe fn retrieveEventDates(eventid: c_int, pos: c_int, fd: c_int) {
 /// Return the player's score for `eventid`, or 0 if not found / on error.
 ///
 /// C line 4951.
-pub unsafe fn checkPlayerScore(eventid: c_int, sd: *mut MapSessionData) -> c_int {
+pub unsafe fn checkPlayerScore(eventid: i32, sd: *mut MapSessionData) -> i32 {
     // EventId is int(10) signed — i32 bind is correct
     let event_id_i = eventid;
     // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
@@ -901,7 +895,7 @@ pub unsafe fn checkPlayerScore(eventid: c_int, sd: *mut MapSessionData) -> c_int
 ///
 /// Issues `SET @r=0` then `UPDATE … SET Rank = @r := (@r+1) ORDER BY Score DESC`.
 /// C line 4983.
-pub unsafe fn updateRanks(eventid: c_int) {
+pub unsafe fn updateRanks(eventid: i32) {
     // EventId is int(10) signed — i32 bind is correct
     // The vestigial SELECT is dropped; just run the rank-update pair.
     blocking_run(async move {
@@ -921,7 +915,7 @@ pub unsafe fn updateRanks(eventid: c_int) {
 /// Return the player's current rank for `eventid`, or 0 if not found / on error.
 ///
 /// C line 5018.
-pub unsafe fn checkPlayerRank(eventid: c_int, sd: *mut MapSessionData) -> c_int {
+pub unsafe fn checkPlayerRank(eventid: i32, sd: *mut MapSessionData) -> i32 {
     // EventId is int(10) signed — i32 bind is correct
     let event_id_i = eventid;
     // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
@@ -946,8 +940,7 @@ pub unsafe fn checkPlayerRank(eventid: c_int, sd: *mut MapSessionData) -> c_int 
 /// Returns the column value on success, or 2 if no row is found.
 ///
 /// SQL: SELECT EventClaim FROM RankingScores WHERE EventId=? AND ChaId=?
-/// C: sl_compat.c line ~642.
-pub unsafe fn checkevent_claim(eventid: c_int, _fd: c_int, sd: *mut MapSessionData) -> c_int {
+pub unsafe fn checkevent_claim(eventid: i32, _fd: i32, sd: *mut MapSessionData) -> i32 {
     // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
     let cha_id = (*sd).status.id as i32;
     // EventId is int(10) signed — i32 bind is correct
@@ -974,8 +967,7 @@ pub unsafe fn checkevent_claim(eventid: c_int, _fd: c_int, sd: *mut MapSessionDa
 /// Writes the event header bytes and delegates date fields to `retrieveEventDates`,
 /// then appends the claim byte at pos+20.
 ///
-/// C: sl_compat.c line ~667.
-pub unsafe fn dateevent_block(pos: c_int, eventid: c_int, fd: c_int, sd: *mut MapSessionData) {
+pub unsafe fn dateevent_block(pos: i32, eventid: i32, fd: i32, sd: *mut MapSessionData) {
     wfifob(fd, pos as usize,       0);
     wfifob(fd, pos as usize + 1,   eventid as u8);
     wfifob(fd, pos as usize + 2,   142);
@@ -989,8 +981,7 @@ pub unsafe fn dateevent_block(pos: c_int, eventid: c_int, fd: c_int, sd: *mut Ma
 /// Write the "filler" event block into the WFIFO at position `pos`.
 ///
 /// Writes player rank / score / claim bytes for the chosen event.
-/// C: sl_compat.c line ~676.
-pub unsafe fn filler_block(pos: c_int, eventid: c_int, fd: c_int, sd: *mut MapSessionData) {
+pub unsafe fn filler_block(pos: i32, eventid: i32, fd: i32, sd: *mut MapSessionData) {
     let player_score = checkPlayerScore(eventid, sd);
     let player_rank  = checkPlayerRank(eventid, sd);
 
@@ -1008,8 +999,7 @@ pub unsafe fn filler_block(pos: c_int, eventid: c_int, fd: c_int, sd: *mut MapSe
 /// Return the number of score rows for `eventid` in `RankingScores`.
 ///
 /// SQL: SELECT COUNT(*) FROM RankingScores WHERE EventId=?
-/// C: sl_compat.c line ~689.
-pub unsafe fn gettotalscores(eventid: c_int) -> c_int {
+pub unsafe fn gettotalscores(eventid: i32) -> i32 {
     let event_id = eventid as u32;
     blocking_run(async move {
         sqlx::query_scalar::<_, i64>(
@@ -1018,7 +1008,7 @@ pub unsafe fn gettotalscores(eventid: c_int) -> c_int {
         .bind(event_id)
         .fetch_one(get_pool())
         .await
-        .unwrap_or(0) as c_int
+        .unwrap_or(0) as i32
     })
 }
 
@@ -1027,15 +1017,14 @@ pub unsafe fn gettotalscores(eventid: c_int) -> c_int {
 /// Return the number of rows in `RankingEvents`.
 ///
 /// SQL: SELECT COUNT(*) FROM RankingEvents
-/// C: sl_compat.c line ~709.
-pub unsafe fn getevents() -> c_int {
+pub unsafe fn getevents() -> i32 {
     blocking_run(async {
         sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM `RankingEvents`"
         )
         .fetch_one(get_pool())
         .await
-        .unwrap_or(0) as c_int
+        .unwrap_or(0) as i32
     })
 }
 
@@ -1046,8 +1035,7 @@ pub unsafe fn getevents() -> c_int {
 ///
 /// Returns updated `pos` after writing all blocks.
 /// SQL: SELECT EventName FROM RankingEvents
-/// C: sl_compat.c line ~725.
-pub unsafe fn getevent_name(mut pos: c_int, fd: c_int, sd: *mut MapSessionData) -> c_int {
+pub unsafe fn getevent_name(mut pos: i32, fd: i32, sd: *mut MapSessionData) -> i32 {
     // EventId is int(10) signed — i32 bind is correct
     struct EventRow { event_id: i32, name: String }
     impl sqlx::FromRow<'_, sqlx::mysql::MySqlRow> for EventRow {
@@ -1068,14 +1056,14 @@ pub unsafe fn getevent_name(mut pos: c_int, fd: c_int, sd: *mut MapSessionData) 
     });
 
     for row in rows.iter() {
-        dateevent_block(pos, row.event_id as c_int, fd, sd);
+        dateevent_block(pos, row.event_id as i32, fd, sd);
         pos += 21;
         let name_bytes = row.name.as_bytes();
         let name_len   = name_bytes.len();
         wfifob(fd, pos as usize, name_len as u8);
         pos += 1;
         wfifop_copy(fd, pos as usize, name_bytes.as_ptr(), name_len);
-        pos += name_len as c_int;
+        pos += name_len as i32;
     }
 
     pos
@@ -1087,13 +1075,12 @@ pub unsafe fn getevent_name(mut pos: c_int, fd: c_int, sd: *mut MapSessionData) 
 /// them into the WFIFO. Adjusts the row-count byte when fewer than 10 rows exist.
 ///
 /// SQL: SELECT ChaName, Score, Rank FROM RankingScores WHERE EventId=? ORDER BY Rank ASC LIMIT 10 [OFFSET ?]
-/// C: sl_compat.c line ~755.
 pub unsafe fn getevent_playerscores(
-    eventid:     c_int,
-    totalscores: c_int,
-    mut pos:     c_int,
-    fd:          c_int,
-) -> c_int {
+    eventid:     i32,
+    totalscores: i32,
+    mut pos:     i32,
+    fd:          i32,
+) -> i32 {
     // The C code reads an offset byte from RFIFO position 17 and subtracts 10.
     let offset: i64 = rfifob(fd, 17) as i64 - 10;
 
@@ -1134,7 +1121,7 @@ pub unsafe fn getevent_playerscores(
     });
 
     // If fewer than 10 rows, patch the count byte written just before `pos`
-    if (rows.len() as c_int) < 10 {
+    if (rows.len() as i32) < 10 {
         wfifob(fd, (pos - 1) as usize, rows.len() as u8);
     }
 
@@ -1144,7 +1131,7 @@ pub unsafe fn getevent_playerscores(
         wfifob(fd, pos as usize, name_len as u8);
         pos += 1;
         wfifop_copy(fd, pos as usize, name_bytes.as_ptr(), name_len);
-        pos += name_len as c_int;
+        pos += name_len as i32;
         pos += 3; // 3 padding bytes (matches C)
         wfifob(fd, pos as usize, row.rank as u8);
         pos += 4; // rank byte + 3 more padding bytes
@@ -1162,8 +1149,7 @@ pub unsafe fn getevent_playerscores(
 /// Assembles: event count, event name/date blocks, filler block, score list,
 /// total score count, encrypts and sends.
 ///
-/// C: sl_compat.c line ~808.
-pub unsafe fn clif_parseranking(sd: *mut MapSessionData, fd: c_int) -> c_int {
+pub unsafe fn clif_parseranking(sd: *mut MapSessionData, fd: i32) -> i32 {
     wfifohead(fd, 0);
     wfifob(fd, 0, 0xAA);
     wfifob(fd, 1, 0x02);
@@ -1177,11 +1163,11 @@ pub unsafe fn clif_parseranking(sd: *mut MapSessionData, fd: c_int) -> c_int {
     }
 
     wfifob(fd, 7, getevents() as u8);
-    let chosen_event = rfifob(fd, 7) as c_int;
+    let chosen_event = rfifob(fd, 7) as i32;
 
     updateRanks(chosen_event);
 
-    let mut pos: c_int = 8;
+    let mut pos: i32 = 8;
     pos = getevent_name(pos, fd, sd);
     filler_block(pos, chosen_event, fd, sd);
     pos += 15;
@@ -1205,8 +1191,8 @@ pub unsafe fn clif_parseranking(sd: *mut MapSessionData, fd: c_int) -> c_int {
 ///
 /// Allowed when: GM, or has `carnagehost` global reg set, and map id is 2001..=2099.
 ///
-/// Pure logic — no SQL. C: sl_compat.c line ~841.
-pub unsafe fn canusepowerboards(sd: *mut MapSessionData) -> c_int {
+/// Pure logic — no SQL.
+pub unsafe fn canusepowerboards(sd: *mut MapSessionData) -> i32 {
     if (*sd).status.gm_level != 0 { return 1; }
     if pc_readglobalreg(sd, c"carnagehost".as_ptr()) == 0 { return 0; }
     if (*sd).bl.m >= 2001 && (*sd).bl.m <= 2099 { return 1; }

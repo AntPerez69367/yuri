@@ -1,35 +1,33 @@
-//! GM command dispatch -- replaces `c_src/gm_command.c`.
+//! GM command dispatch.
 
 #![allow(non_snake_case, dead_code, unused_variables, unused_mut)]
 
-use std::ffi::{c_char, c_int, c_uint, c_ulong};
 use std::sync::atomic::{AtomicI32, AtomicI8};
-use std::os::raw::c_void;
 
 use crate::database::map_db::BlockList;
 use crate::game::mob::{MobSpawnData, BL_MOB, BL_PC, MOB_DEAD};
 use crate::game::pc::{MapSessionData, PC_DIE, SFLAG_FULLSTATS, SFLAG_HPMP};
 
-// Module globals (mirrors C file-scope vars)
+// Module globals
 static SPELLGFX:     AtomicI32 = AtomicI32::new(0);
 static MUSICFX:      AtomicI32 = AtomicI32::new(0);
 static SOUNDFX:      AtomicI32 = AtomicI32::new(0);
 static DOWNTIMER:    AtomicI32 = AtomicI32::new(0);
 static COMMAND_CODE: AtomicI8  = AtomicI8::new(b'/' as i8);
 
-// Flag constants (from map_server.h enums) — imported from pc.rs where possible,
+// Flag constants — imported from pc.rs where possible,
 // redefined here for local clarity.
-const OPT_STEALTH:    c_ulong = 32;
-const OPT_GHOSTS:     c_ulong = 256;
-const UFLAG_SILENCED: c_ulong = 1;
-const UFLAG_IMMORTAL: c_ulong = 8;
-const UFLAG_UNPHYS:   c_ulong = 16;
+const OPT_STEALTH:    u64 = 32;
+const OPT_GHOSTS:     u64 = 256;
+const UFLAG_SILENCED: u64 = 1;
+const UFLAG_IMMORTAL: u64 = 8;
+const UFLAG_UNPHYS:   u64 = 16;
 
 // AREA constant (from map_parse.h enum)
-const AREA: c_int = 4;
+const AREA: i32 = 4;
 
 // MAX_MAP_PER_SERVER (from mmo.h)
-const MAX_MAP_PER_SERVER: c_int = 65535;
+const MAX_MAP_PER_SERVER: i32 = 65535;
 
 // MAX_KILLREG (from mmo.h)
 const MAX_KILLREG: usize = 5000;
@@ -45,7 +43,7 @@ use crate::game::map_server::{char_fd, userlist};
 
 use crate::database::{blocking_run, get_pool};
 
-type LuaState = c_void; // opaque
+type LuaState = std::ffi::c_void; // opaque
 
 // ── map functions ──────────────────────────────────────────────────────────────
 use crate::game::map_server::{map_name2sd, map_reload, map_reset_timer};
@@ -107,7 +105,7 @@ use libc::printf;
 /// Dispatch a Lua event with a single block_list argument.
 #[cfg(not(test))]
 #[allow(dead_code)]
-unsafe fn sl_doscript_simple(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
 }
 
@@ -125,12 +123,12 @@ unsafe fn classdb_read() {}
 #[inline(always)]
 unsafe fn leveldb_read() {}
 
-type CmdFn = unsafe fn(*mut MapSessionData, *mut c_char, *mut LuaState) -> c_int;
+type CmdFn = unsafe fn(*mut MapSessionData, *mut i8, *mut LuaState) -> i32;
 
 struct CommandEntry {
     func:  CmdFn,
     name:  &'static str,
-    level: c_int,
+    level: i32,
 }
 
 static COMMANDS: &[CommandEntry] = &[
@@ -228,7 +226,7 @@ static COMMANDS: &[CommandEntry] = &[
 
 // ─── Stub implementations (replaced batch-by-batch below) ────────────────────
 
-unsafe fn command_debug(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_debug(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     use crate::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
     if sd.is_null() || line.is_null() { return 0; }
     let s = std::ffi::CStr::from_ptr(line).to_str().unwrap_or("");
@@ -253,12 +251,12 @@ unsafe fn command_debug(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lua
     rust_session_commit(fd, n);
     0
 }
-unsafe fn command_item(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_item(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     use crate::servers::char::charstatus::Item;
     if sd.is_null() || line.is_null() { return 0; }
     let line_str = std::ffi::CStr::from_ptr(line).to_str().unwrap_or("");
-    let mut itemnum: c_uint = 0;
-    let mut itemid: c_uint = 0;
+    let mut itemnum: u32 = 0;
+    let mut itemid: u32 = 0;
 
     if !line_str.is_empty() && line_str.as_bytes()[0].is_ascii_digit() {
         // numeric id path
@@ -286,12 +284,12 @@ unsafe fn command_item(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaS
     pc_additem(sd, &mut it);
     0
 }
-unsafe fn command_res(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_res(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     if (*sd).status.state == PC_DIE as i8 { pc_res(sd); }
     0
 }
-unsafe fn command_hair(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_hair(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let (hair, hair_color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     (*sd).status.hair = hair as u16;
@@ -300,13 +298,13 @@ unsafe fn command_hair(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaS
     clif_getchararea(sd);
     0
 }
-unsafe fn command_checkdupes(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_checkdupes(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     for x in 1..crate::session::get_fd_max() {
         if rust_session_exists(x) != 0 {
             let tsd = rust_session_get_data(x) as *mut MapSessionData;
             if !tsd.is_null() && rust_session_get_eof(x) == 0 {
-                let n = pc_readglobalreg(tsd, b"goldbardupe\0".as_ptr() as *const c_char);
+                let n = pc_readglobalreg(tsd, b"goldbardupe\0".as_ptr() as *const i8);
                 if n != 0 {
                     let name_str = std::ffi::CStr::from_ptr((*tsd).status.name.as_ptr()).to_str().unwrap_or("");
                     let mut buf = [0i8; 64];
@@ -319,13 +317,13 @@ unsafe fn command_checkdupes(sd: *mut MapSessionData, _line: *mut c_char, _s: *m
     }
     0
 }
-unsafe fn command_checkwpe(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_checkwpe(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     for x in 1..crate::session::get_fd_max() {
         if rust_session_exists(x) != 0 {
             let tsd = rust_session_get_data(x) as *mut MapSessionData;
             if !tsd.is_null() && rust_session_get_eof(x) == 0 {
-                let n = pc_readglobalreg(tsd, b"WPEtimes\0".as_ptr() as *const c_char);
+                let n = pc_readglobalreg(tsd, b"WPEtimes\0".as_ptr() as *const i8);
                 if n != 0 {
                     let name_str = std::ffi::CStr::from_ptr((*tsd).status.name.as_ptr()).to_str().unwrap_or("");
                     let mut buf = [0i8; 64];
@@ -338,18 +336,18 @@ unsafe fn command_checkwpe(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut
     }
     0
 }
-unsafe fn command_kill(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_kill(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let tsd = map_name2sd(line);
     if !tsd.is_null() {
         if rust_session_exists((*tsd).fd) != 0 { rust_session_set_eof((*tsd).fd, 1); }
-        clif_sendminitext(sd, b"Done.\0".as_ptr() as *const c_char);
+        clif_sendminitext(sd, b"Done.\0".as_ptr() as *const i8);
     } else {
-        clif_sendminitext(sd, b"User not found.\0".as_ptr() as *const c_char);
+        clif_sendminitext(sd, b"User not found.\0".as_ptr() as *const i8);
     }
     0
 }
-unsafe fn command_killall(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_killall(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     for x in 1..crate::session::get_fd_max() {
         if rust_session_exists(x) != 0 {
@@ -360,24 +358,24 @@ unsafe fn command_killall(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut 
         }
     }
     if rust_session_get_eof((*sd).fd) == 0 {
-        clif_sendminitext(sd, b"All but GMs have been mass booted.\0".as_ptr() as *const c_char);
+        clif_sendminitext(sd, b"All but GMs have been mass booted.\0".as_ptr() as *const i8);
     }
     0
 }
-unsafe fn command_deletespell(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_deletespell(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     // Replicates C bug exactly: `spell` is used before it's set from name.
     // In C: `if (spell >= 0 && spell < 52)` where spell is uninitialized (0).
     // So it always clears skill[0].
     if sd.is_null() { return 0; }
     let _name = match parse_str32(line) { Some(v) => v, None => return -1 };
-    let spell: c_int = 0; // C bug: spell used before assignment
+    let spell: i32 = 0; // C bug: spell used before assignment
     if spell >= 0 && spell < 52 {
         (*sd).status.skill[spell as usize] = 0;
         pc_loadmagic(sd);
     }
     0
 }
-unsafe fn command_xprate(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_xprate(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let rate = match parse_int(line) { Some(v) => v, None => return -1 };
     xp_rate = rate;
@@ -387,22 +385,22 @@ unsafe fn command_xprate(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lu
     clif_sendminitext(sd, buf.as_ptr());
     0
 }
-unsafe fn command_heal(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_heal(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     (*sd).status.hp = (*sd).max_hp;
     (*sd).status.mp = (*sd).max_mp;
     clif_sendstatus(sd, SFLAG_HPMP);
     0
 }
-unsafe fn command_level(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_level(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let level = match parse_int(line) { Some(v) => v, None => return -1 };
     (*sd).status.level = level as u8;
     clif_sendstatus(sd, SFLAG_FULLSTATS);
     0
 }
-unsafe fn command_randomspawn   (_sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int { 0 }
-unsafe fn command_drate(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_randomspawn   (_sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 { 0 }
+unsafe fn command_drate(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let rate = match parse_int(line) { Some(v) => v, None => return -1 };
     d_rate = rate;
@@ -412,7 +410,7 @@ unsafe fn command_drate(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lua
     clif_sendminitext(sd, buf.as_ptr());
     0
 }
-unsafe fn command_spell(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_spell(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     if let Some((spell, sound)) = parse_two_ints(line) {
         SPELLGFX.store(spell, Ordering::Relaxed);
@@ -429,7 +427,7 @@ unsafe fn command_spell(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lua
     );
     0
 }
-unsafe fn command_val(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_val(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let count = (MOB_SPAWN_MAX.load(Ordering::Relaxed) - MOB_SPAWN_START.load(Ordering::Relaxed))
               + (MOB_ONETIME_MAX.load(Ordering::Relaxed) - MOB_ONETIME_START.load(Ordering::Relaxed));
@@ -439,7 +437,7 @@ unsafe fn command_val(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaS
     clif_sendminitext(sd, buf.as_ptr());
     0
 }
-unsafe fn command_disguise(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_disguise(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let (d, e) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     let os = (*sd).status.state;
@@ -451,13 +449,13 @@ unsafe fn command_disguise(sd: *mut MapSessionData, line: *mut c_char, _s: *mut 
     broadcast_update_state(sd);
     0
 }
-unsafe fn command_warp(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_warp(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let (m, x, y) = match parse_three_ints(line) { Some(v) => v, None => return -1 };
     pc_warp(sd, m, x, y);
     0
 }
-unsafe fn command_givespell(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_givespell(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let name = match parse_str32(line) { Some(v) => v, None => return -1 };
     let spell = magicdb_id(name.as_ptr());
@@ -471,7 +469,7 @@ unsafe fn command_givespell(sd: *mut MapSessionData, line: *mut c_char, _s: *mut
     }
     0
 }
-unsafe fn command_side(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_side(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let side = match parse_int(line) { Some(v) => v, None => return -1 };
     (*sd).status.side = side as i8;
@@ -479,7 +477,7 @@ unsafe fn command_side(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaS
     clif_getchararea(sd);
     0
 }
-unsafe fn command_state(sd: *mut MapSessionData, line: *mut c_char, _lua_state: *mut LuaState) -> c_int {
+unsafe fn command_state(sd: *mut MapSessionData, line: *mut i8, _lua_state: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let state_val = match parse_int(line) { Some(v) => v, None => return -1 };
     if (*sd).status.state == 1 && state_val != 1 {
@@ -490,7 +488,7 @@ unsafe fn command_state(sd: *mut MapSessionData, line: *mut c_char, _lua_state: 
     }
     0
 }
-unsafe fn command_armorcolor(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_armorcolor(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let ac = match parse_int(line) { Some(v) => v, None => return -1 };
     (*sd).status.armor_color = ac as u16;
@@ -498,7 +496,7 @@ unsafe fn command_armorcolor(sd: *mut MapSessionData, line: *mut c_char, _s: *mu
     clif_getchararea(sd);
     0
 }
-unsafe fn command_makegm(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_makegm(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let name = match parse_str32(line) { Some(v) => v, None => return -1 };
     let tsd = map_name2sd(name.as_ptr());
@@ -507,7 +505,7 @@ unsafe fn command_makegm(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lu
     }
     0
 }
-unsafe fn command_who(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_who(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let mut buf = [0i8; 256];
     let msg = format!("There are {} users online.\0", userlist.user_count);
@@ -515,7 +513,7 @@ unsafe fn command_who(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaS
     clif_sendminitext(sd, buf.as_ptr());
     0
 }
-unsafe fn command_legend(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_legend(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     (*sd).status.legends[0].icon = 12;
     (*sd).status.legends[0].color = 128;
@@ -525,28 +523,28 @@ unsafe fn command_legend(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut L
     }
     0
 }
-unsafe fn command_luareload(sd: *mut MapSessionData, _line: *mut c_char, s: *mut LuaState) -> c_int {
+unsafe fn command_luareload(sd: *mut MapSessionData, _line: *mut i8, s: *mut LuaState) -> i32 {
     let errors = sl_reload();
     if sd.is_null() { return errors; }
-    clif_sendminitext(sd, b"LUA Scripts reloaded!\0".as_ptr() as *const c_char);
+    clif_sendminitext(sd, b"LUA Scripts reloaded!\0".as_ptr() as *const i8);
     errors
 }
-unsafe fn command_magicreload(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_magicreload(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     magicdb_read();
     if sd.is_null() { return 0; }
-    clif_sendminitext(sd, b"Magic DB reloaded!\0".as_ptr() as *const c_char);
+    clif_sendminitext(sd, b"Magic DB reloaded!\0".as_ptr() as *const i8);
     0
 }
-unsafe fn command_lua(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_lua(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() || line.is_null() { return 0; }
     (*sd).luaexec = 0;
-    sl_doscript_simple(b"canRunLuaTalk\0".as_ptr() as *const c_char, std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+    sl_doscript_simple(b"canRunLuaTalk\0".as_ptr() as *const i8, std::ptr::null(), &mut (*sd).bl as *mut BlockList);
     if (*sd).luaexec != 0 {
-        sl_exec(sd as *mut c_void, line);
+        sl_exec(sd as *mut std::ffi::c_void, line);
     }
     0
 }
-unsafe fn command_speed(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_speed(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let d = match parse_int(line) { Some(v) => v, None => return -1 };
     (*sd).speed = d;
@@ -554,32 +552,32 @@ unsafe fn command_speed(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lua
     clif_getchararea(sd);
     0
 }
-unsafe fn command_reloaditem(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_reloaditem(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     itemdb_read();
     if sd.is_null() { return 0; }
-    clif_sendminitext(sd, b"Item DB Reloaded!\0".as_ptr() as *const c_char);
+    clif_sendminitext(sd, b"Item DB Reloaded!\0".as_ptr() as *const i8);
     0
 }
-unsafe fn command_reloadcreations(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_reloadcreations(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     // Creation system is Lua-script-driven; no DB layer to reload.
     if sd.is_null() { return 0; }
-    clif_sendminitext(sd, b"Creations DB reloaded!\0".as_ptr() as *const c_char);
+    clif_sendminitext(sd, b"Creations DB reloaded!\0".as_ptr() as *const i8);
     0
 }
-unsafe fn command_reloadmob(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_reloadmob(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     rust_mobdb_term();
     rust_mobdb_init();
     if sd.is_null() { return 0; }
-    clif_sendminitext(sd, b"Mob DB Reloaded\0".as_ptr() as *const c_char);
+    clif_sendminitext(sd, b"Mob DB Reloaded\0".as_ptr() as *const i8);
     0
 }
-unsafe fn command_reloadspawn(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_reloadspawn(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     mobspawn_read();
     if sd.is_null() { return 0; }
-    clif_sendminitext(sd, b"Spawn DB Reloaded\0".as_ptr() as *const c_char);
+    clif_sendminitext(sd, b"Spawn DB Reloaded\0".as_ptr() as *const i8);
     0
 }
-unsafe fn command_pvp(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_pvp(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let pvp = match parse_int(line) { Some(v) => v, None => return -1 };
     let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
@@ -590,25 +588,25 @@ unsafe fn command_pvp(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaSt
     clif_sendminitext(sd, buf.as_ptr());
     0
 }
-unsafe fn command_spellwork(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_spellwork(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
     if !mp.is_null() { (*mp).spell ^= 1; }
     0
 }
-unsafe fn command_broadcast(_sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_broadcast(_sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     clif_broadcast(line, -1);
     0
 }
-unsafe fn command_luasize(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
-    if !sd.is_null() { sl_luasize(sd as *mut c_void); }
+unsafe fn command_luasize(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
+    if !sd.is_null() { sl_luasize(sd as *mut std::ffi::c_void); }
     0
 }
-unsafe fn command_luafix(_sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_luafix(_sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     sl_fixmem();
     0
 }
-unsafe fn command_respawn(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_respawn(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     map_respawnmobs(|bl| {
         if bl.is_null() { return 0; }
@@ -620,11 +618,11 @@ unsafe fn command_respawn(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut 
     }, (*sd).bl.m as i32, BL_MOB);
     0
 }
-unsafe fn command_ban(_sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_ban(_sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     let name = match parse_str32(line) { Some(v) => v, None => return -1 };
     let tsd = map_name2sd(name.as_ptr());
     if !tsd.is_null() {
-        printf(b"Banning %s\n\0".as_ptr() as *const c_char, name.as_ptr());
+        printf(b"Banning %s\n\0".as_ptr() as *const i8, name.as_ptr());
         let name_str = std::ffi::CStr::from_ptr(name.as_ptr())
             .to_str().unwrap_or("").to_owned();
         blocking_run(async move {
@@ -638,9 +636,9 @@ unsafe fn command_ban(_sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaS
     }
     0
 }
-unsafe fn command_unban(_sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_unban(_sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     let name = match parse_str32(line) { Some(v) => v, None => return -1 };
-    printf(b"Unbanning %s\n\0".as_ptr() as *const c_char, name.as_ptr());
+    printf(b"Unbanning %s\n\0".as_ptr() as *const i8, name.as_ptr());
     let name_str = std::ffi::CStr::from_ptr(name.as_ptr())
         .to_str().unwrap_or("").to_owned();
     blocking_run(async move {
@@ -652,7 +650,7 @@ unsafe fn command_unban(_sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lu
     });
     0
 }
-unsafe fn command_kc(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_kc(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     for x in 0..MAX_KILLREG {
         let mut buf = [0i8; 255];
@@ -664,87 +662,87 @@ unsafe fn command_kc(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaSt
     }
     0
 }
-unsafe fn command_blockcount    (_sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int { 0 }
-unsafe fn command_stealth(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_blockcount    (_sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 { 0 }
+unsafe fn command_stealth(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     if (*sd).optFlags & OPT_STEALTH != 0 {
         (*sd).optFlags ^= OPT_STEALTH;
         clif_refresh(sd);
-        clif_sendminitext(sd, b"Stealth :OFF\0".as_ptr() as *const c_char);
+        clif_sendminitext(sd, b"Stealth :OFF\0".as_ptr() as *const i8);
     } else {
         clif_lookgone(&mut (*sd).bl);
         (*sd).optFlags ^= OPT_STEALTH;
         clif_refresh(sd);
-        clif_sendminitext(sd, b"Stealth :ON\0".as_ptr() as *const c_char);
+        clif_sendminitext(sd, b"Stealth :ON\0".as_ptr() as *const i8);
     }
     0
 }
-unsafe fn command_ghosts(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_ghosts(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     (*sd).optFlags ^= OPT_GHOSTS;
     clif_refresh(sd);
     if (*sd).optFlags & OPT_GHOSTS != 0 {
-        clif_sendminitext(sd, b"Ghosts :ON\0".as_ptr() as *const c_char);
+        clif_sendminitext(sd, b"Ghosts :ON\0".as_ptr() as *const i8);
     } else {
-        clif_sendminitext(sd, b"Ghosts :OFF\0".as_ptr() as *const c_char);
+        clif_sendminitext(sd, b"Ghosts :OFF\0".as_ptr() as *const i8);
     }
     0
 }
-unsafe fn command_unphysical(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_unphysical(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     (*sd).uFlags ^= UFLAG_UNPHYS;
     if (*sd).uFlags & UFLAG_UNPHYS != 0 {
-        clif_sendminitext(sd, b"Unphysical :ON\0".as_ptr() as *const c_char);
+        clif_sendminitext(sd, b"Unphysical :ON\0".as_ptr() as *const i8);
     } else {
-        clif_sendminitext(sd, b"Unphysical :OFF\0".as_ptr() as *const c_char);
+        clif_sendminitext(sd, b"Unphysical :OFF\0".as_ptr() as *const i8);
     }
     0
 }
-unsafe fn command_immortality(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_immortality(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     (*sd).uFlags ^= UFLAG_IMMORTAL;
     if (*sd).uFlags & UFLAG_IMMORTAL != 0 {
-        clif_sendminitext(sd, b"Immortality :ON\0".as_ptr() as *const c_char);
+        clif_sendminitext(sd, b"Immortality :ON\0".as_ptr() as *const i8);
     } else {
-        clif_sendminitext(sd, b"Immortality :OFF\0".as_ptr() as *const c_char);
+        clif_sendminitext(sd, b"Immortality :OFF\0".as_ptr() as *const i8);
     }
     0
 }
-unsafe fn command_silence(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_silence(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let name = match parse_str32(line) { Some(v) => v, None => return -1 };
     let tsd = map_name2sd(name.as_ptr());
     if !tsd.is_null() {
         (*tsd).uFlags ^= UFLAG_SILENCED;
         if (*tsd).uFlags & UFLAG_SILENCED != 0 {
-            clif_sendminitext(sd, b"Silenced.\0".as_ptr() as *const c_char);
-            clif_sendminitext(tsd, b"You have been silenced.\0".as_ptr() as *const c_char);
+            clif_sendminitext(sd, b"Silenced.\0".as_ptr() as *const i8);
+            clif_sendminitext(tsd, b"You have been silenced.\0".as_ptr() as *const i8);
         } else {
-            clif_sendminitext(sd, b"Unsilenced.\0".as_ptr() as *const c_char);
-            clif_sendminitext(tsd, b"Silence lifted.\0".as_ptr() as *const c_char);
+            clif_sendminitext(sd, b"Unsilenced.\0".as_ptr() as *const i8);
+            clif_sendminitext(tsd, b"Silence lifted.\0".as_ptr() as *const i8);
         }
     } else {
-        clif_sendminitext(sd, b"User not on.\0".as_ptr() as *const c_char);
+        clif_sendminitext(sd, b"User not on.\0".as_ptr() as *const i8);
     }
     0
 }
-unsafe fn command_shutdowncancel(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_shutdowncancel(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     let dt = DOWNTIMER.load(Ordering::Relaxed);
     if dt != 0 {
-        clif_broadcast(b"---------------------------------------------------\0".as_ptr() as *const c_char, -1);
-        clif_broadcast(b"Server shutdown cancelled.\0".as_ptr() as *const c_char, -1);
-        clif_broadcast(b"---------------------------------------------------\0".as_ptr() as *const c_char, -1);
+        clif_broadcast(b"---------------------------------------------------\0".as_ptr() as *const i8, -1);
+        clif_broadcast(b"Server shutdown cancelled.\0".as_ptr() as *const i8, -1);
+        clif_broadcast(b"---------------------------------------------------\0".as_ptr() as *const i8, -1);
         timer_remove(dt);
         DOWNTIMER.store(0, Ordering::Relaxed);
     } else if !sd.is_null() {
-        clif_sendminitext(sd, b"Server is not shutting down.\0".as_ptr() as *const c_char);
+        clif_sendminitext(sd, b"Server is not shutting down.\0".as_ptr() as *const i8);
     }
     0
 }
-unsafe fn command_shutdown(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_shutdown(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() || line.is_null() { return 0; }
     if DOWNTIMER.load(Ordering::Relaxed) != 0 {
-        clif_sendminitext(sd, b"Server is already shutting down.\0".as_ptr() as *const c_char);
+        clif_sendminitext(sd, b"Server is already shutting down.\0".as_ptr() as *const i8);
         return 0;
     }
     let s = std::ffi::CStr::from_ptr(line).to_str().unwrap_or("");
@@ -774,13 +772,13 @@ unsafe fn command_shutdown(sd: *mut MapSessionData, line: *mut c_char, _s: *mut 
         let msg = format!("Reset in {} seconds.\0", d);
         for (i, b) in msg.bytes().take(254).enumerate() { msg_buf[i] = b as i8; }
     }
-    clif_broadcast(b"---------------------------------------------------\0".as_ptr() as *const c_char, -1);
+    clif_broadcast(b"---------------------------------------------------\0".as_ptr() as *const i8, -1);
     clif_broadcast(msg_buf.as_ptr(), -1);
-    clif_broadcast(b"---------------------------------------------------\0".as_ptr() as *const c_char, -1);
-    DOWNTIMER.store(timer_insert(250, 250, Some(map_reset_timer), t_time as c_int, 250), Ordering::Relaxed);
+    clif_broadcast(b"---------------------------------------------------\0".as_ptr() as *const i8, -1);
+    DOWNTIMER.store(timer_insert(250, 250, Some(map_reset_timer), t_time as i32, 250), Ordering::Relaxed);
     0
 }
-unsafe fn command_weap(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_weap(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     (*sd).gfx.weapon = id as u16;
@@ -789,7 +787,7 @@ unsafe fn command_weap(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaS
     clif_sendchararea(sd);
     0
 }
-unsafe fn command_shield(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_shield(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     (*sd).gfx.shield = id as u16;
@@ -798,7 +796,7 @@ unsafe fn command_shield(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lu
     clif_sendchararea(sd);
     0
 }
-unsafe fn command_armor(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_armor(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     (*sd).gfx.armor = id as u16;
@@ -807,7 +805,7 @@ unsafe fn command_armor(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lua
     clif_sendchararea(sd);
     0
 }
-unsafe fn command_boots(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_boots(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     (*sd).gfx.boots = id as u16;
@@ -816,7 +814,7 @@ unsafe fn command_boots(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lua
     clif_sendchararea(sd);
     0
 }
-unsafe fn command_mantle(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_mantle(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     (*sd).gfx.mantle = id as u16;
@@ -825,7 +823,7 @@ unsafe fn command_mantle(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lu
     clif_sendchararea(sd);
     0
 }
-unsafe fn command_necklace(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_necklace(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     (*sd).gfx.necklace = id as u16;
@@ -834,7 +832,7 @@ unsafe fn command_necklace(sd: *mut MapSessionData, line: *mut c_char, _s: *mut 
     clif_sendchararea(sd);
     0
 }
-unsafe fn command_faceacc(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_faceacc(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     (*sd).gfx.face_acc = id as u16;
@@ -843,7 +841,7 @@ unsafe fn command_faceacc(sd: *mut MapSessionData, line: *mut c_char, _s: *mut L
     clif_sendchararea(sd);
     0
 }
-unsafe fn command_crown(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_crown(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     (*sd).gfx.crown = id as u16;
@@ -852,7 +850,7 @@ unsafe fn command_crown(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lua
     clif_sendchararea(sd);
     0
 }
-unsafe fn command_helm(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_helm(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     (*sd).gfx.helm = id as u16;
@@ -861,12 +859,12 @@ unsafe fn command_helm(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaS
     clif_sendchararea(sd);
     0
 }
-unsafe fn command_gfxtoggle(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_gfxtoggle(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     (*sd).gfx.toggle ^= 1;
     0
 }
-unsafe fn command_weather(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_weather(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let weather = parse_int(line).unwrap_or(5);
     let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
@@ -881,7 +879,7 @@ unsafe fn command_weather(sd: *mut MapSessionData, line: *mut c_char, _s: *mut L
     }
     0
 }
-unsafe fn command_light(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_light(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let light = parse_int(line).unwrap_or(232);
     let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
@@ -890,13 +888,13 @@ unsafe fn command_light(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lua
         if rust_session_exists(x) != 0 {
             let tmpsd = rust_session_get_data(x) as *mut MapSessionData;
             if !tmpsd.is_null() && rust_session_get_eof(x) == 0 && (*tmpsd).bl.m == (*sd).bl.m {
-                pc_warp(tmpsd, (*tmpsd).bl.m as c_int, (*tmpsd).bl.x as c_int, (*tmpsd).bl.y as c_int);
+                pc_warp(tmpsd, (*tmpsd).bl.m as i32, (*tmpsd).bl.x as i32, (*tmpsd).bl.y as i32);
             }
         }
     }
     0
 }
-unsafe fn command_gm(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_gm(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let name_ptr = (*sd).status.name.as_ptr();
     let line_str = std::ffi::CStr::from_ptr(line).to_str().unwrap_or("");
@@ -914,7 +912,7 @@ unsafe fn command_gm(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaSta
     }
     0
 }
-unsafe fn command_report(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_report(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let name_ptr = (*sd).status.name.as_ptr();
     let line_str = std::ffi::CStr::from_ptr(line).to_str().unwrap_or("");
@@ -932,12 +930,12 @@ unsafe fn command_report(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lu
     }
     0
 }
-unsafe fn command_url(_sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_url(_sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if line.is_null() { return 0; }
     let line_str = std::ffi::CStr::from_ptr(line).to_str().unwrap_or("");
     let mut parts = line_str.trim().splitn(4, char::is_whitespace).filter(|s| !s.is_empty());
     let name_s = match parts.next() { Some(v) => v, None => return -1 };
-    let url_type: c_int = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let url_type: i32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
     let url_s = parts.next().unwrap_or("");
 
     let mut namebuf = [0i8; 32];
@@ -950,7 +948,7 @@ unsafe fn command_url(_sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaS
     clif_sendurl(tsd, url_type, urlbuf.as_ptr());
     0
 }
-unsafe fn command_cinv(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_cinv(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let range = parse_two_ints(line);
     let (start, end) = match range {
@@ -960,13 +958,13 @@ unsafe fn command_cinv(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaS
     for x in start..=end {
         let x = x as usize;
         if x < 52 && (*sd).status.inventory[x].id > 0 && (*sd).status.inventory[x].amount > 0 {
-            pc_delitem(sd, x as c_int, (*sd).status.inventory[x].amount, 0);
+            pc_delitem(sd, x as i32, (*sd).status.inventory[x].amount, 0);
         }
     }
     0
 }
-unsafe fn command_cfloor        (_sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int { 0 }
-unsafe fn command_cspells(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_cfloor        (_sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 { 0 }
+unsafe fn command_cspells(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let (start, end) = match parse_two_ints(line) {
         Some((s, e)) => (s as usize, e as usize),
@@ -980,7 +978,7 @@ unsafe fn command_cspells(sd: *mut MapSessionData, line: *mut c_char, _s: *mut L
     }
     0
 }
-unsafe fn command_job(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_job(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let (mut job, mut subjob) = parse_two_ints(line).unwrap_or((0, 0));
     if job < 0 { job = 5; }
@@ -1004,43 +1002,43 @@ unsafe fn command_job(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaSt
     clif_mystaytus(sd);
     0
 }
-unsafe fn command_music(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_music(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     if let Some(music) = parse_int(line) { MUSICFX.store(music, Ordering::Relaxed); }
-    let oldm = (*sd).bl.m as c_int;
-    let oldx = (*sd).bl.x as c_int;
-    let oldy = (*sd).bl.y as c_int;
+    let oldm = (*sd).bl.m as i32;
+    let oldx = (*sd).bl.x as i32;
+    let oldy = (*sd).bl.y as i32;
     let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
     if !mp.is_null() { (*mp).bgm = MUSICFX.load(Ordering::Relaxed) as u16; }
     pc_warp(sd, 10002, 0, 0);
     pc_warp(sd, oldm, oldx, oldy);
     0
 }
-unsafe fn command_musicn(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_musicn(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     MUSICFX.fetch_add(1, Ordering::Relaxed);
-    let oldm = (*sd).bl.m as c_int;
-    let oldx = (*sd).bl.x as c_int;
-    let oldy = (*sd).bl.y as c_int;
+    let oldm = (*sd).bl.m as i32;
+    let oldx = (*sd).bl.x as i32;
+    let oldy = (*sd).bl.y as i32;
     let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
     if !mp.is_null() { (*mp).bgm = MUSICFX.load(Ordering::Relaxed) as u16; }
     pc_warp(sd, 10002, 0, 0);
     pc_warp(sd, oldm, oldx, oldy);
     0
 }
-unsafe fn command_musicp(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_musicp(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     MUSICFX.fetch_sub(1, Ordering::Relaxed);
-    let oldm = (*sd).bl.m as c_int;
-    let oldx = (*sd).bl.x as c_int;
-    let oldy = (*sd).bl.y as c_int;
+    let oldm = (*sd).bl.m as i32;
+    let oldx = (*sd).bl.x as i32;
+    let oldy = (*sd).bl.y as i32;
     let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
     if !mp.is_null() { (*mp).bgm = MUSICFX.load(Ordering::Relaxed) as u16; }
     pc_warp(sd, 10002, 0, 0);
     pc_warp(sd, oldm, oldx, oldy);
     0
 }
-unsafe fn command_musicq(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_musicq(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let mut buf = [0i8; 25];
     let msg = format!("Current music is: {}\0", MUSICFX.load(Ordering::Relaxed));
@@ -1048,27 +1046,27 @@ unsafe fn command_musicq(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut L
     clif_sendminitext(sd, buf.as_ptr());
     0
 }
-unsafe fn command_sound(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_sound(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     if let Some(sound) = parse_int(line) { SOUNDFX.store(sound, Ordering::Relaxed); }
     clif_playsound(&mut (*sd).bl, SOUNDFX.load(Ordering::Relaxed));
     0
 }
-unsafe fn command_nsound(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_nsound(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let s = (SOUNDFX.fetch_add(1, Ordering::Relaxed) + 1).min(125);
     SOUNDFX.store(s, Ordering::Relaxed);
     clif_playsound(&mut (*sd).bl, s);
     0
 }
-unsafe fn command_psound(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_psound(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let s = (SOUNDFX.fetch_sub(1, Ordering::Relaxed) - 1).max(0);
     SOUNDFX.store(s, Ordering::Relaxed);
     clif_playsound(&mut (*sd).bl, s);
     0
 }
-unsafe fn command_soundq(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_soundq(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let mut buf = [0i8; 25];
     let msg = format!("Current sound is: {}\0", SOUNDFX.load(Ordering::Relaxed));
@@ -1076,7 +1074,7 @@ unsafe fn command_soundq(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut L
     clif_sendminitext(sd, buf.as_ptr());
     0
 }
-unsafe fn command_nspell(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_nspell(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let g = (SPELLGFX.fetch_add(1, Ordering::Relaxed) + 1).min(427);
     SPELLGFX.store(g, Ordering::Relaxed);
@@ -1090,7 +1088,7 @@ unsafe fn command_nspell(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut L
     );
     0
 }
-unsafe fn command_pspell(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_pspell(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let g = (SPELLGFX.fetch_sub(1, Ordering::Relaxed) - 1).max(0);
     SPELLGFX.store(g, Ordering::Relaxed);
@@ -1104,7 +1102,7 @@ unsafe fn command_pspell(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut L
     );
     0
 }
-unsafe fn command_spellq(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_spellq(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     let mut buf = [0i8; 25];
     let msg = format!("Current Spell is: {}\0", SPELLGFX.load(Ordering::Relaxed));
@@ -1112,26 +1110,26 @@ unsafe fn command_spellq(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut L
     clif_sendminitext(sd, buf.as_ptr());
     0
 }
-unsafe fn command_reloadboard(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_reloadboard(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     boarddb_term();
     boarddb_init();
     if sd.is_null() { return 0; }
-    clif_sendminitext(sd, b"Board DB reloaded!\0".as_ptr() as *const c_char);
+    clif_sendminitext(sd, b"Board DB reloaded!\0".as_ptr() as *const i8);
     0
 }
-unsafe fn command_reloadclan(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_reloadclan(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     clandb_init();
     if sd.is_null() { return 0; }
-    clif_sendminitext(sd, b"Clan DB reloaded!\0".as_ptr() as *const c_char);
+    clif_sendminitext(sd, b"Clan DB reloaded!\0".as_ptr() as *const i8);
     0
 }
-unsafe fn command_reloadnpc(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_reloadnpc(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     npc_init();
     if sd.is_null() { return 0; }
-    clif_sendminitext(sd, b"NPC DB reloaded!\0".as_ptr() as *const c_char);
+    clif_sendminitext(sd, b"NPC DB reloaded!\0".as_ptr() as *const i8);
     0
 }
-unsafe fn command_reloadmaps(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_reloadmaps(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     map_reload();
     let cfd = char_fd.load(Ordering::Relaxed);
     if cfd > 0 && rust_session_exists(cfd) != 0 {
@@ -1154,28 +1152,28 @@ unsafe fn command_reloadmaps(sd: *mut MapSessionData, _line: *mut c_char, _s: *m
         rust_session_commit(cfd, pkt_len);
     }
     if sd.is_null() { return 0; }
-    clif_sendminitext(sd, b"Maps reloaded!\0".as_ptr() as *const c_char);
+    clif_sendminitext(sd, b"Maps reloaded!\0".as_ptr() as *const i8);
     0
 }
-unsafe fn command_reloadclass(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_reloadclass(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     classdb_read();
     if sd.is_null() { return 0; }
-    clif_sendminitext(sd, b"Classes reloaded!\0".as_ptr() as *const c_char);
+    clif_sendminitext(sd, b"Classes reloaded!\0".as_ptr() as *const i8);
     0
 }
-unsafe fn command_reloadlevels(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_reloadlevels(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     leveldb_read();
     if sd.is_null() { return 0; }
-    clif_sendminitext(sd, b"Levels reloaded!\0".as_ptr() as *const c_char);
+    clif_sendminitext(sd, b"Levels reloaded!\0".as_ptr() as *const i8);
     0
 }
-unsafe fn command_reloadwarps(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_reloadwarps(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     warp_init();
     if sd.is_null() { return 0; }
-    clif_sendminitext(sd, b"Warps reloaded!\0".as_ptr() as *const c_char);
+    clif_sendminitext(sd, b"Warps reloaded!\0".as_ptr() as *const i8);
     0
 }
-unsafe fn command_transfer(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
+unsafe fn command_transfer(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
     clif_transfer_test(sd, 1, 10, 10);
     0
@@ -1184,8 +1182,8 @@ unsafe fn command_transfer(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut
 // ─── rust_command_reload: exported entry point for full mini-reset ────────────
 
 pub unsafe fn rust_command_reload(
-    sd: *mut MapSessionData, line: *mut c_char, state: *mut LuaState,
-) -> c_int {
+    sd: *mut MapSessionData, line: *mut i8, state: *mut LuaState,
+) -> i32 {
     let errors = command_luareload(sd, line, state);
     command_magicreload(sd, line, state);
     command_reloadmob(sd, line, state);
@@ -1197,20 +1195,20 @@ pub unsafe fn rust_command_reload(
     command_reloadclass(sd, line, state);
     command_reloadwarps(sd, line, state);
     if !sd.is_null() {
-        clif_sendminitext(sd, b"Mini reset complete!\0".as_ptr() as *const c_char);
+        clif_sendminitext(sd, b"Mini reset complete!\0".as_ptr() as *const i8);
     }
     errors
 }
 
 // ─── Parse helpers (replaces sscanf) ─────────────────────────────────────────
 
-unsafe fn parse_int(line: *mut c_char) -> Option<c_int> {
+unsafe fn parse_int(line: *mut i8) -> Option<i32> {
     if line.is_null() { return None; }
     let s = std::ffi::CStr::from_ptr(line).to_str().ok()?;
     s.trim().splitn(2, char::is_whitespace).next()?.parse().ok()
 }
 
-unsafe fn parse_two_ints(line: *mut c_char) -> Option<(c_int, c_int)> {
+unsafe fn parse_two_ints(line: *mut i8) -> Option<(i32, i32)> {
     if line.is_null() { return None; }
     let s = std::ffi::CStr::from_ptr(line).to_str().ok()?;
     let mut p = s.trim().splitn(3, char::is_whitespace).filter(|p| !p.is_empty());
@@ -1219,14 +1217,14 @@ unsafe fn parse_two_ints(line: *mut c_char) -> Option<(c_int, c_int)> {
     Some((a, b))
 }
 
-unsafe fn parse_three_ints(line: *mut c_char) -> Option<(c_int, c_int, c_int)> {
+unsafe fn parse_three_ints(line: *mut i8) -> Option<(i32, i32, i32)> {
     if line.is_null() { return None; }
     let s = std::ffi::CStr::from_ptr(line).to_str().ok()?;
     let mut p = s.trim().splitn(4, char::is_whitespace).filter(|x| !x.is_empty());
     Some((p.next()?.parse().ok()?, p.next()?.parse().ok()?, p.next()?.parse().ok()?))
 }
 
-unsafe fn parse_str32(line: *mut c_char) -> Option<[c_char; 32]> {
+unsafe fn parse_str32(line: *mut i8) -> Option<[i8; 32]> {
     if line.is_null() { return None; }
     let s = std::ffi::CStr::from_ptr(line).to_str().ok()?;
     let word = s.trim().splitn(2, char::is_whitespace).next()?;
@@ -1237,7 +1235,7 @@ unsafe fn parse_str32(line: *mut c_char) -> Option<[c_char; 32]> {
 
 // ─── Command dispatcher ───────────────────────────────────────────────────────
 
-unsafe fn dispatch(sd: *mut MapSessionData, p: *const c_char, len: c_int, log: bool) -> c_int {
+unsafe fn dispatch(sd: *mut MapSessionData, p: *const i8, len: i32, log: bool) -> i32 {
     if *p != COMMAND_CODE.load(Ordering::Relaxed) { return 0; }
     let p = p.add(1);
 
@@ -1262,29 +1260,29 @@ unsafe fn dispatch(sd: *mut MapSessionData, p: *const c_char, len: c_int, log: b
         None => return 0,
     };
 
-    if ((*sd).status.gm_level as c_int) < entry.level { return 0; }
+    if ((*sd).status.gm_level as i32) < entry.level { return 0; }
 
     // Skip past the null byte we inserted, then past whitespace.
     // Clamp to copy_len so we never step past the buffer when end == copy_len.
     let args_offset = (end + 1).min(copy_len);
     let mut args_ptr = p.add(args_offset);
-    while *args_ptr == b' ' as c_char || *args_ptr == b'\t' as c_char {
+    while *args_ptr == b' ' as i8 || *args_ptr == b'\t' as i8 {
         args_ptr = args_ptr.add(1);
     }
 
     if log {
-        printf(b"[command] gm command used cmd=%s\n\0".as_ptr() as *const c_char,
+        printf(b"[command] gm command used cmd=%s\n\0".as_ptr() as *const i8,
                cmd_line.as_ptr());
     }
 
-    (entry.func)(sd, args_ptr as *mut c_char, std::ptr::null_mut());
+    (entry.func)(sd, args_ptr as *mut i8, std::ptr::null_mut());
     1 // command matched and executed — caller checks bool, not handler result
 }
 
-pub unsafe fn rust_is_command(sd: *mut MapSessionData, p: *const c_char, len: c_int) -> c_int {
+pub unsafe fn rust_is_command(sd: *mut MapSessionData, p: *const i8, len: i32) -> i32 {
     dispatch(sd, p, len, true)
 }
 
-pub unsafe fn rust_at_command(sd: *mut MapSessionData, p: *const c_char, len: c_int) -> c_int {
+pub unsafe fn rust_at_command(sd: *mut MapSessionData, p: *const i8, len: i32) -> i32 {
     dispatch(sd, p, len, false)
 }

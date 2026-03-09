@@ -1039,7 +1039,7 @@ async fn session_io_task(fd: i32) {
         if eof != 0 {
             tracing::info!("[session] fd={} server-initiated eof={}, invoking parse for cleanup", fd, eof);
             // Give C one final parse call so clif_handle_disconnect / clif_closeit
-            // can run and free the player's session_data (sd).  This mirrors
+            // can run and free the player's session_data (sd).  This
             // what happens for peer-initiated closes (Ok(0) branch below).
             let parse_cb = {
                 let session = session_arc.lock().await;
@@ -1215,10 +1215,8 @@ async fn shutdown_all_sessions() {
     }
 }
 
-// ─── FFI exports ─────────────────────────────────────────────────────────────
-// Content moved from src/ffi/session.rs
+// ─── Public API exports ────────────────────────────────────────────────────
 
-use std::os::raw::c_int as ffi_c_int;
 
 /// The maximum open fd seen so far. Updated whenever a new session is accepted.
 /// Previously split across bin/map_server.rs + a C callback; now owned here.
@@ -1233,7 +1231,7 @@ pub fn get_fd_max() -> i32 {
 ///
 /// # Safety
 /// The caller must pass a valid function pointer (or null). This function ignores it.
-pub unsafe fn rust_register_fd_max_updater(_cb: unsafe fn(ffi_c_int)) {}
+pub unsafe fn rust_register_fd_max_updater(_cb: unsafe fn(i32)) {}
 
 /// Update fd_max if `fd` is larger.
 pub fn update_fd_max_pub(fd: i32) {
@@ -1245,7 +1243,7 @@ fn update_fd_max(fd: i32) {
     update_fd_max_pub(fd);
 }
 
-/// Helper: access a session synchronously from C FFI.
+/// Helper: access a session synchronously.
 fn with_session<F, R>(fd: i32, default: R, f: F) -> R
 where
     F: FnOnce(&mut Session) -> R,
@@ -1268,7 +1266,7 @@ where
 ///
 /// # Safety
 /// Must be called from a non-async context. Initialises the Tokio runtime internally.
-pub unsafe fn rust_server_run(port: u16) -> ffi_c_int {
+pub unsafe fn rust_server_run(port: u16) -> i32 {
     let _ = tracing_subscriber::fmt()
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -1291,7 +1289,7 @@ pub unsafe fn rust_server_run(port: u16) -> ffi_c_int {
     }
 }
 
-pub fn rust_make_listen_port(port: ffi_c_int) -> ffi_c_int {
+pub fn rust_make_listen_port(port: i32) -> i32 {
     tracing::info!("[FFI] rust_make_listen_port(port={})", port);
 
     let addr = format!("0.0.0.0:{}", port);
@@ -1318,7 +1316,7 @@ pub fn rust_make_listen_port(port: ffi_c_int) -> ffi_c_int {
     fd
 }
 
-pub fn rust_make_connection(ip: u32, port: ffi_c_int) -> ffi_c_int {
+pub fn rust_make_connection(ip: u32, port: i32) -> i32 {
     let ipv4 = std::net::Ipv4Addr::from(u32::from_be(ip));
     let addr = std::net::SocketAddr::new(std::net::IpAddr::V4(ipv4), port as u16);
 
@@ -1353,88 +1351,88 @@ pub fn rust_make_connection(ip: u32, port: ffi_c_int) -> ffi_c_int {
     fd
 }
 
-pub fn rust_session_eof(fd: ffi_c_int) -> ffi_c_int {
+pub fn rust_session_eof(fd: i32) -> i32 {
     with_session(fd, -1, |session| { session.eof = 1; 0 })
 }
 
-pub fn rust_session_read_u8(fd: ffi_c_int, pos: usize) -> u8 {
+pub fn rust_session_read_u8(fd: i32, pos: usize) -> u8 {
     with_session(fd, 0, |session| {
         session.read_u8(pos).unwrap_or_else(|e| { tracing::error!("[FFI] read_u8 error: {}", e); 0 })
     })
 }
 
-pub fn rust_session_read_u16(fd: ffi_c_int, pos: usize) -> u16 {
+pub fn rust_session_read_u16(fd: i32, pos: usize) -> u16 {
     with_session(fd, 0, |session| {
         session.read_u16(pos).unwrap_or_else(|e| { tracing::error!("[FFI] read_u16 error: {}", e); 0 })
     })
 }
 
-pub fn rust_session_read_u32(fd: ffi_c_int, pos: usize) -> u32 {
+pub fn rust_session_read_u32(fd: i32, pos: usize) -> u32 {
     with_session(fd, 0, |session| {
         session.read_u32(pos).unwrap_or_else(|e| { tracing::error!("[FFI] read_u32 error: {}", e); 0 })
     })
 }
 
-pub fn rust_session_write_u8(fd: ffi_c_int, pos: usize, val: u8) -> ffi_c_int {
+pub fn rust_session_write_u8(fd: i32, pos: usize, val: u8) -> i32 {
     with_session(fd, -1, |session| {
         session.write_u8(pos, val).map(|_| 0).unwrap_or_else(|e| { tracing::error!("[FFI] write_u8 error: {}", e); -1 })
     })
 }
 
-pub fn rust_session_write_u16(fd: ffi_c_int, pos: usize, val: u16) -> ffi_c_int {
+pub fn rust_session_write_u16(fd: i32, pos: usize, val: u16) -> i32 {
     with_session(fd, -1, |session| {
         session.write_u16(pos, val).map(|_| 0).unwrap_or_else(|e| { tracing::error!("[FFI] write_u16 error: {}", e); -1 })
     })
 }
 
-pub fn rust_session_write_u32(fd: ffi_c_int, pos: usize, val: u32) -> ffi_c_int {
+pub fn rust_session_write_u32(fd: i32, pos: usize, val: u32) -> i32 {
     with_session(fd, -1, |session| {
         session.write_u32(pos, val).map(|_| 0).unwrap_or_else(|e| { tracing::error!("[FFI] write_u32 error: {}", e); -1 })
     })
 }
 
-pub fn rust_session_skip(fd: ffi_c_int, len: usize) -> ffi_c_int {
+pub fn rust_session_skip(fd: i32, len: usize) -> i32 {
     with_session(fd, -1, |session| {
         session.skip(len).map(|_| 0).unwrap_or_else(|e| { tracing::error!("[FFI] skip error: {}", e); -1 })
     })
 }
 
-pub fn rust_session_available(fd: ffi_c_int) -> usize {
+pub fn rust_session_available(fd: i32) -> usize {
     with_session(fd, 0, |session| session.available())
 }
 
-pub fn rust_session_commit(fd: ffi_c_int, len: usize) -> ffi_c_int {
+pub fn rust_session_commit(fd: i32, len: usize) -> i32 {
     with_session(fd, -1, |session| {
         session.commit_write(len).map(|_| 0).unwrap_or_else(|e| { tracing::error!("[FFI] commit error: {}", e); -1 })
     })
 }
 
-pub fn rust_session_flush(_fd: ffi_c_int) -> ffi_c_int { 0 }
+pub fn rust_session_flush(_fd: i32) -> i32 { 0 }
 
-pub fn rust_session_rdata_ptr(fd: ffi_c_int, pos: usize) -> *const u8 {
+pub fn rust_session_rdata_ptr(fd: i32, pos: usize) -> *const u8 {
     with_session(fd, std::ptr::null(), |session| {
         session.rdata_ptr(pos).unwrap_or_else(|e| { tracing::error!("[FFI] rdata_ptr error: {}", e); std::ptr::null() })
     })
 }
 
-pub fn rust_session_wdata_ptr(fd: ffi_c_int, pos: usize) -> *mut u8 {
+pub fn rust_session_wdata_ptr(fd: i32, pos: usize) -> *mut u8 {
     with_session(fd, std::ptr::null_mut(), |session| {
         session.wdata_ptr(pos).unwrap_or_else(|e| { tracing::error!("[FFI] wdata_ptr error: {}", e); std::ptr::null_mut() })
     })
 }
 
-pub fn rust_session_wfifohead(fd: ffi_c_int, size: usize) -> ffi_c_int {
+pub fn rust_session_wfifohead(fd: i32, size: usize) -> i32 {
     with_session(fd, -1, |session| {
         session.ensure_wdata_capacity(size).map(|_| 0).unwrap_or_else(|e| { tracing::error!("[FFI] wfifohead error: {}", e); -1 })
     })
 }
 
-pub fn rust_session_rfifoflush(fd: ffi_c_int) -> ffi_c_int {
+pub fn rust_session_rfifoflush(fd: i32) -> i32 {
     with_session(fd, -1, |session| { session.flush_read_buffer(); 0 })
 }
 
 pub unsafe fn rust_session_set_default_accept(
-    callback: unsafe fn(ffi_c_int) -> ffi_c_int,
+    callback: unsafe fn(i32) -> i32,
 ) {
     tracing::info!("[FFI] Setting default accept callback");
     let manager = get_session_manager();
@@ -1442,7 +1440,7 @@ pub unsafe fn rust_session_set_default_accept(
 }
 
 pub unsafe fn rust_session_set_default_parse(
-    callback: unsafe fn(ffi_c_int) -> ffi_c_int,
+    callback: unsafe fn(i32) -> i32,
 ) {
     tracing::info!("[FFI] Setting default parse callback");
     let manager = get_session_manager();
@@ -1450,7 +1448,7 @@ pub unsafe fn rust_session_set_default_parse(
 }
 
 pub unsafe fn rust_session_set_default_timeout(
-    callback: unsafe fn(ffi_c_int) -> ffi_c_int,
+    callback: unsafe fn(i32) -> i32,
 ) {
     tracing::info!("[FFI] Setting default timeout callback");
     let manager = get_session_manager();
@@ -1458,75 +1456,75 @@ pub unsafe fn rust_session_set_default_timeout(
 }
 
 pub unsafe fn rust_session_set_default_shutdown(
-    callback: unsafe fn(ffi_c_int) -> ffi_c_int,
+    callback: unsafe fn(i32) -> i32,
 ) {
     tracing::info!("[FFI] Setting default shutdown callback");
     let manager = get_session_manager();
     manager.default_callbacks.lock().unwrap().shutdown = Some(callback);
 }
 
-pub fn rust_session_get_data(fd: ffi_c_int) -> *mut std::ffi::c_void {
+pub fn rust_session_get_data(fd: i32) -> *mut std::ffi::c_void {
     with_session(fd, std::ptr::null_mut(), |session| {
         session.session_data.unwrap_or(std::ptr::null_mut())
     })
 }
 
-pub fn rust_session_set_data(fd: ffi_c_int, data: *mut std::ffi::c_void) {
+pub fn rust_session_set_data(fd: i32, data: *mut std::ffi::c_void) {
     with_session(fd, (), |session| {
         session.session_data = if data.is_null() { None } else { Some(data) };
     });
 }
 
-pub fn rust_session_get_eof(fd: ffi_c_int) -> ffi_c_int {
+pub fn rust_session_get_eof(fd: i32) -> i32 {
     with_session(fd, -1, |session| session.eof)
 }
 
-pub fn rust_session_set_eof(fd: ffi_c_int, eof: ffi_c_int) {
+pub fn rust_session_set_eof(fd: i32, eof: i32) {
     with_session(fd, (), |session| { session.eof = eof; });
 }
 
-pub fn rust_session_get_client_ip(fd: ffi_c_int) -> u32 {
+pub fn rust_session_get_client_ip(fd: i32) -> u32 {
     with_session(fd, 0, |session| session.client_addr_raw)
 }
 
-pub fn rust_session_get_increment(fd: ffi_c_int) -> u8 {
+pub fn rust_session_get_increment(fd: i32) -> u8 {
     with_session(fd, 0, |session| session.increment)
 }
 
-pub fn rust_session_increment(fd: ffi_c_int) -> u8 {
+pub fn rust_session_increment(fd: i32) -> u8 {
     with_session(fd, 0, |session| {
         session.increment = session.increment.wrapping_add(1);
         session.increment
     })
 }
 
-pub fn rust_session_exists(fd: ffi_c_int) -> ffi_c_int {
+pub fn rust_session_exists(fd: i32) -> i32 {
     let manager = get_session_manager();
     if manager.get_session(fd).is_some() { 1 } else { 0 }
 }
 
 pub unsafe fn rust_session_set_parse(
-    fd: ffi_c_int,
-    callback: unsafe fn(ffi_c_int) -> ffi_c_int,
+    fd: i32,
+    callback: unsafe fn(i32) -> i32,
 ) {
     with_session(fd, (), |session| { session.callbacks.parse = Some(callback); });
 }
 
 pub unsafe fn rust_session_set_shutdown(
-    fd: ffi_c_int,
-    callback: unsafe fn(ffi_c_int) -> ffi_c_int,
+    fd: i32,
+    callback: unsafe fn(i32) -> i32,
 ) {
     with_session(fd, (), |session| { session.callbacks.shutdown = Some(callback); });
 }
 
-pub fn rust_session_call_parse(fd: ffi_c_int) {
+pub fn rust_session_call_parse(fd: i32) {
     let parse_cb = with_session(fd, None, |session| session.callbacks.parse);
     if let Some(cb) = parse_cb {
         unsafe { cb(fd); }
     }
 }
 
-pub unsafe fn rust_log_c(level: ffi_c_int, msg: *const std::os::raw::c_char) {
+pub unsafe fn rust_log_c(level: i32, msg: *const i8) {
     if msg.is_null() { return; }
     let s = std::ffi::CStr::from_ptr(msg).to_string_lossy();
     match level {
@@ -1537,7 +1535,7 @@ pub unsafe fn rust_log_c(level: ffi_c_int, msg: *const std::os::raw::c_char) {
     }
 }
 
-pub unsafe fn rust_session_get_all_fds(buf: *mut ffi_c_int, buf_len: ffi_c_int) -> ffi_c_int {
+pub unsafe fn rust_session_get_all_fds(buf: *mut i32, buf_len: i32) -> i32 {
     if buf.is_null() || buf_len <= 0 { return 0; }
     let fds = get_session_manager().get_all_fds();
     let count = (fds.len() as i32).min(buf_len);
@@ -1551,7 +1549,7 @@ pub fn rust_add_ip_lockout(ip: u32) {
     crate::network::ddos::add_ip_lockout(ip);
 }
 
-pub fn rust_connect_check_clear(_id: ffi_c_int, _data: ffi_c_int) -> ffi_c_int {
+pub fn rust_connect_check_clear(_id: i32, _data: i32) -> i32 {
     crate::network::ddos::connect_check_clear()
 }
 
@@ -1559,7 +1557,7 @@ pub fn rust_add_throttle(ip: u32) {
     crate::network::throttle::add_throttle(ip);
 }
 
-pub fn rust_remove_throttle(_id: ffi_c_int, _data: ffi_c_int) -> ffi_c_int {
+pub fn rust_remove_throttle(_id: i32, _data: i32) -> i32 {
     crate::network::throttle::remove_throttle();
     0
 }

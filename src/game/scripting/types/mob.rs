@@ -1,6 +1,5 @@
 use mlua::{MetaMethod, UserData, UserDataMethods};
-use std::ffi::{c_float, c_int, c_uint, CString};
-use std::os::raw::c_void;
+use std::ffi::CString;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use crate::database::map_db::{BlockList, MapData};
@@ -15,7 +14,7 @@ use crate::game::scripting::types::registry::{GameRegObject, MapRegObject, MobRe
 use crate::game::scripting::types::shared;
 
 pub struct MobObject {
-    pub ptr: *mut c_void,
+    pub ptr: *mut std::ffi::c_void,
     /// Set to `true` by the `delete` Lua method after the C object is freed.
     /// Future `__index` / `__newindex` calls check this flag and return early.
     pub deleted: Arc<AtomicBool>,
@@ -37,7 +36,7 @@ use crate::game::map_parse::combat::clif_send_mob_healthscript;
 use crate::database::magic_db::rust_magicdb_id;
 use crate::game::map_server::map_id2bl;
 
-unsafe fn map_id2bl_mob(id: c_uint) -> *mut BlockList {
+unsafe fn map_id2bl_mob(id: u32) -> *mut BlockList {
     map_id2bl(id) as *mut BlockList
 }
 
@@ -49,26 +48,26 @@ unsafe fn mob_map(mob: *const MobSpawnData) -> *mut MapData {
     get_map_ptr((*mob).bl.m)
 }
 
-fn val_to_int(v: &mlua::Value) -> c_int {
+fn val_to_int(v: &mlua::Value) -> i32 {
     match v {
-        mlua::Value::Integer(i) => *i as c_int,
-        mlua::Value::Number(f) => *f as c_int,
+        mlua::Value::Integer(i) => *i as i32,
+        mlua::Value::Number(f) => *f as i32,
         _ => 0,
     }
 }
 
-fn val_to_uint(v: &mlua::Value) -> c_uint {
+fn val_to_uint(v: &mlua::Value) -> u32 {
     match v {
-        mlua::Value::Integer(i) => if *i < 0 { 0 } else { *i as c_uint },
-        mlua::Value::Number(f)  => if *f < 0.0 { 0 } else { *f as c_uint },
+        mlua::Value::Integer(i) => if *i < 0 { 0 } else { *i as u32 },
+        mlua::Value::Number(f)  => if *f < 0.0 { 0 } else { *f as u32 },
         _ => 0,
     }
 }
 
-fn val_to_float(v: &mlua::Value) -> c_float {
+fn val_to_float(v: &mlua::Value) -> f32 {
     match v {
-        mlua::Value::Integer(i) => *i as c_float,
-        mlua::Value::Number(f) => *f as c_float,
+        mlua::Value::Integer(i) => *i as f32,
+        mlua::Value::Number(f) => *f as f32,
         _ => 0.0,
     }
 }
@@ -135,7 +134,7 @@ impl UserData for MobObject {
                 "attack" => {
                     let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (_, id): (mlua::Value, c_int)| {
+                        move |_, (_, id): (mlua::Value, i32)| {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(0i32);
                             }
@@ -146,7 +145,7 @@ impl UserData for MobObject {
                 "addHealth" => {
                     let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (_, damage): (mlua::Value, c_int)| {
+                        move |_, (_, damage): (mlua::Value, i32)| {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
@@ -160,7 +159,7 @@ impl UserData for MobObject {
                 "removeHealth" => {
                     let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (_, damage, caster_id): (mlua::Value, c_int, c_uint)| {
+                        move |_, (_, damage, caster_id): (mlua::Value, i32, u32)| {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
@@ -207,7 +206,7 @@ impl UserData for MobObject {
                 "moveIntent" => {
                     let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (_, target_id): (mlua::Value, c_uint)| {
+                        move |_, (_, target_id): (mlua::Value, u32)| {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(0i32);
                             }
@@ -222,7 +221,7 @@ impl UserData for MobObject {
                 "warp" => {
                     let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (_, m, x, y): (mlua::Value, c_int, c_int, c_int)| {
+                        move |_, (_, m, x, y): (mlua::Value, i32, i32, i32)| {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
@@ -236,14 +235,14 @@ impl UserData for MobObject {
                 "sendHealth" => {
                     let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (_, dmg, critical): (mlua::Value, c_float, c_int)| {
+                        move |_, (_, dmg, critical): (mlua::Value, f32, i32)| {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
                             let damage = if dmg > 0.0 {
-                                (dmg + 0.5) as c_int
+                                (dmg + 0.5) as i32
                             } else if dmg < 0.0 {
-                                (dmg - 0.5) as c_int
+                                (dmg - 0.5) as i32
                             } else {
                                 0
                             };
@@ -267,9 +266,9 @@ impl UserData for MobObject {
                                   (_, name, time, caster_id, recast): (
                                 mlua::Value,
                                 String,
-                                c_int,
-                                c_uint,
-                                c_int,
+                                i32,
+                                u32,
+                                i32,
                             )| {
                                 if ptr.is_null() || df.load(Ordering::Acquire) {
                                     return Ok(());
@@ -287,7 +286,7 @@ impl UserData for MobObject {
                 "flushDuration" => {
                     let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (_, dis, minid, maxid): (mlua::Value, c_int, c_int, c_int)| {
+                        move |_, (_, dis, minid, maxid): (mlua::Value, i32, i32, i32)| {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
@@ -301,7 +300,7 @@ impl UserData for MobObject {
                 "flushDurationNoUncast" => {
                     let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (_, dis, minid, maxid): (mlua::Value, c_int, c_int, c_int)| {
+                        move |_, (_, dis, minid, maxid): (mlua::Value, i32, i32, i32)| {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(());
                             }
@@ -324,14 +323,14 @@ impl UserData for MobObject {
                             let id = unsafe { rust_magicdb_id(cs.as_ptr()) };
                             let mob = unsafe { &*(ptr as *const MobSpawnData) };
                             Ok((0..MAX_MAGIC_TIMERS)
-                                .any(|x| mob.da[x].id as c_int == id && mob.da[x].duration > 0))
+                                .any(|x| mob.da[x].id as i32 == id && mob.da[x].duration > 0))
                         },
                     )?))
                 }
                 "hasDurationID" => {
                     let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (_, name, caster_id): (mlua::Value, String, c_uint)| -> mlua::Result<bool> {
+                        move |_, (_, name, caster_id): (mlua::Value, String, u32)| -> mlua::Result<bool> {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(false);
                             }
@@ -340,7 +339,7 @@ impl UserData for MobObject {
                             let id = unsafe { rust_magicdb_id(cs.as_ptr()) };
                             let mob = unsafe { &*(ptr as *const MobSpawnData) };
                             Ok((0..MAX_MAGIC_TIMERS).any(|x| {
-                                mob.da[x].id as c_int == id
+                                mob.da[x].id as i32 == id
                                     && mob.da[x].caster_id == caster_id
                                     && mob.da[x].duration > 0
                             }))
@@ -350,7 +349,7 @@ impl UserData for MobObject {
                 "getDuration" | "durationAmount" => {
                     let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (_, name): (mlua::Value, String)| -> mlua::Result<c_int> {
+                        move |_, (_, name): (mlua::Value, String)| -> mlua::Result<i32> {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(0);
                             }
@@ -359,7 +358,7 @@ impl UserData for MobObject {
                             let id = unsafe { rust_magicdb_id(cs.as_ptr()) };
                             let mob = unsafe { &*(ptr as *const MobSpawnData) };
                             for x in 0..MAX_MAGIC_TIMERS {
-                                if mob.da[x].id as c_int == id && mob.da[x].duration > 0 {
+                                if mob.da[x].id as i32 == id && mob.da[x].duration > 0 {
                                     return Ok(mob.da[x].duration);
                                 }
                             }
@@ -370,7 +369,7 @@ impl UserData for MobObject {
                 "getDurationID" => {
                     let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (_, name, caster_id): (mlua::Value, String, c_uint)| -> mlua::Result<c_int> {
+                        move |_, (_, name, caster_id): (mlua::Value, String, u32)| -> mlua::Result<i32> {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(0);
                             }
@@ -379,7 +378,7 @@ impl UserData for MobObject {
                             let id = unsafe { rust_magicdb_id(cs.as_ptr()) };
                             let mob = unsafe { &*(ptr as *const MobSpawnData) };
                             for x in 0..MAX_MAGIC_TIMERS {
-                                if mob.da[x].id as c_int == id
+                                if mob.da[x].id as i32 == id
                                     && mob.da[x].caster_id == caster_id
                                     && mob.da[x].duration > 0
                                 {
@@ -393,7 +392,7 @@ impl UserData for MobObject {
                 "checkThreat" => {
                     let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (_, player_id): (mlua::Value, c_uint)| {
+                        move |_, (_, player_id): (mlua::Value, u32)| {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(0i32);
                             }
@@ -428,7 +427,7 @@ impl UserData for MobObject {
                 "setIndDmg" => {
                     let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (_, player_id, dmg): (mlua::Value, c_uint, c_float)| -> mlua::Result<bool> {
+                        move |_, (_, player_id, dmg): (mlua::Value, u32, f32)| -> mlua::Result<bool> {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(false);
                             }
@@ -439,7 +438,7 @@ impl UserData for MobObject {
                 "setGrpDmg" => {
                     let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (_, player_id, dmg): (mlua::Value, c_uint, c_float)| -> mlua::Result<bool> {
+                        move |_, (_, player_id, dmg): (mlua::Value, u32, f32)| -> mlua::Result<bool> {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(false);
                             }
@@ -600,7 +599,7 @@ impl UserData for MobObject {
 
             // ── block_list / map fields ──────────────────────────────────────
             // Shared map properties (pvp, mapTitle, bgm, etc.) — delegate to shared module.
-            if let Some(v) = unsafe { shared::map_field(lua, bl.m as c_int, key.as_str()) } {
+            if let Some(v) = unsafe { shared::map_field(lua, bl.m as i32, key.as_str()) } {
                 return v;
             }
             // Shared GfxViewer properties (gfxFace, gfxWeap, etc.) — delegate to shared module.
@@ -758,7 +757,7 @@ impl UserData for MobObject {
                     )?));
                 }
                 // spawn(mob_name_or_id, x, y, amount [,m [,owner]])
-                // Mirrors npc:spawn but for a mob's own map context.
+                // Spawn behavior for a mob's own map context (mirrors npc:spawn).
                 "spawn" => {
                     let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
@@ -767,27 +766,27 @@ impl UserData for MobObject {
                                 return Ok(mlua::Value::Table(lua.create_table()?));
                             }
                             let args: Vec<mlua::Value> = args.into_iter().collect();
-                            let mob_id: c_uint = match args.get(1) {
+                            let mob_id: u32 = match args.get(1) {
                                 Some(mlua::Value::String(s)) => {
                                     let cs = CString::new(&*s.as_bytes()).map_err(mlua::Error::external)?;
-                                    unsafe { sffi::rust_mobdb_id(cs.as_ptr()) as c_uint }
+                                    unsafe { sffi::rust_mobdb_id(cs.as_ptr()) as u32 }
                                 }
-                                Some(mlua::Value::Integer(n)) => *n as c_uint,
-                                Some(mlua::Value::Number(f))  => *f as c_uint,
+                                Some(mlua::Value::Integer(n)) => *n as u32,
+                                Some(mlua::Value::Number(f))  => *f as u32,
                                 _ => return Ok(mlua::Value::Table(lua.create_table()?)),
                             };
-                            let vi = |i: usize| -> c_int { match args.get(i) {
-                                Some(mlua::Value::Integer(n)) => *n as c_int,
-                                Some(mlua::Value::Number(f))  => *f as c_int,
+                            let vi = |i: usize| -> i32 { match args.get(i) {
+                                Some(mlua::Value::Integer(n)) => *n as i32,
+                                Some(mlua::Value::Number(f))  => *f as i32,
                                 _ => 0,
                             }};
                             let x = vi(2);
                             let y = vi(3);
                             let amount = vi(4);
-                            let owner  = vi(6) as c_uint;
+                            let owner  = vi(6) as u32;
                             let mut m  = vi(5);
                             if m == 0 && !ptr.is_null() {
-                                m = unsafe { (*(ptr as *const crate::game::mob::MobSpawnData)).bl.m as c_int };
+                                m = unsafe { (*(ptr as *const crate::game::mob::MobSpawnData)).bl.m as i32 };
                             }
                             let tbl = lua.create_table()?;
                             if amount <= 0 { return Ok(mlua::Value::Table(tbl)); }
@@ -805,19 +804,19 @@ impl UserData for MobObject {
                                 }
                                 Ok(())
                             })();
-                            unsafe { libc::free(spawned as *mut c_void) };
+                            unsafe { libc::free(spawned as *mut std::ffi::c_void) };
                             fill_result?;
                             Ok(mlua::Value::Table(tbl))
                         }
                     )?));
                 }
-                // getUsers() — mirrors pc:getUsers, returns all online players.
+                // getUsers() — returns all online players.
                 "getUsers" => {
                     return Ok(mlua::Value::Function(lua.create_function(
                         |lua, _: mlua::MultiValue| {
                             const MAX: usize = 4096;
-                            let mut ptrs: Vec<*mut c_void> = vec![std::ptr::null_mut(); MAX];
-                            let count = unsafe { sffi::sl_g_getusers(ptrs.as_mut_ptr(), MAX as c_int) } as usize;
+                            let mut ptrs: Vec<*mut std::ffi::c_void> = vec![std::ptr::null_mut(); MAX];
+                            let count = unsafe { sffi::sl_g_getusers(ptrs.as_mut_ptr(), MAX as i32) } as usize;
                             if count >= MAX {
                                 tracing::warn!("[scripting] getUsers: result capped at {MAX}; some players may be missing");
                             }

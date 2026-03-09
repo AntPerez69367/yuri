@@ -1,4 +1,4 @@
-//! Rust port of `c_src/map_char.c`.
+//! Map-char inter-server communication.
 //!
 //! Contains `intif_mmo_tosd` — the login landing function that installs a
 //! freshly-received `MmoCharStatus` into a live session and fires the full
@@ -7,7 +7,6 @@
 #![allow(non_snake_case, dead_code, unused_variables)]
 
 use std::alloc::{alloc_zeroed, Layout};
-use std::ffi::{c_char, c_int, c_ulong, c_void};
 use std::ptr;
 
 use crate::database::{blocking_run_async, get_pool};
@@ -19,26 +18,25 @@ use crate::servers::char::charstatus::MmoCharStatus;
 // Constants mirrored from map_server.h / map_parse.h
 // ---------------------------------------------------------------------------
 
-const SFLAG_FULLSTATS: c_int = 0x40;
-const SFLAG_HPMP: c_int      = 0x20;
-const SFLAG_XPMONEY: c_int   = 0x10;
+const SFLAG_FULLSTATS: i32 = 0x40;
+const SFLAG_HPMP: i32      = 0x20;
+const SFLAG_XPMONEY: i32   = 0x10;
 
-const BL_ALL: c_int = 0x0F;
-const BL_PC:  c_int = 0x01;
+const BL_ALL: i32 = 0x0F;
+const BL_PC:  i32 = 0x01;
 
 // enum { LOOK_GET, LOOK_SEND } from map_parse.h
-const LOOK_GET: c_int = 0;
+const LOOK_GET: i32 = 0;
 
 // optFlag_walkthrough = 128 (from map_server.h)
-const OPT_WALKTHROUGH: c_ulong = 128;
+const OPT_WALKTHROUGH: u64 = 128;
 
 // ---------------------------------------------------------------------------
-// C FFI declarations
+
 // ---------------------------------------------------------------------------
 
 use crate::game::map_server::map_fd;
 
-// Direct Rust imports replacing extern "C" declarations.
 use crate::session::{rust_session_set_eof, rust_session_set_data};
 use crate::network::crypt::rust_crypt_populate_table;
 use crate::game::pc::{
@@ -59,8 +57,7 @@ use crate::game::map_parse::visual::clif_object_look_sub_inner;
 /// Installs an `MmoCharStatus` received from the char-server into a live
 /// map-server session and fires the full player-login sequence.
 ///
-/// Replaces `intif_mmo_tosd` in `c_src/map_char.c`.
-pub unsafe fn intif_mmo_tosd(fd: c_int, p: *const MmoCharStatus) -> c_int {
+pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
     // Ignore packets arriving on the inter-server socket itself.
     if fd == map_fd.load(std::sync::atomic::Ordering::Relaxed) {
         return 0;
@@ -86,12 +83,12 @@ pub unsafe fn intif_mmo_tosd(fd: c_int, p: *const MmoCharStatus) -> c_int {
 
     // Attach to session.
     (*sd).fd = fd;
-    rust_session_set_data(fd, sd as *mut c_void);
+    rust_session_set_data(fd, sd as *mut std::ffi::c_void);
 
     // Build the per-session encryption hash table from the character name.
     // C: populate_table(sd->status.name, sd->EncHash, sizeof(sd->EncHash))
     rust_crypt_populate_table(
-        (*sd).status.name.as_ptr() as *const c_char,
+        (*sd).status.name.as_ptr() as *const i8,
         (*sd).EncHash.as_mut_ptr(),
         0x401, // sizeof(sd->EncHash)
     );
@@ -153,9 +150,9 @@ pub unsafe fn intif_mmo_tosd(fd: c_int, p: *const MmoCharStatus) -> c_int {
     // Place the player on the map (adds to block grid).
     rust_pc_setpos(
         sd,
-        (*sd).status.last_pos.m as c_int,
-        (*sd).status.last_pos.x as c_int,
-        (*sd).status.last_pos.y as c_int,
+        (*sd).status.last_pos.m as i32,
+        (*sd).status.last_pos.x as i32,
+        (*sd).status.last_pos.y as i32,
     );
 
     // Load magic timers and start session timers.
@@ -238,7 +235,6 @@ pub unsafe fn intif_mmo_tosd(fd: c_int, p: *const MmoCharStatus) -> c_int {
 }
 
 
-// ─── FFI bridge (moved from src/ffi/map_char.rs) ──────────────────────────
 
 use std::sync::{Arc, OnceLock};
 use tokio::runtime::Handle;
@@ -272,7 +268,7 @@ fn send(data: Vec<u8>) {
 }
 
 /// 0x3003 — Request char data (map→char, 24 bytes).
-pub unsafe fn rust_intif_load(fd: i32, char_id: u32, name: *const c_char) {
+pub unsafe fn rust_intif_load(fd: i32, char_id: u32, name: *const i8) {
     if name.is_null() { return; }
     let nb = std::ffi::CStr::from_ptr(name).to_bytes();
     let mut pkt = vec![0u8; 24];
@@ -330,7 +326,7 @@ pub mod intif_save_impl {
         Some(pkt)
     }
 
-    pub unsafe fn rust_sl_intif_save(sd: *mut std::ffi::c_void) -> c_int {
+    pub unsafe fn rust_sl_intif_save(sd: *mut std::ffi::c_void) -> i32 {
         let sd = sd as *mut MapSessionData;
         if sd.is_null() { return -1; }
         (*sd).status.last_pos.m = (*sd).bl.m;
@@ -344,7 +340,7 @@ pub mod intif_save_impl {
         }
     }
 
-    pub unsafe fn rust_sl_intif_savequit(sd: *mut std::ffi::c_void) -> c_int {
+    pub unsafe fn rust_sl_intif_savequit(sd: *mut std::ffi::c_void) -> i32 {
         let sd = sd as *mut MapSessionData;
         if sd.is_null() { return -1; }
         if !map_is_loaded((*sd).status.dest_pos.m as i32) {

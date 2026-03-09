@@ -1,4 +1,4 @@
-//! Port of the movement/walk system from `c_src/map_parse.c`.
+//! Movement and walk packet handlers.
 //!
 //! Covers:
 //!   - `clif_blockmovement`   — send movement-block/unblock packet to one player
@@ -14,7 +14,6 @@
 
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
-use std::ffi::{c_char, c_int, c_uint, c_ulong};
 use std::ptr;
 
 use crate::database::map_db::{BlockList, WarpList, BLOCK_SIZE};
@@ -38,21 +37,21 @@ use super::packet::{
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 // enum { LOOK_GET = 0, LOOK_SEND = 1 } from map_parse.h
-const LOOK_GET:  c_int = 0;
-const LOOK_SEND: c_int = 1;
+const LOOK_GET:  i32 = 0;
+const LOOK_SEND: i32 = 1;
 
 // Equipment slot indices (from map_server.h EQ_* enum)
-const EQ_ARMOR:      c_int = 0;
-const EQ_COAT:       c_int = 1;
-const EQ_WEAP:       c_int = 2;
-const EQ_SHIELD:     c_int = 3;
-const EQ_HELM:       c_int = 4;
-const EQ_FACEACC:    c_int = 5;
-const EQ_CROWN:      c_int = 6;
-const EQ_FACEACCTWO: c_int = 7;
-const EQ_MANTLE:     c_int = 8;
-const EQ_NECKLACE:   c_int = 9;
-const EQ_BOOTS:      c_int = 10;
+const EQ_ARMOR:      i32 = 0;
+const EQ_COAT:       i32 = 1;
+const EQ_WEAP:       i32 = 2;
+const EQ_SHIELD:     i32 = 3;
+const EQ_HELM:       i32 = 4;
+const EQ_FACEACC:    i32 = 5;
+const EQ_CROWN:      i32 = 6;
+const EQ_FACEACCTWO: i32 = 7;
+const EQ_MANTLE:     i32 = 8;
+const EQ_NECKLACE:   i32 = 9;
+const EQ_BOOTS:      i32 = 10;
 
 // PC state values (from map_server.h enum)
 const PC_DIE:      i8 = 1;
@@ -61,7 +60,7 @@ const PC_MOUNTED:  i8 = 3;
 const PC_DISGUISE: i8 = 4;
 
 // BL_ALL — all block-list types
-const BL_ALL: c_int = 0x0F;
+const BL_ALL: i32 = 0x0F;
 
 // CRC lookup table (from `static short crctable[256]` in map_parse.c)
 // Values stored as i16 to match C `short` type exactly.
@@ -125,7 +124,6 @@ static CRC_TABLE: [i16; 256] = [
     0x4E55u16 as i16, 0x5E74u16 as i16, 0x2E93, 0x3EB2, 0x0ED1, 0x1EF0,
 ];
 
-// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
 
 use crate::game::client::{clif_send, clif_sendtogm};
 use crate::game::block::{map_moveblock, foreach_in_area, foreach_in_cell, foreach_in_rect, AreaType};
@@ -146,31 +144,31 @@ use crate::database::item_db::{
 };
 use crate::database::magic_db::rust_magicdb_yname as magicdb_yname;
 
-// map_id2sd returns *mut c_void but movement.rs uses it as *mut MapSessionData — wrap.
-unsafe fn map_id2sd(id: c_uint) -> *mut MapSessionData {
+// map_id2sd returns *mut std::ffi::c_void but movement.rs uses it as *mut MapSessionData — wrap.
+unsafe fn map_id2sd(id: u32) -> *mut MapSessionData {
     crate::game::map_server::map_id2sd(id) as *mut MapSessionData
 }
 
 /// Dispatch a Lua event with a single block_list argument.
 #[cfg(not(test))]
 #[allow(dead_code)]
-unsafe fn sl_doscript_simple(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
 }
 
 /// Dispatch a Lua event with two block_list arguments.
 #[cfg(not(test))]
 #[allow(dead_code)]
-unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
 }
 
 
-// ─── Inline map-data helpers (mirrors C read_tile/read_pass/read_obj macros) ──
+// ─── Inline map-data helpers ────────────────────────────────────────────────
 
 /// `read_tile(m, x, y)` — tile ID at cell (x, y) on map m.
 #[inline]
-unsafe fn read_tile(m: c_int, x: c_int, y: c_int) -> u16 {
+unsafe fn read_tile(m: i32, x: i32, y: i32) -> u16 {
     let md = &*map.add(m as usize);
     if md.tile.is_null() { return 0; }
     *md.tile.add(x as usize + y as usize * md.xs as usize)
@@ -178,7 +176,7 @@ unsafe fn read_tile(m: c_int, x: c_int, y: c_int) -> u16 {
 
 /// `read_obj(m, x, y)` — object ID at cell (x, y) on map m.
 #[inline]
-unsafe fn read_obj(m: c_int, x: c_int, y: c_int) -> u16 {
+unsafe fn read_obj(m: i32, x: i32, y: i32) -> u16 {
     let md = &*map.add(m as usize);
     if md.obj.is_null() { return 0; }
     *md.obj.add(x as usize + y as usize * md.xs as usize)
@@ -187,7 +185,7 @@ unsafe fn read_obj(m: c_int, x: c_int, y: c_int) -> u16 {
 /// `read_pass(m, x, y)` — passability value at cell (x, y) on map m.
 /// Non-zero means blocked.
 #[inline]
-unsafe fn read_pass(m: c_int, x: c_int, y: c_int) -> u16 {
+unsafe fn read_pass(m: i32, x: i32, y: i32) -> u16 {
     let md = &*map.add(m as usize);
     if md.pass.is_null() { return 0; }
     *md.pass.add(x as usize + y as usize * md.xs as usize)
@@ -197,7 +195,6 @@ unsafe fn read_pass(m: c_int, x: c_int, y: c_int) -> u16 {
 
 /// Compute the NexCRCC checksum for a flat array of `i16` triples (tile, pass, obj).
 ///
-/// Mirrors `short nexCRCC(short *buf, int len)` from `c_src/map_parse.c`.
 /// `buf` contains N triples; C `len` was the byte count (`N * 3 * 2`).
 #[inline]
 fn nex_crcc(buf: &[i16]) -> i16 {
@@ -219,8 +216,7 @@ fn nex_crcc(buf: &[i16]) -> i16 {
 ///
 /// Packet: `WFIFOHEADER(fd, 0x51, 5)` + flag byte + two zero bytes = 8 bytes total.
 ///
-/// Mirrors `clif_blockmovement` from `c_src/map_parse.c` ~line 2352.
-pub unsafe fn clif_blockmovement(sd: *mut MapSessionData, flag: c_int) -> c_int {
+pub unsafe fn clif_blockmovement(sd: *mut MapSessionData, flag: i32) -> i32 {
     if sd.is_null() { return 0; }
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
@@ -242,8 +238,7 @@ pub unsafe fn clif_blockmovement(sd: *mut MapSessionData, flag: c_int) -> c_int 
 ///
 /// Uses `AREA` (the full surrounding area, not just `SAMEAREA`).
 ///
-/// Mirrors `clif_sendchararea` from `c_src/map_parse.c` ~line 2374.
-pub unsafe fn clif_sendchararea(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendchararea(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     foreach_in_area(
         (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
@@ -260,11 +255,10 @@ pub unsafe fn clif_sendchararea(sd: *mut MapSessionData) -> c_int {
 /// Builds a 0x33 packet containing position, state, equipment look, and name.
 /// Applies visibility rules (stealth, ghost, GFX override).
 ///
-/// Mirrors `clif_charspecific` from `c_src/map_parse.c` ~line 2379.
-pub unsafe fn clif_charspecific(sender: c_int, id: c_int) -> c_int {
-    let sd = map_id2sd(sender as c_uint);
+pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
+    let sd = map_id2sd(sender as u32);
     if sd.is_null() { return 0; }
-    let src_sd = map_id2sd(id as c_uint);
+    let src_sd = map_id2sd(id as u32);
     if src_sd.is_null() { return 0; }
 
     // Stealth: hide from non-GM viewers (except from self)
@@ -646,12 +640,11 @@ pub unsafe fn clif_charspecific(sender: c_int, id: c_int) -> c_int {
 /// sends walk packets, moves block, triggers area scans and scripted events,
 /// and checks warp tiles.
 ///
-/// Mirrors `clif_parsewalk` from `c_src/map_parse.c` ~line 2753.
-pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
     let fd = (*sd).fd;
-    let m  = (*sd).bl.m as c_int;
+    let m  = (*sd).bl.m as i32;
     let md = &*map.add(m as usize);
 
     // Dismount on non-mount maps
@@ -660,36 +653,36 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> c_int {
     }
 
     let direction = rfifob(fd, 5);
-    let xold = rfifow(fd, 8).swap_bytes() as c_int;
-    let yold = rfifow(fd, 10).swap_bytes() as c_int;
+    let xold = rfifow(fd, 8).swap_bytes() as i32;
+    let yold = rfifow(fd, 10).swap_bytes() as i32;
     let mut dx = xold;
     let mut dy = yold;
 
     // Map-data sub-packet (packet type 6 carries viewport coords)
-    let mut x0: c_int = 0;
-    let mut y0: c_int = 0;
-    let mut x1: c_int = 0;
-    let mut y1: c_int = 0;
+    let mut x0: i32 = 0;
+    let mut y0: i32 = 0;
+    let mut x1: i32 = 0;
+    let mut y1: i32 = 0;
     let mut checksum: u16 = 0;
     if rfifob(fd, 3) == 6 {
-        x0 = rfifow(fd, 12).swap_bytes() as c_int;
-        y0 = rfifow(fd, 14).swap_bytes() as c_int;
-        x1 = rfifob(fd, 16) as c_int;
-        y1 = rfifob(fd, 17) as c_int;
+        x0 = rfifow(fd, 12).swap_bytes() as i32;
+        y0 = rfifow(fd, 14).swap_bytes() as i32;
+        x1 = rfifob(fd, 16) as i32;
+        y1 = rfifob(fd, 17) as i32;
         checksum = rfifow(fd, 18).swap_bytes();
     }
 
     // Position mismatch: snap back
-    if dx != (*sd).bl.x as c_int {
+    if dx != (*sd).bl.x as i32 {
         clif_blockmovement(sd, 0);
-        map_moveblock(&mut (*sd).bl, (*sd).bl.x as c_int, (*sd).bl.y as c_int);
+        map_moveblock(&mut (*sd).bl, (*sd).bl.x as i32, (*sd).bl.y as i32);
         clif_sendxy(sd);
         clif_blockmovement(sd, 1);
         return 0;
     }
-    if dy != (*sd).bl.y as c_int {
+    if dy != (*sd).bl.y as i32 {
         clif_blockmovement(sd, 0);
-        map_moveblock(&mut (*sd).bl, (*sd).bl.x as c_int, (*sd).bl.y as c_int);
+        map_moveblock(&mut (*sd).bl, (*sd).bl.x as i32, (*sd).bl.y as i32);
         clif_sendxy(sd);
         clif_blockmovement(sd, 1);
         return 0;
@@ -708,9 +701,9 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> c_int {
 
     // Clamp to map bounds
     if dx < 0 { dx = 0; }
-    if dx >= md.xs as c_int { dx = md.xs as c_int - 1; }
+    if dx >= md.xs as i32 { dx = md.xs as i32 - 1; }
     if dy < 0 { dy = 0; }
-    if dy >= md.ys as c_int { dy = md.ys as c_int - 1; }
+    if dy >= md.ys as i32 { dy = md.ys as i32 - 1; }
 
     // Collision checks (GM bypasses)
     if (*sd).status.gm_level == 0 {
@@ -732,18 +725,18 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> c_int {
     }
 
     // Update viewport offsets
-    let vx = (*sd).viewx as c_int;
-    let vy = (*sd).viewy as c_int;
-    if direction == 0 && (dy <= vy || ((md.ys as c_int - 1 - dy) < 7 && vy > 7)) {
+    let vx = (*sd).viewx as i32;
+    let vy = (*sd).viewy as i32;
+    if direction == 0 && (dy <= vy || ((md.ys as i32 - 1 - dy) < 7 && vy > 7)) {
         (*sd).viewy = (*sd).viewy.saturating_sub(1);
     }
-    if direction == 1 && ((dx < 8 && vx < 8) || 16 - (md.xs as c_int - 1 - dx) <= vx) {
+    if direction == 1 && ((dx < 8 && vx < 8) || 16 - (md.xs as i32 - 1 - dx) <= vx) {
         (*sd).viewx = (*sd).viewx.wrapping_add(1);
     }
-    if direction == 2 && ((dy < 7 && vy < 7) || 14 - (md.ys as c_int - 1 - dy) <= vy) {
+    if direction == 2 && ((dy < 7 && vy < 7) || 14 - (md.ys as i32 - 1 - dy) <= vy) {
         (*sd).viewy = (*sd).viewy.wrapping_add(1);
     }
-    if direction == 3 && (dx <= vx || ((md.xs as c_int - 1 - dx) < 8 && vx > 8)) {
+    if direction == 3 && (dx <= vx || ((md.xs as i32 - 1 - dx) < 8 && vx > 8)) {
         (*sd).viewx = (*sd).viewx.saturating_sub(1);
     }
     if (*sd).viewx > 16 { (*sd).viewx = 16; }
@@ -771,9 +764,9 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> c_int {
     }
 
     // No actual position change
-    if dx == (*sd).bl.x as c_int && dy == (*sd).bl.y as c_int { return 0; }
+    if dx == (*sd).bl.x as i32 && dy == (*sd).bl.y as i32 { return 0; }
 
-    // Broadcast movement to area (stack buffer mirrors C CALLOC(buf, …, 32))
+    // Broadcast movement to area.
     let mut buf = [0u8; 32];
     buf[0] = 0xAA;
     buf[1] = 0x00;
@@ -822,7 +815,7 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> c_int {
     // Skill passive walk scripts
     for i in 0..MAX_SPELLS {
         if (*sd).status.skill[i] > 0 {
-            let yn = magicdb_yname((*sd).status.skill[i] as c_int);
+            let yn = magicdb_yname((*sd).status.skill[i] as i32);
             if !yn.is_null() {
                 sl_doscript_simple(yn, c"on_walk_passive".as_ptr(), &mut (*sd).bl as *mut BlockList);
             }
@@ -832,7 +825,7 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> c_int {
     // Aether walk scripts
     for i in 0..MAX_MAGIC_TIMERS {
         if (*sd).status.dura_aether[i].id > 0 && (*sd).status.dura_aether[i].duration > 0 {
-            let yn = magicdb_yname((*sd).status.dura_aether[i].id as c_int);
+            let yn = magicdb_yname((*sd).status.dura_aether[i].id as i32);
             if !yn.is_null() {
                 sl_doscript_simple(yn, c"on_walk_while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
             }
@@ -855,29 +848,28 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> c_int {
 /// viewport logic as `clif_parsewalk`, but sends `[4]=0x03` and computes
 /// the new-strip viewport coords internally.
 ///
-/// Mirrors `clif_noparsewalk` from `c_src/map_parse.c` ~line 3063.
-pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> c_int {
+pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> i32 {
     if sd.is_null() { return 0; }
 
-    let m  = (*sd).bl.m as c_int;
+    let m  = (*sd).bl.m as i32;
     let md = &*map.add(m as usize);
 
-    let xold = (*sd).bl.x as c_int;
-    let yold = (*sd).bl.y as c_int;
+    let xold = (*sd).bl.x as i32;
+    let yold = (*sd).bl.y as i32;
     let mut dx = xold;
     let mut dy = yold;
 
     // Position guards (always false since dx/dy == bl.x/y)
-    if dx != (*sd).bl.x as c_int {
+    if dx != (*sd).bl.x as i32 {
         clif_blockmovement(sd, 0);
-        map_moveblock(&mut (*sd).bl, (*sd).bl.x as c_int, (*sd).bl.y as c_int);
+        map_moveblock(&mut (*sd).bl, (*sd).bl.x as i32, (*sd).bl.y as i32);
         clif_sendxy(sd);
         clif_blockmovement(sd, 1);
         return 0;
     }
-    if dy != (*sd).bl.y as c_int {
+    if dy != (*sd).bl.y as i32 {
         clif_blockmovement(sd, 0);
-        map_moveblock(&mut (*sd).bl, (*sd).bl.x as c_int, (*sd).bl.y as c_int);
+        map_moveblock(&mut (*sd).bl, (*sd).bl.x as i32, (*sd).bl.y as i32);
         clif_sendxy(sd);
         clif_blockmovement(sd, 1);
         return 0;
@@ -888,36 +880,36 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> c_int {
         sl_doscript_simple(c"onDismount".as_ptr(), ptr::null(), &mut (*sd).bl as *mut BlockList);
     }
 
-    let direction = (*sd).status.side as c_int;
+    let direction = (*sd).status.side as i32;
 
     // Compute destination and new viewport strip
-    let (x0, y0, x1, y1): (c_int, c_int, c_int, c_int);
+    let (x0, y0, x1, y1): (i32, i32, i32, i32);
     match direction {
         0 => {
             dy -= 1;
-            x0 = (*sd).bl.x as c_int - ((*sd).viewx as c_int + 1);
-            y0 = dy - ((*sd).viewy as c_int + 1);
+            x0 = (*sd).bl.x as i32 - ((*sd).viewx as i32 + 1);
+            y0 = dy - ((*sd).viewy as i32 + 1);
             x1 = 19;
             y1 = 1;
         }
         1 => {
             dx += 1;
-            x0 = dx + (18 - ((*sd).viewx as c_int + 1));
-            y0 = (*sd).bl.y as c_int - ((*sd).viewy as c_int + 1);
+            x0 = dx + (18 - ((*sd).viewx as i32 + 1));
+            y0 = (*sd).bl.y as i32 - ((*sd).viewy as i32 + 1);
             x1 = 1;
             y1 = 17;
         }
         2 => {
             dy += 1;
-            x0 = (*sd).bl.x as c_int - ((*sd).viewx as c_int + 1);
-            y0 = dy + (16 - ((*sd).viewy as c_int + 1));
+            x0 = (*sd).bl.x as i32 - ((*sd).viewx as i32 + 1);
+            y0 = dy + (16 - ((*sd).viewy as i32 + 1));
             x1 = 19;
             y1 = 1;
         }
         3 => {
             dx -= 1;
-            x0 = dx - ((*sd).viewx as c_int + 1);
-            y0 = (*sd).bl.y as c_int - ((*sd).viewy as c_int + 1);
+            x0 = dx - ((*sd).viewx as i32 + 1);
+            y0 = (*sd).bl.y as i32 - ((*sd).viewy as i32 + 1);
             x1 = 1;
             y1 = 17;
         }
@@ -928,9 +920,9 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> c_int {
 
     // Clamp
     if dx < 0 { dx = 0; }
-    if dx >= md.xs as c_int { dx = md.xs as c_int - 1; }
+    if dx >= md.xs as i32 { dx = md.xs as i32 - 1; }
     if dy < 0 { dy = 0; }
-    if dy >= md.ys as c_int { dy = md.ys as c_int - 1; }
+    if dy >= md.ys as i32 { dy = md.ys as i32 - 1; }
 
     (*sd).canmove = 0;
     if (*sd).status.gm_level == 0 {
@@ -947,21 +939,21 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> c_int {
         return 0;
     }
 
-    if dx == (*sd).bl.x as c_int && dy == (*sd).bl.y as c_int { return 0; }
+    if dx == (*sd).bl.x as i32 && dy == (*sd).bl.y as i32 { return 0; }
 
     // Viewport update
-    let vx = (*sd).viewx as c_int;
-    let vy = (*sd).viewy as c_int;
-    if direction == 0 && (dy <= vy || ((md.ys as c_int - 1 - dy) < 7 && vy > 7)) {
+    let vx = (*sd).viewx as i32;
+    let vy = (*sd).viewy as i32;
+    if direction == 0 && (dy <= vy || ((md.ys as i32 - 1 - dy) < 7 && vy > 7)) {
         (*sd).viewy = (*sd).viewy.saturating_sub(1);
     }
-    if direction == 1 && ((dx < 8 && vx < 8) || 16 - (md.xs as c_int - 1 - dx) <= vx) {
+    if direction == 1 && ((dx < 8 && vx < 8) || 16 - (md.xs as i32 - 1 - dx) <= vx) {
         (*sd).viewx = (*sd).viewx.wrapping_add(1);
     }
-    if direction == 2 && ((dy < 7 && vy < 7) || 14 - (md.ys as c_int - 1 - dy) <= vy) {
+    if direction == 2 && ((dy < 7 && vy < 7) || 14 - (md.ys as i32 - 1 - dy) <= vy) {
         (*sd).viewy = (*sd).viewy.wrapping_add(1);
     }
-    if direction == 3 && (dx <= vx || ((md.xs as c_int - 1 - dx) < 8 && vx > 8)) {
+    if direction == 3 && (dx <= vx || ((md.xs as i32 - 1 - dx) < 8 && vx > 8)) {
         (*sd).viewx = (*sd).viewx.saturating_sub(1);
     }
     if (*sd).viewx > 16 { (*sd).viewx = 16; }
@@ -1022,8 +1014,8 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> c_int {
 
     // Send new viewport strip if in bounds
     if x0 >= 0 && y0 >= 0
-        && x0 + (x1 - 1) < md.xs as c_int
-        && y0 + (y1 - 1) < md.ys as c_int
+        && x0 + (x1 - 1) < md.xs as i32
+        && y0 + (y1 - 1) < md.ys as i32
     {
         clif_sendmapdata(sd, m, x0, y0, x1, y1, 0);
         clif_mob_look_start(sd);
@@ -1052,20 +1044,19 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> c_int {
 /// Reads the timestamp at [9..12] (u32 BE → host), updates `msPing` and
 /// `LastPongStamp`.
 ///
-/// Mirrors `clif_parsewalkpong` from `c_src/map_parse.c` ~line 4619.
-pub unsafe fn clif_parsewalkpong(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsewalkpong(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
 
     // [5..8] = HASH (unused); [9..12] = TS (u32 big-endian)
-    let ts = rfifol(fd, 9).swap_bytes() as c_ulong;
+    let ts = rfifol(fd, 9).swap_bytes() as u64;
 
     if (*sd).LastPingTick != 0 {
-        (*sd).msPing = (gettick() as c_ulong).wrapping_sub((*sd).LastPingTick) as c_int;
+        (*sd).msPing = (gettick() as u64).wrapping_sub((*sd).LastPingTick) as i32;
     }
 
     if (*sd).LastPongStamp != 0 {
-        let difference = ts.wrapping_sub((*sd).LastPongStamp) as c_int;
+        let difference = ts.wrapping_sub((*sd).LastPongStamp) as i32;
         if difference > 43000 {
             // Speedhack detection — C commented the enforcement out; replicate no-op
         }
@@ -1082,17 +1073,16 @@ pub unsafe fn clif_parsewalkpong(sd: *mut MapSessionData) -> c_int {
 /// Sets `sd->loaded = 1`, reads viewport parameters, then delegates to
 /// `clif_sendmapdata`.
 ///
-/// Mirrors `clif_parsemap` from `c_src/map_parse.c` ~line 4639.
-pub unsafe fn clif_parsemap(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsemap(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
 
     (*sd).loaded = 1;
 
-    let x0 = rfifow(fd, 5).swap_bytes() as c_int;
-    let y0 = rfifow(fd, 7).swap_bytes() as c_int;
-    let x1 = rfifob(fd, 9) as c_int;
-    let y1 = rfifob(fd, 10) as c_int;
+    let x0 = rfifow(fd, 5).swap_bytes() as i32;
+    let y0 = rfifow(fd, 7).swap_bytes() as i32;
+    let x1 = rfifob(fd, 9) as i32;
+    let y1 = rfifob(fd, 10) as i32;
     let mut checksum = rfifow(fd, 11).swap_bytes();
 
     // Packet type 5 → force full resend (checksum=0 means always send)
@@ -1101,7 +1091,7 @@ pub unsafe fn clif_parsemap(sd: *mut MapSessionData) -> c_int {
     }
 
     tracing::debug!("[map] [parsemap] fd={} m={} x0={} y0={} x1={} y1={} check={}", fd, (*sd).bl.m, x0, y0, x1, y1, checksum);
-    clif_sendmapdata(sd, (*sd).bl.m as c_int, x0, y0, x1, y1, checksum);
+    clif_sendmapdata(sd, (*sd).bl.m as i32, x0, y0, x1, y1, checksum);
     0
 }
 
@@ -1112,16 +1102,15 @@ pub unsafe fn clif_parsemap(sd: *mut MapSessionData) -> c_int {
 /// Builds the tile packet locally, computes NexCRCC checksum, and skips the
 /// send if the client's cached checksum already matches.
 ///
-/// Mirrors `clif_sendmapdata` from `c_src/map_parse.c` ~line 4659.
 pub unsafe fn clif_sendmapdata(
     sd: *mut MapSessionData,
-    m: c_int,
-    mut x0: c_int,
-    mut y0: c_int,
-    mut x1: c_int,
-    mut y1: c_int,
+    m: i32,
+    mut x0: i32,
+    mut y0: i32,
+    mut x1: i32,
+    mut y1: i32,
     check: u16,
-) -> c_int {
+) -> i32 {
     if sd.is_null() { return 0; }
 
     if rust_session_exists((*sd).fd) == 0 {
@@ -1146,8 +1135,8 @@ pub unsafe fn clif_sendmapdata(
     let md = &*map.add(m as usize);
     if x0 < 0 { x0 = 0; }
     if y0 < 0 { y0 = 0; }
-    if x1 > md.xs as c_int { x1 = md.xs as c_int; }
-    if y1 > md.ys as c_int { y1 = md.ys as c_int; }
+    if x1 > md.xs as i32 { x1 = md.xs as i32; }
+    if y1 > md.ys as i32 { y1 = md.ys as i32; }
 
     // CRC buffer: flat array of i16 triples (tile, pass, obj)
     // Maximum tiles = 323, so max triples = 323 × 3 = 969 i16s.
@@ -1168,9 +1157,9 @@ pub unsafe fn clif_sendmapdata(
     let mut a:   usize = 0;
 
     for y in 0..y1 {
-        if y + y0 >= md.ys as c_int { break; }
+        if y + y0 >= md.ys as i32 { break; }
         for x in 0..x1 {
-            if x + x0 >= md.xs as c_int { break; }
+            if x + x0 >= md.xs as i32 { break; }
             let t = read_tile(m, x0 + x, y0 + y) as i16;
             let p = read_pass(m, x0 + x, y0 + y) as i16;
             let o = read_obj(m,  x0 + x, y0 + y) as i16;
@@ -1228,15 +1217,14 @@ pub unsafe fn clif_sendmapdata(
 ///
 /// PC: sent to AREA (including self). MOB/NPC: AREA_WOS.
 ///
-/// Mirrors `clif_sendside` from `c_src/map_parse.c` ~line 4738.
-pub unsafe fn clif_sendside(bl: *mut BlockList) -> c_int {
+pub unsafe fn clif_sendside(bl: *mut BlockList) -> i32 {
     if bl.is_null() { return 0; }
 
     // Read the side byte from the typed struct.
     // PC: MapSessionData.status.side (i8)
     // MOB/NPC: the `side` field lives at the same offset in both structs:
     //   immediately after the block_list header (48 bytes).
-    let (side_byte, target): (u8, c_int) = if (*bl).bl_type == BL_PC as u8 {
+    let (side_byte, target): (u8, i32) = if (*bl).bl_type == BL_PC as u8 {
         let sd = bl as *mut MapSessionData;
         ((*sd).status.side as u8, AREA)
     } else if (*bl).bl_type == BL_MOB as u8 || (*bl).bl_type == BL_NPC as u8 {
@@ -1267,8 +1255,7 @@ pub unsafe fn clif_sendside(bl: *mut BlockList) -> c_int {
 /// Reads new side from RFIFO[5], broadcasts via `clif_sendside`, fires
 /// `onTurn` Lua event.
 ///
-/// Mirrors `clif_parseside` from `c_src/map_parse.c` ~line 4802.
-pub unsafe fn clif_parseside(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parseside(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
     (*sd).status.side = rfifob(fd, 5) as i8;
@@ -1285,21 +1272,21 @@ pub unsafe fn clif_parseside(sd: *mut MapSessionData) -> c_int {
 /// Shared by both `clif_parsewalk` and `clif_noparsewalk`.
 #[inline]
 unsafe fn do_warp_check(sd: *mut MapSessionData) {
-    let fm = (*sd).bl.m as c_int;
+    let fm = (*sd).bl.m as i32;
     let fmd = &*map.add(fm as usize);
 
-    let mut fx = (*sd).bl.x as c_int;
-    let mut fy = (*sd).bl.y as c_int;
-    if fx >= fmd.xs as c_int { fx = fmd.xs as c_int - 1; }
-    if fy >= fmd.ys as c_int { fy = fmd.ys as c_int - 1; }
+    let mut fx = (*sd).bl.x as i32;
+    let mut fy = (*sd).bl.y as i32;
+    if fx >= fmd.xs as i32 { fx = fmd.xs as i32 - 1; }
+    if fy >= fmd.ys as i32 { fy = fmd.ys as i32 - 1; }
 
     if fmd.warp.is_null() { return; }
 
     let bidx = fx as usize / BLOCK_SIZE + (fy as usize / BLOCK_SIZE) * fmd.bxs as usize;
     let mut wp: *mut WarpList = fmd.warp.add(bidx).read();
-    let mut zm: c_int = 0;
-    let mut zx: c_int = 0;
-    let mut zy: c_int = 0;
+    let mut zm: i32 = 0;
+    let mut zx: i32 = 0;
+    let mut zy: i32 = 0;
     while !wp.is_null() {
         if (*wp).x == fx && (*wp).y == fy {
             zm = (*wp).tm;
@@ -1336,7 +1323,7 @@ unsafe fn do_warp_check(sd: *mut MapSessionData) {
             } else {
                 b"A powerful force repels you.\0"
             };
-            clif_sendminitext(sd, msg.as_ptr() as *const c_char);
+            clif_sendminitext(sd, msg.as_ptr() as *const i8);
         } else {
             clif_sendminitext(sd, maprejectmsg);
         }
@@ -1351,7 +1338,7 @@ unsafe fn do_warp_check(sd: *mut MapSessionData) {
         clif_pushback(sd);
         clif_sendminitext(
             sd,
-            b"A magical barrier prevents you from entering.\0".as_ptr() as *const c_char,
+            b"A magical barrier prevents you from entering.\0".as_ptr() as *const i8,
         );
         return;
     }
@@ -1361,8 +1348,7 @@ unsafe fn do_warp_check(sd: *mut MapSessionData) {
 
 // ─── Object collision flag queries ───────────────────────────────────────────
 //
-// Ported from c_src/sl_compat.c lines 3950–3977.
-// OBJ_* bits (from c_src/map_server.h):
+// OBJ_* bits:
 const OBJ_UP:    u8 = 1;
 const OBJ_DOWN:  u8 = 2;
 const OBJ_RIGHT: u8 = 4;
@@ -1370,8 +1356,7 @@ const OBJ_LEFT:  u8 = 8;
 
 /// Return non-zero if the object at `(m, x, y)` blocks movement in `side` direction.
 /// `side`: 0=up, 1=right, 2=down, 3=left.
-/// Replaces `clif_object_canmove` in `c_src/sl_compat.c` (line 3950).
-pub unsafe fn clif_object_canmove(m: c_int, x: c_int, y: c_int, side: c_int) -> c_int {
+pub unsafe fn clif_object_canmove(m: i32, x: i32, y: i32, side: i32) -> i32 {
     use crate::game::map_server::objectFlags;
     let object = read_obj(m, x, y) as usize;
     if objectFlags.is_null() { return 0; }
@@ -1387,8 +1372,7 @@ pub unsafe fn clif_object_canmove(m: c_int, x: c_int, y: c_int, side: c_int) -> 
 
 /// Return non-zero if movement is blocked when *leaving* `(m, x, y)` in `side` direction.
 /// Uses the reverse-direction flag (leaving down = OBJ_UP on the destination side).
-/// Replaces `clif_object_canmove_from` in `c_src/sl_compat.c` (line 3964).
-pub unsafe fn clif_object_canmove_from(m: c_int, x: c_int, y: c_int, side: c_int) -> c_int {
+pub unsafe fn clif_object_canmove_from(m: i32, x: i32, y: i32, side: i32) -> i32 {
     use crate::game::map_server::objectFlags;
     let object = read_obj(m, x, y) as usize;
     if objectFlags.is_null() { return 0; }
@@ -1403,14 +1387,13 @@ pub unsafe fn clif_object_canmove_from(m: c_int, x: c_int, y: c_int, side: c_int
 }
 
 /// Push player back 2 tiles opposite their facing direction.
-/// Replaces `clif_pushback` in `c_src/sl_compat.c` (line 4176).
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_pushback(sd: *mut MapSessionData) -> c_int {
-    let m = (*sd).bl.m as c_int;
-    let x = (*sd).bl.x as c_int;
-    let y = (*sd).bl.y as c_int;
+pub unsafe fn clif_pushback(sd: *mut MapSessionData) -> i32 {
+    let m = (*sd).bl.m as i32;
+    let x = (*sd).bl.x as i32;
+    let y = (*sd).bl.y as i32;
     match (*sd).status.side {
         0 => { pc_warp(sd, m, x,     y + 2); }
         1 => { pc_warp(sd, m, x - 2, y    ); }
@@ -1422,28 +1405,27 @@ pub unsafe fn clif_pushback(sd: *mut MapSessionData) -> c_int {
 }
 
 /// Respond to a client viewport scroll: update position delta and refresh visible objects.
-/// Replaces `clif_parseviewchange` in `c_src/sl_compat.c` (line 3070).
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_parseviewchange(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parseviewchange(sd: *mut MapSessionData) -> i32 {
     use crate::game::map_parse::chat::clif_sendminitext;
     use crate::game::map_parse::player_state::clif_sendxychange;
 
     let fd = (*sd).fd;
-    let direction = *crate::session::rust_session_rdata_ptr(fd, 5) as c_int;
-    let mut dx = *crate::session::rust_session_rdata_ptr(fd, 6) as c_int;
-    let mut dy = *crate::session::rust_session_rdata_ptr(fd, 7) as c_int;
+    let direction = *crate::session::rust_session_rdata_ptr(fd, 5) as i32;
+    let mut dx = *crate::session::rust_session_rdata_ptr(fd, 6) as i32;
+    let mut dy = *crate::session::rust_session_rdata_ptr(fd, 7) as i32;
     let x0 = u16::from_be_bytes([
         *crate::session::rust_session_rdata_ptr(fd, 8),
         *crate::session::rust_session_rdata_ptr(fd, 9),
-    ]) as c_int;
+    ]) as i32;
     let y0 = u16::from_be_bytes([
         *crate::session::rust_session_rdata_ptr(fd, 10),
         *crate::session::rust_session_rdata_ptr(fd, 11),
-    ]) as c_int;
-    let x1 = *crate::session::rust_session_rdata_ptr(fd, 12) as c_int;
-    let y1 = *crate::session::rust_session_rdata_ptr(fd, 13) as c_int;
+    ]) as i32;
+    let x1 = *crate::session::rust_session_rdata_ptr(fd, 12) as i32;
+    let y1 = *crate::session::rust_session_rdata_ptr(fd, 13) as i32;
 
     if (*sd).status.state == 3 {
         clif_sendminitext(sd, c"You cannot do that while riding a mount.".as_ptr());
@@ -1472,13 +1454,11 @@ pub unsafe fn clif_parseviewchange(sd: *mut MapSessionData) -> c_int {
 
 // ─── Look-at handlers ────────────────────────────────────────────────────────
 //
-// Ported from c_src/sl_compat.c lines 3023–3060.
 
-/// Typed inner function replacing the old variadic `clif_parselookat_sub` callback.
+
 ///
 /// Fires the "onLook" Lua event when player looks at a cell.
 /// Args: `bl` = the object being looked at, `sd` = the looking player.
-/// Replaces `clif_parselookat_sub` in `c_src/sl_compat.c` (line 3023).
 #[cfg(not(test))]
 pub unsafe fn clif_parselookat_sub_inner(bl: *mut BlockList, sd: *mut MapSessionData) -> i32 {
     if bl.is_null() || sd.is_null() { return 0; }
@@ -1487,24 +1467,22 @@ pub unsafe fn clif_parselookat_sub_inner(bl: *mut BlockList, sd: *mut MapSession
 }
 
 /// Dead code stub — body was removed in original C.
-/// Replaces `clif_parselookat_scriptsub` in `c_src/sl_compat.c` (line 3031).
 pub unsafe fn clif_parselookat_scriptsub(
     _sd: *mut MapSessionData,
     _bl: *mut BlockList,
-) -> c_int {
+) -> i32 {
     0
 }
 
 /// Look at the cell directly ahead of the player (based on `side`).
-/// Replaces `clif_parselookat_2` in `c_src/sl_compat.c` (line 3036).
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 #[cfg(not(test))]
-pub unsafe fn clif_parselookat_2(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parselookat_2(sd: *mut MapSessionData) -> i32 {
     use crate::game::mob::BL_ITEM;
-    let mut dx = (*sd).bl.x as c_int;
-    let mut dy = (*sd).bl.y as c_int;
+    let mut dx = (*sd).bl.x as i32;
+    let mut dy = (*sd).bl.y as i32;
     match (*sd).status.side {
         0 => dy -= 1,
         1 => dx += 1,
@@ -1521,22 +1499,21 @@ pub unsafe fn clif_parselookat_2(sd: *mut MapSessionData) -> c_int {
 }
 
 /// Look at a specific map cell (coordinates from packet bytes 5–8).
-/// Replaces `clif_parselookat` in `c_src/sl_compat.c` (line 3054).
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 #[cfg(not(test))]
-pub unsafe fn clif_parselookat(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parselookat(sd: *mut MapSessionData) -> i32 {
     use crate::game::mob::BL_ITEM;
     let fd = (*sd).fd;
     let x = u16::from_be_bytes([
         *crate::session::rust_session_rdata_ptr(fd, 5),
         *crate::session::rust_session_rdata_ptr(fd, 6),
-    ]) as c_int;
+    ]) as i32;
     let y = u16::from_be_bytes([
         *crate::session::rust_session_rdata_ptr(fd, 7),
         *crate::session::rust_session_rdata_ptr(fd, 8),
-    ]) as c_int;
+    ]) as i32;
     let m = (*sd).bl.m as i32;
     foreach_in_cell(m, x, y, BL_PC,   |bl| clif_parselookat_sub_inner(bl, sd));
     foreach_in_cell(m, x, y, BL_MOB,  |bl| clif_parselookat_sub_inner(bl, sd));
@@ -1547,15 +1524,13 @@ pub unsafe fn clif_parselookat(sd: *mut MapSessionData) -> c_int {
 
 // ─── clif_refreshnoclick ─────────────────────────────────────────────────────
 //
-// Ported from c_src/sl_compat.c line 2960.
 
 /// Resync the client's view (areas, chars, objects) after a non-click teleport.
-/// Replaces `clif_refreshnoclick` in `c_src/sl_compat.c` (line 2960).
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 #[cfg(not(test))]
-pub unsafe fn clif_refreshnoclick(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_refreshnoclick(sd: *mut MapSessionData) -> i32 {
     use crate::database::map_db::map;
     use crate::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
     use crate::game::map_parse::player_state::{clif_sendmapinfo, clif_sendxynoclick};
@@ -1608,12 +1583,11 @@ pub unsafe fn clif_refreshnoclick(sd: *mut MapSessionData) -> c_int {
 
 // ─── clif_npc_move_inner ─────────────────────────────────────────────────────
 
-/// Typed inner function replacing the old variadic `clif_npc_move` callback.
+
 ///
 /// Broadcast an NPC position packet to a nearby player.
 /// `bl` is cast to `*mut MapSessionData` (the receiving player).
 /// Builds a 32-byte buffer and calls `clif_send(buf, 32, &nd->bl, AREA_WOS)`.
-/// Replaces `clif_npc_move` in `c_src/sl_compat.c` (line 3913).
 #[cfg(not(test))]
 pub unsafe fn clif_npc_move_inner(bl: *mut BlockList, nd: *mut crate::game::npc::NpcData) -> i32 {
     let sd = bl as *mut MapSessionData;
@@ -1635,11 +1609,10 @@ pub unsafe fn clif_npc_move_inner(bl: *mut BlockList, nd: *mut crate::game::npc:
 
 // ─── clif_mob_move_inner ──────────────────────────────────────────────────────
 
-/// Typed inner function replacing the old variadic `clif_mob_move` callback.
+
 ///
 /// Send a mob-position packet to a player.
 /// `bl` is the viewing player, `mob` is the mob to render.
-/// Replaces `clif_mob_move` in `c_src/sl_compat.c` (line 3938).
 #[cfg(not(test))]
 pub unsafe fn clif_mob_move_inner(bl: *mut BlockList, mob: *mut crate::game::mob::MobSpawnData) -> i32 {
     use crate::game::mob::MOB_DEAD;

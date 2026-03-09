@@ -1,6 +1,6 @@
 //! Visual/status packet builders — Rust port of the `clif_sendupdatestatus` group.
 //!
-//! Ported from `c_src/sl_compat.c` lines 3264–3512.
+
 //! All functions build and send binary status packets to a player's client.
 //!
 //! ## Byte-order convention
@@ -9,7 +9,6 @@
 
 #![allow(non_snake_case)]
 
-use std::os::raw::{c_char, c_float, c_int, c_uint};
 
 use crate::database::{board_db, class_db};
 use crate::session::{
@@ -36,7 +35,6 @@ unsafe fn wb(p: *mut u8, pos: usize, val: u8) {
 
 /// Write a 4-byte big-endian integer at `pos`.
 ///
-/// Mirrors `WFIFOL(fd, pos) = SWAP32(val)`.
 ///
 /// # Safety
 /// Same requirements as `wb`; `pos..pos+4` must lie within the buffer.
@@ -48,7 +46,7 @@ unsafe fn wl_be(p: *mut u8, pos: usize, val: u32) {
 
 /// Write a 4-byte little-endian integer at `pos`.
 ///
-/// Mirrors `WFIFOL(fd, pos) = val` (no SWAP32 in original C).
+/// Write little-endian u32 at `pos` in the send-FIFO.
 ///
 /// # Safety
 /// Same requirements as `wb`; `pos..pos+4` must lie within the buffer.
@@ -60,7 +58,6 @@ unsafe fn wl_le(p: *mut u8, pos: usize, val: u32) {
 
 /// Write a big-endian u16 at `pos` in write buffer `p`.
 ///
-/// Mirrors `WFIFOW(fd, pos) = SWAP16(val)`.
 ///
 /// # Safety
 /// `p` must be a valid write buffer pointer with at least `pos + 2` writable bytes.
@@ -69,25 +66,24 @@ unsafe fn ww_be(p: *mut u8, pos: usize, val: u16) {
     std::ptr::copy_nonoverlapping(val.to_be_bytes().as_ptr(), p.add(pos), 2);
 }
 
-// ─── Exported helpers (declared in c_src/map_parse.h; called from C) ─────────
+// ─── Packet helpers ──────────────────────────────────────────────────────────
 
 /// Returns experience needed to reach the next level (TNL = To Next Level).
 ///
-/// Mirrors `clif_getLevelTNL` in `c_src/sl_compat.c` (line 3319).
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-pub unsafe fn clif_getLevelTNL(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_getLevelTNL(sd: *mut MapSessionData) -> i32 {
     let sd = &*sd;
-    let mut path = sd.status.class as c_int;
-    let level = sd.status.level as c_int;
+    let mut path = sd.status.class as i32;
+    let level = sd.status.level as i32;
 
     if path > 5 {
         path = class_db::path(path);
     }
 
     if level < 99 {
-        class_db::level(path, level) as c_int - sd.status.exp as c_int
+        class_db::level(path, level) as i32 - sd.status.exp as i32
     } else {
         0
     }
@@ -95,34 +91,33 @@ pub unsafe fn clif_getLevelTNL(sd: *mut MapSessionData) -> c_int {
 
 /// Returns the current XP bar fill percentage (0.0–100.0).
 ///
-/// Mirrors `clif_getXPBarPercent` in `c_src/sl_compat.c` (line 3331).
 ///
 /// Mutates `sd->underLevelFlag` as a side effect (faithfully reproduced from C).
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-pub unsafe fn clif_getXPBarPercent(sd: *mut MapSessionData) -> c_float {
+pub unsafe fn clif_getXPBarPercent(sd: *mut MapSessionData) -> f32 {
     let sd = &mut *sd;
 
     // C normalises path twice — the first assignment is overwritten immediately;
     // reproduced faithfully. The `let _ = path` silences the dead-assignment lint.
-    let mut path = sd.status.class as c_int;
+    let mut path = sd.status.class as i32;
     if path > 5 {
         path = class_db::path(path);
     }
     let _ = path; // dead assignment; C re-reads sd->status.class next
 
-    path = sd.status.class as c_int;
-    let level = sd.status.level as c_int;
+    path = sd.status.class as i32;
+    let level = sd.status.level as i32;
     if path > 5 {
         path = class_db::path(path);
     }
 
     if level < 99 {
-        let exp_in_level = class_db::level(path, level) as c_int
-            - class_db::level(path, level - 1) as c_int;
-        let tnl = class_db::level(path, level) as c_int - sd.status.exp as c_int;
-        let percentage = (exp_in_level - tnl) as c_float / exp_in_level as c_float * 100.0;
+        let exp_in_level = class_db::level(path, level) as i32
+            - class_db::level(path, level - 1) as i32;
+        let tnl = class_db::level(path, level) as i32 - sd.status.exp as i32;
+        let percentage = (exp_in_level - tnl) as f32 / exp_in_level as f32 * 100.0;
 
         if sd.underLevelFlag == 0
             && sd.status.exp < class_db::level(path, level - 1)
@@ -135,12 +130,12 @@ pub unsafe fn clif_getXPBarPercent(sd: *mut MapSessionData) -> c_float {
         }
 
         if sd.underLevelFlag != 0 {
-            return sd.status.exp as c_float / class_db::level(path, level) as c_float * 100.0;
+            return sd.status.exp as f32 / class_db::level(path, level) as f32 * 100.0;
         }
 
         percentage
     } else {
-        sd.status.exp as c_float / 4_294_967_295_f32 * 100.0
+        sd.status.exp as f32 / 4_294_967_295_f32 * 100.0
     }
 }
 
@@ -148,11 +143,10 @@ pub unsafe fn clif_getXPBarPercent(sd: *mut MapSessionData) -> c_float {
 
 /// Sends a full HP/MP/EXP/money status update packet.
 ///
-/// Mirrors `clif_sendupdatestatus` in `c_src/sl_compat.c` (line 3264).
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-pub unsafe fn clif_sendupdatestatus(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendupdatestatus(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -196,11 +190,10 @@ pub unsafe fn clif_sendupdatestatus(sd: *mut MapSessionData) -> c_int {
 
 /// Sends a compact status update (EXP, money, XP%, blind/drunk, flags, settingFlags).
 ///
-/// Mirrors `clif_sendupdatestatus2` in `c_src/sl_compat.c` (line 3292).
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-pub unsafe fn clif_sendupdatestatus2(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendupdatestatus2(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -235,7 +228,7 @@ pub unsafe fn clif_sendupdatestatus2(sd: *mut MapSessionData) -> c_int {
     wb(p, 17, 0x00);
     wb(p, 18, 0x00);
     wb(p, 19, 0x00);
-    // sd->flags is c_ulong (64-bit on Linux x86-64); C WFIFOB truncates to low byte.
+    // sd->flags is u64 (64-bit on Linux x86-64); C WFIFOB truncates to low byte.
     wb(p, 20, sd.flags as u8);
     wb(p, 21, 0x01);
     wl_be(p, 22, sd.status.setting_flags as u32);
@@ -247,16 +240,15 @@ pub unsafe fn clif_sendupdatestatus2(sd: *mut MapSessionData) -> c_int {
 
 /// Sends a status update after a kill (EXP, money, XP%, settingFlags, TNL, armor/dam/hit).
 ///
-/// Mirrors `clif_sendupdatestatus_onkill` in `c_src/sl_compat.c` (line 3365).
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-pub unsafe fn clif_sendupdatestatus_onkill(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendupdatestatus_onkill(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() {
         return 0;
     }
 
-    // Compute before taking the shared ref — mirrors C's ordering (nullpo_ret comes after).
+    // Compute before taking the shared ref.
     let tnl = clif_getLevelTNL(sd);
     let percentage = clif_getXPBarPercent(sd);
 
@@ -288,7 +280,7 @@ pub unsafe fn clif_sendupdatestatus_onkill(sd: *mut MapSessionData) -> c_int {
     wb(p, 17, 0);
     wb(p, 18, 0);
     wb(p, 19, 0);
-    // sd->flags is c_ulong (64-bit on Linux x86-64); C WFIFOB truncates to low byte.
+    // sd->flags is u64 (64-bit on Linux x86-64); C WFIFOB truncates to low byte.
     wb(p, 20, sdr.flags as u8);
     wb(p, 21, 0);
     wl_be(p, 22, sdr.status.setting_flags as u32);
@@ -304,11 +296,10 @@ pub unsafe fn clif_sendupdatestatus_onkill(sd: *mut MapSessionData) -> c_int {
 
 /// Sends a full status update after equipping an item (all stats, XP, TNL, combat stats).
 ///
-/// Mirrors `clif_sendupdatestatus_onequip` in `c_src/sl_compat.c` (line 3401).
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-pub unsafe fn clif_sendupdatestatus_onequip(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendupdatestatus_onequip(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -367,7 +358,7 @@ pub unsafe fn clif_sendupdatestatus_onequip(sd: *mut MapSessionData) -> c_int {
     wb(p, 46, 0x00);
     wb(p, 47, 0x00);
     wb(p, 48, 0x00);
-    // sd->flags is c_ulong (64-bit on Linux x86-64); C WFIFOB truncates to low byte.
+    // sd->flags is u64 (64-bit on Linux x86-64); C WFIFOB truncates to low byte.
     wb(p, 49, sdr.flags as u8);
     wb(p, 50, 0x00);
     wl_be(p, 51, sdr.status.setting_flags as u32);
@@ -383,14 +374,13 @@ pub unsafe fn clif_sendupdatestatus_onequip(sd: *mut MapSessionData) -> c_int {
 
 /// Sends a status update after unequipping an item (HP/MP + armor + XP + TNL).
 ///
-/// Mirrors `clif_sendupdatestatus_onunequip` in `c_src/sl_compat.c` (line 3460).
 ///
 /// HP (offset 11) and MP (offset 15) use **little-endian** byte order — the C code
 /// writes them without SWAP32. TNL at offset 50 is also little-endian.
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-pub unsafe fn clif_sendupdatestatus_onunequip(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendupdatestatus_onunequip(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -450,7 +440,7 @@ pub unsafe fn clif_sendupdatestatus_onunequip(sd: *mut MapSessionData) -> c_int 
     wb(p, 46, 0x00);
     wb(p, 47, 0x00);
     wb(p, 48, 0x00);
-    // sd->flags is c_ulong (64-bit on Linux x86-64); C WFIFOB truncates to low byte.
+    // sd->flags is u64 (64-bit on Linux x86-64); C WFIFOB truncates to low byte.
     wb(p, 49, sdr.flags as u8);
     // No SWAP32 in C → little-endian store.
     wl_le(p, 50, tnl as u32);
@@ -464,14 +454,12 @@ pub unsafe fn clif_sendupdatestatus_onunequip(sd: *mut MapSessionData) -> c_int 
 
 /// Clears AFK state on the player session.
 ///
-/// Mirrors `clif_cancelafk` in `c_src/sl_compat.c` (line 4752).
 /// Sets `sd->afktime = 0` and `sd->afk = 0`. No packet is sent.
 ///
-/// Declared in `c_src/map_parse.h` line 217.
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-pub unsafe fn clif_cancelafk(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_cancelafk(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -483,14 +471,12 @@ pub unsafe fn clif_cancelafk(sd: *mut MapSessionData) -> c_int {
 
 /// Sends a "destroy old objects" packet (opcode 0x58) to the client.
 ///
-/// Mirrors `clif_destroyold` in `c_src/sl_compat.c` (line 3206).
 /// Fixed 6-byte packet (3-byte header + 3-byte payload).
 ///
-/// Declared in `c_src/map_parse.h` line 159.
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-pub unsafe fn clif_destroyold(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_destroyold(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -522,25 +508,24 @@ pub unsafe fn clif_destroyold(sd: *mut MapSessionData) -> c_int {
 
 /// Maps an equipment slot ID to a map-message number.
 ///
-/// Mirrors `clif_mapmsgnum` in `c_src/sl_compat.c` (line 3184).
 /// Pure switch/case — no packet is sent. Returns `-1` for unknown slot IDs.
 ///
-/// EQ_ slot enum values (from `c_src/item_db.h`, 0-based):
+/// EQ_ slot enum values (0-based):
 /// EQ_WEAP=0, EQ_ARMOR=1, EQ_SHIELD=2, EQ_HELM=3, EQ_LEFT=4, EQ_RIGHT=5,
 /// EQ_SUBLEFT=6, EQ_SUBRIGHT=7, EQ_FACEACC=8, EQ_CROWN=9,
 /// EQ_MANTLE=10, EQ_NECKLACE=11, EQ_BOOTS=12, EQ_COAT=13.
 /// EQ_FACEACCTWO=14 exists in `item_db.h` but is not handled by this function
 /// (falls through to return -1), consistent with the C original.
 ///
-/// MAP_EQ* enum values (from `c_src/map_server.h`, starts at MAP_EQHELM=13):
+/// MAP_EQ* enum values:
 /// MAP_EQHELM=13, MAP_EQWEAP=14, MAP_EQARMOR=15, MAP_EQSHIELD=16,
 /// MAP_EQLEFT=17, MAP_EQRIGHT=18, MAP_EQSUBLEFT=19, MAP_EQSUBRIGHT=20,
 /// MAP_EQFACEACC=21, MAP_EQCROWN=22, MAP_EQMANTLE=23, MAP_EQNECKLACE=24,
 /// MAP_EQBOOTS=25, MAP_EQCOAT=26.
 ///
 /// # Safety
-/// `_sd` is unused but present for ABI compatibility with C callers.
-pub unsafe fn clif_mapmsgnum(_sd: *mut MapSessionData, id: c_int) -> c_int {
+/// `_sd` is unused.
+pub unsafe fn clif_mapmsgnum(_sd: *mut MapSessionData, id: i32) -> i32 {
     match id {
         3  => 13, // EQ_HELM=3     → MAP_EQHELM=13
         0  => 14, // EQ_WEAP=0     → MAP_EQWEAP=14
@@ -562,7 +547,6 @@ pub unsafe fn clif_mapmsgnum(_sd: *mut MapSessionData, id: c_int) -> c_int {
 
 /// Sends a popup message packet (opcode 0x0A) to the client.
 ///
-/// Mirrors `clif_popup` in `c_src/sl_compat.c` (line 2497).
 ///
 /// Packet layout (total = `str_len + 8`):
 /// ```text
@@ -570,12 +554,11 @@ pub unsafe fn clif_mapmsgnum(_sd: *mut MapSessionData, id: c_int) -> c_int {
 /// ```
 /// where the length field = `str_len + 5`.
 ///
-/// Declared in `c_src/map_parse.h` line 75.
 ///
 /// # Safety
 /// - `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 /// - `buf` must be a valid, null-terminated C string.
-pub unsafe fn clif_popup(sd: *mut MapSessionData, buf: *const c_char) -> c_int {
+pub unsafe fn clif_popup(sd: *mut MapSessionData, buf: *const i8) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -615,7 +598,6 @@ pub unsafe fn clif_popup(sd: *mut MapSessionData, buf: *const c_char) -> c_int {
 
 /// Sends the profile page URL to the client (opcode 0x62, subtype 0x04).
 ///
-/// Mirrors `clif_sendprofile` in `c_src/sl_compat.c` (line 2378).
 /// Hardcoded URL: `"https://www.website.com/users"` (29 bytes).
 ///
 /// Packet layout:
@@ -624,11 +606,10 @@ pub unsafe fn clif_popup(sd: *mut MapSessionData, buf: *const c_char) -> c_int {
 /// ```
 /// where `len = url_len + 7`.
 ///
-/// Previously declared as `extern "C"` in `src/game/client/mod.rs`; now a Rust impl.
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-pub unsafe fn clif_sendprofile(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendprofile(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -667,17 +648,15 @@ pub unsafe fn clif_sendprofile(sd: *mut MapSessionData) -> c_int {
 
 /// Sends the board page URLs to the client (opcode 0x62, subtype 0x00).
 ///
-/// Mirrors `clif_sendboard` in `c_src/sl_compat.c` (line 2397).
 /// Three hardcoded URLs packed sequentially, each preceded by a length byte:
 /// - url1: `"https://www.website.com/boards"` (30 bytes)
 /// - url2: `"https://www.website.com/boards"` (30 bytes)
 /// - url3: `"?abc123"` (7 bytes)
 ///
-/// Previously declared as `extern "C"` in `src/game/client/mod.rs`; now a Rust impl.
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-pub unsafe fn clif_sendboard(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendboard(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -722,10 +701,9 @@ pub unsafe fn clif_sendboard(sd: *mut MapSessionData) -> c_int {
 
 /// Maps an equipment slot ID to its item-type integer.
 ///
-/// Mirrors `clif_getequiptype` in `c_src/sl_compat.c` (line 2697).
 /// Pure switch/case — no packet is sent. Returns `0` for unknown slot IDs.
 ///
-/// EQ_ slot enum values (0-based, from `c_src/item_db.h`):
+/// EQ_ slot enum values (0-based):
 /// EQ_WEAP=0, EQ_ARMOR=1, EQ_SHIELD=2, EQ_HELM=3, EQ_LEFT=4, EQ_RIGHT=5,
 /// EQ_SUBLEFT=6, EQ_SUBRIGHT=7, EQ_FACEACC=8, EQ_CROWN=9,
 /// EQ_MANTLE=10, EQ_NECKLACE=11, EQ_BOOTS=12, EQ_COAT=13.
@@ -733,7 +711,7 @@ pub unsafe fn clif_sendboard(sd: *mut MapSessionData) -> c_int {
 ///
 /// # Safety
 /// No pointer dereferences — this function is pure.
-pub unsafe fn clif_getequiptype(val: c_int) -> c_int {
+pub unsafe fn clif_getequiptype(val: i32) -> i32 {
     match val {
         0  => 1,  // EQ_WEAP=0      → type 1
         1  => 2,  // EQ_ARMOR=1     → type 2
@@ -755,35 +733,30 @@ pub unsafe fn clif_getequiptype(val: c_int) -> c_int {
 
 /// Returns the item area for a player session (stub — always returns 0).
 ///
-/// Mirrors `clif_getitemarea` in `c_src/sl_compat.c` (line 2827).
-/// Declared in `c_src/map_parse.h` line 111.
 ///
 /// # Safety
 /// `_sd` is unused; safe to call with any pointer (including null).
 pub unsafe fn clif_getitemarea(
     _sd: *mut crate::game::pc::MapSessionData,
-) -> c_int {
+) -> i32 {
     0
 }
 
 /// Returns the XP required to reach the given level.
 ///
-/// Mirrors `clif_getlvlxp` in `c_src/sl_compat.c` (line 2807).
 /// Formula: `(level / 0.2)^2` rounded to nearest integer.
 ///
 /// C original: `pow((level / 0.2), 2)` cast from `float + 0.5` to `unsigned int`.
 ///
 /// # Safety
 /// Pure math function — no pointer dereferences.
-pub unsafe fn clif_getlvlxp(level: c_int) -> c_uint {
+pub unsafe fn clif_getlvlxp(level: i32) -> u32 {
     let xp = (level as f64 / 0.2_f64).powi(2);
-    (xp + 0.5) as c_uint
+    (xp + 0.5) as u32
 }
 
 /// Sends the current map weather to the client (opcode 0x1F).
 ///
-/// Mirrors `clif_sendweather` in `c_src/sl_compat.c` (line 2831).
-/// Declared in `c_src/map_parse.h` line 76.
 ///
 /// Packet layout (6 bytes total):
 /// ```text
@@ -794,14 +767,14 @@ pub unsafe fn clif_getlvlxp(level: c_int) -> c_uint {
 ///
 /// The weather byte is taken from `map[sd->bl.m].weather` only when
 /// `sd->status.setting_flags & FLAG_WEATHER` is set; otherwise 0.
-/// `FLAG_WEATHER = 32` (bit 5) from `c_src/mmo.h` line 45.
+/// `FLAG_WEATHER = 32` (bit 5).
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 /// `crate::database::map_db::map` must be initialised before calling this function.
 pub unsafe fn clif_sendweather(
     sd: *mut crate::game::pc::MapSessionData,
-) -> c_int {
+) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -851,8 +824,6 @@ pub unsafe fn clif_sendweather(
 
 /// Returns whether a ghost player (`tsd`) should be visible to `sd`.
 ///
-/// Mirrors `clif_show_ghost` in `c_src/sl_compat.c` (line 2813).
-/// Declared in `c_src/map_parse.h` line 59.
 ///
 /// Logic:
 /// - GMs (`sd->status.gm_level != 0`) always see ghosts → 1.
@@ -860,7 +831,7 @@ pub unsafe fn clif_sendweather(
 /// - If `tsd->status.state != 1` (tsd is not a ghost) → 1.
 /// - If `sd->bl.id == tsd->bl.id` (same entity) → 1.
 /// - On PvP maps: 1 only if `sd->status.state == 1` AND `sd->optFlags & 256`
-///   (`optFlag_ghosts = 256`, from `c_src/map_server.h` line 34).
+
 /// - On non-PvP maps: always 1.
 ///
 /// # Safety
@@ -869,7 +840,7 @@ pub unsafe fn clif_sendweather(
 pub unsafe fn clif_show_ghost(
     sd: *mut crate::game::pc::MapSessionData,
     tsd: *mut crate::game::pc::MapSessionData,
-) -> c_int {
+) -> i32 {
     if sd.is_null() || tsd.is_null() {
         return 1;
     }
@@ -892,7 +863,7 @@ pub unsafe fn clif_show_ghost(
     }
 
     if map_slot.pvp != 0 {
-        // optFlag_ghosts = 256 (map_server.h line 34). optFlags is c_ulong (64-bit on Linux).
+        // optFlag_ghosts = 256 (map_server.h line 34). optFlags is u64 (64-bit on Linux).
         const OPT_FLAG_GHOSTS: u64 = 256;
         if sdr.status.state == 1 && (sdr.optFlags as u64 & OPT_FLAG_GHOSTS) != 0 {
             1
@@ -906,7 +877,6 @@ pub unsafe fn clif_show_ghost(
 
 /// Sends a user-list notification to the char server for this player.
 ///
-/// Mirrors `clif_user_list` in `c_src/sl_compat.c` (line 2781).
 ///
 /// Sends a 4-byte little-endian packet to `char_fd`:
 /// ```text
@@ -919,7 +889,7 @@ pub unsafe fn clif_show_ghost(
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 pub unsafe fn clif_user_list(
     sd: *mut crate::game::pc::MapSessionData,
-) -> c_int {
+) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -952,14 +922,13 @@ pub unsafe fn clif_user_list(
 
 /// Logs a hex dump of a byte buffer for debugging.
 ///
-/// Mirrors `clif_debug` in `c_src/sl_compat.c` (line 2766).
 /// The C original uses `printf` to print two lines: hex bytes and printable chars.
 /// This port emits a single `tracing::debug!` line with all hex-formatted bytes.
 ///
 /// # Safety
 /// `data` must be a valid pointer to at least `len` readable bytes, or null.
 /// If `data` is null or `len <= 0`, this function is a no-op.
-pub unsafe fn clif_debug(data: *const u8, len: c_int) -> c_int {
+pub unsafe fn clif_debug(data: *const u8, len: i32) -> i32 {
     if data.is_null() || len <= 0 {
         return 0;
     }
@@ -973,8 +942,6 @@ pub unsafe fn clif_debug(data: *const u8, len: c_int) -> c_int {
 
 /// Sends a URL packet (opcode 0x66, subtype 0x03) to the client.
 ///
-/// Mirrors `clif_sendurl` in `c_src/sl_compat.c` (line 2363).
-/// Declared in `c_src/map_parse.h` line 30.
 ///
 /// Packet layout (total = `url_len + 11`):
 /// ```text
@@ -988,9 +955,9 @@ pub unsafe fn clif_debug(data: *const u8, len: c_int) -> c_int {
 /// - `url` must be a valid, null-terminated C string.
 pub unsafe fn clif_sendurl(
     sd: *mut MapSessionData,
-    ty: c_int,
-    url: *const c_char,
-) -> c_int {
+    ty: i32,
+    url: *const i8,
+) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -1032,8 +999,6 @@ pub unsafe fn clif_sendurl(
 
 /// Logs a connection timeout and marks the session for closure.
 ///
-/// Mirrors `clif_timeout` in `c_src/sl_compat.c` (line 2431).
-/// Declared in `c_src/map_parse.h` line 121.
 ///
 /// Guard checks (matching C source):
 /// - If `fd == char_fd` → return 0 (never time out the char-server link).
@@ -1047,7 +1012,7 @@ pub unsafe fn clif_sendurl(
 /// # Safety
 /// Safe to call with any fd value. No struct dereferences occur before `sd_ptr` is
 /// verified non-null. All pointer dereferences follow their respective null checks.
-pub unsafe fn clif_timeout(fd: c_int) -> c_int {
+pub unsafe fn clif_timeout(fd: i32) -> i32 {
     if fd == crate::game::map_server::char_fd.load(std::sync::atomic::Ordering::Relaxed) {
         return 0;
     }
@@ -1058,7 +1023,7 @@ pub unsafe fn clif_timeout(fd: c_int) -> c_int {
         return 0;
     }
 
-    // Mirrors `if (!rust_session_get_data(fd)) rust_session_set_eof(fd, 12);`
+    // Disconnect if the session is gone.
     // in C — set eof then fall through to the nullpo_ret which returns 0.
     let sd_ptr = rust_session_get_data(fd) as *mut MapSessionData;
     if sd_ptr.is_null() {
@@ -1076,7 +1041,7 @@ pub unsafe fn clif_timeout(fd: c_int) -> c_int {
     let d = (raw_ip >> 24) & 0xff;
 
     // sd->status.name is [i8; 16] — interior pointer from a fixed array, never null.
-    let name_display = std::ffi::CStr::from_ptr(sdr.status.name.as_ptr() as *const c_char)
+    let name_display = std::ffi::CStr::from_ptr(sdr.status.name.as_ptr() as *const i8)
         .to_string_lossy()
         .into_owned();
 
@@ -1090,8 +1055,6 @@ pub unsafe fn clif_timeout(fd: c_int) -> c_int {
 
 /// Sends a paper-popup display packet (opcode 0x35) to the client.
 ///
-/// Mirrors `clif_paperpopup` in `c_src/sl_compat.c` (line 2456).
-/// Declared in `c_src/map_parse.h` line 263.
 ///
 /// Packet layout (total = `str_len + 14`):
 /// ```text
@@ -1105,10 +1068,10 @@ pub unsafe fn clif_timeout(fd: c_int) -> c_int {
 /// - `buf` must be a valid, null-terminated C string.
 pub unsafe fn clif_paperpopup(
     sd: *mut MapSessionData,
-    buf: *const c_char,
-    width: c_int,
-    height: c_int,
-) -> c_int {
+    buf: *const i8,
+    width: i32,
+    height: i32,
+) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -1150,8 +1113,6 @@ pub unsafe fn clif_paperpopup(
 
 /// Sends a paper-popup write packet (opcode 0x1B) to the client.
 ///
-/// Mirrors `clif_paperpopupwrite` in `c_src/sl_compat.c` (line 2476).
-/// Declared in `c_src/map_parse.h` line 261.
 ///
 /// Identical layout to [`clif_paperpopup`] except:
 /// - opcode at byte 3 is `0x1B` instead of `0x35`.
@@ -1163,11 +1124,11 @@ pub unsafe fn clif_paperpopup(
 /// - `buf` must be a valid, null-terminated C string.
 pub unsafe fn clif_paperpopupwrite(
     sd: *mut MapSessionData,
-    buf: *const c_char,
-    width: c_int,
-    height: c_int,
-    invslot: c_int,
-) -> c_int {
+    buf: *const i8,
+    width: i32,
+    height: i32,
+    invslot: i32,
+) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -1208,8 +1169,6 @@ pub unsafe fn clif_paperpopupwrite(
 
 /// Sends a fixed 7-byte test packet (opcode 0x63) with a per-call incrementing counter.
 ///
-/// Mirrors `clif_sendtest` in `c_src/sl_compat.c` (line 3575).
-/// Declared in `c_src/map_parse.h` line 70.
 ///
 /// The C original uses a `static int number` that increments after each send.
 /// This port uses `static mut SENDTEST_NUMBER: u8` with wrapping arithmetic.
@@ -1223,7 +1182,7 @@ pub unsafe fn clif_paperpopupwrite(
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-pub unsafe fn clif_sendtest(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendtest(sd: *mut MapSessionData) -> i32 {
     static mut SENDTEST_NUMBER: u8 = 0;
 
     if sd.is_null() {
@@ -1260,16 +1219,13 @@ pub unsafe fn clif_sendtest(sd: *mut MapSessionData) -> c_int {
 
 /// Logs the disconnect reason for a session and returns.
 ///
-/// Mirrors `clif_print_disconnect` in `c_src/sl_compat.c` (line 3418).
-/// Declared in `c_src/map_parse.h` (searched but not found there; declared as
-/// `extern "C"` in `src/game/client/mod.rs` prior to this port).
 ///
 /// Returns early (0) when eof == 4 (`ZERO_RECV_ERROR/NORMAL`) — the C source
 /// also returns early in that case without printing.
 ///
 /// # Safety
 /// No pointer dereferences — reads only the eof flag via `rust_session_get_eof`.
-pub unsafe fn clif_print_disconnect(fd: c_int) -> c_int {
+pub unsafe fn clif_print_disconnect(fd: i32) -> i32 {
     let eof = rust_session_get_eof(fd);
     if eof == 4 {
         return 0;
@@ -1301,9 +1257,7 @@ pub unsafe fn clif_print_disconnect(fd: c_int) -> c_int {
 
 /// Saves the player's paper-popup note text for the given inventory slot.
 ///
-/// Mirrors `clif_paperpopupwrite_save` in `c_src/sl_compat.c` (line 2431).
-/// Not declared in `map_parse.h`; declared in `c_src/sl_compat.c` only.
-///
+////
 /// Packet layout (incoming):
 /// ```text
 /// [... header ...][slot byte @ 5][copy_len_hi @ 6][copy_len_lo @ 7][... note @ 8 ...]
@@ -1318,7 +1272,7 @@ pub unsafe fn clif_print_disconnect(fd: c_int) -> c_int {
 /// - `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 /// - The caller must have validated that `RFIFOREST(fd) >= 8 + copy_len` before calling,
 ///   matching the C original's requirement.
-pub unsafe fn clif_paperpopupwrite_save(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_paperpopupwrite_save(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -1351,11 +1305,11 @@ pub unsafe fn clif_paperpopupwrite_save(sd: *mut MapSessionData) -> c_int {
     let src = rdata.add(8) as *const i8;
     // SAFETY: copy_len ≤ 300; src points into session rdata (valid for the packet duration).
     std::ptr::copy_nonoverlapping(src, input.as_mut_ptr(), copy_len);
-    // Remaining bytes stay zero — mirrors C's memset(input, 0, 300) + memcpy.
+    // Remaining bytes stay zero.
 
     let note = &(*sd).status.inventory[slot].note;
 
-    // Only update if the note actually changed (mirrors C's strcmp guard).
+    // Only update if the note actually changed.
     if *note != input {
         std::ptr::copy_nonoverlapping(input.as_ptr(), (*sd).status.inventory[slot].note.as_mut_ptr(), 300);
     }
@@ -1364,9 +1318,7 @@ pub unsafe fn clif_paperpopupwrite_save(sd: *mut MapSessionData) -> c_int {
 
 /// Reads a new profile picture and profile text from the incoming packet.
 ///
-/// Mirrors `clif_changeprofile` in `c_src/sl_compat.c` (line 3189).
-/// Not declared in `map_parse.h`; declared in `c_src/sl_compat.c` only.
-///
+////
 /// Packet layout (incoming):
 /// ```text
 /// [... header ...][pic_len_hi @ 5][pic_len_lo @ 6][...pic bytes (profilepic_size bytes)...]
@@ -1382,7 +1334,7 @@ pub unsafe fn clif_paperpopupwrite_save(sd: *mut MapSessionData) -> c_int {
 /// - `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 /// - The caller must have validated that `RFIFOREST(fd) >= 5 + profilepic_size + 1 + profile_size`
 ///   before calling, matching the C original's requirement.
-pub unsafe fn clif_changeprofile(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_changeprofile(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -1433,7 +1385,6 @@ pub unsafe fn clif_changeprofile(sd: *mut MapSessionData) -> c_int {
 /// Validates that the byte immediately following the current packet is a valid
 /// framing byte (`0xAA`). Sets eof=1 and returns 1 if the framing is wrong.
 ///
-/// Mirrors `check_packet_size` in `c_src/sl_compat.c` (line 3197).
 /// Not declared in any `.h` file.
 ///
 /// Logic:
@@ -1443,7 +1394,7 @@ pub unsafe fn clif_changeprofile(sd: *mut MapSessionData) -> c_int {
 ///
 /// # Safety
 /// Pure fd-based — no struct dereferences.
-pub unsafe fn check_packet_size(fd: c_int, len: c_int) -> c_int {
+pub unsafe fn check_packet_size(fd: i32, len: i32) -> i32 {
     if len < 0 {
         return 0;
     }
@@ -1468,7 +1419,6 @@ pub unsafe fn check_packet_size(fd: c_int, len: c_int) -> c_int {
 
 /// Broadcasts a mob's facing direction to all nearby players (area, excluding self).
 ///
-/// Mirrors `clif_sendmob_side` in `c_src/sl_compat.c` (line 2887).
 /// Builds a 16-byte local buffer and sends it via `clif_send` with `AREA_WOS = 5`.
 ///
 /// Packet layout (16 bytes):
@@ -1480,7 +1430,7 @@ pub unsafe fn check_packet_size(fd: c_int, len: c_int) -> c_int {
 ///
 /// # Safety
 /// `mob` must be a valid, non-null pointer to an initialised [`MobSpawnData`].
-pub unsafe fn clif_sendmob_side(mob: *mut crate::game::mob::MobSpawnData) -> c_int {
+pub unsafe fn clif_sendmob_side(mob: *mut crate::game::mob::MobSpawnData) -> i32 {
     if mob.is_null() {
         return 0;
     }
@@ -1497,7 +1447,7 @@ pub unsafe fn clif_sendmob_side(mob: *mut crate::game::mob::MobSpawnData) -> c_i
     // WBUFL(buf, 5) = SWAP32(mob->bl.id) — big-endian mob id.
     let id_be = (mob.bl.id as u32).to_be_bytes();
     buf[5..9].copy_from_slice(&id_be);
-    // WBUFB(buf, 9) = mob->side — cast from c_int to u8.
+    // WBUFB(buf, 9) = mob->side — cast from i32 to u8.
     buf[9] = mob.side as u8;
 
     // clif_send(buf, 16, &mob->bl, AREA_WOS=5)
@@ -1515,7 +1465,7 @@ use crate::game::pc::{
 };
 use crate::game::block::{foreach_in_area, AreaType};
 
-// optFlag_ghosts = 256 (c_src/map_server.h line 34). optFlags is c_ulong (64-bit on Linux).
+// optFlag_ghosts = 256 (bit 8 of optFlags).
 const OPT_FLAG_GHOSTS: u64 = 256;
 
 // Direct Rust imports (with _us suffix aliases to avoid name conflicts)
@@ -1530,7 +1480,6 @@ use crate::game::pc::rust_pc_isequip as pc_isequip_us;
 /// In C terms: `sd` = `va_arg(ap, USER*)` (the player whose state is sent),
 /// `src_sd` = `(USER*)bl` (the viewer who receives the packet).
 ///
-/// Mirrors the body of `clif_updatestate` from `c_src/sl_compat.c` (line 648).
 ///
 /// # Safety
 /// Both `sd` and `src_sd` must be valid, non-null `MapSessionData` pointers.
@@ -1566,7 +1515,7 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
         ww_be(p, 12, sd_r.disguise.wrapping_add(32768));
         wb(p, 14, sd_r.disguise_color as u8);
 
-        let name_ptr = sd_r.status.name.as_ptr() as *const std::os::raw::c_char;
+        let name_ptr = sd_r.status.name.as_ptr() as *const i8;
         let name_len = libc::strlen(name_ptr);
 
         wb(p, 16, name_len as u8);
@@ -1634,22 +1583,22 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             if sd_r.status.equip[EQ_ARMOR as usize].custom_look != 0 {
                 ww_be(p, 21, sd_r.status.equip[EQ_ARMOR as usize].custom_look as u16);
             } else {
-                ww_be(p, 21, itemdb_look_us(pc_isequip_us(sd, EQ_ARMOR) as c_uint) as u16);
+                ww_be(p, 21, itemdb_look_us(pc_isequip_us(sd, EQ_ARMOR) as u32) as u16);
             }
             if sd_r.status.armor_color > 0 {
                 wb(p, 23, sd_r.status.armor_color as u8);
             } else if sd_r.status.equip[EQ_ARMOR as usize].custom_look != 0 {
                 wb(p, 23, sd_r.status.equip[EQ_ARMOR as usize].custom_look_color as u8);
             } else {
-                wb(p, 23, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_ARMOR) as c_uint) as u8);
+                wb(p, 23, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_ARMOR) as u32) as u8);
             }
         }
         if pc_isequip_us(sd, EQ_COAT) != 0 {
-            ww_be(p, 21, itemdb_look_us(pc_isequip_us(sd, EQ_COAT) as c_uint) as u16);
+            ww_be(p, 21, itemdb_look_us(pc_isequip_us(sd, EQ_COAT) as u32) as u16);
             if sd_r.status.armor_color > 0 {
                 wb(p, 23, sd_r.status.armor_color as u8);
             } else {
-                wb(p, 23, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_COAT) as c_uint) as u8);
+                wb(p, 23, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_COAT) as u32) as u8);
             }
         }
 
@@ -1661,8 +1610,8 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             ww_be(p, 24, sd_r.status.equip[EQ_WEAP as usize].custom_look as u16);
             wb(p, 26, sd_r.status.equip[EQ_WEAP as usize].custom_look_color as u8);
         } else {
-            ww_be(p, 24, itemdb_look_us(pc_isequip_us(sd, EQ_WEAP) as c_uint) as u16);
-            wb(p, 26, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_WEAP) as c_uint) as u8);
+            ww_be(p, 24, itemdb_look_us(pc_isequip_us(sd, EQ_WEAP) as u32) as u16);
+            wb(p, 26, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_WEAP) as u32) as u8);
         }
 
         // shield  (offsets 27–29)
@@ -1673,14 +1622,14 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             ww_be(p, 27, sd_r.status.equip[EQ_SHIELD as usize].custom_look as u16);
             wb(p, 29, sd_r.status.equip[EQ_SHIELD as usize].custom_look_color as u8);
         } else {
-            ww_be(p, 27, itemdb_look_us(pc_isequip_us(sd, EQ_SHIELD) as c_uint) as u16);
-            wb(p, 29, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_SHIELD) as c_uint) as u8);
+            ww_be(p, 27, itemdb_look_us(pc_isequip_us(sd, EQ_SHIELD) as u32) as u16);
+            wb(p, 29, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_SHIELD) as u32) as u8);
         }
 
         // helm  (offsets 30–32)
         if pc_isequip_us(sd, EQ_HELM) == 0
             || (sd_r.status.setting_flags & FLAG_HELM as u16) == 0
-            || itemdb_look_us(pc_isequip_us(sd, EQ_HELM) as c_uint) == -1
+            || itemdb_look_us(pc_isequip_us(sd, EQ_HELM) as u32) == -1
         {
             wb(p, 30, 0);
             ww_be(p, 31, 0xFFFF);
@@ -1690,8 +1639,8 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
                 wb(p, 31, sd_r.status.equip[EQ_HELM as usize].custom_look as u8);
                 wb(p, 32, sd_r.status.equip[EQ_HELM as usize].custom_look_color as u8);
             } else {
-                wb(p, 31, itemdb_look_us(pc_isequip_us(sd, EQ_HELM) as c_uint) as u8);
-                wb(p, 32, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_HELM) as c_uint) as u8);
+                wb(p, 31, itemdb_look_us(pc_isequip_us(sd, EQ_HELM) as u32) as u8);
+                wb(p, 32, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_HELM) as u32) as u8);
             }
         }
 
@@ -1700,8 +1649,8 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             ww_be(p, 33, 0xFFFF);
             wb(p, 35, 0x0);
         } else {
-            ww_be(p, 33, itemdb_look_us(pc_isequip_us(sd, EQ_FACEACC) as c_uint) as u16);
-            wb(p, 35, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_FACEACC) as c_uint) as u8);
+            ww_be(p, 33, itemdb_look_us(pc_isequip_us(sd, EQ_FACEACC) as u32) as u16);
+            wb(p, 35, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_FACEACC) as u32) as u8);
         }
 
         // crown  (offsets 36–38; also writes byte 30)
@@ -1714,8 +1663,8 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
                 ww_be(p, 36, sd_r.status.equip[EQ_CROWN as usize].custom_look as u16);
                 wb(p, 38, sd_r.status.equip[EQ_CROWN as usize].custom_look_color as u8);
             } else {
-                ww_be(p, 36, itemdb_look_us(pc_isequip_us(sd, EQ_CROWN) as c_uint) as u16);
-                wb(p, 38, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_CROWN) as c_uint) as u8);
+                ww_be(p, 36, itemdb_look_us(pc_isequip_us(sd, EQ_CROWN) as u32) as u16);
+                wb(p, 38, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_CROWN) as u32) as u8);
             }
         }
 
@@ -1724,8 +1673,8 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             ww_be(p, 39, 0xFFFF);
             wb(p, 41, 0x0);
         } else {
-            ww_be(p, 39, itemdb_look_us(pc_isequip_us(sd, EQ_FACEACCTWO) as c_uint) as u16);
-            wb(p, 41, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_FACEACCTWO) as c_uint) as u8);
+            ww_be(p, 39, itemdb_look_us(pc_isequip_us(sd, EQ_FACEACCTWO) as u32) as u16);
+            wb(p, 41, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_FACEACCTWO) as u32) as u8);
         }
 
         // mantle  (offsets 42–44)
@@ -1733,20 +1682,20 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             ww_be(p, 42, 0xFFFF);
             wb(p, 44, 0xFF);
         } else {
-            ww_be(p, 42, itemdb_look_us(pc_isequip_us(sd, EQ_MANTLE) as c_uint) as u16);
-            wb(p, 44, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_MANTLE) as c_uint) as u8);
+            ww_be(p, 42, itemdb_look_us(pc_isequip_us(sd, EQ_MANTLE) as u32) as u16);
+            wb(p, 44, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_MANTLE) as u32) as u8);
         }
 
         // necklace  (offsets 45–47)
         if pc_isequip_us(sd, EQ_NECKLACE) == 0
             || (sd_r.status.setting_flags & FLAG_NECKLACE as u16) == 0
-            || itemdb_look_us(pc_isequip_us(sd, EQ_NECKLACE) as c_uint) == -1
+            || itemdb_look_us(pc_isequip_us(sd, EQ_NECKLACE) as u32) == -1
         {
             ww_be(p, 45, 0xFFFF);
             wb(p, 47, 0x0);
         } else {
-            ww_be(p, 45, itemdb_look_us(pc_isequip_us(sd, EQ_NECKLACE) as c_uint) as u16);
-            wb(p, 47, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_NECKLACE) as c_uint) as u8);
+            ww_be(p, 45, itemdb_look_us(pc_isequip_us(sd, EQ_NECKLACE) as u32) as u16);
+            wb(p, 47, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_NECKLACE) as u32) as u8);
         }
 
         // boots  (offsets 48–50)
@@ -1757,8 +1706,8 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             ww_be(p, 48, sd_r.status.equip[EQ_BOOTS as usize].custom_look as u16);
             wb(p, 50, sd_r.status.equip[EQ_BOOTS as usize].custom_look_color as u8);
         } else {
-            ww_be(p, 48, itemdb_look_us(pc_isequip_us(sd, EQ_BOOTS) as c_uint) as u16);
-            wb(p, 50, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_BOOTS) as c_uint) as u8);
+            ww_be(p, 48, itemdb_look_us(pc_isequip_us(sd, EQ_BOOTS) as u32) as u16);
+            wb(p, 50, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_BOOTS) as u32) as u8);
         }
 
         // title/outline/color bytes 51–53
@@ -1779,7 +1728,7 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
         }
 
         // Name field (offset 54 = length, 55+ = name bytes).
-        let name_ptr = sd_r.status.name.as_ptr() as *const std::os::raw::c_char;
+        let name_ptr = sd_r.status.name.as_ptr() as *const i8;
         let name_len = libc::strlen(name_ptr);
 
         // Clan and group color at byte 53.
@@ -1849,7 +1798,7 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             wb(p, 50, gfx.cboots);
 
             // gfx name override.
-            let gfx_name_ptr = gfx.name.as_ptr() as *const std::os::raw::c_char;
+            let gfx_name_ptr = gfx.name.as_ptr() as *const i8;
             let gfx_name_len = libc::strlen(gfx_name_ptr);
             let visible = sd_r.status.state != 2 && sd_r.status.state != 5;
             let gfx_name_empty = gfx_name_len == 0;
@@ -1902,7 +1851,7 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
                         rust_session_commit(src_fd, encrypt(src_fd) as usize);
                     }
                 } else {
-                    clif_charspecific_us(src_r.bl.id as c_int, sd_r.bl.id as c_int);
+                    clif_charspecific_us(src_r.bl.id as i32, sd_r.bl.id as i32);
                 }
             }
         }
@@ -1911,8 +1860,6 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
 
 /// Broadcast `src`'s appearance state to all PCs in the area.
 ///
-/// Replaces `sl_pc_updatestate` / `clif_updatestate` from `c_src/sl_compat.c`
-/// (lines 450–460 and 648–960). Called from Lua via the `` export.
 ///
 /// # Safety
 /// `src` must be a valid, non-null pointer to an initialised [`MapSessionData`].
@@ -1945,9 +1892,9 @@ use crate::database::item_db::{
 };
 use crate::game::client::handlers::{clif_getName as clif_getName_cop, clif_isregistered as clif_isregistered_cop};
 
-// map_id2sd in map_server returns *mut c_void — wrap with cast.
+// map_id2sd in map_server returns *mut std::ffi::c_void — wrap with cast.
 #[inline]
-unsafe fn map_id2sd_cop(id: c_uint) -> *mut MapSessionData {
+unsafe fn map_id2sd_cop(id: u32) -> *mut MapSessionData {
     crate::game::map_server::map_id2sd(id) as *mut MapSessionData
 }
 
@@ -1957,7 +1904,7 @@ unsafe fn map_id2sd_cop(id: c_uint) -> *mut MapSessionData {
 /// # Safety
 /// All pointer arguments must be valid, null-terminated C strings for the duration
 /// of the call.  The returned pointer is valid until the next call.
-unsafe fn replace_str_rust(src: *const c_char, orig: &[u8], rep: *const c_char) -> *const c_char {
+unsafe fn replace_str_rust(src: *const i8, orig: &[u8], rep: *const i8) -> *const i8 {
     // Strip trailing NUL(s) from orig so orig_len is the actual string length.
     // Callers may pass NUL-terminated byte literals (e.g. b"$player\0"); strstr
     // needs the NUL excluded, and `tail` must point past the matched bytes only.
@@ -1966,7 +1913,7 @@ unsafe fn replace_str_rust(src: *const c_char, orig: &[u8], rep: *const c_char) 
         None => orig,
     };
     // Fast path: if orig is not present, return src unchanged.
-    let p = libc::strstr(src, orig_bytes.as_ptr() as *const c_char);
+    let p = libc::strstr(src, orig_bytes.as_ptr() as *const i8);
     if p.is_null() {
         return src;
     }
@@ -1986,18 +1933,17 @@ unsafe fn replace_str_rust(src: *const c_char, orig: &[u8], rep: *const c_char) 
     let tail_len = libc::strlen(tail).min(4095 - after_rep);
     std::ptr::copy_nonoverlapping(tail as *const u8, REPL_BUF.as_mut_ptr().add(after_rep), tail_len);
     REPL_BUF[after_rep + tail_len] = 0;
-    REPL_BUF.as_ptr() as *const c_char
+    REPL_BUF.as_ptr() as *const i8
 }
 
 /// Send the player inspection/profile packet to `sd` (viewer) for `bl` (target player).
 ///
-/// Mirrors `clif_clickonplayer` in `c_src/sl_compat.c` (line 682).
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 /// `bl` must be a valid, non-null pointer to a [`BlockList`] that belongs to a
 /// [`MapSessionData`] (i.e. `bl_type == BL_PC`), retrievable via `map_id2sd`.
-pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) -> c_int {
+pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) -> i32 {
     if sd.is_null() || bl.is_null() {
         return 0;
     }
@@ -2031,7 +1977,7 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
 
     // ── Title ─────────────────────────────────────────────────────────────────
     {
-        let title_ptr = (*tsd).status.title.as_ptr() as *const c_char;
+        let title_ptr = (*tsd).status.title.as_ptr() as *const i8;
         let title_len = libc::strlen(title_ptr);
         if title_len > 0 {
             wb(p, len + 5, title_len as u8);
@@ -2046,7 +1992,7 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
     // ── Clan name ─────────────────────────────────────────────────────────────
     {
         if (*tsd).status.clan > 0 {
-            let clan_name = rust_clandb_name_cop((*tsd).status.clan as c_int);
+            let clan_name = rust_clandb_name_cop((*tsd).status.clan as i32);
             if !clan_name.is_null() {
                 let clan_len = libc::strlen(clan_name);
                 wb(p, len + 5, clan_len as u8);
@@ -2064,7 +2010,7 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
 
     // ── Clan title ────────────────────────────────────────────────────────────
     {
-        let ctitle_ptr = (*tsd).status.clan_title.as_ptr() as *const c_char;
+        let ctitle_ptr = (*tsd).status.clan_title.as_ptr() as *const i8;
         let ctitle_len = libc::strlen(ctitle_ptr);
         if ctitle_len > 0 {
             wb(p, len + 5, ctitle_len as u8);
@@ -2079,8 +2025,8 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
     // ── Class name ────────────────────────────────────────────────────────────
     {
         let class_name = rust_classdb_name_cop(
-            (*tsd).status.class as c_int,
-            (*tsd).status.mark  as c_int,
+            (*tsd).status.class as i32,
+            (*tsd).status.mark  as i32,
         );
         if !class_name.is_null() {
             let cn_len = libc::strlen(class_name);
@@ -2095,7 +2041,7 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
 
     // ── Player name ───────────────────────────────────────────────────────────
     {
-        let name_ptr = (*tsd).status.name.as_ptr() as *const c_char;
+        let name_ptr = (*tsd).status.name.as_ptr() as *const i8;
         let name_len = libc::strlen(name_ptr);
         wb(p, len + 5, name_len as u8);
         std::ptr::copy_nonoverlapping(name_ptr as *const u8, p.add(len + 6), name_len);
@@ -2136,23 +2082,23 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
         if (*tsd).status.equip[EQ_ARMOR as usize].custom_look != 0 {
             ww_be(p, len + 4, (*tsd).status.equip[EQ_ARMOR as usize].custom_look as u16);
         } else {
-            ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_ARMOR) as c_uint) as u16);
+            ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_ARMOR) as u32) as u16);
         }
         if (*tsd).status.armor_color > 0 {
             wb(p, len + 6, (*tsd).status.armor_color as u8);
         } else if (*tsd).status.equip[EQ_ARMOR as usize].custom_look != 0 {
             wb(p, len + 6, (*tsd).status.equip[EQ_ARMOR as usize].custom_look_color as u8);
         } else {
-            wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_ARMOR) as c_uint) as u8);
+            wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_ARMOR) as u32) as u8);
         }
     }
     // EQ_COAT overrides armor look if equipped.
     if pc_isequip_us(tsd, EQ_COAT) != 0 {
-        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_COAT) as c_uint) as u16);
+        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_COAT) as u32) as u16);
         if (*tsd).status.armor_color > 0 {
             wb(p, len + 6, (*tsd).status.armor_color as u8);
         } else {
-            wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_COAT) as c_uint) as u8);
+            wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_COAT) as u32) as u8);
         }
     }
     len += 3;
@@ -2165,8 +2111,8 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
         ww_be(p, len + 4, (*tsd).status.equip[EQ_WEAP as usize].custom_look as u16);
         wb(p, len + 6, (*tsd).status.equip[EQ_WEAP as usize].custom_look_color as u8);
     } else {
-        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_WEAP) as c_uint) as u16);
-        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_WEAP) as c_uint) as u8);
+        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_WEAP) as u32) as u16);
+        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_WEAP) as u32) as u8);
     }
     len += 3;
 
@@ -2178,15 +2124,15 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
         ww_be(p, len + 4, (*tsd).status.equip[EQ_SHIELD as usize].custom_look as u16);
         wb(p, len + 6, (*tsd).status.equip[EQ_SHIELD as usize].custom_look_color as u8);
     } else {
-        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_SHIELD) as c_uint) as u16);
-        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_SHIELD) as c_uint) as u8);
+        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_SHIELD) as u32) as u16);
+        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_SHIELD) as u32) as u8);
     }
     len += 3;
 
     // ── Helm slot ─────────────────────────────────────────────────────────────
     if pc_isequip_us(tsd, EQ_HELM) == 0
         || ((*tsd).status.setting_flags & FLAG_HELM as u16) == 0
-        || itemdb_look_us(pc_isequip_us(tsd, EQ_HELM) as c_uint) == -1
+        || itemdb_look_us(pc_isequip_us(tsd, EQ_HELM) as u32) == -1
     {
         wb(p, len + 4, 0);
         ww_be(p, len + 5, 0xFFFF);
@@ -2197,8 +2143,8 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
             wb(p, len + 5, (*tsd).status.equip[EQ_HELM as usize].custom_look as u8);
             wb(p, len + 6, (*tsd).status.equip[EQ_HELM as usize].custom_look_color as u8);
         } else {
-            wb(p, len + 5, itemdb_look_us(pc_isequip_us(tsd, EQ_HELM) as c_uint) as u8);
-            wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_HELM) as c_uint) as u8);
+            wb(p, len + 5, itemdb_look_us(pc_isequip_us(tsd, EQ_HELM) as u32) as u8);
+            wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_HELM) as u32) as u8);
         }
     }
     len += 3;
@@ -2208,8 +2154,8 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
         ww_be(p, len + 4, 0xFFFF);
         wb(p, len + 6, 0);
     } else {
-        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_FACEACC) as c_uint) as u16);
-        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_FACEACC) as c_uint) as u8);
+        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_FACEACC) as u32) as u16);
+        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_FACEACC) as u32) as u8);
     }
     len += 3;
 
@@ -2223,8 +2169,8 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
             ww_be(p, len + 4, (*tsd).status.equip[EQ_CROWN as usize].custom_look as u16);
             wb(p, len + 6, (*tsd).status.equip[EQ_CROWN as usize].custom_look_color as u8);
         } else {
-            ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_CROWN) as c_uint) as u16);
-            wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_CROWN) as c_uint) as u8);
+            ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_CROWN) as u32) as u16);
+            wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_CROWN) as u32) as u8);
         }
     }
     len += 3;
@@ -2234,8 +2180,8 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
         ww_be(p, len + 4, 0xFFFF);
         wb(p, len + 6, 0);
     } else {
-        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_FACEACCTWO) as c_uint) as u16);
-        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_FACEACCTWO) as c_uint) as u8);
+        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_FACEACCTWO) as u32) as u16);
+        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_FACEACCTWO) as u32) as u8);
     }
     len += 3;
 
@@ -2244,21 +2190,21 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
         ww_be(p, len + 4, 0xFFFF);
         wb(p, len + 6, 0xFF);
     } else {
-        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_MANTLE) as c_uint) as u16);
-        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_MANTLE) as c_uint) as u8);
+        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_MANTLE) as u32) as u16);
+        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_MANTLE) as u32) as u8);
     }
     len += 3;
 
     // ── Necklace slot ─────────────────────────────────────────────────────────
     if pc_isequip_us(tsd, EQ_NECKLACE) == 0
         || ((*tsd).status.setting_flags & FLAG_NECKLACE as u16) == 0
-        || itemdb_look_us(pc_isequip_us(tsd, EQ_NECKLACE) as c_uint) == -1
+        || itemdb_look_us(pc_isequip_us(tsd, EQ_NECKLACE) as u32) == -1
     {
         ww_be(p, len + 4, 0xFFFF);
         wb(p, len + 6, 0);
     } else {
-        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_NECKLACE) as c_uint) as u16);
-        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_NECKLACE) as c_uint) as u8);
+        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_NECKLACE) as u32) as u16);
+        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_NECKLACE) as u32) as u8);
     }
     len += 3;
 
@@ -2270,8 +2216,8 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
         ww_be(p, len + 4, (*tsd).status.equip[EQ_BOOTS as usize].custom_look as u16);
         wb(p, len + 6, (*tsd).status.equip[EQ_BOOTS as usize].custom_look_color as u8);
     } else {
-        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_BOOTS) as c_uint) as u16);
-        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_BOOTS) as c_uint) as u8);
+        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_BOOTS) as u32) as u16);
+        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_BOOTS) as u32) as u8);
     }
     len += 3;
 
@@ -2305,7 +2251,7 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
                 let n = rust_itemdb_name_cop(eq.id);
                 if n.is_null() { b"\0".as_ptr() } else { n as *const u8 }
             };
-            let name_len = libc::strlen(name_ptr as *const c_char);
+            let name_len = libc::strlen(name_ptr as *const i8);
             wb(p, len + 6, name_len as u8);
             std::ptr::copy_nonoverlapping(name_ptr, p.add(len + 7), name_len);
             len += name_len + 1;
@@ -2313,7 +2259,7 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
             // DB name (always from itemdb).
             let dbname = rust_itemdb_name_cop(eq.id);
             let dbname_ptr: *const u8 = if dbname.is_null() { b"\0".as_ptr() } else { dbname as *const u8 };
-            let dbname_len = libc::strlen(dbname_ptr as *const c_char);
+            let dbname_len = libc::strlen(dbname_ptr as *const i8);
             wb(p, len + 6, dbname_len as u8);
             std::ptr::copy_nonoverlapping(dbname_ptr, p.add(len + 7), dbname_len);
             len += dbname_len + 1;
@@ -2325,12 +2271,12 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
             // Build equip_status summary string for weapon/armor item types (3..=16).
             let item_type = rust_itemdb_type_cop(eq.id);
             if item_type >= 3 && item_type <= 16 {
-                let nameof: *const c_char = if eq.real_name[0] != 0 {
-                    eq.real_name.as_ptr() as *const c_char
+                let nameof: *const i8 = if eq.real_name[0] != 0 {
+                    eq.real_name.as_ptr() as *const i8
                 } else {
-                    rust_itemdb_name_cop(eq.id) as *const c_char
+                    rust_itemdb_name_cop(eq.id) as *const i8
                 };
-                let msgnum = clif_mapmsgnum(tsd, x as c_int);
+                let msgnum = clif_mapmsgnum(tsd, x as i32);
                 if msgnum >= 0 && nameof != std::ptr::null() {
                     let mut buff = [0i8; 256];
                     libc::snprintf(
@@ -2429,8 +2375,8 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
 
         if lg.tchaid > 0 {
             let char_name = clif_getName_cop(lg.tchaid);
-            let text_ptr  = lg.text.as_ptr() as *const c_char;
-            let bff = replace_str_rust(text_ptr, b"$player\0", char_name as *const c_char);
+            let text_ptr  = lg.text.as_ptr() as *const i8;
+            let bff = replace_str_rust(text_ptr, b"$player\0", char_name as *const i8);
             let bff_len = if bff.is_null() { 0 } else { libc::strlen(bff) };
             wb(p, len + 8, bff_len as u8);
             if !bff.is_null() && bff_len > 0 {
@@ -2438,7 +2384,7 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
             }
             len += bff_len + 3;
         } else {
-            let text_len = libc::strlen(lg.text.as_ptr() as *const c_char);
+            let text_len = libc::strlen(lg.text.as_ptr() as *const i8);
             wb(p, len + 8, text_len as u8);
             std::ptr::copy_nonoverlapping(lg.text.as_ptr() as *const u8, p.add(len + 9), text_len);
             len += text_len + 3;
@@ -2457,7 +2403,7 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
     // ── Lua onClick hook ──────────────────────────────────────────────────────
     {
         use crate::game::scripting::doscript_blargs;
-        let onclick = b"onClick\0".as_ptr() as *const c_char;
+        let onclick = b"onClick\0".as_ptr() as *const i8;
         let args: [*mut BlockList; 2] = [&mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList];
         doscript_blargs(onclick, std::ptr::null(), &args);
     }
@@ -2469,8 +2415,7 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
 
 /// Sends the filtered board list to a player.
 ///
-/// Ported from `clif_showboards` in `c_src/sl_compat.c` (Task 1.8).
-///
+////
 /// Iterates all 256 sort-order slots and, for each slot, finds the first board
 /// (id 0..256) whose `sort`, `level`, `gmlevel`, `path`, and `clan` match the
 /// player's character status.  The matching board's id and name are appended to
@@ -2496,7 +2441,7 @@ pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) ->
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-pub unsafe fn clif_showboards(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_showboards(sd: *mut MapSessionData) -> i32 {
     let sd_ref = &*sd;
     let fd = sd_ref.fd;
 
@@ -2529,7 +2474,7 @@ pub unsafe fn clif_showboards(sd: *mut MapSessionData) -> c_int {
     let player_path    = sd_ref.status.class as i32;
     let player_clan    = sd_ref.status.clan as i32;
 
-    // Mirrors the C double-loop: outer = sort order 0..256, inner = board id 0..256.
+    // Double-loop: outer = sort order 0..256, inner = board id 0..256.
     // Uses `searchexist` (returns null for missing ids) so no new API is needed.
     for sort_order in 0..256_i32 {
         for x in 0..256_i32 {
@@ -2545,7 +2490,7 @@ pub unsafe fn clif_showboards(sd: *mut MapSessionData) -> c_int {
                 && (b.clan == player_clan  || b.clan == 0)
             {
                 let name_len = libc::strlen(b.name.as_ptr());
-                // board id (big-endian u16) — mirrors WFIFOW(fd, len+6) = SWAP16(x).
+                // board id (big-endian u16).
                 ww_be(p, len + 6, x as u16);
                 // name byte-length at len+8; name bytes starting at len+9.
                 wb(p, len + 8, name_len as u8);

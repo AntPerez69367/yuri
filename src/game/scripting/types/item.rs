@@ -1,5 +1,4 @@
-use std::ffi::{CStr, c_char, c_int, c_uint, c_uchar};
-use std::os::raw::c_void;
+use std::ffi::CStr;
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
 use crate::database::item_db::ItemData;
@@ -9,51 +8,49 @@ use crate::database::recipe_db::RecipeData;
 // repr(C) structs mirroring C game structs
 // ---------------------------------------------------------------------------
 
-/// Mirrors `struct item` from `mmo.h`. 880 bytes.
+/// Live item instance. 880 bytes.
 #[repr(C)]
 pub struct BoundItem {
-    pub id: c_uint,
-    pub owner: c_uint,
-    pub custom: c_uint,
-    pub time: c_uint,
-    pub dura: c_int,
-    pub amount: c_int,
-    pub pos: c_uchar,
-    pub _pad: [c_uchar; 3],
-    pub custom_look: c_uint,
-    pub custom_icon: c_uint,
-    pub custom_look_color: c_uint,
-    pub custom_icon_color: c_uint,
-    pub protected: c_uint,
-    pub traps_table: [c_uint; 100],
-    pub buytext: [c_uchar; 64],
-    pub note: [c_char; 300],
-    pub repair: c_char,
-    pub real_name: [c_char; 64],
+    pub id: u32,
+    pub owner: u32,
+    pub custom: u32,
+    pub time: u32,
+    pub dura: i32,
+    pub amount: i32,
+    pub pos: u8,
+    pub _pad: [u8; 3],
+    pub custom_look: u32,
+    pub custom_icon: u32,
+    pub custom_look_color: u32,
+    pub custom_icon_color: u32,
+    pub protected: u32,
+    pub traps_table: [u32; 100],
+    pub buytext: [u8; 64],
+    pub note: [i8; 300],
+    pub repair: i8,
+    pub real_name: [i8; 64],
 }
 
-/// Mirrors `struct bank_data` from `mmo.h`.
 #[repr(C)]
 pub struct BankData {
-    pub item_id: c_uint,
-    pub amount: c_uint,
-    pub owner: c_uint,
-    pub time: c_uint,
-    pub custom_icon: c_uint,
-    pub custom_look: c_uint,
-    pub real_name: [c_char; 64],
-    pub custom_look_color: c_uint,
-    pub custom_icon_color: c_uint,
-    pub protected: c_uint,
-    pub note: [c_char; 300],
+    pub item_id: u32,
+    pub amount: u32,
+    pub owner: u32,
+    pub time: u32,
+    pub custom_icon: u32,
+    pub custom_look: u32,
+    pub real_name: [i8; 64],
+    pub custom_look_color: u32,
+    pub custom_icon_color: u32,
+    pub protected: u32,
+    pub note: [i8; 300],
 }
 
-/// Mirrors `struct parcel` from `map_server.h`.
 #[repr(C)]
 pub struct Parcel {
-    pub sender: c_uint,
-    pub pos: c_int,
-    pub npcflag: c_int,
+    pub sender: u32,
+    pub pos: i32,
+    pub npcflag: i32,
     pub data: BoundItem,
 }
 
@@ -61,11 +58,11 @@ pub struct Parcel {
 // Lua object wrappers
 // ---------------------------------------------------------------------------
 
-pub struct ItemObject     { pub ptr: *mut c_void }
-pub struct BItemObject    { pub ptr: *mut c_void }
-pub struct BankItemObject { pub ptr: *mut c_void }
-pub struct ParcelObject   { pub ptr: *mut c_void }
-pub struct RecipeObject   { pub ptr: *mut c_void }
+pub struct ItemObject     { pub ptr: *mut std::ffi::c_void }
+pub struct BItemObject    { pub ptr: *mut std::ffi::c_void }
+pub struct BankItemObject { pub ptr: *mut std::ffi::c_void }
+pub struct ParcelObject   { pub ptr: *mut std::ffi::c_void }
+pub struct RecipeObject   { pub ptr: *mut std::ffi::c_void }
 
 // SAFETY: Each wrapper holds a raw C pointer that is managed entirely by the
 // game engine's C layer.  Sending the wrapper across threads is sound only when
@@ -97,23 +94,23 @@ unsafe impl Send for RecipeObject {}
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn val_to_int(v: &mlua::Value) -> c_int {
+fn val_to_int(v: &mlua::Value) -> i32 {
     match v {
-        mlua::Value::Integer(i) => (*i).clamp(c_int::MIN as i64, c_int::MAX as i64) as c_int,
+        mlua::Value::Integer(i) => (*i).clamp(i32::MIN as i64, i32::MAX as i64) as i32,
         mlua::Value::Number(f)  => {
             if f.is_nan() { return 0; }
-            f.clamp(c_int::MIN as f64, c_int::MAX as f64) as c_int
+            f.clamp(i32::MIN as f64, i32::MAX as f64) as i32
         }
         _ => 0,
     }
 }
 
-fn val_to_uint(v: &mlua::Value) -> c_uint {
+fn val_to_uint(v: &mlua::Value) -> u32 {
     match v {
-        mlua::Value::Integer(i) => (*i).clamp(0, c_uint::MAX as i64) as c_uint,
+        mlua::Value::Integer(i) => (*i).clamp(0, u32::MAX as i64) as u32,
         mlua::Value::Number(f)  => {
             if f.is_nan() || *f < 0.0 { return 0; }
-            f.clamp(0.0, c_uint::MAX as f64) as c_uint
+            f.clamp(0.0, u32::MAX as f64) as u32
         }
         _ => 0,
     }
@@ -124,19 +121,19 @@ fn val_to_uint(v: &mlua::Value) -> c_uint {
 /// Performs a bounded NUL search within `arr`. If a NUL is found the bytes
 /// before it are decoded; if the buffer has no NUL terminator the entire
 /// slice is decoded lossily. Neither path reads beyond `arr.len()`.
-pub fn fixed_str(arr: &[c_char]) -> String {
+pub fn fixed_str(arr: &[i8]) -> String {
     let nul_pos = arr.iter().position(|&c| c == 0);
     let len = nul_pos.unwrap_or(arr.len());
     let bytes: Vec<u8> = arr[..len].iter().map(|&c| c as u8).collect();
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-pub fn write_str_field(arr: &mut [c_char], s: &mlua::String) {
+pub fn write_str_field(arr: &mut [i8], s: &mlua::String) {
     if arr.is_empty() { return; }
     let bytes = s.as_bytes();
     let len = bytes.len().min(arr.len() - 1);
     unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const c_char, arr.as_mut_ptr(), len);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const i8, arr.as_mut_ptr(), len);
         arr[len] = 0;
     }
 }
@@ -202,16 +199,16 @@ pub unsafe fn item_data_getattr(
         "protection"   => int!(d.protection),
         "reqMight"     => int!(d.mightreq),
         "rank" => {
-            let path = unsafe { crate::database::class_db::rust_classdb_path(d.class as c_int) };
+            let path = unsafe { crate::database::class_db::rust_classdb_path(d.class as i32) };
             let ptr = unsafe { crate::database::class_db::rust_classdb_name(path, d.rank) };
             let s = classdb_name_to_string(ptr);
             Ok(mlua::Value::String(lua.create_string(s)?))
         }
         "baseClass" => {
-            int!(unsafe { crate::database::class_db::rust_classdb_path(d.class as c_int) })
+            int!(unsafe { crate::database::class_db::rust_classdb_path(d.class as i32) })
         }
         "className" => {
-            let ptr = unsafe { crate::database::class_db::rust_classdb_name(d.class as c_int, d.rank) };
+            let ptr = unsafe { crate::database::class_db::rust_classdb_name(d.class as i32, d.rank) };
             let s = classdb_name_to_string(ptr);
             Ok(mlua::Value::String(lua.create_string(s)?))
         }
@@ -219,7 +216,7 @@ pub unsafe fn item_data_getattr(
     }
 }
 
-fn classdb_name_to_string(ptr: *mut c_char) -> String {
+fn classdb_name_to_string(ptr: *mut i8) -> String {
     if ptr.is_null() { return String::new(); }
     let s = unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() };
     unsafe { crate::database::class_db::rust_classdb_free_name(ptr); }
@@ -276,12 +273,12 @@ impl UserData for BItemObject {
             let bi = unsafe { &mut *(this.ptr as *mut BoundItem) };
             match key.as_str() {
                 "id"              => bi.id              = val_to_uint(&val),
-                "amount"          => bi.amount          = val_to_int(&val) as c_int,
+                "amount"          => bi.amount          = val_to_int(&val) as i32,
                 "dura"            => bi.dura            = val_to_int(&val),
                 "protected"       => bi.protected       = val_to_uint(&val),
                 "owner"           => bi.owner           = val_to_uint(&val),
                 "time"            => bi.time            = val_to_uint(&val),
-                "repairCheck"     => { let v = val_to_int(&val).clamp(i8::MIN as c_int, i8::MAX as c_int); bi.repair = v as c_char; }
+                "repairCheck"     => { let v = val_to_int(&val).clamp(i8::MIN as i32, i8::MAX as i32); bi.repair = v as i8; }
                 "custom"          => bi.custom          = val_to_uint(&val),
                 "customLook"      => bi.custom_look     = val_to_uint(&val),
                 "customLookColor" => bi.custom_look_color = val_to_uint(&val),

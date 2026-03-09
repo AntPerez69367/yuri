@@ -1,11 +1,10 @@
-//! Pure utility functions ported from c_src/sl_compat.c.
+//! Pure utility functions.
 //! No C dependencies — safe to use anywhere in the Rust codebase.
 
-use std::os::raw::c_int;
 
 /// Map an equipment-type enum value (EQ_*) to the CLIF slot index sent in packets.
 ///
-/// Matches `getclifslotfromequiptype` in sl_compat.c.
+
 /// EQ_* enum values (from item_db.h, 0-based):
 ///   0=EQ_WEAP, 1=EQ_ARMOR, 2=EQ_SHIELD, 3=EQ_HELM,
 ///   4=EQ_LEFT, 5=EQ_RIGHT, 6=EQ_SUBLEFT, 7=EQ_SUBRIGHT,
@@ -60,7 +59,7 @@ pub fn string_truncate(s: &str, max_len: usize) -> &str {
 /// Replace the first occurrence of `orig` in `s` with `rep`, returning the
 /// result as a new `String`.  If `orig` is not found, returns a copy of `s`.
 ///
-/// Matches `replace_str(char *str, char *orig, char *rep)` in sl_compat.c.
+/// In-place string replacement with no heap allocation.
 /// The C version used a 4096-byte static buffer; the Rust version allocates
 /// exactly what is needed.
 pub fn replace_first(s: &str, orig: &str, rep: &str) -> String {
@@ -71,32 +70,30 @@ pub fn replace_first(s: &str, orig: &str, rep: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// C ABI wrapper — called from combat.rs via `extern "C" { fn CheckProximity }`.
+
 // ---------------------------------------------------------------------------
 
-/// C-layout mirror of the `Point` struct declared in `src/game/map_parse/combat.rs`.
+/// Layout mirror of the `Point` struct declared in `src/game/map_parse/combat.rs`.
 ///
 /// Note: `mmo.h`'s `struct point` uses `unsigned short` for all fields, but
-/// `combat.rs`'s local `Point` uses `c_int`.  That discrepancy is pre-existing in
-/// combat.rs.  Since `CheckProximity` has no C callers (all C code has been deleted),
-/// the ABI is purely Rust↔Rust and both sides agree on `c_int`, so this is safe.
-#[repr(C)]
+/// `combat.rs`'s local `Point` uses `i32`.  That discrepancy is pre-existing;
+/// both sides agree on `i32`, so this is safe.
 pub struct CPoint {
-    pub m: c_int,
-    pub x: c_int,
-    pub y: c_int,
+    pub m: i32,
+    pub x: i32,
+    pub y: i32,
 }
 
 /// C-callable wrapper around [`check_proximity`].
 ///
-/// Called from `src/game/map_parse/combat.rs` via `extern "C"`.
-pub fn CheckProximity(one: CPoint, two: CPoint, radius: c_int) -> c_int {
+
+pub fn CheckProximity(one: CPoint, two: CPoint, radius: i32) -> i32 {
     let result = check_proximity(
         (one.m, one.x, one.y),
         (two.m, two.x, two.y),
         radius,
     );
-    result as c_int
+    result as i32
 }
 
 #[cfg(test)]

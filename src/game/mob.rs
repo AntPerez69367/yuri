@@ -1,4 +1,4 @@
-//! Mob game logic — replaces `c_src/mob.c`.
+//! Mob game logic.
 
 #![allow(non_snake_case, dead_code)]
 
@@ -12,7 +12,6 @@ use crate::database::map_db::{get_map_ptr as ffi_get_map_ptr, map_is_loaded as f
 use crate::game::pc::MapSessionData;
 use crate::game::types::GfxViewer;
 use crate::servers::char::charstatus::{Item, SkillInfo};
-use std::ffi::{c_char, c_double, c_float, c_int, c_schar, c_short, c_uchar, c_uint, c_ushort};
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -26,10 +25,10 @@ pub const MAX_INVENTORY: usize = 52;
 pub const MAX_GLOBALMOBREG: usize = 50;
 pub const MAX_THREATCOUNT: usize = 50;
 
-pub const BL_PC: c_int = 0x01;
-pub const BL_MOB: c_int = 0x02;
-pub const BL_NPC: c_int = 0x04;
-pub const BL_ITEM: c_int = 0x08;
+pub const BL_PC: i32 = 0x01;
+pub const BL_MOB: i32 = 0x02;
+pub const BL_NPC: i32 = 0x04;
+pub const BL_ITEM: i32 = 0x08;
 
 // mob state constants
 pub const MOB_ALIVE: u8 = 0;
@@ -39,25 +38,25 @@ pub const MOB_BLIND: u8 = 3;
 pub const MOB_HIT: u8 = 4;
 pub const MOB_ESCAPE: u8 = 5;
 
-/// `AREA=4` from enum in `c_src/map_parse.h`.
-const AREA: c_int = 4;
-/// `LOOK_SEND=1` from enum `{ LOOK_GET=0, LOOK_SEND=1 }` in `c_src/map_parse.h`.
-const LOOK_SEND: c_int = 1;
-/// `FLOOR=1` from enum `{ SCRIPT=0, FLOOR=1 }` in `c_src/map_server.h`.
-const FLOOR: c_uchar = 1;
+/// Viewport area query type constant.
+const AREA: i32 = 4;
+/// Send visual appearance to nearby players.
+const LOOK_SEND: i32 = 1;
+/// Floor item subtype (as opposed to script item).
+const FLOOR: u8 = 1;
 
 // ─── ThreatTable ─────────────────────────────────────────────────────────────
 
-/// Mirrors `struct threat_table` from `map_server.h`. 8 bytes.
+/// Mob threat entry: which player and how much threat they have generated.
 #[repr(C)]
 pub struct ThreatTable {
-    pub user: c_uint,
-    pub amount: c_uint,
+    pub user: u32,
+    pub amount: u32,
 }
 
 // ─── MobSpawnData ─────────────────────────────────────────────────────────────
 
-/// Mirrors `struct mobspawn_data` from `map_server.h`. (`MOB` typedef in C.)
+/// Mob spawn data (spawn parameters and state for a single mob instance).
 ///
 /// Field order and types MUST exactly match C. Verify size with:
 /// `cargo test mob_spawn_data_size -- --nocapture`
@@ -90,77 +89,77 @@ pub struct MobSpawnData {
     pub threat: [ThreatTable; MAX_THREATCOUNT],
     pub registry: [GlobalReg; MAX_GLOBALMOBREG],
     pub gfx: GfxViewer,
-    pub startm: c_ushort,
-    pub startx: c_ushort,
-    pub starty: c_ushort,
-    pub bx: c_ushort,
-    pub by_: c_ushort,
-    pub look: c_ushort,
-    pub miss: c_short,
-    pub protection: c_short,
-    pub id: c_uint,
-    pub mobid: c_uint,
-    pub current_vita: c_uint,
-    pub current_mana: c_uint,
-    pub target: c_uint,
-    pub attacker: c_uint,
-    pub owner: c_uint,
-    pub confused_target: c_uint,
-    pub timer: c_uint,
-    pub last_death: c_uint,
-    pub rangeTarget: c_uint,
-    pub ranged: c_uint,
-    pub newmove: c_uint,
-    pub newatk: c_uint,
-    pub lastvita: c_uint,
-    pub maxvita: c_uint,
-    pub maxmana: c_uint,
-    pub replace: c_uint,
-    pub mindam: c_uint,
-    pub maxdam: c_uint,
-    pub amnesia: c_uint,
-    pub exp: c_uint,
-    pub ac: c_int,
-    pub side: c_int,
-    pub time_: c_int,
-    pub spawncheck: c_int,
-    pub num: c_int,
-    pub crit: c_int,
-    pub critchance: c_int,
-    pub critmult: c_int,
-    pub snare: c_int,
-    pub lastaction: c_int,
-    pub hit: c_int,
-    pub might: c_int,
-    pub grace: c_int,
-    pub will: c_int,
-    pub state: c_uchar,
-    pub canmove: c_uchar,
-    pub onetime: c_uchar,
-    pub paralyzed: c_uchar,
-    pub blind: c_uchar,
-    pub confused: c_uchar,
-    pub summon: c_uchar,
-    pub returning: c_uchar,
-    pub look_color: c_uchar,
-    pub clone: c_schar,
-    pub start: c_schar,
-    pub end: c_schar,
-    pub block: c_schar,
-    pub charstate: c_schar,
-    // compiler inserts 3 bytes of padding here to align c_float to 4 bytes
-    pub sleep: c_float,
-    pub deduction: c_float,
-    pub damage: c_float,
-    pub dmgshield: c_float,
-    pub invis: c_float,
-    // compiler inserts padding here to align c_double to 8 bytes
-    pub dmgdealt: c_double,
-    pub dmgtaken: c_double,
-    pub maxdmg: c_double,
-    pub dmgindtable: [[c_double; 2]; MAX_THREATCOUNT],
-    pub dmggrptable: [[c_double; 2]; MAX_THREATCOUNT],
-    pub cursed: c_uchar,
+    pub startm: u16,
+    pub startx: u16,
+    pub starty: u16,
+    pub bx: u16,
+    pub by_: u16,
+    pub look: u16,
+    pub miss: i16,
+    pub protection: i16,
+    pub id: u32,
+    pub mobid: u32,
+    pub current_vita: u32,
+    pub current_mana: u32,
+    pub target: u32,
+    pub attacker: u32,
+    pub owner: u32,
+    pub confused_target: u32,
+    pub timer: u32,
+    pub last_death: u32,
+    pub rangeTarget: u32,
+    pub ranged: u32,
+    pub newmove: u32,
+    pub newatk: u32,
+    pub lastvita: u32,
+    pub maxvita: u32,
+    pub maxmana: u32,
+    pub replace: u32,
+    pub mindam: u32,
+    pub maxdam: u32,
+    pub amnesia: u32,
+    pub exp: u32,
+    pub ac: i32,
+    pub side: i32,
+    pub time_: i32,
+    pub spawncheck: i32,
+    pub num: i32,
+    pub crit: i32,
+    pub critchance: i32,
+    pub critmult: i32,
+    pub snare: i32,
+    pub lastaction: i32,
+    pub hit: i32,
+    pub might: i32,
+    pub grace: i32,
+    pub will: i32,
+    pub state: u8,
+    pub canmove: u8,
+    pub onetime: u8,
+    pub paralyzed: u8,
+    pub blind: u8,
+    pub confused: u8,
+    pub summon: u8,
+    pub returning: u8,
+    pub look_color: u8,
+    pub clone: i8,
+    pub start: i8,
+    pub end: i8,
+    pub block: i8,
+    pub charstate: i8,
+    // compiler inserts 3 bytes of padding here to align f32 to 4 bytes
+    pub sleep: f32,
+    pub deduction: f32,
+    pub damage: f32,
+    pub dmgshield: f32,
+    pub invis: f32,
+    // compiler inserts padding here to align f64 to 8 bytes
+    pub dmgdealt: f64,
+    pub dmgtaken: f64,
+    pub maxdmg: f64,
+    pub dmgindtable: [[f64; 2]; MAX_THREATCOUNT],
+    pub dmggrptable: [[f64; 2]; MAX_THREATCOUNT],
+    pub cursed: u8,
 }
 
 // SAFETY: MobSpawnData contains raw pointers to C-managed entities.
@@ -168,11 +167,9 @@ pub struct MobSpawnData {
 unsafe impl Send for MobSpawnData {}
 unsafe impl Sync for MobSpawnData {}
 
-// ─── Mutable globals (atomic, C-compatible) ───────────────────────────────────
+// ─── Mutable globals ──────────────────────────────────────────────────────────
 // Use #[export_name] for uppercase globals to avoid sqlx #[derive(FromRow)]
 // let-binding conflicts (see MEMORY.md: "npc_id #[export_name]").
-// AtomicU32 has the same ABI as u32 on x86-64: a plain 4-byte aligned integer.
-// C code that reads these via extern symbol gets the raw value directly.
 #[export_name = "mob_id"]
 pub static MOB_ID: AtomicU32 = AtomicU32::new(MOB_START_NUM);
 #[export_name = "max_normal_id"]
@@ -191,7 +188,7 @@ pub static MOB_ONETIME_START: AtomicU32 = AtomicU32::new(MOBOT_START_NUM);
 pub static MIN_TIMER: AtomicU32 = AtomicU32::new(1000);
 pub static TIMERCHECK: AtomicU8 = AtomicU8::new(0); // internal only
 
-// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
+
 
 #[cfg(not(test))]
 use crate::game::map_server::{
@@ -231,15 +228,15 @@ use crate::config_globals::serverid;
 #[cfg(not(test))]
 use crate::game::map_server::groups as groups_mob;
 
-// map_id2bl returns *mut c_void; wrap for BlockList usage
+// map_id2bl returns *mut std::ffi::c_void; wrap for BlockList usage
 #[cfg(not(test))]
-pub unsafe fn map_id2bl(id: c_uint) -> *mut BlockList {
+pub unsafe fn map_id2bl(id: u32) -> *mut BlockList {
     crate::game::map_server::map_id2bl(id) as *mut BlockList
 }
 
-// map_id2sd returns *mut c_void; wrap for MapSessionData usage
+// map_id2sd returns *mut std::ffi::c_void; wrap for MapSessionData usage
 #[cfg(not(test))]
-unsafe fn map_id2sd_mob(id: c_uint) -> *mut MapSessionData {
+unsafe fn map_id2sd_mob(id: u32) -> *mut MapSessionData {
     crate::game::map_server::map_id2sd(id) as *mut MapSessionData
 }
 
@@ -261,42 +258,42 @@ use crate::game::map_parse::combat::clif_sendanimation_inner;
 /// Wraps `crate::game::scripting::doscript_blargs` for the common 1-arg case.
 #[cfg(not(test))]
 unsafe fn sl_doscript_simple(
-    yname: *const c_char,
-    event: *const c_char,
+    yname: *const i8,
+    event: *const i8,
     bl: *mut BlockList,
-) -> c_int {
+) -> i32 {
     crate::game::scripting::doscript_blargs(yname, event, &[bl as *mut _])
 }
 
 /// Dispatch a Lua event with two block_list arguments.
 #[cfg(not(test))]
 unsafe fn sl_doscript_2(
-    root: *const c_char,
-    event: *const c_char,
+    root: *const i8,
+    event: *const i8,
     bl1: *mut BlockList,
     bl2: *mut BlockList,
-) -> c_int {
+) -> i32 {
     crate::game::scripting::doscript_blargs(root, event, &[bl1 as *mut _, bl2 as *mut _])
 }
 
 // ─── Mob ID management ────────────────────────────────────────────────────────
 
-pub fn mob_get_new_id() -> c_uint {
+pub fn mob_get_new_id() -> u32 {
     MOB_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 #[cfg(not(test))]
-pub unsafe fn mob_get_free_id() -> c_uint {
+pub unsafe fn mob_get_free_id() -> u32 {
     let mut x = MOB_ONETIME_START.load(Ordering::Relaxed);
     loop {
         if x >= NPC_START_NUM {
-            eprintln!("[mob] mob_get_free_id: onetime range exhausted");
+            tracing::warn!("[mob] mob_get_free_id: onetime range exhausted");
             return 0;
         }
         let omax = MOB_ONETIME_MAX.load(Ordering::Relaxed);
         if x == omax {
             if omax >= NPC_START_NUM {
-                eprintln!("[mob] mob_get_free_id: onetime range full");
+                tracing::warn!("[mob] mob_get_free_id: onetime range full");
                 return 0;
             }
             MOB_ONETIME_MAX.store(omax + 1, Ordering::Relaxed);
@@ -309,12 +306,12 @@ pub unsafe fn mob_get_free_id() -> c_uint {
 }
 
 #[cfg(not(test))]
-pub unsafe fn onetime_avail(id: c_uint) -> *mut BlockList {
+pub unsafe fn onetime_avail(id: u32) -> *mut BlockList {
     map_id2bl(id)
 }
 
 #[cfg(not(test))]
-pub unsafe fn free_onetime(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn free_onetime(mob: *mut MobSpawnData) -> i32 {
     if mob.is_null() {
         return 0;
     }
@@ -342,8 +339,8 @@ pub unsafe fn free_onetime(mob: *mut MobSpawnData) -> c_int {
 
 #[cfg(not(test))]
 unsafe fn in_spawn_window(mob: *const MobSpawnData) -> bool {
-    let s = (*mob).start as c_int;
-    let e = (*mob).end as c_int;
+    let s = (*mob).start as i32;
+    let e = (*mob).end as i32;
     let ct = cur_time.load(Ordering::Relaxed);
     (s < e && ct >= s && ct <= e)
         || (s > e && (ct >= s || ct <= e))
@@ -352,7 +349,7 @@ unsafe fn in_spawn_window(mob: *const MobSpawnData) -> bool {
 }
 
 #[cfg(not(test))]
-pub unsafe fn mob_respawn_getstats(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn mob_respawn_getstats(mob: *mut MobSpawnData) -> i32 {
     if mob.is_null() {
         return 0;
     }
@@ -367,8 +364,8 @@ pub unsafe fn mob_respawn_getstats(mob: *mut MobSpawnData) -> c_int {
         return 0;
     }
     let d = &*(*mob).data;
-    (*mob).maxvita = d.vita as c_uint;
-    (*mob).maxmana = d.mana as c_uint;
+    (*mob).maxvita = d.vita as u32;
+    (*mob).maxmana = d.mana as u32;
     (*mob).ac = d.baseac;
     if (*mob).ac < -95 {
         (*mob).ac = -95;
@@ -377,11 +374,11 @@ pub unsafe fn mob_respawn_getstats(mob: *mut MobSpawnData) -> c_int {
         (*mob).exp = mobdb_experience((*mob).mobid);
     }
     (*mob).miss = d.miss;
-    (*mob).newmove = d.movetime as c_uint;
-    (*mob).newatk = d.atktime as c_uint;
+    (*mob).newmove = d.movetime as u32;
+    (*mob).newatk = d.atktime as u32;
     (*mob).current_vita = (*mob).maxvita;
     (*mob).current_mana = (*mob).maxmana;
-    (*mob).maxdmg = (*mob).current_vita as c_double;
+    (*mob).maxdmg = (*mob).current_vita as f64;
     (*mob).hit = d.hit;
     (*mob).mindam = d.mindam;
     (*mob).maxdam = d.maxdam;
@@ -390,8 +387,8 @@ pub unsafe fn mob_respawn_getstats(mob: *mut MobSpawnData) -> c_int {
     (*mob).will = d.will;
     (*mob).block = d.block;
     (*mob).protection = d.protection;
-    (*mob).look = d.look as c_ushort;
-    (*mob).look_color = d.look_color as c_uchar;
+    (*mob).look = d.look as u16;
+    (*mob).look_color = d.look_color as u8;
     (*mob).charstate = d.state;
     (*mob).clone = 0;
     (*mob).time_ = 0;
@@ -420,7 +417,7 @@ pub unsafe fn mob_respawn_getstats(mob: *mut MobSpawnData) -> c_int {
 use crate::database::{blocking_run, get_pool};
 
 #[cfg(not(test))]
-pub unsafe fn mobspawn_read() -> c_int {
+pub unsafe fn mobspawn_read() -> i32 {
     let serverid_val = serverid;
     let result = blocking_run(async move {
         let pool = get_pool();
@@ -436,7 +433,7 @@ pub unsafe fn mobspawn_read() -> c_int {
     let rows = match result {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("[mob] spawn read error: {}", e);
+            tracing::error!("[mob] spawn read error: {}", e);
             return 0;
         }
     };
@@ -445,15 +442,15 @@ pub unsafe fn mobspawn_read() -> c_int {
     for row in &rows {
         use sqlx::Row;
         // All Spawns columns are int(10) unsigned → read as u32, cast to dest type
-        let startm: c_ushort = row.try_get::<u32, _>(0).unwrap_or(0) as c_ushort;
-        let startx: c_ushort = row.try_get::<u32, _>(1).unwrap_or(0) as c_ushort;
-        let starty: c_ushort = row.try_get::<u32, _>(2).unwrap_or(0) as c_ushort;
-        let mobid: c_uint = row.try_get::<u32, _>(3).unwrap_or(0);
-        let last_death: c_uint = row.try_get::<u32, _>(4).unwrap_or(0);
-        let spn_id: c_uint = row.try_get::<u32, _>(5).unwrap_or(0);
-        let start: c_schar = row.try_get::<u32, _>(6).unwrap_or(25) as c_schar;
-        let end: c_schar = row.try_get::<u32, _>(7).unwrap_or(25) as c_schar;
-        let replace: c_uint = row.try_get::<u32, _>(8).unwrap_or(0);
+        let startm: u16 = row.try_get::<u32, _>(0).unwrap_or(0) as u16;
+        let startx: u16 = row.try_get::<u32, _>(1).unwrap_or(0) as u16;
+        let starty: u16 = row.try_get::<u32, _>(2).unwrap_or(0) as u16;
+        let mobid: u32 = row.try_get::<u32, _>(3).unwrap_or(0);
+        let last_death: u32 = row.try_get::<u32, _>(4).unwrap_or(0);
+        let spn_id: u32 = row.try_get::<u32, _>(5).unwrap_or(0);
+        let start: i8 = row.try_get::<u32, _>(6).unwrap_or(25) as i8;
+        let end: i8 = row.try_get::<u32, _>(7).unwrap_or(25) as i8;
+        let replace: u32 = row.try_get::<u32, _>(8).unwrap_or(0);
 
         let db = map_id2mob(spn_id);
         let (db, checkspawn) = if db.is_null() {
@@ -474,7 +471,7 @@ pub unsafe fn mobspawn_read() -> c_int {
         }
 
         (*db).id = spn_id;
-        (*db).bl.bl_type = BL_MOB as c_uchar;
+        (*db).bl.bl_type = BL_MOB as u8;
         (*db).startm = startm;
         (*db).startx = startx;
         (*db).starty = starty;
@@ -524,23 +521,23 @@ pub unsafe fn mobspawn_read() -> c_int {
     0
 }
 
-// Stubs — unused in this server but keep C callers happy
-pub unsafe fn mobspawn2_read() -> c_int {
+// Stubs — no active callers
+pub unsafe fn mobspawn2_read() -> i32 {
     0
 }
-pub unsafe fn mobspeech_read() -> c_int {
+pub unsafe fn mobspeech_read() -> i32 {
     0
 }
 
 // ─── Magic timer functions ────────────────────────────────────────────────────
 
 #[cfg(not(test))]
-pub unsafe fn mob_duratimer(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn mob_duratimer(mob: *mut MobSpawnData) -> i32 {
     if mob.is_null() {
         return 0;
     }
     for x in 0..MAX_MAGIC_TIMERS {
-        let id = (*mob).da[x].id as c_int;
+        let id = (*mob).da[x].id as i32;
         if id <= 0 {
             continue;
         }
@@ -555,13 +552,13 @@ pub unsafe fn mob_duratimer(mob: *mut MobSpawnData) -> c_int {
             (*mob).da[x].duration -= 1000;
 
             if !tbl.is_null() {
-                let health: i64 = if (*tbl).bl_type as c_int == BL_MOB {
+                let health: i64 = if (*tbl).bl_type as i32 == BL_MOB {
                     let tmob = tbl as *mut MobSpawnData;
                     (*tmob).current_vita as i64
                 } else {
                     0
                 };
-                if health > 0 || (*tbl).bl_type as c_int == BL_PC {
+                if health > 0 || (*tbl).bl_type as i32 == BL_PC {
                     sl_doscript_2(magicdb_yname(id), c"while_cast".as_ptr(), &raw mut (*mob).bl, tbl);
                 }
             } else {
@@ -587,9 +584,9 @@ pub unsafe fn mob_duratimer(mob: *mut MobSpawnData) -> c_int {
 
 /// Common body for the 250 / 500 / 1500 ms timers (no expire logic).
 #[cfg(not(test))]
-unsafe fn dura_tick(mob: *mut MobSpawnData, event: *const c_char) {
+unsafe fn dura_tick(mob: *mut MobSpawnData, event: *const i8) {
     for x in 0..MAX_MAGIC_TIMERS {
-        let id = (*mob).da[x].id as c_int;
+        let id = (*mob).da[x].id as i32;
         if id <= 0 {
             continue;
         }
@@ -600,13 +597,13 @@ unsafe fn dura_tick(mob: *mut MobSpawnData, event: *const c_char) {
         };
         if (*mob).da[x].duration > 0 {
             if !tbl.is_null() {
-                let health: i64 = if (*tbl).bl_type as c_int == BL_MOB {
+                let health: i64 = if (*tbl).bl_type as i32 == BL_MOB {
                     let tmob = tbl as *mut MobSpawnData;
                     (*tmob).current_vita as i64
                 } else {
                     0
                 };
-                if health > 0 || (*tbl).bl_type as c_int == BL_PC {
+                if health > 0 || (*tbl).bl_type as i32 == BL_PC {
                     sl_doscript_2(magicdb_yname(id), event, &raw mut (*mob).bl, tbl);
                 }
             } else {
@@ -617,7 +614,7 @@ unsafe fn dura_tick(mob: *mut MobSpawnData, event: *const c_char) {
 }
 
 #[cfg(not(test))]
-pub unsafe fn mob_secondduratimer(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn mob_secondduratimer(mob: *mut MobSpawnData) -> i32 {
     if mob.is_null() {
         return 0;
     }
@@ -626,7 +623,7 @@ pub unsafe fn mob_secondduratimer(mob: *mut MobSpawnData) -> c_int {
 }
 
 #[cfg(not(test))]
-pub unsafe fn mob_thirdduratimer(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn mob_thirdduratimer(mob: *mut MobSpawnData) -> i32 {
     if mob.is_null() {
         return 0;
     }
@@ -635,7 +632,7 @@ pub unsafe fn mob_thirdduratimer(mob: *mut MobSpawnData) -> c_int {
 }
 
 #[cfg(not(test))]
-pub unsafe fn mob_fourthduratimer(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn mob_fourthduratimer(mob: *mut MobSpawnData) -> i32 {
     if mob.is_null() {
         return 0;
     }
@@ -644,9 +641,9 @@ pub unsafe fn mob_fourthduratimer(mob: *mut MobSpawnData) -> c_int {
 }
 
 #[cfg(not(test))]
-pub unsafe fn mob_flushmagic(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn mob_flushmagic(mob: *mut MobSpawnData) -> i32 {
     for x in 0..MAX_MAGIC_TIMERS {
-        let id = (*mob).da[x].id as c_int;
+        let id = (*mob).da[x].id as i32;
         if id <= 0 {
             continue;
         }
@@ -676,20 +673,20 @@ pub unsafe fn mob_flushmagic(mob: *mut MobSpawnData) -> c_int {
 // ─── Respawn functions ────────────────────────────────────────────────────────
 
 #[cfg(not(test))]
-pub unsafe fn mob_calcstat(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn mob_calcstat(mob: *mut MobSpawnData) -> i32 {
     if mob.is_null() || (*mob).data.is_null() {
         return 0;
     }
     let d = &*(*mob).data;
-    (*mob).maxvita = d.vita as c_uint;
-    (*mob).maxmana = d.mana as c_uint;
+    (*mob).maxvita = d.vita as u32;
+    (*mob).maxmana = d.mana as u32;
     (*mob).ac = d.baseac;
     if (*mob).ac < -95 {
         (*mob).ac = -95;
     }
     (*mob).miss = d.miss;
-    (*mob).newmove = d.movetime as c_uint;
-    (*mob).newatk = d.atktime as c_uint;
+    (*mob).newmove = d.movetime as u32;
+    (*mob).newatk = d.atktime as u32;
     (*mob).hit = d.hit;
     (*mob).mindam = d.mindam;
     (*mob).maxdam = d.maxdam;
@@ -714,7 +711,7 @@ pub unsafe fn mob_calcstat(mob: *mut MobSpawnData) -> c_int {
     if (*mob).state != MOB_DEAD {
         for x in 0..MAX_MAGIC_TIMERS {
             let p = &(*mob).da[x];
-            let id = p.id as c_int;
+            let id = p.id as i32;
             if id > 0 && p.duration > 0 {
                 let tsd = map_id2sd_mob(p.caster_id) as *mut BlockList;
                 if !tsd.is_null() {
@@ -729,19 +726,19 @@ pub unsafe fn mob_calcstat(mob: *mut MobSpawnData) -> c_int {
 }
 
 #[cfg(not(test))]
-pub unsafe fn mob_respawn_nousers(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn mob_respawn_nousers(mob: *mut MobSpawnData) -> i32 {
     if (*mob).bl.m != (*mob).startm {
         mob_warp(
             mob,
-            (*mob).startm as c_int,
-            (*mob).startx as c_int,
-            (*mob).starty as c_int,
+            (*mob).startm as i32,
+            (*mob).startx as i32,
+            (*mob).starty as i32,
         );
     } else {
         map_moveblock(
             &mut (*mob).bl,
-            (*mob).startx as c_int,
-            (*mob).starty as c_int,
+            (*mob).startx as i32,
+            (*mob).starty as i32,
         );
     }
     (*mob).state = MOB_ALIVE;
@@ -754,19 +751,19 @@ pub unsafe fn mob_respawn_nousers(mob: *mut MobSpawnData) -> c_int {
 }
 
 #[cfg(not(test))]
-pub unsafe fn mob_respawn(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn mob_respawn(mob: *mut MobSpawnData) -> i32 {
     if (*mob).bl.m != (*mob).startm {
         mob_warp(
             mob,
-            (*mob).startm as c_int,
-            (*mob).startx as c_int,
-            (*mob).starty as c_int,
+            (*mob).startm as i32,
+            (*mob).startx as i32,
+            (*mob).starty as i32,
         );
     } else {
         map_moveblock(
             &mut (*mob).bl,
-            (*mob).startx as c_int,
-            (*mob).starty as c_int,
+            (*mob).startx as i32,
+            (*mob).starty as i32,
         );
     }
     (*mob).state = MOB_ALIVE;
@@ -796,7 +793,7 @@ pub unsafe fn mob_respawn(mob: *mut MobSpawnData) -> c_int {
 
 // mob_warp forward-declared here; full body follows in the movement section.
 #[cfg(not(test))]
-pub unsafe fn mob_warp(mob: *mut MobSpawnData, m: c_int, x: c_int, y: c_int) -> c_int {
+pub unsafe fn mob_warp(mob: *mut MobSpawnData, m: i32, x: i32, y: i32) -> i32 {
     if mob.is_null() {
         return 0;
     }
@@ -805,12 +802,12 @@ pub unsafe fn mob_warp(mob: *mut MobSpawnData, m: c_int, x: c_int, y: c_int) -> 
     }
     map_delblock(&mut (*mob).bl);
     clif_lookgone(&mut (*mob).bl);
-    (*mob).bl.m = m as c_ushort;
-    (*mob).bl.x = x as c_ushort;
-    (*mob).bl.y = y as c_ushort;
-    (*mob).bl.bl_type = BL_MOB as c_uchar;
+    (*mob).bl.m = m as u16;
+    (*mob).bl.x = x as u16;
+    (*mob).bl.y = y as u16;
+    (*mob).bl.bl_type = BL_MOB as u8;
     if map_addblock(&mut (*mob).bl) != 0 {
-        eprintln!("Error warping mob.");
+        tracing::warn!("Error warping mob.");
     }
     if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
         let mob_ptr = mob;
@@ -824,7 +821,7 @@ pub unsafe fn mob_warp(mob: *mut MobSpawnData, m: c_int, x: c_int, y: c_int) -> 
     0
 }
 
-pub unsafe fn kill_mob(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn kill_mob(mob: *mut MobSpawnData) -> i32 {
     #[cfg(not(test))]
     {
         clif_mob_kill(mob);
@@ -895,8 +892,8 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
             } else {
                 &*(*mob).data
             };
-            if ((*mob).time_ >= data.movetime && (*mob).time_ >= (*mob).newmove as c_int)
-                || ((*mob).newmove > 0 && (*mob).time_ >= (*mob).newmove as c_int)
+            if ((*mob).time_ >= data.movetime && (*mob).time_ >= (*mob).newmove as i32)
+                || ((*mob).newmove > 0 && (*mob).time_ >= (*mob).newmove as i32)
             {
                 if data.r#type >= 2 {
                     return;
@@ -916,9 +913,9 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
                 // reset newmove so the mob doesn't rapid-fire move attempts.
                 if (*mob).bl.x == pre_x && (*mob).bl.y == pre_y
                     && !(*mob).data.is_null()
-                    && (*mob).newmove < (*(*mob).data).movetime as c_uint
+                    && (*mob).newmove < (*(*mob).data).movetime as u32
                 {
-                    (*mob).newmove = (*(*mob).data).movetime as c_uint;
+                    (*mob).newmove = (*(*mob).data).movetime as u32;
                 }
             }
         }
@@ -928,8 +925,8 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
             } else {
                 &*(*mob).data
             };
-            if ((*mob).time_ >= data.atktime && (*mob).time_ >= (*mob).newatk as c_int)
-                || ((*mob).newatk > 0 && (*mob).time_ >= (*mob).newatk as c_int)
+            if ((*mob).time_ >= data.atktime && (*mob).time_ >= (*mob).newatk as i32)
+                || ((*mob).newatk > 0 && (*mob).time_ >= (*mob).newatk as i32)
             {
                 if data.r#type >= 2 {
                     return;
@@ -957,8 +954,8 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
             } else {
                 &*(*mob).data
             };
-            if ((*mob).time_ >= data.movetime && (*mob).time_ >= (*mob).newmove as c_int)
-                || ((*mob).newmove > 0 && (*mob).time_ >= (*mob).newmove as c_int)
+            if ((*mob).time_ >= data.movetime && (*mob).time_ >= (*mob).newmove as i32)
+                || ((*mob).newmove > 0 && (*mob).time_ >= (*mob).newmove as i32)
             {
                 if data.r#type >= 2 {
                     return;
@@ -991,7 +988,7 @@ unsafe fn mob_resolve_target(mob: *mut MobSpawnData) -> *mut BlockList {
         (*mob).attacker = 0;
         return std::ptr::null_mut();
     }
-    if (*bl).bl_type as c_int == BL_MOB {
+    if (*bl).bl_type as i32 == BL_MOB {
         let tmob = bl as *mut MobSpawnData;
         if (*tmob).state == MOB_DEAD {
             (*mob).target = 0;
@@ -1012,13 +1009,13 @@ unsafe fn mob_resolve_target(mob: *mut MobSpawnData) -> *mut BlockList {
 
 /// Dispatches to the correct Lua AI script based on mob subtype.
 #[cfg(not(test))]
-unsafe fn dispatch_ai(mob: *mut MobSpawnData, bl: *mut BlockList, event: *const c_char) {
+unsafe fn dispatch_ai(mob: *mut MobSpawnData, bl: *mut BlockList, event: *const i8) {
     let data = if (*mob).data.is_null() {
         return;
     } else {
         &*(*mob).data
     };
-    let script: *const c_char = match data.subtype {
+    let script: *const i8 = match data.subtype {
         0 => c"mob_ai_basic".as_ptr(),
         1 => c"mob_ai_normal".as_ptr(),
         2 => c"mob_ai_hard".as_ptr(),
@@ -1060,7 +1057,7 @@ pub unsafe fn mob_trap_look_inner(bl: *mut BlockList, mob: *mut MobSpawnData, ty
 
 /// Called every 50ms by the timer system.
 #[cfg(not(test))]
-pub unsafe fn mob_timer_spawns(_id: c_int, _n: c_int) -> c_int {
+pub unsafe fn mob_timer_spawns(_id: i32, _n: i32) -> i32 {
     TIMERCHECK.fetch_add(1, Ordering::Relaxed);
 
     let spawn_start = MOB_SPAWN_START.load(Ordering::Relaxed);
@@ -1117,7 +1114,7 @@ unsafe fn tick_mob(mob: *mut MobSpawnData) {
 
 /// Shared warp-tile check used by all three move_mob variants.
 #[cfg(not(test))]
-unsafe fn warp_at(slot: *mut crate::database::map_db::MapData, dx: c_int, dy: c_int) -> bool {
+unsafe fn warp_at(slot: *mut crate::database::map_db::MapData, dx: i32, dy: i32) -> bool {
     let bxs = (*slot).bxs as usize;
     let xs = (*slot).xs as usize;
     let ys = (*slot).ys as usize;
@@ -1130,7 +1127,7 @@ unsafe fn warp_at(slot: *mut crate::database::map_db::MapData, dx: c_int, dy: c_
     let warp: *mut WarpList = *(*slot).warp.add(idx);
     let mut w = warp;
     while !w.is_null() {
-        if (*w).x == dx as c_int && (*w).y == dy as c_int {
+        if (*w).x == dx as i32 && (*w).y == dy as i32 {
             return true;
         }
         w = (*w).next;
@@ -1144,11 +1141,11 @@ unsafe fn warp_at(slot: *mut crate::database::map_db::MapData, dx: c_int, dy: c_
 unsafe fn viewport_delta(
     mob: *const MobSpawnData,
     slot: *mut crate::database::map_db::MapData,
-) -> (c_int, c_int, c_int, c_int, c_int, c_int, bool) {
-    let backx = (*mob).bl.x as c_int;
-    let backy = (*mob).bl.y as c_int;
-    let xs = (*slot).xs as c_int;
-    let ys = (*slot).ys as c_int;
+) -> (i32, i32, i32, i32, i32, i32, bool) {
+    let backx = (*mob).bl.x as i32;
+    let backy = (*mob).bl.y as i32;
+    let xs = (*slot).xs as i32;
+    let ys = (*slot).ys as i32;
     let (mut x0, mut y0) = (backx, backy);
     let (mut x1, mut y1) = (0, 0);
     let mut dx = backx;
@@ -1271,13 +1268,13 @@ unsafe fn viewport_delta(
 #[cfg(not(test))]
 unsafe fn broadcast_move(
     mob: *mut MobSpawnData,
-    x0: c_int,
-    y0: c_int,
-    x1: c_int,
-    y1: c_int,
+    x0: i32,
+    y0: i32,
+    x1: i32,
+    y1: i32,
     nothingnew: bool,
 ) {
-    let m = (*mob).bl.m as c_int;
+    let m = (*mob).bl.m as i32;
     let mut subt = [0i32; 1];
     if !nothingnew {
         if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
@@ -1308,10 +1305,10 @@ unsafe fn broadcast_move(
 }
 
 #[cfg(not(test))]
-unsafe fn check_mob_collision(moving_mob: *mut MobSpawnData, m: c_int, x: c_int, y: c_int) {
+unsafe fn check_mob_collision(moving_mob: *mut MobSpawnData, m: i32, x: i32, y: i32) {
     if (*moving_mob).canmove == 1 { return; }
     if x < 0 || y < 0 { return; }
-    let slot = ffi_get_map_ptr(m as c_ushort);
+    let slot = ffi_get_map_ptr(m as u16);
     if slot.is_null() { return; }
     let bxs = (*slot).bxs as usize;
     let bys = (*slot).bys as usize;
@@ -1321,7 +1318,7 @@ unsafe fn check_mob_collision(moving_mob: *mut MobSpawnData, m: c_int, x: c_int,
     let pos = bx + by * bxs;
     let mut bl = *(*slot).block_mob.add(pos);
     while !bl.is_null() {
-        if (*bl).x as c_int == x && (*bl).y as c_int == y {
+        if (*bl).x as i32 == x && (*bl).y as i32 == y {
             let m2 = bl as *mut MobSpawnData;
             if (*m2).state != MOB_DEAD && bl != &raw mut (*moving_mob).bl {
                 (*moving_mob).canmove = 1;
@@ -1332,14 +1329,13 @@ unsafe fn check_mob_collision(moving_mob: *mut MobSpawnData, m: c_int, x: c_int,
     }
 }
 
-/// Direct Rust PC-collision check — replaces the broken BL_PC foreachincell call.
-/// Sets `moving_mob.canmove = 1` if a physical, non-GM, non-dead player occupies `(x, y)`.
+/// PC-collision check — sets `moving_mob.canmove = 1` if a physical, non-GM, non-dead player occupies `(x, y)`.
 #[cfg(not(test))]
-unsafe fn check_pc_collision(moving_mob: *mut MobSpawnData, m: c_int, x: c_int, y: c_int) {
+unsafe fn check_pc_collision(moving_mob: *mut MobSpawnData, m: i32, x: i32, y: i32) {
     use crate::game::pc::{MapSessionData, PC_DIE};
     if (*moving_mob).canmove == 1 { return; }
     if x < 0 || y < 0 { return; }
-    let slot = ffi_get_map_ptr(m as c_ushort);
+    let slot = ffi_get_map_ptr(m as u16);
     if slot.is_null() { return; }
     let show_ghosts = (*slot).show_ghosts;
     let bxs = (*slot).bxs as usize;
@@ -1350,7 +1346,7 @@ unsafe fn check_pc_collision(moving_mob: *mut MobSpawnData, m: c_int, x: c_int, 
     let pos = bx + by * bxs;
     let mut bl = *(*slot).block.add(pos);
     while !bl.is_null() {
-        if (*bl).bl_type == BL_PC as u8 && (*bl).x as c_int == x && (*bl).y as c_int == y {
+        if (*bl).bl_type == BL_PC as u8 && (*bl).x as i32 == x && (*bl).y as i32 == y {
             let sd = bl as *mut MapSessionData;
             let state   = (*sd).status.state;
             let gm_lvl  = (*sd).status.gm_level;
@@ -1367,10 +1363,10 @@ unsafe fn check_pc_collision(moving_mob: *mut MobSpawnData, m: c_int, x: c_int, 
 }
 
 #[cfg(not(test))]
-pub unsafe fn move_mob(mob: *mut MobSpawnData) -> c_int {
-    let m = (*mob).bl.m as c_int;
-    let backx = (*mob).bl.x as c_int;
-    let backy = (*mob).bl.y as c_int;
+pub unsafe fn move_mob(mob: *mut MobSpawnData) -> i32 {
+    let m = (*mob).bl.m as i32;
+    let backx = (*mob).bl.x as i32;
+    let backy = (*mob).bl.y as i32;
     let slot = ffi_get_map_ptr((*mob).bl.m);
     if slot.is_null() {
         return 0;
@@ -1378,8 +1374,8 @@ pub unsafe fn move_mob(mob: *mut MobSpawnData) -> c_int {
 
     let (x0, y0, x1, y1, mut dx, mut dy, nothingnew) = viewport_delta(mob, slot);
 
-    let xs = (*slot).xs as c_int;
-    let ys = (*slot).ys as c_int;
+    let xs = (*slot).xs as i32;
+    let ys = (*slot).ys as i32;
 
     if dx >= xs {
         dx = xs - 1;
@@ -1426,8 +1422,8 @@ pub unsafe fn move_mob(mob: *mut MobSpawnData) -> c_int {
     };
 
     if dx != backx || dy != backy {
-        (*mob).bx = backx as c_ushort;
-        (*mob).by_ = backy as c_ushort;
+        (*mob).bx = backx as u16;
+        (*mob).by_ = backy as u16;
         map_moveblock(&mut (*mob).bl, dx, dy);
         broadcast_move(mob, x0, y0, x1, y1, nothingnew);
         return 1;
@@ -1436,18 +1432,18 @@ pub unsafe fn move_mob(mob: *mut MobSpawnData) -> c_int {
 }
 
 #[cfg(not(test))]
-pub unsafe fn move_mob_ignore_object(mob: *mut MobSpawnData) -> c_int {
-    let m = (*mob).bl.m as c_int;
-    let backx = (*mob).bl.x as c_int;
-    let backy = (*mob).bl.y as c_int;
+pub unsafe fn move_mob_ignore_object(mob: *mut MobSpawnData) -> i32 {
+    let m = (*mob).bl.m as i32;
+    let backx = (*mob).bl.x as i32;
+    let backy = (*mob).bl.y as i32;
     let slot = ffi_get_map_ptr((*mob).bl.m);
     if slot.is_null() {
         return 0;
     }
 
     let (x0, y0, x1, y1, mut dx, mut dy, nothingnew) = viewport_delta(mob, slot);
-    let xs = (*slot).xs as c_int;
-    let ys = (*slot).ys as c_int;
+    let xs = (*slot).xs as i32;
+    let ys = (*slot).ys as i32;
     if dx >= xs {
         dx = xs - 1;
     }
@@ -1484,8 +1480,8 @@ pub unsafe fn move_mob_ignore_object(mob: *mut MobSpawnData) -> c_int {
     };
 
     if dx != backx || dy != backy {
-        (*mob).bx = backx as c_ushort;
-        (*mob).by_ = backy as c_ushort;
+        (*mob).bx = backx as u16;
+        (*mob).by_ = backy as u16;
         map_moveblock(&mut (*mob).bl, dx, dy);
         broadcast_move(mob, x0, y0, x1, y1, nothingnew);
         return 1;
@@ -1494,18 +1490,18 @@ pub unsafe fn move_mob_ignore_object(mob: *mut MobSpawnData) -> c_int {
 }
 
 #[cfg(not(test))]
-pub unsafe fn moveghost_mob(mob: *mut MobSpawnData) -> c_int {
-    let m = (*mob).bl.m as c_int;
-    let backx = (*mob).bl.x as c_int;
-    let backy = (*mob).bl.y as c_int;
+pub unsafe fn moveghost_mob(mob: *mut MobSpawnData) -> i32 {
+    let m = (*mob).bl.m as i32;
+    let backx = (*mob).bl.x as i32;
+    let backy = (*mob).bl.y as i32;
     let slot = ffi_get_map_ptr((*mob).bl.m);
     if slot.is_null() {
         return 0;
     }
 
     let (x0, y0, x1, y1, mut dx, mut dy, nothingnew) = viewport_delta(mob, slot);
-    let xs = (*slot).xs as c_int;
-    let ys = (*slot).ys as c_int;
+    let xs = (*slot).xs as i32;
+    let ys = (*slot).ys as i32;
     if dx >= xs {
         dx = xs - 1;
     }
@@ -1552,8 +1548,8 @@ pub unsafe fn moveghost_mob(mob: *mut MobSpawnData) -> c_int {
     };
 
     if dx != backx || dy != backy {
-        (*mob).bx = backx as c_ushort;
-        (*mob).by_ = backy as c_ushort;
+        (*mob).bx = backx as u16;
+        (*mob).by_ = backy as u16;
         map_moveblock(&mut (*mob).bl, dx, dy);
         broadcast_move(mob, x0, y0, x1, y1, nothingnew);
         return 1;
@@ -1562,14 +1558,14 @@ pub unsafe fn moveghost_mob(mob: *mut MobSpawnData) -> c_int {
 }
 
 #[cfg(not(test))]
-pub unsafe fn mob_move2(mob: *mut MobSpawnData, x: c_int, y: c_int, side: c_int) -> c_int {
+pub unsafe fn mob_move2(mob: *mut MobSpawnData, x: i32, y: i32, side: i32) -> i32 {
     if (*mob).canmove != 0 {
         return 1;
     }
     if x < 0 || y < 0 {
         return 0;
     }
-    let m = (*mob).bl.m as c_int;
+    let m = (*mob).bl.m as i32;
     (*mob).side = side;
     check_mob_collision(mob, m, x, y);
     check_pc_collision(mob, m, x, y);
@@ -1588,15 +1584,15 @@ pub unsafe fn mob_move2(mob: *mut MobSpawnData, x: c_int, y: c_int, side: c_int)
 }
 
 #[cfg(not(test))]
-pub unsafe fn move_mob_intent(mob: *mut MobSpawnData, bl: *mut BlockList) -> c_int {
+pub unsafe fn move_mob_intent(mob: *mut MobSpawnData, bl: *mut BlockList) -> i32 {
     if bl.is_null() {
         return 0;
     }
     (*mob).canmove = 0;
-    let mx = (*mob).bl.x as c_int;
-    let my = (*mob).bl.y as c_int;
-    let px = (*bl).x as c_int;
-    let py = (*bl).y as c_int;
+    let mx = (*mob).bl.x as i32;
+    let my = (*mob).bl.y as i32;
+    let px = (*bl).x as i32;
+    let py = (*bl).y as i32;
     let ax = (mx - px).abs();
     let ay = (my - py).abs();
     let side = (*mob).side;
@@ -1623,7 +1619,7 @@ pub unsafe fn move_mob_intent(mob: *mut MobSpawnData, bl: *mut BlockList) -> c_i
 
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
-pub unsafe fn mob_readglobalreg(mob: *mut MobSpawnData, reg: *const c_char) -> c_int {
+pub unsafe fn mob_readglobalreg(mob: *mut MobSpawnData, reg: *const i8) -> i32 {
     if mob.is_null() || reg.is_null() {
         return 0;
     }
@@ -1635,7 +1631,7 @@ pub unsafe fn mob_readglobalreg(mob: *mut MobSpawnData, reg: *const c_char) -> c
     0
 }
 
-pub unsafe fn mob_setglobalreg(mob: *mut MobSpawnData, reg: *const c_char, val: c_int) -> c_int {
+pub unsafe fn mob_setglobalreg(mob: *mut MobSpawnData, reg: *const i8, val: i32) -> i32 {
     if mob.is_null() || reg.is_null() {
         return 1;
     }
@@ -1660,7 +1656,7 @@ pub unsafe fn mob_setglobalreg(mob: *mut MobSpawnData, reg: *const c_char, val: 
             return 0;
         }
     }
-    eprintln!(
+    tracing::warn!(
         "[mob] mob_setglobalreg: couldn't set {:?}",
         std::ffi::CStr::from_ptr(reg)
     );
@@ -1679,7 +1675,6 @@ pub unsafe fn mob_thing_yeah_inner(_bl: *mut BlockList, def: *mut i32) -> i32 {
 
 /// Typed inner: merge item `fl2` into an existing floor-item `fl` if IDs match.
 /// Args: `int* def`, `int id` (unused), `FLOORITEM* fl2`, `USER* sd` (unused).
-/// Mirrors `mob_addtocurrent` from `c_src/mob.c`.
 #[cfg(not(test))]
 pub unsafe fn rust_mob_addtocurrent_inner(bl: *mut BlockList, def: *mut i32, _id: i32, fl2: *mut crate::game::scripting::types::floor::FloorItemData, _sd: *mut MapSessionData) -> i32 {
     use crate::game::scripting::types::floor::FloorItemData;
@@ -1702,30 +1697,29 @@ pub unsafe fn rust_mob_addtocurrent_inner(bl: *mut BlockList, def: *mut i32, _id
 
 /// Drop an item onto the ground at (m, x, y).
 /// Reads `attacker->group_count` and `groups[]` to populate floor-item looters.
-/// Mirrors `mobdb_dropitem` from `c_src/mob.c`.
 #[cfg(not(test))]
 pub unsafe fn rust_mob_dropitem(
-    blockid: c_uint,
-    id: c_uint,
-    amount: c_int,
-    dura: c_int,
-    protected_: c_int,
-    owner: c_int,
-    m: c_int,
-    x: c_int,
-    y: c_int,
+    blockid: u32,
+    id: u32,
+    amount: i32,
+    dura: i32,
+    protected_: i32,
+    owner: i32,
+    m: i32,
+    x: i32,
+    y: i32,
     sd: *mut MapSessionData,
-) -> c_int {
+) -> i32 {
     use crate::game::pc::MAX_GROUP_MEMBERS;
     use crate::game::scripting::types::floor::FloorItemData;
     let mob: *mut MobSpawnData =
-        if blockid >= MOB_START_NUM as c_uint && blockid < FLOORITEM_START_NUM as c_uint {
+        if blockid >= MOB_START_NUM as u32 && blockid < FLOORITEM_START_NUM as u32 {
             map_id2mob(blockid)
         } else {
             std::ptr::null_mut()
         };
 
-    let mut def: c_int = 0;
+    let mut def: i32 = 0;
     let fl = libc::calloc(1, std::mem::size_of::<FloorItemData>()) as *mut FloorItemData;
     if fl.is_null() {
         return 0;
@@ -1736,8 +1730,8 @@ pub unsafe fn rust_mob_dropitem(
     (*fl).data.id = id;
     (*fl).data.amount = amount;
     (*fl).data.dura = dura;
-    (*fl).data.protected = protected_ as c_uint;
-    (*fl).data.owner = owner as c_uint;
+    (*fl).data.protected = protected_ as u32;
+    (*fl).data.owner = owner as u32;
 
     {
         let def_ptr = &raw mut def;
@@ -1747,18 +1741,18 @@ pub unsafe fn rust_mob_dropitem(
             |bl| rust_mob_addtocurrent_inner(bl, def_ptr, id as i32, fl_ptr, sd_ptr));
     }
 
-    (*fl).timer = libc::time(std::ptr::null_mut()) as c_uint;
+    (*fl).timer = libc::time(std::ptr::null_mut()) as u32;
     libc::memset(
         (*fl).looters.as_mut_ptr() as *mut libc::c_void,
         0,
-        std::mem::size_of::<c_uint>() * MAX_GROUP_MEMBERS,
+        std::mem::size_of::<u32>() * MAX_GROUP_MEMBERS,
     );
 
     if !mob.is_null() {
         let attacker = map_id2sd_mob((*mob).attacker);
         if !attacker.is_null() {
             if (*attacker).group_count > 0 {
-                let safe_count = if (*attacker).group_count < MAX_GROUP_MEMBERS as c_int {
+                let safe_count = if (*attacker).group_count < MAX_GROUP_MEMBERS as i32 {
                     (*attacker).group_count as usize
                 } else {
                     MAX_GROUP_MEMBERS
@@ -1788,7 +1782,7 @@ pub unsafe fn rust_mob_dropitem(
 }
 
 #[cfg(not(test))]
-pub unsafe fn mobdb_drops(mob: *mut MobSpawnData, sd: *mut std::ffi::c_void) -> c_int {
+pub unsafe fn mobdb_drops(mob: *mut MobSpawnData, sd: *mut std::ffi::c_void) -> i32 {
     // sd->bl is the first field — cast gives the block_list* for sl_doscript_blargs
     sl_doscript_2(c"mobDrops".as_ptr(), std::ptr::null(), sd as *mut BlockList, &raw mut (*mob).bl);
     let sd_typed = sd as *mut MapSessionData;
@@ -1797,14 +1791,14 @@ pub unsafe fn mobdb_drops(mob: *mut MobSpawnData, sd: *mut std::ffi::c_void) -> 
         if slot.id != 0 && slot.amount >= 1 {
             rust_mob_dropitem(
                 (*mob).bl.id,
-                slot.id as c_uint,
+                slot.id as u32,
                 slot.amount,
                 slot.dura,
-                slot.protected as c_int,
-                slot.owner as c_int,
-                (*mob).bl.m as c_int,
-                (*mob).bl.x as c_int,
-                (*mob).bl.y as c_int,
+                slot.protected as i32,
+                slot.owner as i32,
+                (*mob).bl.m as i32,
+                (*mob).bl.x as i32,
+                (*mob).bl.y as i32,
                 sd_typed,
             );
             (*mob).inventory[i].id = 0;
@@ -1817,12 +1811,11 @@ pub unsafe fn mobdb_drops(mob: *mut MobSpawnData, sd: *mut std::ffi::c_void) -> 
     0
 }
 
-// ─── USER-dependent mob functions (ported from c_src/mob.c) ──────────────────
+// ─── Mob AI and behavior functions ────────────────────────────────────────────
 
 /// Typed inner: selects a PC as this mob's target.
 /// Reads `sd->status.dura_aether` to check sneak/cloak/hide, then conditionally
 /// updates `mob->target` based on `sd->status.gm_level` and a random roll.
-/// Mirrors `mob_find_target` from `c_src/mob.c`.
 #[cfg(not(test))]
 pub unsafe fn rust_mob_find_target_inner(bl: *mut BlockList, mob: *mut MobSpawnData) -> i32 {
     use crate::game::pc::PC_DIE;
@@ -1841,7 +1834,7 @@ pub unsafe fn rust_mob_find_target_inner(bl: *mut BlockList, mob: *mut MobSpawnD
     let mut invis: u8 = 0;
     for i in 0..MAX_MAGIC_TIMERS {
         if (*sd).status.dura_aether[i].duration > 0 {
-            let name = magicdb_name((*sd).status.dura_aether[i].id as c_int);
+            let name = magicdb_name((*sd).status.dura_aether[i].id as i32);
             if !name.is_null() {
                 if libc::strcasecmp(name, c"sneak".as_ptr()) == 0 {
                     invis = 1;
@@ -1893,14 +1886,13 @@ pub unsafe fn rust_mob_find_target_inner(bl: *mut BlockList, mob: *mut MobSpawnD
 /// Mob attacks a player (or another mob) by ID.
 /// Reads `sd->uFlags` and `sd->optFlags` to check immortal/stealth before attacking.
 /// Calls scripting hooks `hitCritChance` and `swingDamage`, then sends network damage.
-/// Mirrors `mob_attack` from `c_src/mob.c`.
 #[cfg(not(test))]
-pub unsafe fn rust_mob_attack(mob: *mut MobSpawnData, id: c_int) -> c_int {
+pub unsafe fn rust_mob_attack(mob: *mut MobSpawnData, id: i32) -> i32 {
     use crate::game::pc::{OPT_FLAG_STEALTH, SFLAG_HPMP, U_FLAG_IMMORTAL};
     if id < 0 {
         return 0;
     }
-    let bl = map_id2bl(id as c_uint);
+    let bl = map_id2bl(id as u32);
     if bl.is_null() {
         return 0;
     }
@@ -1931,18 +1923,18 @@ pub unsafe fn rust_mob_attack(mob: *mut MobSpawnData, id: c_int) -> c_int {
             sl_doscript_2(c"swingDamage".as_ptr(), std::ptr::null(), &raw mut (*mob).bl, &raw mut (*sd).bl);
             for x in 0..MAX_MAGIC_TIMERS {
                 if (*mob).da[x].id > 0 && (*mob).da[x].duration > 0 {
-                    sl_doscript_2(magicdb_yname((*mob).da[x].id as c_int), c"on_hit_while_cast".as_ptr(), &raw mut (*mob).bl, &raw mut (*sd).bl);
+                    sl_doscript_2(magicdb_yname((*mob).da[x].id as i32), c"on_hit_while_cast".as_ptr(), &raw mut (*mob).bl, &raw mut (*sd).bl);
                 }
             }
         } else if !tmob.is_null() {
             sl_doscript_2(c"swingDamage".as_ptr(), std::ptr::null(), &raw mut (*mob).bl, &raw mut (*tmob).bl);
             for x in 0..MAX_MAGIC_TIMERS {
                 if (*mob).da[x].id > 0 && (*mob).da[x].duration > 0 {
-                    sl_doscript_2(magicdb_yname((*mob).da[x].id as c_int), c"on_hit_while_cast".as_ptr(), &raw mut (*mob).bl, &raw mut (*tmob).bl);
+                    sl_doscript_2(magicdb_yname((*mob).da[x].id as i32), c"on_hit_while_cast".as_ptr(), &raw mut (*mob).bl, &raw mut (*tmob).bl);
                 }
             }
         }
-        let dmg = ((*mob).damage + 0.5f32) as c_int;
+        let dmg = ((*mob).damage + 0.5f32) as i32;
         if !sd.is_null() {
             if (*mob).critchance == 1 {
                 clif_send_pc_health(sd, dmg, 33);
@@ -1963,12 +1955,11 @@ pub unsafe fn rust_mob_attack(mob: *mut MobSpawnData, id: c_int) -> c_int {
 
 /// Calculate and set `mob->critchance` based on mob stats vs player stats.
 /// Returns 0 (miss), 1 (normal hit), or 2 (critical hit).
-/// Mirrors `mob_calc_critical` from `c_src/mob.c`.
 #[cfg(not(test))]
 pub unsafe fn rust_mob_calc_critical(
     mob: *mut MobSpawnData,
     sd: *mut MapSessionData,
-) -> c_int {
+) -> i32 {
     if mob.is_null() || sd.is_null() {
         return 0;
     }
@@ -1977,9 +1968,9 @@ pub unsafe fn rust_mob_calc_critical(
         return 0;
     }
     let equat = ((*db).hit + (*db).level + ((*db).might / 5) + 20)
-        - ((*sd).status.level as c_int + ((*sd).grace / 2));
-    let mut equat = equat - ((*sd).grace / 4) + (*sd).status.level as c_int;
-    let chance = ((rand::random::<u32>() & 0x00FF_FFFF) % 100) as c_int;
+        - ((*sd).status.level as i32 + ((*sd).grace / 2));
+    let mut equat = equat - ((*sd).grace / 4) + (*sd).status.level as i32;
+    let chance = ((rand::random::<u32>() & 0x00FF_FFFF) % 100) as i32;
     if equat < 5 {
         equat = 5;
     }
@@ -2000,7 +1991,6 @@ pub unsafe fn rust_mob_calc_critical(
 
 /// Typed inner: check whether an entity blocks mob movement.
 /// Sets `mob->canmove = 1` if the entity occupies the cell and is not a valid ghost/GM.
-/// Mirrors `mob_move` from `c_src/mob.c`.
 #[cfg(not(test))]
 pub unsafe fn rust_mob_move_inner(bl: *mut BlockList, mob: *mut MobSpawnData) -> i32 {
     use crate::game::pc::PC_DIE;
@@ -2044,21 +2034,21 @@ pub unsafe fn rust_mob_move_inner(bl: *mut BlockList, mob: *mut MobSpawnData) ->
 
 #[cfg(not(test))]
 pub unsafe fn mobspawn_onetime(
-    id: c_uint,
-    m: c_int,
-    x: c_int,
-    y: c_int,
-    times: c_int,
-    start: c_int,
-    end: c_int,
-    replace: c_uint,
-    owner: c_uint,
-) -> *mut c_uint {
-    const MAX_ONETIME_SPAWNS: c_int = 1024;
+    id: u32,
+    m: i32,
+    x: i32,
+    y: i32,
+    times: i32,
+    start: i32,
+    end: i32,
+    replace: u32,
+    owner: u32,
+) -> *mut u32 {
+    const MAX_ONETIME_SPAWNS: i32 = 1024;
     if times <= 0 || times > MAX_ONETIME_SPAWNS {
         return std::ptr::null_mut();
     }
-    let spawnedmobs = libc::calloc(times as usize, std::mem::size_of::<c_uint>()) as *mut c_uint;
+    let spawnedmobs = libc::calloc(times as usize, std::mem::size_of::<u32>()) as *mut u32;
     if spawnedmobs.is_null() {
         return std::ptr::null_mut();
     }
@@ -2070,18 +2060,18 @@ pub unsafe fn mobspawn_onetime(
         if (*db).exp == 0 {
             (*db).exp = mobdb_experience(id);
         }
-        (*db).startm = m as c_ushort;
-        (*db).startx = x as c_ushort;
-        (*db).starty = y as c_ushort;
+        (*db).startm = m as u16;
+        (*db).startx = x as u16;
+        (*db).starty = y as u16;
         (*db).mobid = id;
-        (*db).start = start as c_schar;
-        (*db).end = end as c_schar;
+        (*db).start = start as i8;
+        (*db).end = end as i8;
         (*db).replace = replace;
         (*db).state = MOB_DEAD;
-        (*db).bl.bl_type = BL_MOB as c_uchar;
-        (*db).bl.m = m as c_ushort;
-        (*db).bl.x = x as c_ushort;
-        (*db).bl.y = y as c_ushort;
+        (*db).bl.bl_type = BL_MOB as u8;
+        (*db).bl.m = m as u16;
+        (*db).bl.x = x as u16;
+        (*db).bl.y = y as u16;
         (*db).owner = owner;
         (*db).onetime = 1;
         (*db).spawncheck = 0;
@@ -2090,7 +2080,7 @@ pub unsafe fn mobspawn_onetime(
 
         let new_id = mob_get_free_id();
         if new_id == 0 {
-            eprintln!("[mob] mobspawn_onetime: no free onetime ID, skipping spawn");
+            tracing::warn!("[mob] mobspawn_onetime: no free onetime ID, skipping spawn");
             libc::free(db as *mut libc::c_void);
             continue;
         }
@@ -2110,11 +2100,11 @@ pub unsafe fn mobspawn_onetime(
     spawnedmobs
 }
 
-// ─── sl_mob_* Lua scripting glue (ported from c_src/sl_compat.c) ─────────────
+// ─── Mob Lua scripting glue ───────────────────────────────────────────────────
 
 /// Heal mob: fire on_healed Lua event then send the negative-damage health packet.
 #[cfg(not(test))]
-pub unsafe fn sl_mob_addhealth(mob: *mut MobSpawnData, damage: c_int) {
+pub unsafe fn sl_mob_addhealth(mob: *mut MobSpawnData, damage: i32) {
     use crate::game::map_parse::combat::clif_send_mob_healthscript;
     if mob.is_null() { return; }
     let bl = map_id2bl((*mob).attacker);
@@ -2145,7 +2135,7 @@ pub unsafe fn sl_mob_addhealth(mob: *mut MobSpawnData, damage: c_int) {
 
 /// Damage mob: set attacker/damage fields then send the health packet.
 #[cfg(not(test))]
-pub unsafe fn sl_mob_removehealth(mob: *mut MobSpawnData, damage: c_int, caster_id: c_uint) {
+pub unsafe fn sl_mob_removehealth(mob: *mut MobSpawnData, damage: i32, caster_id: u32) {
     use crate::game::map_parse::combat::clif_send_mob_healthscript;
     if mob.is_null() { return; }
     let bl = if caster_id > 0 {
@@ -2155,17 +2145,17 @@ pub unsafe fn sl_mob_removehealth(mob: *mut MobSpawnData, damage: c_int, caster_
         map_id2bl((*mob).attacker)
     };
     if !bl.is_null() {
-        if (*bl).bl_type as c_int == BL_PC {
+        if (*bl).bl_type as i32 == BL_PC {
             let tsd = bl as *mut MapSessionData;
-            (*tsd).damage = damage as c_float;
+            (*tsd).damage = damage as f32;
             (*tsd).critchance = 0;
-        } else if (*bl).bl_type as c_int == BL_MOB {
+        } else if (*bl).bl_type as i32 == BL_MOB {
             let tmob = bl as *mut MobSpawnData;
-            (*tmob).damage = damage as c_float;
+            (*tmob).damage = damage as f32;
             (*tmob).critchance = 0;
         }
     } else {
-        (*mob).damage = damage as c_float;
+        (*mob).damage = damage as f32;
         (*mob).critchance = 0;
     }
     if (*mob).state != MOB_DEAD {
@@ -2175,14 +2165,14 @@ pub unsafe fn sl_mob_removehealth(mob: *mut MobSpawnData, damage: c_int, caster_
 
 /// Return accumulated threat amount from a specific player on this mob.
 #[cfg(not(test))]
-pub unsafe fn sl_mob_checkthreat(mob: *mut MobSpawnData, player_id: c_uint) -> c_int {
+pub unsafe fn sl_mob_checkthreat(mob: *mut MobSpawnData, player_id: u32) -> i32 {
     if mob.is_null() { return 0; }
     let tsd = map_id2sd_mob(player_id);
     if tsd.is_null() { return 0; }
     let uid = (*tsd).bl.id;
     for x in 0..MAX_THREATCOUNT {
         if (*mob).threat[x].user == uid {
-            return (*mob).threat[x].amount as c_int;
+            return (*mob).threat[x].amount as i32;
         }
     }
     0
@@ -2190,13 +2180,13 @@ pub unsafe fn sl_mob_checkthreat(mob: *mut MobSpawnData, player_id: c_uint) -> c
 
 /// Add individual damage from player to mob's dmgindtable.
 #[cfg(not(test))]
-pub unsafe fn sl_mob_setinddmg(mob: *mut MobSpawnData, player_id: c_uint, dmg: f32) -> c_int {
+pub unsafe fn sl_mob_setinddmg(mob: *mut MobSpawnData, player_id: u32, dmg: f32) -> i32 {
     if mob.is_null() { return 0; }
     let sd = map_id2sd_mob(player_id);
     if sd.is_null() { return 0; }
     let cid = (*sd).status.id;
     for x in 0..MAX_THREATCOUNT {
-        if (*mob).dmgindtable[x][0] as c_uint == cid || (*mob).dmgindtable[x][0] == 0.0 {
+        if (*mob).dmgindtable[x][0] as u32 == cid || (*mob).dmgindtable[x][0] == 0.0 {
             (*mob).dmgindtable[x][0] = cid as f64;
             (*mob).dmgindtable[x][1] += dmg as f64;
             return 1;
@@ -2207,13 +2197,13 @@ pub unsafe fn sl_mob_setinddmg(mob: *mut MobSpawnData, player_id: c_uint, dmg: f
 
 /// Add group damage from player to mob's dmggrptable.
 #[cfg(not(test))]
-pub unsafe fn sl_mob_setgrpdmg(mob: *mut MobSpawnData, player_id: c_uint, dmg: f32) -> c_int {
+pub unsafe fn sl_mob_setgrpdmg(mob: *mut MobSpawnData, player_id: u32, dmg: f32) -> i32 {
     if mob.is_null() { return 0; }
     let sd = map_id2sd_mob(player_id);
     if sd.is_null() { return 0; }
     let gid = (*sd).groupid;
     for x in 0..MAX_THREATCOUNT {
-        if (*mob).dmggrptable[x][0] as c_uint == gid || (*mob).dmggrptable[x][0] == 0.0 {
+        if (*mob).dmggrptable[x][0] as u32 == gid || (*mob).dmggrptable[x][0] == 0.0 {
             (*mob).dmggrptable[x][0] = gid as f64;
             (*mob).dmggrptable[x][1] += dmg as f64;
             return 1;
@@ -2224,7 +2214,7 @@ pub unsafe fn sl_mob_setgrpdmg(mob: *mut MobSpawnData, player_id: c_uint, dmg: f
 
 /// Call a named event on this mob's custom AI script.
 #[cfg(not(test))]
-pub unsafe fn sl_mob_callbase(mob: *mut MobSpawnData, script: *const c_char) -> c_int {
+pub unsafe fn sl_mob_callbase(mob: *mut MobSpawnData, script: *const i8) -> i32 {
     if mob.is_null() || script.is_null() { return 0; }
     let bl = map_id2bl((*mob).attacker);
     let yname = (*(*mob).data).yname.as_ptr();
@@ -2238,11 +2228,11 @@ pub unsafe fn sl_mob_callbase(mob: *mut MobSpawnData, script: *const c_char) -> 
 
 /// Return 1 if the mob can step forward in its current direction, 0 if blocked.
 #[cfg(not(test))]
-pub unsafe fn sl_mob_checkmove(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn sl_mob_checkmove(mob: *mut MobSpawnData) -> i32 {
     if mob.is_null() { return 0; }
-    let m = (*mob).bl.m as c_int;
-    let mut dx = (*mob).bl.x as c_int;
-    let mut dy = (*mob).bl.y as c_int;
+    let m = (*mob).bl.m as i32;
+    let mut dx = (*mob).bl.x as i32;
+    let mut dy = (*mob).bl.y as i32;
     let direction = (*mob).side;
     match direction {
         0 => dy -= 1,
@@ -2253,15 +2243,15 @@ pub unsafe fn sl_mob_checkmove(mob: *mut MobSpawnData) -> c_int {
     }
     let slot = ffi_get_map_ptr((*mob).bl.m);
     if slot.is_null() { return 0; }
-    dx = dx.max(0).min((*slot).xs as c_int - 1);
-    dy = dy.max(0).min((*slot).ys as c_int - 1);
+    dx = dx.max(0).min((*slot).xs as i32 - 1);
+    dy = dy.max(0).min((*slot).ys as i32 - 1);
     if warp_at(slot, dx, dy) { return 0; }
     (*mob).canmove = 0;
     { let mob_ptr = mob; foreach_in_cell(m, dx, dy, BL_MOB, |bl| rust_mob_move_inner(bl, mob_ptr)); }
     { let mob_ptr = mob; foreach_in_cell(m, dx, dy, BL_PC, |bl| rust_mob_move_inner(bl, mob_ptr)); }
     { let mob_ptr = mob; foreach_in_cell(m, dx, dy, BL_NPC, |bl| rust_mob_move_inner(bl, mob_ptr)); }
     if clif_object_canmove(m, dx, dy, direction) != 0 { return 0; }
-    if clif_object_canmove_from(m, (*mob).bl.x as c_int, (*mob).bl.y as c_int, direction) != 0 { return 0; }
+    if clif_object_canmove_from(m, (*mob).bl.x as i32, (*mob).bl.y as i32, direction) != 0 { return 0; }
     if map_canmove(m, dx, dy) == 1 || (*mob).canmove == 1 { return 0; }
     1
 }
@@ -2269,20 +2259,20 @@ pub unsafe fn sl_mob_checkmove(mob: *mut MobSpawnData) -> c_int {
 /// Set or clear a magic-effect duration slot on the mob.
 #[cfg(not(test))]
 pub unsafe fn sl_mob_setduration(
-    mob: *mut MobSpawnData, name: *const c_char,
-    mut time: c_int, caster_id: c_uint, recast: c_int,
+    mob: *mut MobSpawnData, name: *const i8,
+    mut time: i32, caster_id: u32, recast: i32,
 ) {
     if mob.is_null() { return; }
     let id = magicdb_id(name);
     if time > 0 && time < 1000 { time = 1000; }
     let mut alreadycast = 0i32;
     for x in 0..MAX_MAGIC_TIMERS {
-        if (*mob).da[x].id as c_int == id && (*mob).da[x].caster_id == caster_id && (*mob).da[x].duration > 0 {
+        if (*mob).da[x].id as i32 == id && (*mob).da[x].caster_id == caster_id && (*mob).da[x].duration > 0 {
             alreadycast = 1;
         }
     }
     for x in 0..MAX_MAGIC_TIMERS {
-        let mid = (*mob).da[x].id as c_int;
+        let mid = (*mob).da[x].id as i32;
         if mid == id && time <= 0 && (*mob).da[x].caster_id == caster_id && alreadycast == 1 {
             let saved_caster_id = (*mob).da[x].caster_id;
             (*mob).da[x].duration = 0; (*mob).da[x].id = 0; (*mob).da[x].caster_id = 0;
@@ -2292,7 +2282,7 @@ pub unsafe fn sl_mob_setduration(
             if !bl.is_null() { sl_doscript_2(magicdb_yname(mid), c"uncast".as_ptr(), &raw mut (*mob).bl, bl); }
             else             { sl_doscript_simple(magicdb_yname(mid), c"uncast".as_ptr(), &raw mut (*mob).bl); }
             return;
-        } else if (*mob).da[x].id as c_int == id && (*mob).da[x].caster_id == caster_id
+        } else if (*mob).da[x].id as i32 == id && (*mob).da[x].caster_id == caster_id
                 && ((*mob).da[x].duration > time || recast == 1) && alreadycast == 1 {
             (*mob).da[x].duration = time;
             return;
@@ -2307,11 +2297,11 @@ pub unsafe fn sl_mob_setduration(
 
 /// Clear magic-effect timers in id range [minid..maxid], firing uncast Lua events.
 #[cfg(not(test))]
-pub unsafe fn sl_mob_flushduration(mob: *mut MobSpawnData, dis: c_int, minid: c_int, maxid: c_int) {
+pub unsafe fn sl_mob_flushduration(mob: *mut MobSpawnData, dis: i32, minid: i32, maxid: i32) {
     if mob.is_null() { return; }
     let maxid = if maxid < minid { minid } else { maxid };
     for x in 0..MAX_MAGIC_TIMERS {
-        let id = (*mob).da[x].id as c_int;
+        let id = (*mob).da[x].id as i32;
         if id == 0 { continue; }
         if magicdb_dispel(id) > dis { continue; }
         let flush = if minid <= 0 { true } else if maxid <= 0 { id == minid } else { id >= minid && id <= maxid };
@@ -2329,11 +2319,11 @@ pub unsafe fn sl_mob_flushduration(mob: *mut MobSpawnData, dis: c_int, minid: c_
 
 /// Clear magic-effect timers without firing uncast Lua events.
 #[cfg(not(test))]
-pub unsafe fn sl_mob_flushdurationnouncast(mob: *mut MobSpawnData, dis: c_int, minid: c_int, maxid: c_int) {
+pub unsafe fn sl_mob_flushdurationnouncast(mob: *mut MobSpawnData, dis: i32, minid: i32, maxid: i32) {
     if mob.is_null() { return; }
     let maxid = if maxid < minid { minid } else { maxid };
     for x in 0..MAX_MAGIC_TIMERS {
-        let id = (*mob).da[x].id as c_int;
+        let id = (*mob).da[x].id as i32;
         if id == 0 { continue; }
         if magicdb_dispel(id) > dis { continue; }
         let flush = if minid <= 0 { true } else if maxid <= 0 { id == minid } else { id >= minid && id <= maxid };
@@ -2367,95 +2357,95 @@ mod tests {
     }
 }
 
-// ─── FFI bridge (moved from src/ffi/mob.rs) ───────────────────────────────
+
 
 #[cfg(not(test))]
-pub unsafe fn rust_mobspawn_read() -> c_int {
+pub unsafe fn rust_mobspawn_read() -> i32 {
     mobspawn_read()
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_mob_timer_spawns(id: c_int, n: c_int) -> c_int {
+pub unsafe fn rust_mob_timer_spawns(id: i32, n: i32) -> i32 {
     mob_timer_spawns(id, n)
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_mob_respawn_getstats(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn rust_mob_respawn_getstats(mob: *mut MobSpawnData) -> i32 {
     mob_respawn_getstats(mob)
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_mob_warp(mob: *mut MobSpawnData, m: c_int, x: c_int, y: c_int) -> c_int {
+pub unsafe fn rust_mob_warp(mob: *mut MobSpawnData, m: i32, x: i32, y: i32) -> i32 {
     mob_warp(mob, m, x, y)
 }
 
 #[cfg(not(test))]
 pub unsafe fn rust_mobspawn_onetime(
-    id: c_uint, m: c_int, x: c_int, y: c_int,
-    times: c_int, start: c_int, end: c_int,
-    replace: c_uint, owner: c_uint,
-) -> *mut c_uint {
+    id: u32, m: i32, x: i32, y: i32,
+    times: i32, start: i32, end: i32,
+    replace: u32, owner: u32,
+) -> *mut u32 {
     mobspawn_onetime(id, m, x, y, times, start, end, replace, owner)
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_mob_readglobalreg(mob: *mut MobSpawnData, reg: *const c_char) -> c_int {
+pub unsafe fn rust_mob_readglobalreg(mob: *mut MobSpawnData, reg: *const i8) -> i32 {
     mob_readglobalreg(mob, reg)
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_mob_setglobalreg(mob: *mut MobSpawnData, reg: *const c_char, val: c_int) -> c_int {
+pub unsafe fn rust_mob_setglobalreg(mob: *mut MobSpawnData, reg: *const i8, val: i32) -> i32 {
     mob_setglobalreg(mob, reg, val)
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_mob_drops(mob: *mut MobSpawnData, sd: *mut std::ffi::c_void) -> c_int {
+pub unsafe fn rust_mob_drops(mob: *mut MobSpawnData, sd: *mut std::ffi::c_void) -> i32 {
     mobdb_drops(mob, sd)
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_mob_handle_sub(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn rust_mob_handle_sub(mob: *mut MobSpawnData) -> i32 {
     mob_handle_sub(mob);
     0
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_kill_mob(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn rust_kill_mob(mob: *mut MobSpawnData) -> i32 {
     kill_mob(mob)
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_mob_calcstat(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn rust_mob_calcstat(mob: *mut MobSpawnData) -> i32 {
     mob_calcstat(mob)
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_mob_respawn(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn rust_mob_respawn(mob: *mut MobSpawnData) -> i32 {
     mob_respawn(mob)
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_mob_respawn_nousers(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn rust_mob_respawn_nousers(mob: *mut MobSpawnData) -> i32 {
     mob_respawn_nousers(mob)
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_mob_flushmagic(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn rust_mob_flushmagic(mob: *mut MobSpawnData) -> i32 {
     mob_flushmagic(mob)
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_move_mob(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn rust_move_mob(mob: *mut MobSpawnData) -> i32 {
     move_mob(mob)
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_move_mob_ignore_object(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn rust_move_mob_ignore_object(mob: *mut MobSpawnData) -> i32 {
     move_mob_ignore_object(mob)
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_moveghost_mob(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn rust_moveghost_mob(mob: *mut MobSpawnData) -> i32 {
     moveghost_mob(mob)
 }
 
@@ -2463,6 +2453,6 @@ pub unsafe fn rust_moveghost_mob(mob: *mut MobSpawnData) -> c_int {
 pub unsafe fn rust_move_mob_intent(
     mob: *mut MobSpawnData,
     bl: *mut crate::database::map_db::BlockList,
-) -> c_int {
+) -> i32 {
     move_mob_intent(mob, bl)
 }

@@ -7,7 +7,6 @@ const CL_KEY1_PACKETS: &[u8] = &[2, 3, 4, 11, 21, 38, 58, 66, 67, 75, 80, 87, 98
 const SV_KEY1_PACKETS: &[u8] = &[2, 3, 10, 64, 68, 94, 96, 98, 102, 111];
 
 /// Returns true if the opcode should use dynamic encryption (client-bound check).
-/// Mirrors C `is_key_client`: returns false (0) when opcode IS in the list.
 pub fn is_key_client(opcode: u8) -> bool {
     !CL_KEY1_PACKETS.contains(&opcode)
 }
@@ -44,16 +43,15 @@ pub fn generate_hash(name: &str) -> String {
 
 /// Builds a 1025-byte encryption lookup table from a name string.
 ///
-/// Mirrors C `populate_table`. The C implementation writes 1056 bytes into a
-/// 1025-byte buffer (latent overflow), but `generate_key2` only accesses
-/// indices masked by `& 0x3FF` (0..1023). We produce exactly 1024 usable bytes
-/// in 31 iterations (32 + 31×32 = 1024), which fits safely in 1025 bytes.
+/// Produces exactly 1024 usable bytes in 31 iterations (32 + 31×32 = 1024),
+/// fitting safely in 1025 bytes. `generate_key2` only accesses indices masked
+/// by `& 0x3FF` (0..1023).
 pub fn populate_table(name: &[u8], table: &mut [u8]) -> bool {
     if table.len() < 0x401 {
         return false;
     }
     let mut hash = [0u8; 64];
-    // Double-hash the name (mirrors two consecutive generate_hashvalues calls in C)
+    // Double-hash the name (two consecutive generate_hashvalues calls).
     if !generate_hashvalues(name, &mut hash) {
         return false;
     }
@@ -78,8 +76,7 @@ pub fn populate_table(name: &[u8], table: &mut [u8]) -> bool {
 }
 
 /// Appends 3 index bytes to the packet and updates the length field.
-/// Mirrors C `set_packet_indexes`. `packet` must be the full write buffer
-/// starting at byte 0 (opcode byte).
+/// `packet` must be the full write buffer starting at byte 0 (opcode byte).
 ///
 /// Packet layout (bytes):
 ///   [0] opcode  [1..2] big-endian payload len  [3] packet-id  [4] inc  [5..] data
@@ -88,7 +85,7 @@ pub fn populate_table(name: &[u8], table: &mut [u8]) -> bool {
 ///   [psize+0] = k2_lo  [psize+1] = k1  [psize+2] = k2_hi
 ///   [1..2] updated to new big-endian length
 pub fn set_packet_indexes(packet: &mut [u8]) -> usize {
-    // USE_RANDOM_INDEXES is defined — use a fixed value matching C's #else branch
+    // USE_RANDOM_INDEXES is defined — use fixed deterministic values.
     let k1: u8 = (0x1337usize & 0x7FFF % 0x9B + 0x64) as u8 ^ 0x21;
     let k2: u16 = ((0x1337usize & 0x7FFF) as u16 + 0x100) ^ 0x7424;
 
@@ -105,7 +102,6 @@ pub fn set_packet_indexes(packet: &mut [u8]) -> usize {
 }
 
 /// Derives a 9-byte session key from the packet trailer and the lookup table.
-/// Mirrors C `generate_key2`.
 pub fn generate_key2(packet: &[u8], table: &[u8], keyout: &mut [u8; 10], fromclient: bool) {
     let psize = ((packet[1] as usize) << 8) | (packet[2] as usize);
     let mut k1 = packet[psize + 1] as u32;
@@ -129,14 +125,13 @@ pub fn generate_key2(packet: &[u8], table: &[u8], keyout: &mut [u8; 10], fromcli
 }
 
 /// XOR-encrypts/decrypts packet data in-place using a 9-byte key.
-/// Mirrors C `tk_crypt_dynamic`.
 ///
 /// Packet layout: [0] opcode [1..2] big-endian total len [3] inc [4] packetInc [5..] data
 pub fn tk_crypt_dynamic(buff: &mut [u8], key: &[u8]) {
     if buff.len() < 5 || key.is_empty() {
         return;
     }
-    // C uses a fixed 9-byte key array (null-padded); mirror that by padding here
+    // Pad key to 9 bytes (null-terminated, matching the expected key array layout).
     let mut k9 = [0u8; 9];
     k9[..key.len().min(9)].copy_from_slice(&key[..key.len().min(9)]);
     let key = &k9;
@@ -173,12 +168,7 @@ pub fn tk_crypt_static(buff: &mut [u8], xor_key: &[u8]) {
     tk_crypt_dynamic(buff, xor_key);
 }
 
-// ─── C ABI wrappers (port of c_src/net_crypt.c / c_src/sl_compat.c) ──────────
-
 /// Encrypts the pending write buffer for `fd` and returns the total byte count to commit.
-///
-/// Mirrors `encrypt()` in `c_src/sl_compat.c` (line 4618).
-/// Called as `rust_session_commit(fd, encrypt(fd) as usize)` from every packet sender.
 ///
 /// Algorithm:
 /// 1. Read the original payload length from `wbuf[1..2]` (big-endian u16).
@@ -189,7 +179,7 @@ pub fn tk_crypt_static(buff: &mut [u8], xor_key: &[u8]) {
 /// # Safety
 /// `fd` must be a valid session fd with pending write data staged by `rust_session_wfifohead`.
 #[cfg(not(test))]
-pub unsafe fn encrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int {
+pub unsafe fn encrypt(fd: i32) -> i32 {
     use crate::config::config;
     use crate::session::{rust_session_get_data, rust_session_wdata_ptr};
     use crate::game::pc::MapSessionData;
@@ -208,7 +198,7 @@ pub unsafe fn encrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int {
 
     // Original payload length from packet header bytes 1–2 (big-endian).
     // After set_packet_indexes the header is updated; total slice = original + 6
-    // (3 bytes framing offset + 3 index bytes appended by set_packet_indexes).
+    // (3-byte framing header + 3 index bytes appended by set_packet_indexes).
     let original_len = u16::from_be_bytes([*buf.add(1), *buf.add(2)]) as usize;
     let total_size = original_len + 6;
     let buf_slice = std::slice::from_raw_parts_mut(buf, total_size);
@@ -217,7 +207,6 @@ pub unsafe fn encrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int {
 
     if is_key_server(buf_slice[3]) {
         // Dynamic encryption: derive session key from EncHash lookup table.
-        // EncHash is [i8; 0x401]; reinterpret as &[u8] for the crypto functions.
         let enc_hash = std::slice::from_raw_parts(
             (*sd).EncHash.as_ptr() as *const u8,
             (*sd).EncHash.len(),
@@ -229,22 +218,18 @@ pub unsafe fn encrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int {
         tk_crypt_static(buf_slice, config().xor_key.as_bytes());
     }
 
-    // buf_slice[1..2] was updated by set_packet_indexes to the new payload length.
-    u16::from_be_bytes([buf_slice[1], buf_slice[2]]) as std::os::raw::c_int + 3
+    // [1..2] was updated by set_packet_indexes to the new payload length.
+    u16::from_be_bytes([buf_slice[1], buf_slice[2]]) as i32 + 3
 }
 
 /// Decrypts the incoming read buffer for `fd` in-place.
 ///
-/// Mirrors `decrypt()` in `c_src/sl_compat.c` (line 4647).
-/// Called by the packet dispatch loop before `map_parse` processes a packet.
-///
 /// # Safety
 /// `fd` must be a valid session fd with a complete incoming packet in the read buffer.
-/// The read buffer is C-allocated session memory; the `*const u8 → *mut u8` cast for
-/// in-place XOR mirrors the C `RFIFOP(fd, 0)` usage and is safe here because
+/// The `*const u8 → *mut u8` cast for in-place XOR is safe here because
 /// packet dispatch is single-threaded and no other thread aliases this buffer.
 #[cfg(not(test))]
-pub unsafe fn decrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int {
+pub unsafe fn decrypt(fd: i32) -> i32 {
     use crate::config::config;
     use crate::session::{rust_session_available, rust_session_get_data, rust_session_rdata_ptr};
     use crate::game::pc::MapSessionData;
@@ -280,11 +265,6 @@ pub unsafe fn decrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int {
 }
 
 // ─── Meta file packet senders ─────────────────────────────────────────────────
-//
-// Ported from c_src/sl_compat.c lines 3196–3295.
-// `metacrc` / `send_metafile` are internal helpers; `send_meta` and
-// `send_metalist` are exported C symbols called from map_parse.c dispatch and
-// sl_g_sendmeta() respectively.
 
 #[cfg(not(test))]
 unsafe fn metacrc_path(path: &str) -> u32 {
@@ -296,7 +276,7 @@ unsafe fn metacrc_path(path: &str) -> u32 {
 }
 
 #[cfg(not(test))]
-unsafe fn send_metafile_impl(fd: std::os::raw::c_int, file: &str) {
+unsafe fn send_metafile_impl(fd: i32, file: &str) {
     use flate2::write::ZlibEncoder;
     use flate2::Compression;
     use std::io::Write;
@@ -360,12 +340,11 @@ unsafe fn send_metafile_impl(fd: std::os::raw::c_int, file: &str) {
 }
 
 /// Respond to a client meta-file request with the compressed file data.
-/// Replaces `send_meta` in `c_src/sl_compat.c` (line 3268).
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`crate::game::pc::MapSessionData`].
 #[cfg(not(test))]
-pub unsafe fn send_meta(sd: *mut crate::game::pc::MapSessionData) -> std::os::raw::c_int {
+pub unsafe fn send_meta(sd: *mut crate::game::pc::MapSessionData) -> i32 {
     use crate::session::rust_session_rdata_ptr;
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
@@ -380,12 +359,11 @@ pub unsafe fn send_meta(sd: *mut crate::game::pc::MapSessionData) -> std::os::ra
 }
 
 /// Send the list of meta files and their CRC32 checksums to the client.
-/// Replaces `send_metalist` in `c_src/sl_compat.c` (line 3276).
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`crate::game::pc::MapSessionData`].
 #[cfg(not(test))]
-pub unsafe fn send_metalist(sd: *mut crate::game::pc::MapSessionData) -> std::os::raw::c_int {
+pub unsafe fn send_metalist(sd: *mut crate::game::pc::MapSessionData) -> i32 {
     use flate2::Crc;
     use crate::config::config;
     use crate::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
@@ -494,30 +472,27 @@ mod tests {
     }
 }
 
-// ─── FFI bridge (moved from src/ffi/crypt.rs) ─────────────────────────────
-
 use std::ffi::CStr;
-use std::os::raw::{c_char, c_int, c_uchar};
 use std::slice;
 
 use crate::session::{RFIFO_SIZE, WFIFO_SIZE};
 
 /// Whether the opcode uses dynamic encryption (client-side check).
-pub fn rust_crypt_is_key_client(opcode: c_int) -> bool {
+pub fn rust_crypt_is_key_client(opcode: i32) -> bool {
     is_key_client(opcode as u8)
 }
 
 /// Whether the opcode uses dynamic encryption (server-side check).
-pub fn rust_crypt_is_key_server(opcode: c_int) -> bool {
+pub fn rust_crypt_is_key_server(opcode: i32) -> bool {
     is_key_server(opcode as u8)
 }
 
 /// Generates an MD5 hex digest of `name` into `buffer` (must be ≥33 bytes).
 pub unsafe fn rust_crypt_generate_hashvalues(
-    name: *const c_char,
-    buffer: *mut c_char,
-    buflen: c_int,
-) -> *mut c_char {
+    name: *const i8,
+    buffer: *mut i8,
+    buflen: i32,
+) -> *mut i8 {
     if name.is_null() || buffer.is_null() || buflen < 33 {
         return std::ptr::null_mut();
     }
@@ -528,10 +503,10 @@ pub unsafe fn rust_crypt_generate_hashvalues(
 
 /// Builds the 1025-byte encryption lookup table from `name`.
 pub unsafe fn rust_crypt_populate_table(
-    name: *const c_char,
-    table: *mut c_char,
-    tablelen: c_int,
-) -> *mut c_char {
+    name: *const i8,
+    table: *mut i8,
+    tablelen: i32,
+) -> *mut i8 {
     if name.is_null() || table.is_null() || tablelen < 0x401 {
         return std::ptr::null_mut();
     }
@@ -541,22 +516,22 @@ pub unsafe fn rust_crypt_populate_table(
 }
 
 /// Appends 3 index bytes to `packet` and updates its length field.
-pub unsafe fn rust_crypt_set_packet_indexes(packet: *mut c_uchar) -> c_int {
+pub unsafe fn rust_crypt_set_packet_indexes(packet: *mut u8) -> i32 {
     if packet.is_null() { return 0; }
     let psize = ((*packet.add(1) as usize) << 8) | (*packet.add(2) as usize);
     if psize == 0 || psize + 6 > WFIFO_SIZE { return 0; }
     let buf_size = psize + 3 + 3;
     let buf = slice::from_raw_parts_mut(packet, buf_size);
-    set_packet_indexes(buf) as c_int
+    set_packet_indexes(buf) as i32
 }
 
 /// Derives a 9-byte session key into `keyout[0..10]` (NUL at [9]).
 pub unsafe fn rust_crypt_generate_key2(
-    packet: *mut c_uchar,
-    table: *const c_char,
-    keyout: *mut c_char,
-    fromclient: c_int,
-) -> *mut c_char {
+    packet: *mut u8,
+    table: *const i8,
+    keyout: *mut i8,
+    fromclient: i32,
+) -> *mut i8 {
     if packet.is_null() || table.is_null() || keyout.is_null() {
         return std::ptr::null_mut();
     }
@@ -572,7 +547,7 @@ pub unsafe fn rust_crypt_generate_key2(
 }
 
 /// XOR-encrypts/decrypts `buff` in-place using a 9-byte `key`.
-pub unsafe fn rust_crypt_dynamic(buff: *mut c_uchar, key: *const c_char) {
+pub unsafe fn rust_crypt_dynamic(buff: *mut u8, key: *const i8) {
     if buff.is_null() || key.is_null() { return; }
     let total = ((*buff.add(1) as usize) << 8) | (*buff.add(2) as usize);
     if total < 5 || total > RFIFO_SIZE { return; }
@@ -581,7 +556,7 @@ pub unsafe fn rust_crypt_dynamic(buff: *mut c_uchar, key: *const c_char) {
     tk_crypt_dynamic(buf, key_bytes);
 }
 
-/// XOR-encrypts/decrypts `buff` using the static xor_key (passed from C config global).
-pub unsafe fn rust_crypt_static(buff: *mut c_uchar, xor_key: *const c_char) {
+/// XOR-encrypts/decrypts `buff` using the static xor_key.
+pub unsafe fn rust_crypt_static(buff: *mut u8, xor_key: *const i8) {
     rust_crypt_dynamic(buff, xor_key);
 }

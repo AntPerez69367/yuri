@@ -1,17 +1,16 @@
-use std::ffi::{CString, c_int, c_ulong};
-use std::os::raw::c_void;
+use std::ffi::CString;
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
 use crate::game::scripting::ffi as sffi;
 use crate::game::scripting::map_globals;
 
-pub struct RegObject       { pub ptr: *mut c_void }
-pub struct RegStringObject { pub ptr: *mut c_void }
-pub struct NpcRegObject    { pub ptr: *mut c_void }
-pub struct MobRegObject    { pub ptr: *mut c_void }
-pub struct MapRegObject    { pub ptr: *mut c_void }
-pub struct GameRegObject   { pub ptr: *mut c_void }
-pub struct QuestRegObject  { pub ptr: *mut c_void }
+pub struct RegObject       { pub ptr: *mut std::ffi::c_void }
+pub struct RegStringObject { pub ptr: *mut std::ffi::c_void }
+pub struct NpcRegObject    { pub ptr: *mut std::ffi::c_void }
+pub struct MobRegObject    { pub ptr: *mut std::ffi::c_void }
+pub struct MapRegObject    { pub ptr: *mut std::ffi::c_void }
+pub struct GameRegObject   { pub ptr: *mut std::ffi::c_void }
+pub struct QuestRegObject  { pub ptr: *mut std::ffi::c_void }
 
 // SAFETY: These objects wrap raw C pointers that are owned and managed by the
 // Lua scripting runtime, which runs entirely on a single dedicated thread.
@@ -28,11 +27,11 @@ unsafe impl Send for MapRegObject {}
 unsafe impl Send for GameRegObject {}
 unsafe impl Send for QuestRegObject {}
 
-fn val_to_int(v: &mlua::Value) -> Result<c_int, mlua::Error> {
+fn val_to_int(v: &mlua::Value) -> Result<i32, mlua::Error> {
     match v {
         mlua::Value::Integer(i) => {
-            c_int::try_from(*i).map_err(|_| {
-                mlua::Error::external(format!("integer value {} out of range for c_int", i))
+            i32::try_from(*i).map_err(|_| {
+                mlua::Error::external(format!("integer value {} out of range for i32", i))
             })
         }
         mlua::Value::Number(f) => {
@@ -48,13 +47,13 @@ fn val_to_int(v: &mlua::Value) -> Result<c_int, mlua::Error> {
                     f
                 )));
             }
-            if *f < c_int::MIN as f64 || *f > c_int::MAX as f64 {
+            if *f < i32::MIN as f64 || *f > i32::MAX as f64 {
                 return Err(mlua::Error::external(format!(
-                    "float value {} out of range for c_int",
+                    "float value {} out of range for i32",
                     f
                 )));
             }
-            Ok(*f as c_int)
+            Ok(*f as i32)
         }
         other => Err(mlua::Error::external(format!(
             "expected integer for registry value, got {}",
@@ -63,11 +62,11 @@ fn val_to_int(v: &mlua::Value) -> Result<c_int, mlua::Error> {
     }
 }
 
-fn val_to_ulong(v: &mlua::Value) -> Result<c_ulong, mlua::Error> {
+fn val_to_ulong(v: &mlua::Value) -> Result<u64, mlua::Error> {
     match v {
         mlua::Value::Integer(i) => {
-            c_ulong::try_from(*i).map_err(|_| {
-                mlua::Error::external(format!("integer value {} out of range for c_ulong", i))
+            u64::try_from(*i).map_err(|_| {
+                mlua::Error::external(format!("integer value {} out of range for u64", i))
             })
         }
         mlua::Value::Number(f) => {
@@ -90,15 +89,15 @@ fn val_to_ulong(v: &mlua::Value) -> Result<c_ulong, mlua::Error> {
                     f
                 )));
             }
-            // Use u128 intermediate to avoid f64 precision loss at the high end of c_ulong range.
+            // Use u128 intermediate to avoid f64 precision loss at the high end of u64 range.
             let bits = t as u128;
-            if bits > c_ulong::MAX as u128 {
+            if bits > u64::MAX as u128 {
                 return Err(mlua::Error::external(format!(
-                    "float value {} overflows c_ulong",
+                    "float value {} overflows u64",
                     f
                 )));
             }
-            Ok(bits as c_ulong)
+            Ok(bits as u64)
         }
         other => Err(mlua::Error::external(format!(
             "expected integer for registry value, got {}",

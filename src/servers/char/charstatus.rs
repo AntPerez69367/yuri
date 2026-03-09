@@ -1,4 +1,4 @@
-//! Rust mirror of `struct mmo_charstatus` from c_src/mmo.h.
+//! Character status struct.
 //!
 //! MUST match the C struct byte-for-byte (same field order, same types, same
 //! padding). Verified target size: 3,171,352 bytes (from gcc sizeof check).
@@ -64,7 +64,7 @@ pub struct SkillInfo {
     pub caster_id: u32,
     pub dura_timer: u32,
     pub aether_timer: u32,
-    pub _pad: u32, // explicit padding to 8-byte-align lasttick_dura; replaces implicit repr(C) padding
+    pub _pad: u32, // explicit padding to 8-byte-align lasttick_dura
     pub lasttick_dura: u64,
     pub lasttick_aether: u64,
 }

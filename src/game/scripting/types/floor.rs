@@ -1,5 +1,3 @@
-use std::ffi::c_int;
-use std::os::raw::{c_char, c_uint, c_void};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicPtr, Ordering};
 use mlua::{MetaMethod, UserData, UserDataMethods};
@@ -13,14 +11,13 @@ use crate::game::scripting::types::item::{
 // MAX_GROUP_MEMBERS from map_server.h
 const MAX_GROUP_MEMBERS: usize = 256;
 
-/// Mirrors `struct flooritem_data` from `map_server.h`.
 #[repr(C)]
 pub struct FloorItemData {
     pub bl:         BlockList,
     pub data:       BoundItem,
-    pub lastamount: c_uint,
-    pub timer:      c_uint,
-    pub looters:    [c_uint; MAX_GROUP_MEMBERS],
+    pub lastamount: u32,
+    pub timer:      u32,
+    pub looters:    [u32; MAX_GROUP_MEMBERS],
 }
 
 /// # Safety invariants (upheld by the caller / game engine)
@@ -36,16 +33,16 @@ pub struct FloorItemData {
 ///    created from it (`getTrapSpotters`, `addTrapSpotters`) will observe a null
 ///    pointer and return a safe nil / no-op result.
 ///
-/// `Arc<AtomicPtr<c_void>>` is unconditionally `Send + Sync`; no `unsafe impl
+/// `Arc<AtomicPtr<std::ffi::c_void>>` is unconditionally `Send + Sync`; no `unsafe impl
 /// Send` is required.
 pub struct FloorListObject {
     /// Shared handle to the underlying `FloorItemData` pointer.
     /// Becomes null after `delete()` has been called.
-    pub ptr: Arc<AtomicPtr<c_void>>,
+    pub ptr: Arc<AtomicPtr<std::ffi::c_void>>,
 }
 
 impl FloorListObject {
-    pub fn new(ptr: *mut c_void) -> Self {
+    pub fn new(ptr: *mut std::ffi::c_void) -> Self {
         Self { ptr: Arc::new(AtomicPtr::new(ptr)) }
     }
 }
@@ -58,18 +55,18 @@ unsafe fn fl_map(fl: *const FloorItemData) -> *mut MapData {
     get_map_ptr((*fl).bl.m)
 }
 
-fn val_to_int(v: &mlua::Value) -> c_int {
+fn val_to_int(v: &mlua::Value) -> i32 {
     match v {
-        mlua::Value::Integer(i) => *i as c_int,
-        mlua::Value::Number(f)  => *f as c_int,
+        mlua::Value::Integer(i) => *i as i32,
+        mlua::Value::Number(f)  => *f as i32,
         _ => 0,
     }
 }
 
-fn val_to_uint(v: &mlua::Value) -> c_uint {
+fn val_to_uint(v: &mlua::Value) -> u32 {
     match v {
-        mlua::Value::Integer(i) => if *i < 0 { 0 } else { (*i).min(c_uint::MAX as i64) as c_uint },
-        mlua::Value::Number(f)  => if *f < 0.0 || f.is_nan() { 0 } else { (*f).min(c_uint::MAX as f64) as c_uint },
+        mlua::Value::Integer(i) => if *i < 0 { 0 } else { (*i).min(u32::MAX as i64) as u32 },
+        mlua::Value::Number(f)  => if *f < 0.0 || f.is_nan() { 0 } else { (*f).min(u32::MAX as f64) as u32 },
         _ => 0,
     }
 }
@@ -122,7 +119,7 @@ impl UserData for FloorListObject {
             if key == "addTrapSpotters" {
                 let shared = Arc::clone(&this.ptr);
                 return Ok(mlua::Value::Function(lua.create_function(
-                    move |_, playerid: c_uint| {
+                    move |_, playerid: u32| {
                         let raw = shared.load(Ordering::Relaxed);
                         if raw.is_null() { return Ok(()); }
                         let fl = unsafe { &mut *(raw as *mut FloorItemData) };
@@ -255,7 +252,7 @@ impl UserData for FloorListObject {
                             let len = bytes.len().min(63);
                             unsafe {
                                 std::ptr::copy_nonoverlapping(
-                                    bytes.as_ptr() as *const c_char,
+                                    bytes.as_ptr() as *const i8,
                                     (*mp).title.as_mut_ptr(), len);
                                 (*mp).title[len] = 0;
                             }
@@ -314,7 +311,7 @@ impl UserData for FloorListObject {
                     if let mlua::Value::Table(ref tbl) = val {
                         let mut read_count = 0;
                         for i in 0..MAX_GROUP_MEMBERS {
-                            if let Ok(v) = tbl.raw_get::<c_uint>((i + 1) as i64) {
+                            if let Ok(v) = tbl.raw_get::<u32>((i + 1) as i64) {
                                 fl.looters[i] = v;
                                 read_count += 1;
                             } else {

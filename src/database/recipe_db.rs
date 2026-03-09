@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::ffi::CStr;
-use std::os::raw::{c_char, c_int, c_uint};
 use std::ptr::null_mut;
 use std::sync::{Mutex, OnceLock};
 
@@ -9,23 +8,22 @@ use sqlx::Row;
 use super::{blocking_run, get_pool};
 use super::item_db::str_to_fixed;
 
-#[repr(C)]
 pub struct RecipeData {
-    pub id: c_int,
-    pub tokens_required: c_int,
+    pub id: i32,
+    pub tokens_required: i32,
     /// Alternating [material_id, amount] pairs × 5: [mat1, amt1, mat2, amt2, ...]
-    pub materials: [c_int; 10],
-    pub superior_materials: [c_int; 2],
-    pub identifier: [c_char; 64],
-    pub description: [c_char; 64],
-    pub crit_identifier: [c_char; 64],
-    pub crit_description: [c_char; 64],
-    pub craft_time: c_uint,
-    pub success_rate: c_uint,
-    pub skill_advance: c_uint,
-    pub crit_rate: c_uint,
-    pub bonus: c_uint,
-    pub skill_required: c_uint,
+    pub materials: [i32; 10],
+    pub superior_materials: [i32; 2],
+    pub identifier: [i8; 64],
+    pub description: [i8; 64],
+    pub crit_identifier: [i8; 64],
+    pub crit_description: [i8; 64],
+    pub craft_time: u32,
+    pub success_rate: u32,
+    pub skill_advance: u32,
+    pub crit_rate: u32,
+    pub bonus: u32,
+    pub skill_required: u32,
 }
 
 unsafe impl Send for RecipeData {}
@@ -39,7 +37,7 @@ fn db() -> &'static Mutex<HashMap<u32, Box<RecipeData>>> {
 
 fn make_default(id: u32) -> Box<RecipeData> {
     let mut r = Box::new(RecipeData {
-        id: id as c_int,
+        id: id as i32,
         tokens_required: 0,
         materials: [0; 10],
         superior_materials: [0; 2],
@@ -80,9 +78,10 @@ async fn load_recipes() -> Result<usize, sqlx::Error> {
     let count = rows.len();
     let mut map = RECIPE_DB.get().unwrap().lock().unwrap();
     for row in rows {
-        let id: u32 = row.try_get(0)?;
-        let r = map.entry(id).or_insert_with(|| make_default(id));
-        r.id = id as c_int;
+        let id: i32 = row.try_get(0)?;
+        let key = id as u32;
+        let r = map.entry(key).or_insert_with(|| make_default(key));
+        r.id = id;
         str_to_fixed(&mut r.identifier, &row.try_get::<String, _>(1).unwrap_or_default());
         str_to_fixed(&mut r.description, &row.try_get::<String, _>(2).unwrap_or_default());
         r.success_rate = row.try_get::<u32, _>(3).unwrap_or(0);
@@ -90,26 +89,26 @@ async fn load_recipes() -> Result<usize, sqlx::Error> {
         r.skill_advance = row.try_get::<u32, _>(5).unwrap_or(0);
         str_to_fixed(&mut r.crit_identifier, &row.try_get::<String, _>(6).unwrap_or_default());
         str_to_fixed(&mut r.crit_description, &row.try_get::<String, _>(7).unwrap_or_default());
-        r.tokens_required = row.try_get::<u32, _>(8).unwrap_or(0) as c_int;
+        r.tokens_required = row.try_get::<i32, _>(8).unwrap_or(0);
         for i in 0..10usize {
-            r.materials[i] = row.try_get::<u32, _>(9 + i).unwrap_or(0) as c_int;
+            r.materials[i] = row.try_get::<i32, _>(9 + i).unwrap_or(0);
         }
         r.crit_rate = row.try_get::<u32, _>(19).unwrap_or(0);
         r.bonus = row.try_get::<u32, _>(20).unwrap_or(0);
         r.skill_required = row.try_get::<u32, _>(21).unwrap_or(0);
-        r.superior_materials[0] = row.try_get::<u32, _>(22).unwrap_or(0) as c_int;
-        r.superior_materials[1] = row.try_get::<u32, _>(23).unwrap_or(0) as c_int;
+        r.superior_materials[0] = row.try_get::<i32, _>(22).unwrap_or(0);
+        r.superior_materials[1] = row.try_get::<i32, _>(23).unwrap_or(0);
     }
     Ok(count)
 }
 
 // ─── Public interface ────────────────────────────────────────────────────────
 
-pub fn init() -> c_int {
+pub fn init() -> i32 {
     RECIPE_DB.get_or_init(|| Mutex::new(HashMap::new()));
     match blocking_run(load_recipes()) {
         Ok(n) => { println!("[recipe_db] read done count={}", n); 0 }
-        Err(e) => { eprintln!("[recipe_db] load failed: {}", e); -1 }
+        Err(e) => { tracing::error!("[recipe_db] load failed: {}", e); -1 }
     }
 }
 
@@ -141,7 +140,7 @@ pub fn searchexist(id: u32) -> *mut RecipeData {
     }
 }
 
-pub unsafe fn searchname(s: *const c_char) -> *mut RecipeData {
+pub unsafe fn searchname(s: *const i8) -> *mut RecipeData {
     if s.is_null() { return null_mut(); }
     let target = unsafe { CStr::from_ptr(s) }.to_string_lossy().to_lowercase();
     let map = db().lock().unwrap();
@@ -159,17 +158,16 @@ pub unsafe fn searchname(s: *const c_char) -> *mut RecipeData {
     null_mut()
 }
 
-// ─── FFI bridge (moved from src/ffi/recipe_db.rs) ─────────────────────────
 
-pub fn rust_recipedb_init() -> c_int { ffi_catch!(-1, init()) }
+pub fn rust_recipedb_init() -> i32 { ffi_catch!(-1, init()) }
 
 pub fn rust_recipedb_term() { ffi_catch!((), term()) }
 
-pub fn rust_recipedb_search(id: c_uint) -> *mut RecipeData { ffi_catch!(null_mut(), search(id)) }
+pub fn rust_recipedb_search(id: u32) -> *mut RecipeData { ffi_catch!(null_mut(), search(id)) }
 
-pub fn rust_recipedb_searchexist(id: c_uint) -> *mut RecipeData { ffi_catch!(null_mut(), searchexist(id)) }
+pub fn rust_recipedb_searchexist(id: u32) -> *mut RecipeData { ffi_catch!(null_mut(), searchexist(id)) }
 
-pub unsafe fn rust_recipedb_searchname(s: *const c_char) -> *mut RecipeData {
+pub unsafe fn rust_recipedb_searchname(s: *const i8) -> *mut RecipeData {
     if s.is_null() { return null_mut(); }
     ffi_catch!(null_mut(), unsafe { searchname(s) })
 }

@@ -1,9 +1,7 @@
 //! Map data structures and loader.
 //!
-//! `MapData` mirrors `struct map_data` from `map_server.h` exactly.
-//! `GlobalReg` mirrors `struct global_reg` from `mmo.h` exactly.
+//! Map and global registry data structures.
 
-use std::os::raw::{c_char, c_int, c_uchar, c_uint, c_ushort};
 use std::sync::atomic::{AtomicI32, Ordering};
 
 use anyhow::{Context, Result};
@@ -16,30 +14,30 @@ pub const BLOCK_SIZE: usize = 8;
 pub const MAX_MAPREG: usize = 500;
 pub const MAP_SLOTS: usize = 65535;
 
-/// Mirrors `struct global_reg` from `mmo.h`.
+/// Player/NPC/mob registry entry (string or integer key-value pair).
 #[repr(C)]
 pub struct GlobalReg {
-    pub str: [c_char; 64],
-    pub val: c_int,
+    pub str: [i8; 64],
+    pub val: i32,
 }
 
-/// Mirrors `struct block_list` from `map_server.h`. 48 bytes on 64-bit.
+/// Intrusive linked-list node for entities on the block grid. 48 bytes on 64-bit.
 /// Intrusive doubly-linked list header embedded as first field in every entity
 /// struct (mob, pc, npc, flooritem). `bl_type` selects which grid chain is used.
 #[repr(C)]
 pub struct BlockList {
     pub next:          *mut BlockList,
     pub prev:          *mut BlockList,
-    pub id:            c_uint,
-    pub bx:            c_uint,
-    pub by:            c_uint,
-    pub graphic_id:    c_uint,
-    pub graphic_color: c_uint,
-    pub m:             c_ushort,
-    pub x:             c_ushort,
-    pub y:             c_ushort,
-    pub bl_type:       c_uchar,
-    pub subtype:       c_uchar,
+    pub id:            u32,
+    pub bx:            u32,
+    pub by:            u32,
+    pub graphic_id:    u32,
+    pub graphic_color: u32,
+    pub m:             u16,
+    pub x:             u16,
+    pub y:             u16,
+    pub bl_type:       u8,
+    pub subtype:       u8,
 }
 // SAFETY: BlockList contains raw pointers to C-managed intrusive list nodes.
 // All access is gated behind unsafe blocks; no Rust code aliases these pointers.
@@ -47,14 +45,14 @@ unsafe impl Send for BlockList {}
 // SAFETY: same as Send — no interior mutability, no aliasing through Rust references.
 unsafe impl Sync for BlockList {}
 
-/// Mirrors `struct warp_list` from `map_server.h`. 40 bytes on 64-bit.
+/// Warp portal entry for map-to-map teleportation. 40 bytes on 64-bit.
 #[repr(C)]
 pub struct WarpList {
-    pub x:    c_int,
-    pub y:    c_int,
-    pub tm:   c_int,
-    pub tx:   c_int,
-    pub ty:   c_int,
+    pub x:    i32,
+    pub y:    i32,
+    pub tm:   i32,
+    pub tx:   i32,
+    pub ty:   i32,
     pub next: *mut WarpList,
     pub prev: *mut WarpList,
 }
@@ -64,72 +62,72 @@ unsafe impl Send for WarpList {}
 // SAFETY: same as Send — no interior mutability, no aliasing through Rust references.
 unsafe impl Sync for WarpList {}
 
-/// Mirrors `struct map_data` from `map_server.h`.
+/// Per-map data: grid dimensions, tile flags, entity lists, and registry.
 /// Pointer fields managed by Rust (tile/pass/obj/map/registry) or C (block/block_mob/warp).
 #[repr(C)]
 pub struct MapData {
-    pub title: [c_char; 64],
-    pub mapfile: [c_char; 1024],
-    pub maprejectmsg: [c_char; 64],
+    pub title: [i8; 64],
+    pub mapfile: [i8; 1024],
+    pub maprejectmsg: [i8; 64],
     pub block:     *mut *mut BlockList,
     pub block_mob: *mut *mut BlockList,
     pub warp:      *mut *mut WarpList,
     pub registry: *mut GlobalReg,
-    pub max_sweep_count: c_int,
-    pub user: c_int,
-    pub registry_num: c_int,
-    pub id: c_int,
-    pub xs: c_ushort,
-    pub ys: c_ushort,
-    pub bxs: c_ushort,
-    pub bys: c_ushort,
-    pub port: c_ushort,
-    pub bgm: c_ushort,
-    pub bgmtype: c_ushort,
-    pub map: *mut c_uchar,   // walkability byte per cell — zeroed
-    pub tile: *mut c_ushort, // tile id per cell — from .map file
-    pub obj: *mut c_ushort,  // obj id per cell — from .map file
-    pub pass: *mut c_ushort, // passability per cell — from .map file
-    pub ip: c_uint,
-    pub sweeptime: c_uint,
-    pub pvp: c_uchar,
-    pub spell: c_uchar,
-    pub light: c_uchar,
-    pub weather: c_uchar,
-    pub cantalk: c_uchar,
-    pub show_ghosts: c_uchar,
-    pub region: c_uchar,
-    pub indoor: c_uchar,
-    pub warpout: c_uchar,
-    pub bind: c_uchar,
-    pub reqlvl: c_uint,
-    pub reqvita: c_uint,
-    pub reqmana: c_uint,
-    pub lvlmax: c_uint,
-    pub manamax: c_uint,
-    pub vitamax: c_uint,
-    pub reqmark: c_uchar,
-    pub reqpath: c_uchar,
-    pub summon: c_uchar,
-    pub can_use: c_uchar,
-    pub can_eat: c_uchar,
-    pub can_smoke: c_uchar,
-    pub can_mount: c_uchar,
-    pub can_group: c_uchar,
-    pub can_equip: c_uchar,
+    pub max_sweep_count: i32,
+    pub user: i32,
+    pub registry_num: i32,
+    pub id: i32,
+    pub xs: u16,
+    pub ys: u16,
+    pub bxs: u16,
+    pub bys: u16,
+    pub port: u16,
+    pub bgm: u16,
+    pub bgmtype: u16,
+    pub map: *mut u8,   // walkability byte per cell — zeroed
+    pub tile: *mut u16, // tile id per cell — from .map file
+    pub obj: *mut u16,  // obj id per cell — from .map file
+    pub pass: *mut u16, // passability per cell — from .map file
+    pub ip: u32,
+    pub sweeptime: u32,
+    pub pvp: u8,
+    pub spell: u8,
+    pub light: u8,
+    pub weather: u8,
+    pub cantalk: u8,
+    pub show_ghosts: u8,
+    pub region: u8,
+    pub indoor: u8,
+    pub warpout: u8,
+    pub bind: u8,
+    pub reqlvl: u32,
+    pub reqvita: u32,
+    pub reqmana: u32,
+    pub lvlmax: u32,
+    pub manamax: u32,
+    pub vitamax: u32,
+    pub reqmark: u8,
+    pub reqpath: u8,
+    pub summon: u8,
+    pub can_use: u8,
+    pub can_eat: u8,
+    pub can_smoke: u8,
+    pub can_mount: u8,
+    pub can_group: u8,
+    pub can_equip: u8,
 }
 
 /// Tile arrays parsed from a single .map file. Raw pointers are independently
 /// heap-allocated — no aliases — so safe to move across threads.
 pub(crate) struct ParsedTiles {
-    pub(crate) xs: c_ushort,
-    pub(crate) ys: c_ushort,
-    pub(crate) bxs: c_ushort,
-    pub(crate) bys: c_ushort,
-    pub(crate) tile: *mut c_ushort,
-    pub(crate) pass: *mut c_ushort,
-    pub(crate) obj: *mut c_ushort,
-    pub(crate) map: *mut c_uchar,
+    pub(crate) xs: u16,
+    pub(crate) ys: u16,
+    pub(crate) bxs: u16,
+    pub(crate) bys: u16,
+    pub(crate) tile: *mut u16,
+    pub(crate) pass: *mut u16,
+    pub(crate) obj: *mut u16,
+    pub(crate) map: *mut u8,
 }
 // Each pointer is a uniquely-owned allocation with no aliases.
 unsafe impl Send for ParsedTiles {}
@@ -170,11 +168,11 @@ fn alloc_zeroed_registry(len: usize) -> *mut GlobalReg {
 }
 
 /// Copy a Rust &str into a fixed C char array, null-terminating.
-fn copy_str_to_fixed<const N: usize>(dest: &mut [c_char; N], src: &str) {
+fn copy_str_to_fixed<const N: usize>(dest: &mut [i8; N], src: &str) {
     let bytes = src.as_bytes();
     let copy_len = bytes.len().min(N - 1);
     unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const c_char, dest.as_mut_ptr(), copy_len);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const i8, dest.as_mut_ptr(), copy_len);
         *dest.as_mut_ptr().add(copy_len) = 0;
     }
 }
@@ -201,13 +199,13 @@ pub fn parse_map_file(path: &str) -> Result<ParsedTiles> {
         );
     }
 
-    let bxs = ((xs as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as c_ushort;
-    let bys = ((ys as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as c_ushort;
+    let bxs = ((xs as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as u16;
+    let bys = ((ys as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as u16;
 
-    let tile = alloc_zeroed_slice::<c_ushort>(cell_count);
-    let pass = alloc_zeroed_slice::<c_ushort>(cell_count);
-    let obj = alloc_zeroed_slice::<c_ushort>(cell_count);
-    let map_cells = alloc_zeroed_slice::<c_uchar>(cell_count);
+    let tile = alloc_zeroed_slice::<u16>(cell_count);
+    let pass = alloc_zeroed_slice::<u16>(cell_count);
+    let obj = alloc_zeroed_slice::<u16>(cell_count);
+    let map_cells = alloc_zeroed_slice::<u8>(cell_count);
 
     let mut pos = 4usize;
     for i in 0..cell_count {
@@ -233,20 +231,20 @@ pub fn parse_map_file(path: &str) -> Result<ParsedTiles> {
 
 /// Write a slice of registry rows into a slot's pre-allocated registry array.
 fn apply_registry(slot: &mut MapData, rows: &[(String, u32)]) {
-    slot.registry_num = rows.len().min(MAX_MAPREG) as c_int;
+    slot.registry_num = rows.len().min(MAX_MAPREG) as i32;
     for (i, (identifier, value)) in rows.iter().take(MAX_MAPREG).enumerate() {
         let reg = unsafe { &mut *slot.registry.add(i) };
         let bytes = identifier.as_bytes();
         let copy_len = bytes.len().min(63);
         unsafe {
             std::ptr::copy_nonoverlapping(
-                bytes.as_ptr() as *const c_char,
+                bytes.as_ptr() as *const i8,
                 reg.str.as_mut_ptr(),
                 copy_len,
             );
             *reg.str.as_mut_ptr().add(copy_len) = 0;
         }
-        reg.val = *value as c_int;
+        reg.val = *value as i32;
     }
 }
 
@@ -407,35 +405,35 @@ pub fn load_maps(
         copy_str_to_fixed(&mut slot.title, &row.map_name);
         copy_str_to_fixed(&mut slot.mapfile, &row.map_file);
         copy_str_to_fixed(&mut slot.maprejectmsg, &row.map_reject_msg);
-        slot.id = row.map_id as c_int;
-        slot.bgm = row.map_bgm as c_ushort;
-        slot.bgmtype = row.map_bgm_type as c_ushort;
-        slot.pvp = row.map_pv_p as c_uchar;
-        slot.spell = row.map_spells as c_uchar;
-        slot.light = row.map_light as c_uchar;
-        slot.weather = row.map_weather as c_uchar;
+        slot.id = row.map_id as i32;
+        slot.bgm = row.map_bgm as u16;
+        slot.bgmtype = row.map_bgm_type as u16;
+        slot.pvp = row.map_pv_p as u8;
+        slot.spell = row.map_spells as u8;
+        slot.light = row.map_light as u8;
+        slot.weather = row.map_weather as u8;
         slot.sweeptime = row.map_sweep_time;
-        slot.cantalk = row.map_chat as c_uchar;
-        slot.show_ghosts = row.map_ghosts as c_uchar;
-        slot.region = row.map_region as c_uchar;
-        slot.indoor = row.map_indoor as c_uchar;
-        slot.warpout = row.map_warpout as c_uchar;
-        slot.bind = row.map_bind as c_uchar;
-        slot.reqlvl = row.map_req_lvl as c_uint;
-        slot.reqpath = row.map_req_path as c_uchar;
-        slot.reqmark = row.map_req_mark as c_uchar;
-        slot.summon = row.map_can_summon as c_uchar;
+        slot.cantalk = row.map_chat as u8;
+        slot.show_ghosts = row.map_ghosts as u8;
+        slot.region = row.map_region as u8;
+        slot.indoor = row.map_indoor as u8;
+        slot.warpout = row.map_warpout as u8;
+        slot.bind = row.map_bind as u8;
+        slot.reqlvl = row.map_req_lvl as u32;
+        slot.reqpath = row.map_req_path as u8;
+        slot.reqmark = row.map_req_mark as u8;
+        slot.summon = row.map_can_summon as u8;
         slot.reqvita = row.map_req_vita;
         slot.reqmana = row.map_req_mana;
         slot.lvlmax = row.map_lvl_max;
         slot.vitamax = row.map_vita_max;
         slot.manamax = row.map_mana_max;
-        slot.can_use = row.map_can_use as c_uchar;
-        slot.can_eat = row.map_can_eat as c_uchar;
-        slot.can_smoke = row.map_can_smoke as c_uchar;
-        slot.can_mount = row.map_can_mount as c_uchar;
-        slot.can_group = row.map_can_group as c_uchar;
-        slot.can_equip = row.map_can_equip as c_uchar;
+        slot.can_use = row.map_can_use as u8;
+        slot.can_eat = row.map_can_eat as u8;
+        slot.can_smoke = row.map_can_smoke as u8;
+        slot.can_mount = row.map_can_mount as u8;
+        slot.can_group = row.map_can_group as u8;
+        slot.can_equip = row.map_can_equip as u8;
 
         slot.xs = tiles.xs;
         slot.ys = tiles.ys;
@@ -550,35 +548,35 @@ pub fn reload_maps(
         copy_str_to_fixed(&mut slot.title, &row.map_name);
         copy_str_to_fixed(&mut slot.mapfile, &row.map_file);
         copy_str_to_fixed(&mut slot.maprejectmsg, &row.map_reject_msg);
-        slot.id = row.map_id as c_int;
-        slot.bgm = row.map_bgm as c_ushort;
-        slot.bgmtype = row.map_bgm_type as c_ushort;
-        slot.pvp = row.map_pv_p as c_uchar;
-        slot.spell = row.map_spells as c_uchar;
-        slot.light = row.map_light as c_uchar;
-        slot.weather = row.map_weather as c_uchar;
+        slot.id = row.map_id as i32;
+        slot.bgm = row.map_bgm as u16;
+        slot.bgmtype = row.map_bgm_type as u16;
+        slot.pvp = row.map_pv_p as u8;
+        slot.spell = row.map_spells as u8;
+        slot.light = row.map_light as u8;
+        slot.weather = row.map_weather as u8;
         slot.sweeptime = row.map_sweep_time;
-        slot.cantalk = row.map_chat as c_uchar;
-        slot.show_ghosts = row.map_ghosts as c_uchar;
-        slot.region = row.map_region as c_uchar;
-        slot.indoor = row.map_indoor as c_uchar;
-        slot.warpout = row.map_warpout as c_uchar;
-        slot.bind = row.map_bind as c_uchar;
-        slot.reqlvl = row.map_req_lvl as c_uint;
-        slot.reqpath = row.map_req_path as c_uchar;
-        slot.reqmark = row.map_req_mark as c_uchar;
-        slot.summon = row.map_can_summon as c_uchar;
+        slot.cantalk = row.map_chat as u8;
+        slot.show_ghosts = row.map_ghosts as u8;
+        slot.region = row.map_region as u8;
+        slot.indoor = row.map_indoor as u8;
+        slot.warpout = row.map_warpout as u8;
+        slot.bind = row.map_bind as u8;
+        slot.reqlvl = row.map_req_lvl as u32;
+        slot.reqpath = row.map_req_path as u8;
+        slot.reqmark = row.map_req_mark as u8;
+        slot.summon = row.map_can_summon as u8;
         slot.reqvita = row.map_req_vita;
         slot.reqmana = row.map_req_mana;
         slot.lvlmax = row.map_lvl_max;
         slot.vitamax = row.map_vita_max;
         slot.manamax = row.map_mana_max;
-        slot.can_use = row.map_can_use as c_uchar;
-        slot.can_eat = row.map_can_eat as c_uchar;
-        slot.can_smoke = row.map_can_smoke as c_uchar;
-        slot.can_mount = row.map_can_mount as c_uchar;
-        slot.can_group = row.map_can_group as c_uchar;
-        slot.can_equip = row.map_can_equip as c_uchar;
+        slot.can_use = row.map_can_use as u8;
+        slot.can_eat = row.map_can_eat as u8;
+        slot.can_smoke = row.map_can_smoke as u8;
+        slot.can_mount = row.map_can_mount as u8;
+        slot.can_group = row.map_can_group as u8;
+        slot.can_equip = row.map_can_equip as u8;
 
         slot.xs = tiles.xs;
         slot.ys = tiles.ys;
@@ -630,8 +628,7 @@ mod layout_tests {
     }
 }
 
-// ─── FFI exports ─────────────────────────────────────────────────────────────
-// Content moved from src/ffi/map_db.rs
+// ─── Public API exports ────────────────────────────────────────────────────
 
 use std::ffi::CStr;
 
@@ -643,7 +640,7 @@ pub static mut map: *mut MapData = std::ptr::null_mut();
 pub static map_n: AtomicI32 = AtomicI32::new(0);
 
 /// Allocate the 65535-slot map array, load all maps from DB + files, set C globals.
-pub unsafe fn rust_map_init(maps_dir: *const c_char, server_id: c_int) -> c_int {
+pub unsafe fn rust_map_init(maps_dir: *const i8, server_id: i32) -> i32 {
     ffi_catch!(-1, {
         let dir = match unsafe { CStr::from_ptr(maps_dir) }.to_str() {
             Ok(s) => s,
@@ -663,7 +660,7 @@ pub unsafe fn rust_map_init(maps_dir: *const c_char, server_id: c_int) -> c_int 
             Ok(count) => {
                 unsafe {
                     map = raw;
-                    map_n.store(count as c_int, Ordering::Relaxed);
+                    map_n.store(count as i32, Ordering::Relaxed);
                 }
                 tracing::info!("[map] map data loaded count={count}");
                 0
@@ -681,7 +678,7 @@ pub unsafe fn rust_map_init(maps_dir: *const c_char, server_id: c_int) -> c_int 
 }
 
 /// Reload map metadata + registry in-place.
-pub unsafe fn rust_map_reload(maps_dir: *const c_char, server_id: c_int) -> c_int {
+pub unsafe fn rust_map_reload(maps_dir: *const i8, server_id: i32) -> i32 {
     ffi_catch!(-1, {
         if unsafe { map.is_null() } { return -1; }
         let dir = match unsafe { CStr::from_ptr(maps_dir) }.to_str() {
@@ -728,7 +725,7 @@ pub unsafe fn map_is_loaded(id: u16) -> bool {
 }
 
 /// Reload the MapRegistry for a single map.
-pub unsafe fn rust_map_loadregistry(map_id: c_int) -> c_int {
+pub unsafe fn rust_map_loadregistry(map_id: i32) -> i32 {
     ffi_catch!(-1, {
         if unsafe { map.is_null() } { return -1; }
         let id = map_id as usize;

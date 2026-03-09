@@ -1,5 +1,4 @@
-use std::ffi::{c_int, c_uint, CString};
-use std::os::raw::c_void;
+use std::ffi::CString;
 use std::sync::{Arc, atomic::AtomicBool};
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
@@ -12,7 +11,7 @@ use crate::game::scripting::types::registry::{GameRegObject, MapRegObject, NpcRe
 use crate::game::scripting::types::shared;
 use crate::servers::char::charstatus::MAX_EQUIP;
 
-pub struct NpcObject { pub ptr: *mut c_void }
+pub struct NpcObject { pub ptr: *mut std::ffi::c_void }
 // SAFETY: NpcObject is used exclusively within a single-threaded Lua runtime.
 // All Lua closures that touch `ptr` are invoked on one thread; no concurrent
 // access to the underlying NpcData is possible.
@@ -28,7 +27,7 @@ unsafe fn npc_map(nd: *const NpcData) -> *mut MapData {
     get_map_ptr((*nd).bl.m)
 }
 
-unsafe fn cstr_to_string(p: *const std::ffi::c_char) -> String {
+unsafe fn cstr_to_string(p: *const i8) -> String {
     if p.is_null() { return String::new(); }
     std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
 }
@@ -67,7 +66,7 @@ impl UserData for NpcObject {
                 "warp" => {
                     let ptr = this.ptr;
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_, (_, m, x, y): (mlua::Value, c_int, c_int, c_int)| {
+                        move |_, (_, m, x, y): (mlua::Value, i32, i32, i32)| {
                             unsafe { npc_warp(ptr as *mut NpcData, m, x, y); }
                             Ok(())
                         }
@@ -230,8 +229,8 @@ impl UserData for NpcObject {
                     return Ok(mlua::Value::Function(lua.create_function(
                         |lua, _: mlua::MultiValue| {
                             const MAX: usize = 4096;
-                            let mut ptrs: Vec<*mut c_void> = vec![std::ptr::null_mut(); MAX];
-                            let count = unsafe { sffi::sl_g_getusers(ptrs.as_mut_ptr(), MAX as c_int) } as usize;
+                            let mut ptrs: Vec<*mut std::ffi::c_void> = vec![std::ptr::null_mut(); MAX];
+                            let count = unsafe { sffi::sl_g_getusers(ptrs.as_mut_ptr(), MAX as i32) } as usize;
                             let tbl = lua.create_table()?;
                             for (i, &bl) in ptrs[..count].iter().enumerate() {
                                 let val = unsafe {
@@ -252,31 +251,31 @@ impl UserData for NpcObject {
                         move |lua, args: mlua::MultiValue| -> mlua::Result<mlua::Value> {
                             let args: Vec<mlua::Value> = args.into_iter().collect();
                             // args[0]=self, [1]=mob, [2]=x, [3]=y, [4]=amount, [5]=m, [6]=owner
-                            let mob_id: c_uint = match args.get(1) {
+                            let mob_id: u32 = match args.get(1) {
                                 Some(mlua::Value::String(s)) => {
                                     let cs = CString::new(&*s.as_bytes()).map_err(mlua::Error::external)?;
-                                    unsafe { sffi::rust_mobdb_id(cs.as_ptr()) as c_uint }
+                                    unsafe { sffi::rust_mobdb_id(cs.as_ptr()) as u32 }
                                 }
-                                Some(mlua::Value::Integer(n)) => *n as c_uint,
-                                Some(mlua::Value::Number(f))  => *f as c_uint,
+                                Some(mlua::Value::Integer(n)) => *n as u32,
+                                Some(mlua::Value::Number(f))  => *f as u32,
                                 _ => return Ok(mlua::Value::Table(lua.create_table()?)),
                             };
-                            let vi = |i: usize| -> c_int { match args.get(i) {
-                                Some(mlua::Value::Integer(n)) => *n as c_int,
-                                Some(mlua::Value::Number(f))  => *f as c_int,
+                            let vi = |i: usize| -> i32 { match args.get(i) {
+                                Some(mlua::Value::Integer(n)) => *n as i32,
+                                Some(mlua::Value::Number(f))  => *f as i32,
                                 _ => 0,
                             }};
                             let x = vi(2);
                             let y = vi(3);
                             let amount = vi(4);
-                            let owner  = vi(6) as c_uint;
+                            let owner  = vi(6) as u32;
                             let mut m  = vi(5);
                             if m == 0 {
                                 let align = std::mem::align_of::<NpcData>();
                                 if ptr.is_null() || ptr as usize % align != 0 {
                                     return Ok(mlua::Value::Table(lua.create_table()?));
                                 }
-                                m = unsafe { (*(ptr as *const NpcData)).bl.m as c_int };
+                                m = unsafe { (*(ptr as *const NpcData)).bl.m as i32 };
                             }
                             let tbl = lua.create_table()?;
                             if amount <= 0 { return Ok(mlua::Value::Table(tbl)); }
@@ -289,7 +288,7 @@ impl UserData for NpcObject {
                             let ids: Vec<_> = (0..amount as usize)
                                 .map(|i| unsafe { *spawned_raw.add(i) })
                                 .collect();
-                            unsafe { libc::free(spawned_raw as *mut c_void) };
+                            unsafe { libc::free(spawned_raw as *mut std::ffi::c_void) };
                             for (i, id) in ids.into_iter().enumerate() {
                                 let bl = unsafe { sffi::map_id2bl(id) };
                                 if !bl.is_null() {
@@ -302,7 +301,7 @@ impl UserData for NpcObject {
                 }
 
                 // addNPC(name, m, x, y, subtype [,timer, duration, owner, movetime, yname])
-                // Mirrors bll_addnpc from scripting.c.
+
                 // Does not dereference self.ptr — works with the sentinel core NPC.
                 "addNPC" => {
                     return Ok(mlua::Value::Function(lua.create_function(
@@ -312,9 +311,9 @@ impl UserData for NpcObject {
                                 Some(mlua::Value::String(s)) => s.to_str()?.to_owned(),
                                 _ => return Ok(()),
                             };
-                            let vi = |i: usize| -> c_int { match args.get(i) {
-                                Some(mlua::Value::Integer(n)) => *n as c_int,
-                                Some(mlua::Value::Number(f))  => *f as c_int,
+                            let vi = |i: usize| -> i32 { match args.get(i) {
+                                Some(mlua::Value::Integer(n)) => *n as i32,
+                                Some(mlua::Value::Number(f))  => *f as i32,
                                 _ => 0,
                             }};
                             let vs = |i: usize| -> Option<String> { match args.get(i) {
@@ -356,7 +355,7 @@ impl UserData for NpcObject {
                 )?))
             }; }
             // Shared map properties (pvp, mapTitle, bgm, etc.) — delegate to shared module.
-            if let Some(v) = unsafe { shared::map_field(lua, bl.m as c_int, key.as_str()) } {
+            if let Some(v) = unsafe { shared::map_field(lua, bl.m as i32, key.as_str()) } {
                 return v;
             }
             // Shared GfxViewer properties (gfxFace, gfxWeap, etc.) — delegate to shared module.

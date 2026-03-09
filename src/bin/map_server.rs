@@ -39,7 +39,7 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    // Initialize C core state (mirrors core.c main() preamble).
+    // Initialize core state.
     unsafe {
         rust_core_init();
         // fd_max is now owned by session.rs (get_fd_max()); no external callback needed.

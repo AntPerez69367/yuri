@@ -147,7 +147,7 @@ start_point:
             }
         }
 
-        // Send connect banner (mirrors C clif_accept ok branch)
+        // Send connect banner.
         let banner: &[u8] = b"\xAA\x00\x13\x7E\x1B\x43\x4F\x4E\x4E\x45\x43\x54\x45\x44\x20\x53\x45\x52\x56\x45\x52\x0A";
         if stream.write_all(banner).await.is_err() {
             return;

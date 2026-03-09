@@ -4,7 +4,7 @@
 //! Migrating incrementally from C to Rust for memory safety and performance.
 
 /// Catch any Rust panic at the FFI boundary and return `$default` instead.
-/// Panics must not unwind across `extern "C"` — doing so is undefined behavior.
+/// Panics must not unwind across FFI boundaries — doing so is undefined behavior.
 macro_rules! ffi_catch {
     ($default:expr, $body:expr) => {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {

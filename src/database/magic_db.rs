@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::ffi::CStr;
-use std::os::raw::{c_char, c_int, c_uchar};
 use std::ptr::null_mut;
 use std::sync::{Mutex, OnceLock};
 
@@ -9,25 +8,24 @@ use sqlx::Row;
 use super::{blocking_run, get_pool};
 use super::item_db::str_to_fixed;
 
-#[repr(C)]
 pub struct MagicData {
-    pub id: c_int,
-    pub typ: c_int,
-    pub name: [c_char; 32],
-    pub yname: [c_char; 32],
-    pub question: [c_char; 64],
-    pub script: [c_char; 64],
-    pub script2: [c_char; 64],
-    pub script3: [c_char; 64],
-    pub dispell: c_uchar,
-    pub aether: c_uchar,
-    pub mute: c_uchar,
-    pub level: c_uchar,
-    pub mark: c_uchar,
-    pub canfail: c_uchar,
-    pub alignment: c_char,
-    pub ticker: c_uchar,
-    pub class: c_char,
+    pub id: i32,
+    pub typ: i32,
+    pub name: [i8; 32],
+    pub yname: [i8; 32],
+    pub question: [i8; 64],
+    pub script: [i8; 64],
+    pub script2: [i8; 64],
+    pub script3: [i8; 64],
+    pub dispell: u8,
+    pub aether: u8,
+    pub mute: u8,
+    pub level: u8,
+    pub mark: u8,
+    pub canfail: u8,
+    pub alignment: i8,
+    pub ticker: u8,
+    pub class: i8,
 }
 
 unsafe impl Send for MagicData {}
@@ -102,7 +100,7 @@ async fn load_magic() -> Result<usize, sqlx::Error> {
 
 // ─── Public interface ────────────────────────────────────────────────────────
 
-pub fn init() -> c_int {
+pub fn init() -> i32 {
     MAGIC_DB.get_or_init(|| Mutex::new(HashMap::new()));
     match blocking_run(load_magic()) {
         Ok(n) => { tracing::info!("[magic_db] read done count={n}"); 0 }
@@ -151,7 +149,7 @@ pub fn searchexist(id: i32) -> *mut MagicData {
 /// - `m.yname` is always null-terminated because `str_to_fixed` writes a zero
 ///   byte at `dst[len]` where `len ≤ N-1`, guaranteeing termination even for
 ///   maximum-length inputs.
-pub unsafe fn searchname(s: *const c_char) -> *mut MagicData {
+pub unsafe fn searchname(s: *const i8) -> *mut MagicData {
     if s.is_null() { return null_mut(); }
     let target = unsafe { CStr::from_ptr(s) }.to_string_lossy().to_lowercase();
     let map = db().lock().unwrap();
@@ -166,7 +164,7 @@ pub unsafe fn searchname(s: *const c_char) -> *mut MagicData {
     null_mut()
 }
 
-pub unsafe fn id(s: *const c_char) -> c_int {
+pub unsafe fn id(s: *const i8) -> i32 {
     if s.is_null() { return 0; }
     let ptr = unsafe { searchname(s) };
     if !ptr.is_null() {
@@ -185,79 +183,78 @@ pub unsafe fn id(s: *const c_char) -> c_int {
 }
 
 /// Takes a spell name string, returns the level field.
-pub unsafe fn level_by_name(s: *const c_char) -> c_int {
+pub unsafe fn level_by_name(s: *const i8) -> i32 {
     if s.is_null() { return 0; }
     let spell_id = unsafe { id(s) };
     if spell_id != 0 {
-        unsafe { (*search(spell_id)).level as c_int }
+        unsafe { (*search(spell_id)).level as i32 }
     } else {
         0
     }
 }
 
-// ─── FFI bridge (moved from src/ffi/magic_db.rs) ──────────────────────────
 
 static EMPTY: &[u8] = b"\0";
 
-pub fn rust_magicdb_init() -> c_int { ffi_catch!(-1, init()) }
+pub fn rust_magicdb_init() -> i32 { ffi_catch!(-1, init()) }
 
 pub fn rust_magicdb_term() { ffi_catch!((), term()) }
 
-pub fn rust_magicdb_search(id: c_int) -> *mut MagicData { ffi_catch!(null_mut(), search(id)) }
+pub fn rust_magicdb_search(id: i32) -> *mut MagicData { ffi_catch!(null_mut(), search(id)) }
 
-pub fn rust_magicdb_searchexist(id: c_int) -> *mut MagicData { ffi_catch!(null_mut(), searchexist(id)) }
+pub fn rust_magicdb_searchexist(id: i32) -> *mut MagicData { ffi_catch!(null_mut(), searchexist(id)) }
 
-pub unsafe fn rust_magicdb_searchname(s: *const c_char) -> *mut MagicData { ffi_catch!(null_mut(), unsafe { searchname(s) }) }
+pub unsafe fn rust_magicdb_searchname(s: *const i8) -> *mut MagicData { ffi_catch!(null_mut(), unsafe { searchname(s) }) }
 
-pub unsafe fn rust_magicdb_id(s: *const c_char) -> c_int { ffi_catch!(0, unsafe { id(s) }) }
+pub unsafe fn rust_magicdb_id(s: *const i8) -> i32 { ffi_catch!(0, unsafe { id(s) }) }
 
-pub fn rust_magicdb_name(id: c_int) -> *mut c_char {
+pub fn rust_magicdb_name(id: i32) -> *mut i8 {
     ffi_catch!(null_mut(), {
         let p = search(id);
         if p.is_null() { null_mut() } else { unsafe { (*p).name.as_mut_ptr() } }
     })
 }
-pub fn rust_magicdb_yname(id: c_int) -> *mut c_char {
+pub fn rust_magicdb_yname(id: i32) -> *mut i8 {
     ffi_catch!(null_mut(), {
         let p = search(id);
         if p.is_null() { null_mut() } else { unsafe { (*p).yname.as_mut_ptr() } }
     })
 }
-pub fn rust_magicdb_question(id: c_int) -> *mut c_char {
+pub fn rust_magicdb_question(id: i32) -> *mut i8 {
     ffi_catch!(null_mut(), {
         let p = search(id);
         if p.is_null() { null_mut() } else { unsafe { (*p).question.as_mut_ptr() } }
     })
 }
-pub fn rust_magicdb_type(id: c_int) -> c_int {
+pub fn rust_magicdb_type(id: i32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).typ } } })
 }
-pub fn rust_magicdb_dispel(id: c_int) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).dispell as c_int } } })
+pub fn rust_magicdb_dispel(id: i32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).dispell as i32 } } })
 }
-pub fn rust_magicdb_aether(id: c_int) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).aether as c_int } } })
+pub fn rust_magicdb_aether(id: i32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).aether as i32 } } })
 }
-pub fn rust_magicdb_mute(id: c_int) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).mute as c_int } } })
+pub fn rust_magicdb_mute(id: i32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).mute as i32 } } })
 }
-pub fn rust_magicdb_canfail(id: c_int) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).canfail as c_int } } })
+pub fn rust_magicdb_canfail(id: i32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).canfail as i32 } } })
 }
-pub fn rust_magicdb_alignment(id: c_int) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).alignment as c_int } } })
+pub fn rust_magicdb_alignment(id: i32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).alignment as i32 } } })
 }
-pub fn rust_magicdb_ticker(id: c_int) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).ticker as c_int } } })
+pub fn rust_magicdb_ticker(id: i32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).ticker as i32 } } })
 }
-pub unsafe fn rust_magicdb_level(s: *const c_char) -> c_int { ffi_catch!(0, unsafe { level_by_name(s) }) }
+pub unsafe fn rust_magicdb_level(s: *const i8) -> i32 { ffi_catch!(0, unsafe { level_by_name(s) }) }
 
-pub fn rust_magicdb_script(_id: c_int) -> *const c_char {
-    EMPTY.as_ptr() as *const c_char
+pub fn rust_magicdb_script(_id: i32) -> *const i8 {
+    EMPTY.as_ptr() as *const i8
 }
-pub fn rust_magicdb_script2(_id: c_int) -> *const c_char {
-    EMPTY.as_ptr() as *const c_char
+pub fn rust_magicdb_script2(_id: i32) -> *const i8 {
+    EMPTY.as_ptr() as *const i8
 }
-pub fn rust_magicdb_script3(_id: c_int) -> *const c_char {
-    EMPTY.as_ptr() as *const c_char
+pub fn rust_magicdb_script3(_id: i32) -> *const i8 {
+    EMPTY.as_ptr() as *const i8
 }

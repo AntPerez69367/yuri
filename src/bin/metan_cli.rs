@@ -1,6 +1,6 @@
 /// metan_cli — generates binary .metan metadata files from the item database
 ///
-/// Rust port of c_src/metan_cli.c.
+/// Meta file CLI utility.
 /// Connects to MySQL via sqlx (same pool used by item_db/class_db),
 /// loads itemdb + classdb, queries the Items table, and writes .metan files.
 

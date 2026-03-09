@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::ffi::CStr;
-use std::os::raw::{c_char, c_int, c_schar, c_short, c_uchar, c_uint, c_ushort};
 use std::ptr::null_mut;
 use std::sync::{Mutex, OnceLock};
 
@@ -11,80 +10,78 @@ use super::item_db::str_to_fixed;
 
 const MAX_EQUIP: usize = 15;
 
-/// Mirrors `struct item` from mmo.h (live item instance, not item template).
+/// Live item instance (not the item template).
 /// Also used by pc.rs inventory — move to a shared types module when pc.rs is written.
-#[repr(C)]
 pub struct MobItem {
-    pub id: c_uint,
-    pub owner: c_uint,
-    pub custom: c_uint,
-    pub time: c_uint,
-    pub dura: c_int,
-    pub amount: c_int,
-    pub pos: c_uchar,
+    pub id: u32,
+    pub owner: u32,
+    pub custom: u32,
+    pub time: u32,
+    pub dura: i32,
+    pub amount: i32,
+    pub pos: u8,
     pub _pad: [u8; 3],
-    pub custom_look: c_uint,
-    pub custom_icon: c_uint,
-    pub custom_look_color: c_uint,
-    pub custom_icon_color: c_uint,
-    pub protected_: c_uint,
-    pub traps_table: [c_uint; 100],
-    pub buytext: [c_uchar; 64],
-    pub note: [c_char; 300],
-    pub repair: c_schar,
-    pub real_name: [c_char; 64],
+    pub custom_look: u32,
+    pub custom_icon: u32,
+    pub custom_look_color: u32,
+    pub custom_icon_color: u32,
+    pub protected_: u32,
+    pub traps_table: [u32; 100],
+    pub buytext: [u8; 64],
+    pub note: [i8; 300],
+    pub repair: i8,
+    pub real_name: [i8; 64],
 }
 
-/// Mirrors `struct mobdb_data` from map_server.h.
+/// Mob database entry.
 /// The `equip` array is populated by a MobEquipment sub-query for NPC mobs (mobtype == 1).
-#[repr(C)]
 pub struct MobDbData {
     pub equip: [MobItem; 15], // MAX_EQUIP from mmo.h
-    pub vita: c_int,
-    pub r#type: c_int,
-    pub subtype: c_int,
-    pub look: c_int,
-    pub look_color: c_int,
-    pub hit: c_int,
-    pub level: c_int,
-    pub might: c_int,
-    pub grace: c_int,
-    pub will: c_int,
-    pub movetime: c_int,
-    pub atktime: c_int,
-    pub spawntime: c_int,
-    pub baseac: c_int,
-    pub sound: c_int,
-    pub mana: c_int,
-    pub owner: c_uint,
-    pub id: c_uint,
-    pub mindam: c_uint,
-    pub maxdam: c_uint,
-    pub exp: c_uint,
-    pub name: [c_char; 45],
-    pub yname: [c_char; 45],
-    pub block: c_schar,
-    pub retdist: c_schar,
-    pub mobtype: c_uchar,
-    pub state: c_schar,
-    pub race: c_schar,
-    pub seeinvis: c_schar,
-    pub tier: c_schar,
-    pub mark: c_uchar,
-    pub isnpc: c_uchar,
-    pub isboss: c_uchar,
-    pub protection: c_short,
-    pub miss: c_short,
-    pub sex: c_ushort,
-    pub face: c_ushort,
-    pub face_color: c_ushort,
-    pub hair: c_ushort,
-    pub hair_color: c_ushort,
-    pub armor_color: c_ushort,
-    pub skin_color: c_ushort,
-    pub startm: c_ushort,
-    pub startx: c_ushort,
-    pub starty: c_ushort,
+    pub vita: i32,
+    pub r#type: i32,
+    pub subtype: i32,
+    pub look: i32,
+    pub look_color: i32,
+    pub hit: i32,
+    pub level: i32,
+    pub might: i32,
+    pub grace: i32,
+    pub will: i32,
+    pub movetime: i32,
+    pub atktime: i32,
+    pub spawntime: i32,
+    pub baseac: i32,
+    pub sound: i32,
+    pub mana: i32,
+    pub owner: u32,
+    pub id: u32,
+    pub mindam: u32,
+    pub maxdam: u32,
+    pub exp: u32,
+    pub name: [i8; 45],
+    pub yname: [i8; 45],
+    pub block: i8,
+    pub retdist: i8,
+    pub mobtype: u8,
+    pub state: i8,
+    pub race: i8,
+    pub seeinvis: i8,
+    pub tier: i8,
+    pub mark: u8,
+    pub isnpc: u8,
+    pub isboss: u8,
+    pub protection: i16,
+    pub miss: i16,
+    pub sex: u16,
+    pub face: u16,
+    pub face_color: u16,
+    pub hair: u16,
+    pub hair_color: u16,
+    pub armor_color: u16,
+    pub skin_color: u16,
+    pub startm: u16,
+    pub startx: u16,
+    pub starty: u16,
 }
 
 unsafe impl Send for MobDbData {}
@@ -179,38 +176,38 @@ async fn load_mobs() -> Result<usize, sqlx::Error> {
         str_to_fixed(&mut m.yname, &row.try_get::<String, _>(2).unwrap_or_default());
         // All columns are int(10) unsigned in MySQL → read as u32, cast to target C type.
         // Only MobArmor (col 16) is signed int.
-        m.r#type     = row.try_get::<u32, _>(3).unwrap_or(0)  as c_int;
-        m.subtype    = row.try_get::<u32, _>(4).unwrap_or(0)  as c_int;
-        m.look       = row.try_get::<u32, _>(5).unwrap_or(0)  as c_int;
-        m.look_color = row.try_get::<u32, _>(6).unwrap_or(0)  as c_int;
-        m.vita       = row.try_get::<u32, _>(7).unwrap_or(0)  as c_int;
-        m.mana       = row.try_get::<u32, _>(8).unwrap_or(0)  as c_int;
+        m.r#type     = row.try_get::<u32, _>(3).unwrap_or(0)  as i32;
+        m.subtype    = row.try_get::<u32, _>(4).unwrap_or(0)  as i32;
+        m.look       = row.try_get::<u32, _>(5).unwrap_or(0)  as i32;
+        m.look_color = row.try_get::<u32, _>(6).unwrap_or(0)  as i32;
+        m.vita       = row.try_get::<u32, _>(7).unwrap_or(0)  as i32;
+        m.mana       = row.try_get::<u32, _>(8).unwrap_or(0)  as i32;
         m.exp        = row.try_get::<u32, _>(9).unwrap_or(0);
-        m.hit        = row.try_get::<u32, _>(10).unwrap_or(0) as c_int;
-        m.level      = row.try_get::<u32, _>(11).unwrap_or(0) as c_int;
-        m.might      = row.try_get::<u32, _>(12).unwrap_or(0) as c_int;
-        m.grace      = row.try_get::<u32, _>(13).unwrap_or(0) as c_int;
-        m.movetime   = row.try_get::<u32, _>(14).unwrap_or(0) as c_int;
-        m.spawntime  = row.try_get::<u32, _>(15).unwrap_or(0) as c_int;
+        m.hit        = row.try_get::<u32, _>(10).unwrap_or(0) as i32;
+        m.level      = row.try_get::<u32, _>(11).unwrap_or(0) as i32;
+        m.might      = row.try_get::<u32, _>(12).unwrap_or(0) as i32;
+        m.grace      = row.try_get::<u32, _>(13).unwrap_or(0) as i32;
+        m.movetime   = row.try_get::<u32, _>(14).unwrap_or(0) as i32;
+        m.spawntime  = row.try_get::<u32, _>(15).unwrap_or(0) as i32;
         m.baseac     = row.try_get::<i32, _>(16).unwrap_or(0);          // signed
-        m.sound      = row.try_get::<u32, _>(17).unwrap_or(0) as c_int;
-        m.atktime    = row.try_get::<u32, _>(18).unwrap_or(0) as c_int;
-        m.protection = row.try_get::<u32, _>(19).unwrap_or(0) as c_short;
-        m.retdist    = row.try_get::<u32, _>(20).unwrap_or(0) as c_schar;
-        m.sex        = row.try_get::<u32, _>(21).unwrap_or(0) as c_ushort;
-        m.face       = row.try_get::<u32, _>(22).unwrap_or(0) as c_ushort;
-        m.face_color = row.try_get::<u32, _>(23).unwrap_or(0) as c_ushort;
-        m.hair       = row.try_get::<u32, _>(24).unwrap_or(0) as c_ushort;
-        m.hair_color = row.try_get::<u32, _>(25).unwrap_or(0) as c_ushort;
-        m.skin_color = row.try_get::<u32, _>(26).unwrap_or(0) as c_ushort;
-        m.state      = row.try_get::<u32, _>(27).unwrap_or(0) as c_schar;
-        m.mobtype    = row.try_get::<u32, _>(28).unwrap_or(0) as c_uchar;
-        m.will       = row.try_get::<u32, _>(29).unwrap_or(0) as c_int;
+        m.sound      = row.try_get::<u32, _>(17).unwrap_or(0) as i32;
+        m.atktime    = row.try_get::<u32, _>(18).unwrap_or(0) as i32;
+        m.protection = row.try_get::<u32, _>(19).unwrap_or(0) as i16;
+        m.retdist    = row.try_get::<u32, _>(20).unwrap_or(0) as i8;
+        m.sex        = row.try_get::<u32, _>(21).unwrap_or(0) as u16;
+        m.face       = row.try_get::<u32, _>(22).unwrap_or(0) as u16;
+        m.face_color = row.try_get::<u32, _>(23).unwrap_or(0) as u16;
+        m.hair       = row.try_get::<u32, _>(24).unwrap_or(0) as u16;
+        m.hair_color = row.try_get::<u32, _>(25).unwrap_or(0) as u16;
+        m.skin_color = row.try_get::<u32, _>(26).unwrap_or(0) as u16;
+        m.state      = row.try_get::<u32, _>(27).unwrap_or(0) as i8;
+        m.mobtype    = row.try_get::<u32, _>(28).unwrap_or(0) as u8;
+        m.will       = row.try_get::<u32, _>(29).unwrap_or(0) as i32;
         m.mindam     = row.try_get::<u32, _>(30).unwrap_or(0);
         m.maxdam     = row.try_get::<u32, _>(31).unwrap_or(0);
-        m.mark       = row.try_get::<u32, _>(32).unwrap_or(0) as c_uchar;
-        m.isnpc      = row.try_get::<u32, _>(33).unwrap_or(0) as c_uchar;
-        m.isboss     = row.try_get::<u32, _>(34).unwrap_or(0) as c_uchar;
+        m.mark       = row.try_get::<u32, _>(32).unwrap_or(0) as u8;
+        m.isnpc      = row.try_get::<u32, _>(33).unwrap_or(0) as u8;
+        m.isboss     = row.try_get::<u32, _>(34).unwrap_or(0) as u8;
 
         if m.mobtype == 1 {
             let eq_rows = sqlx::query(
@@ -237,7 +234,7 @@ async fn load_mobs() -> Result<usize, sqlx::Error> {
 
 // ─── Public interface ────────────────────────────────────────────────────────
 
-pub fn init() -> c_int {
+pub fn init() -> i32 {
     MOB_DB.get_or_init(|| Mutex::new(HashMap::new()));
     match blocking_run(load_mobs()) {
         Ok(n) => { tracing::info!("[mob_db] read done count={n}"); 0 }
@@ -267,7 +264,7 @@ pub fn searchexist(id: u32) -> *mut MobDbData {
 }
 
 /// Searches by `yname` (script identifier), case-insensitive.
-pub unsafe fn searchname(s: *const c_char) -> *mut MobDbData {
+pub unsafe fn searchname(s: *const i8) -> *mut MobDbData {
     if s.is_null() { return null_mut(); }
     let target = unsafe { CStr::from_ptr(s) }.to_string_lossy().to_lowercase();
     let map = db().lock().unwrap();
@@ -281,70 +278,51 @@ pub unsafe fn searchname(s: *const c_char) -> *mut MobDbData {
     null_mut()
 }
 
-pub fn level(id: u32) -> c_int {
+pub fn level(id: u32) -> i32 {
     let map = db().lock().unwrap();
     map.get(&id).map(|m| m.level).unwrap_or(0)
 }
 
-pub fn experience(id: u32) -> c_uint {
+pub fn experience(id: u32) -> u32 {
     let map = db().lock().unwrap();
     map.get(&id).map(|m| m.exp).unwrap_or(0)
 }
 
 /// Finds a mob id by yname string. Returns 0 if not found.
-pub unsafe fn find_id(s: *const c_char) -> c_int {
+pub unsafe fn find_id(s: *const i8) -> i32 {
     let ptr = unsafe { searchname(s) };
     if ptr.is_null() { return 0; }
-    unsafe { (*ptr).id as c_int }
+    unsafe { (*ptr).id as i32 }
 }
 
-#[cfg(test)]
-mod layout_tests {
-    use super::*;
 
-    #[test]
-    fn mob_item_size() {
-        // struct item in mmo.h: verify layout matches C
-        assert_eq!(std::mem::size_of::<MobItem>(), 880,
-            "MobItem size mismatch — C struct item is 880 bytes");
-    }
 
-    #[test]
-    fn mob_db_data_size() {
-        // Calculated from C struct layout
-        assert_eq!(std::mem::size_of::<MobDbData>(), 13408,
-            "MobDbData size mismatch — check field ordering vs map_server.h");
-    }
-}
-
-// ─── FFI bridge (moved from src/ffi/mob_db.rs) ────────────────────────────
-
-pub fn rust_mobdb_init() -> c_int { ffi_catch!(-1, init()) }
+pub fn rust_mobdb_init() -> i32 { ffi_catch!(-1, init()) }
 
 pub fn rust_mobdb_term() { ffi_catch!((), term()) }
 
-pub fn rust_mobdb_search(id: c_uint) -> *mut MobDbData {
+pub fn rust_mobdb_search(id: u32) -> *mut MobDbData {
     ffi_catch!(null_mut(), search(id))
 }
 
-pub fn rust_mobdb_searchexist(id: c_uint) -> *mut MobDbData {
+pub fn rust_mobdb_searchexist(id: u32) -> *mut MobDbData {
     ffi_catch!(null_mut(), searchexist(id))
 }
 
-pub unsafe fn rust_mobdb_searchname(s: *const c_char) -> *mut MobDbData {
+pub unsafe fn rust_mobdb_searchname(s: *const i8) -> *mut MobDbData {
     if s.is_null() { return null_mut(); }
     ffi_catch!(null_mut(), unsafe { searchname(s) })
 }
 
-pub fn rust_mobdb_level(id: c_uint) -> c_int {
+pub fn rust_mobdb_level(id: u32) -> i32 {
     ffi_catch!(0, level(id))
 }
 
-pub fn rust_mobdb_experience(id: c_uint) -> c_uint {
+pub fn rust_mobdb_experience(id: u32) -> u32 {
     ffi_catch!(0, experience(id))
 }
 
-pub unsafe fn rust_mobdb_id(s: *const c_char) -> c_int {
+pub unsafe fn rust_mobdb_id(s: *const i8) -> i32 {
     if s.is_null() { return 0; }
     ffi_catch!(0, unsafe { find_id(s) })
 }

@@ -4,16 +4,14 @@
 //! `GlobalReg` → import from `crate::database::map_db::GlobalReg`
 //! `GfxViewer` → defined here (first use; shared by npc, mob, pc)
 
-use std::ffi::c_char;
 
-/// Mirrors `struct gfxViewer` from `map_server.h`. Must be 72 bytes.
 ///
 /// Field layout (no padding — all `u16` first, then all single-byte fields):
 /// - 10 × `u16` equipment/appearance slots   (20 bytes)
 /// - 10 × `u8`  color overrides for slots    (10 bytes)
 /// -  7 × `u8`  hair/face/skin/dye/color     ( 7 bytes)
-/// -  1 × `c_char` toggle                    ( 1 byte)
-/// - 34 × `c_char` name buffer               (34 bytes)
+/// -  1 × `i8` toggle                    ( 1 byte)
+/// - 34 × `i8` name buffer               (34 bytes)
 ///                                      total: 72 bytes
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -45,8 +43,8 @@ pub struct GfxViewer {
     pub cskin:       u8,
     pub dye:         u8,
     pub title_color: u8,
-    pub toggle:      c_char,
-    pub name:        [c_char; 34],
+    pub toggle:      i8,
+    pub name:        [i8; 34],
 }
 
 #[cfg(test)]

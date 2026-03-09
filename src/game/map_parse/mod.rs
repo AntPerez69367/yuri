@@ -1,5 +1,4 @@
 #![allow(non_snake_case, dead_code, unused_variables)]
-//! Port of `c_src/map_parse.c` — client packet handlers and send helpers.
 //!
 //! Submodule layout:
 //!   packet       — FIFO helpers + clif_send routing layer
@@ -28,7 +27,6 @@ pub mod events;
 
 // ─── clif_parse — main packet dispatcher ─────────────────────────────────────
 
-use std::ffi::{c_char, c_int, c_uint};
 
 use crate::database::map_db::map;
 use crate::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof, rust_session_set_eof};
@@ -39,7 +37,7 @@ use crate::game::map_parse::packet::{
     rfifob, rfifow, rfifol, rfifop, rfiforest, rfifoskip, swap16, swap32, decrypt,
 };
 
-// Rust-native functions (all pub unsafe extern "C")
+// Rust-native functions
 use crate::game::map_parse::movement::{clif_parsewalk, clif_parsemap};
 use crate::game::map_parse::combat::{clif_parseattack, clif_parsemagic};
 use crate::game::map_parse::chat::{clif_parsesay, clif_parsewisp, clif_parseignore, clif_sendminitext};
@@ -54,8 +52,7 @@ use crate::game::map_parse::events::{clif_sendRewardInfo, clif_getReward, clif_p
 use crate::game::map_parse::player_state::{clif_mystaytus, clif_refresh};
 use crate::game::map_parse::dialogs::{clif_parsenpcdialog, clif_handle_clickgetinfo, clif_closeit};
 
-// crate::session::get_fd_max() is defined in the binary — cannot import from library, must keep extern "C".
-// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
+// get_fd_max is defined in the binary; import via the session module.
 
 use crate::game::client::visual::{
     clif_cancelafk, clif_print_disconnect, clif_user_list, clif_debug,
@@ -77,25 +74,25 @@ use crate::network::crypt::{send_meta, send_metalist};
 use crate::database::item_db::rust_itemdb_thrownconfirm as itemdb_thrownconfirm;
 use crate::game::pc::rust_pc_atkspeed;
 
-// pc_warp: actual fn takes c_int, old extern had u16 — wrap with cast.
+// pc_warp: actual fn takes i32, old extern had u16 — wrap with cast.
 #[inline]
 unsafe fn pc_warp(sd: *mut MapSessionData, map_id: u16, x: u16, y: u16) {
-    crate::game::pc::rust_pc_warp(sd, map_id as c_int, x as c_int, y as c_int);
+    crate::game::pc::rust_pc_warp(sd, map_id as i32, x as i32, y as i32);
 }
-// clif_debug: actual fn takes c_int for len, old extern had u16 — wrap with cast.
+// clif_debug: actual fn takes i32 for len, old extern had u16 — wrap with cast.
 #[inline]
 unsafe fn clif_debug_u16(buf: *const u8, len: u16) {
-    clif_debug(buf, len as c_int);
+    clif_debug(buf, len as i32);
 }
-// createdb_start takes *mut c_void in handlers.rs.
+// createdb_start takes *mut std::ffi::c_void in handlers.rs.
 #[inline]
 unsafe fn createdb_start(sd: *mut MapSessionData) {
     crate::game::client::handlers::createdb_start(sd as *mut std::ffi::c_void);
 }
 
-/// Main packet dispatcher. Mirrors `int clif_parse(int fd)` from `c_src/map_parse.c`.
+/// Main packet dispatcher.
 // clif_parse — ported to rust (src/game/map_parse/mod.rs)
-pub unsafe fn clif_parse(fd: c_int) -> c_int {
+pub unsafe fn clif_parse(fd: i32) -> i32 {
     if fd < 0 { return 0; }
     if rust_session_exists(fd) == 0 { return 0; }
 
@@ -103,7 +100,7 @@ pub unsafe fn clif_parse(fd: c_int) -> c_int {
 
     if rust_session_get_eof(fd) != 0 {
         if !sd.is_null() {
-            libc::printf(b"[map] [session_eof] name=%s\n\0".as_ptr() as *const c_char,
+            libc::printf(b"[map] [session_eof] name=%s\n\0".as_ptr() as *const i8,
                 (*sd).status.name.as_ptr());
             clif_handle_disconnect(sd);
             clif_closeit(sd);
@@ -123,12 +120,12 @@ pub unsafe fn clif_parse(fd: c_int) -> c_int {
 
     let len = swap16(rfifow(fd, 1)) as usize + 3;
 
-    if rfiforest(fd) < len as c_int { return 0; }
+    if rfiforest(fd) < len as i32 { return 0; }
 
     if sd.is_null() {
         match rfifob(fd, 3) {
             0x10 => {
-                clif_accept2(fd, rfifop(fd, 16) as *mut c_char, rfifob(fd, 15) as c_int);
+                clif_accept2(fd, rfifop(fd, 16) as *mut i8, rfifob(fd, 15) as i32);
             }
             _ => {}
         }
@@ -152,7 +149,7 @@ pub unsafe fn clif_parse(fd: c_int) -> c_int {
                 }
                 if logincount >= 2 {
                     libc::printf(
-                        b"%s attempted dual login on IP:%s\n\0".as_ptr() as *const c_char,
+                        b"%s attempted dual login on IP:%s\n\0".as_ptr() as *const i8,
                         (*sd).status.name.as_ptr(),
                         (*sd).status.ipaddress.as_ptr(),
                     );
@@ -223,7 +220,7 @@ pub unsafe fn clif_parse(fd: c_int) -> c_int {
                     if (*map.add((*sd).bl.m as usize)).spell != 0 || (*sd).status.gm_level != 0 {
                         clif_parsemagic(sd);
                     } else {
-                        clif_sendminitext(sd, b"That doesn't work here.\0".as_ptr() as *const c_char);
+                        clif_sendminitext(sd, b"That doesn't work here.\0".as_ptr() as *const i8);
                     }
                 }
             }
@@ -241,12 +238,12 @@ pub unsafe fn clif_parse(fd: c_int) -> c_int {
             (*sd).time += 1;
             if (*sd).attacked != 1 && (*sd).attack_speed > 0 {
                 (*sd).attacked = 1;
-                let delay = (((*sd).attack_speed as c_uint) * 1000) / 60;
+                let delay = (((*sd).attack_speed as u32) * 1000) / 60;
                 timer_insert(
                     delay,
                     delay,
                     Some(rust_pc_atkspeed as unsafe fn(i32, i32) -> i32),
-                    (*sd).status.id as c_int,
+                    (*sd).status.id as i32,
                     0,
                 );
                 clif_parseattack(sd);
@@ -285,7 +282,7 @@ pub unsafe fn clif_parse(fd: c_int) -> c_int {
         }
         0x1B => {
             if (*sd).loaded != 0 {
-                clif_changestatus(sd, rfifob((*sd).fd, 6) as c_int);
+                clif_changestatus(sd, rfifob((*sd).fd, 6) as i32);
             }
         }
         0x1C => {
@@ -436,18 +433,18 @@ pub unsafe fn clif_parse(fd: c_int) -> c_int {
             }
         }
         0x75 => {
-            // clif_parsewalkpong is in movement.rs but called via C ABI
+            // clif_parsewalkpong is in movement.rs
             crate::game::map_parse::movement::clif_parsewalkpong(sd);
         }
         0x77 => {
             clif_cancelafk(sd);
-            let name_ptr = rfifop((*sd).fd, 5) as *const c_char;
-            let name_len = swap16(rfifow((*sd).fd, 1)) as c_int - 5;
+            let name_ptr = rfifop((*sd).fd, 5) as *const i8;
+            let name_len = swap16(rfifow((*sd).fd, 1)) as i32 - 5;
             clif_parsefriends(sd, name_ptr, name_len);
         }
         0x7B => {
-            libc::printf(b"request: %u\n\0".as_ptr() as *const c_char,
-                rfifob((*sd).fd, 5) as c_uint);
+            libc::printf(b"request: %u\n\0".as_ptr() as *const i8,
+                rfifob((*sd).fd, 5) as u32);
             match rfifob((*sd).fd, 5) {
                 0 => { send_meta(sd); }
                 1 => { send_metalist(sd); }
@@ -483,8 +480,8 @@ pub unsafe fn clif_parse(fd: c_int) -> c_int {
         }
         _ => {
             libc::printf(
-                b"[Map] Unknown Packet ID: %02X\nPacket content:\n\0".as_ptr() as *const c_char,
-                rfifob((*sd).fd, 3) as c_uint,
+                b"[Map] Unknown Packet ID: %02X\nPacket content:\n\0".as_ptr() as *const i8,
+                rfifob((*sd).fd, 3) as u32,
             );
             clif_debug_u16(rfifop((*sd).fd, 0), swap16(rfifow((*sd).fd, 1)));
         }

@@ -1,4 +1,4 @@
-//! Scripting engine — replaces `c_src/scripting.c`.
+//! Lua scripting engine.
 #![allow(non_snake_case, dead_code, unused_variables)]
 
 pub mod async_coro;
@@ -10,8 +10,7 @@ pub mod map_globals;
 pub mod types;
 
 use mlua::Lua;
-use std::ffi::{CStr, CString, c_char, c_int, c_uint};
-use std::os::raw::c_void;
+use std::ffi::{CStr, CString};
 use std::sync::{Arc, atomic::{AtomicBool}};
 
 use crate::database::map_db::BlockList;
@@ -24,7 +23,6 @@ use types::registry::*;
 
 // ---------------------------------------------------------------------------
 // Global Lua state — single instance, lives for the process lifetime.
-// Mirrors `lua_State *sl_gstate` in scripting.c.
 // ---------------------------------------------------------------------------
 // SAFETY: Option<mlua::Lua> is !Send + !Sync. Initialised once by rust_sl_init on the game thread.
 // All Lua calls happen on the same thread via the tokio LocalSet executor. No concurrent access.
@@ -42,7 +40,7 @@ pub unsafe fn sl_state() -> &'static Lua {
 /// Set after init. Leave null if mlua does not expose a stable raw accessor.
 // SAFETY: Raw pointer alias into SL_STATE's internal lua_State. Same safety invariant as SL_STATE:
 // initialised once on the game thread, only accessed from the tokio LocalSet executor.
-pub static mut sl_gstate: *mut c_void = std::ptr::null_mut();
+pub static mut sl_gstate: *mut std::ffi::c_void = std::ptr::null_mut();
 
 // ---------------------------------------------------------------------------
 // sl_init
@@ -59,13 +57,12 @@ pub fn sl_init() {
         SL_STATE = Some(lua);
 
         // Capture the raw lua_State* via exec_raw and store in sl_gstate so C
-        // helpers (sl_compat.c) and async_coro.rs can access it without going
+        // helpers 
         // through the mlua lock (safe: pointer is stable for process lifetime).
-        // Capture the raw lua_State* so sl_compat.c and async_coro.rs can access
-        // it without going through the mlua lock.  Panic on failure — sl_gstate
+                // it without going through the mlua lock.  Panic on failure — sl_gstate
         // must be non-null before any C code can call back into Lua.
         SL_STATE.as_ref().unwrap().exec_raw::<()>((), |L| {
-            sl_gstate = L as *mut c_void;
+            sl_gstate = L as *mut std::ffi::c_void;
         }).expect("exec_raw failed: sl_gstate could not be initialised");
 
         // Reload scripts (lua_dir comes from config).
@@ -75,10 +72,10 @@ pub fn sl_init() {
 
 /// Convert a Lua value (integer id or light userdata pointer) to a C pointer.
 /// Integer values that are negative or exceed `usize::MAX` map to null.
-fn lua_val_to_ptr(v: mlua::Value) -> *mut c_void {
+fn lua_val_to_ptr(v: mlua::Value) -> *mut std::ffi::c_void {
     match v {
         mlua::Value::Integer(i)         => {
-            usize::try_from(i).map_or(std::ptr::null_mut(), |u| u as *mut c_void)
+            usize::try_from(i).map_or(std::ptr::null_mut(), |u| u as *mut std::ffi::c_void)
         }
         mlua::Value::LightUserData(ud)  => ud.0,
         _                               => std::ptr::null_mut(),
@@ -98,26 +95,26 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
         ptr: lua_val_to_ptr(v),
         deleted: Arc::new(AtomicBool::new(false)),
     }))?)?;
-    // NPC(id) — mirrors the C npcl_ctor: looks up the NPC via map_id2bl.
+    // NPC(id) — looks up the NPC by ID.
     // The old C constructor called map_id2npc(id) which resolves the integer ID
     // to a real pointer; storing the raw integer as a pointer would cause a
     // misaligned-pointer panic when Rust later tries to dereference it.
     g.set("NPC", lua.create_function(|lua, v: mlua::Value| -> mlua::Result<mlua::Value> {
         let ptr = match v {
-            mlua::Value::Integer(i) if i >= 0 && i <= c_uint::MAX as i64 => {
-                unsafe { ffi::map_id2bl(i as c_uint) }
+            mlua::Value::Integer(i) if i >= 0 && i <= u32::MAX as i64 => {
+                unsafe { ffi::map_id2bl(i as u32) }
             }
-            mlua::Value::Number(f) if f.is_finite() && f >= 0.0 && f <= c_uint::MAX as f64 => {
-                unsafe { ffi::map_id2bl(f as c_uint) }
+            mlua::Value::Number(f) if f.is_finite() && f >= 0.0 && f <= u32::MAX as f64 => {
+                unsafe { ffi::map_id2bl(f as u32) }
             }
             mlua::Value::String(ref s) => {
                 let cs = CString::new(s.as_bytes().to_vec()).map_err(mlua::Error::external)?;
-                unsafe { ffi::map_name2npc(cs.as_ptr()) as *mut c_void }
+                unsafe { ffi::map_name2npc(cs.as_ptr()) as *mut std::ffi::c_void }
             }
             _ => std::ptr::null_mut(),
         };
         if ptr.is_null() { return Ok(mlua::Value::Nil); }
-        if unsafe { (*(ptr as *const BlockList)).bl_type as c_int } != ffi::BL_NPC {
+        if unsafe { (*(ptr as *const BlockList)).bl_type as i32 } != ffi::BL_NPC {
             return Ok(mlua::Value::Nil);
         }
         Ok(mlua::Value::UserData(lua.create_userdata(NpcObject { ptr })?))
@@ -131,12 +128,12 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     player_mt.set("__call", lua.create_function(|lua, (_tbl, v): (mlua::Value, mlua::Value)| -> mlua::Result<mlua::Value> {
         let ptr = match v {
             mlua::Value::Integer(id) => {
-                if id < 0 || id > c_uint::MAX as i64 { return Ok(mlua::Value::Nil); }
-                unsafe { ffi::map_id2sd(id as c_uint) }
+                if id < 0 || id > u32::MAX as i64 { return Ok(mlua::Value::Nil); }
+                unsafe { ffi::map_id2sd(id as u32) }
             }
             mlua::Value::Number(f) => {
-                if !f.is_finite() || f < 0.0 || f > c_uint::MAX as f64 { return Ok(mlua::Value::Nil); }
-                unsafe { ffi::map_id2sd(f as c_uint) }
+                if !f.is_finite() || f < 0.0 || f > u32::MAX as f64 { return Ok(mlua::Value::Nil); }
+                unsafe { ffi::map_id2sd(f as u32) }
             }
             mlua::Value::String(ref s) => {
                 let cs = CString::new(s.as_bytes().to_vec()).map_err(mlua::Error::external)?;
@@ -157,12 +154,12 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     mob_mt.set("__call", lua.create_function(|lua, (_tbl, v): (mlua::Value, mlua::Value)| -> mlua::Result<mlua::Value> {
         let ptr = match v {
             mlua::Value::Integer(id) => {
-                if id < 0 || id > c_uint::MAX as i64 { return Ok(mlua::Value::Nil); }
-                unsafe { ffi::map_id2mob(id as c_uint) }
+                if id < 0 || id > u32::MAX as i64 { return Ok(mlua::Value::Nil); }
+                unsafe { ffi::map_id2mob(id as u32) }
             }
             mlua::Value::Number(f) => {
-                if !f.is_finite() || f < 0.0 || f > c_uint::MAX as f64 { return Ok(mlua::Value::Nil); }
-                unsafe { ffi::map_id2mob(f as c_uint) }
+                if !f.is_finite() || f < 0.0 || f > u32::MAX as f64 { return Ok(mlua::Value::Nil); }
+                unsafe { ffi::map_id2mob(f as u32) }
             }
             _ => std::ptr::null_mut(),
         };
@@ -180,19 +177,19 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     g.set("QUESTREG", ctor!(lua, QuestRegObject))?;
     // ITEM/RECIPE/FL need custom ctors that perform DB/id-db lookups.
     g.set("ITEM", lua.create_function(|lua, v: mlua::Value| -> mlua::Result<mlua::Value> {
-        let ptr: *mut c_void = match v {
+        let ptr: *mut std::ffi::c_void = match v {
             mlua::Value::Integer(id) => {
-                if id < 0 || id > c_uint::MAX as i64 { return Ok(mlua::Value::Nil); }
-                unsafe { crate::database::item_db::rust_itemdb_search(id as c_uint) as *mut c_void }
+                if id < 0 || id > u32::MAX as i64 { return Ok(mlua::Value::Nil); }
+                unsafe { crate::database::item_db::rust_itemdb_search(id as u32) as *mut std::ffi::c_void }
             }
             mlua::Value::Number(f) => {
-                if !f.is_finite() || f < 0.0 || f > c_uint::MAX as f64 { return Ok(mlua::Value::Nil); }
-                unsafe { crate::database::item_db::rust_itemdb_search(f as c_uint) as *mut c_void }
+                if !f.is_finite() || f < 0.0 || f > u32::MAX as f64 { return Ok(mlua::Value::Nil); }
+                unsafe { crate::database::item_db::rust_itemdb_search(f as u32) as *mut std::ffi::c_void }
             }
             mlua::Value::String(ref s) => {
                 let text = s.to_str()?;
                 let cs = CString::new(text.as_bytes()).map_err(mlua::Error::external)?;
-                unsafe { crate::database::item_db::rust_itemdb_searchname(cs.as_ptr()) as *mut c_void }
+                unsafe { crate::database::item_db::rust_itemdb_searchname(cs.as_ptr()) as *mut std::ffi::c_void }
             }
             _ => std::ptr::null_mut(),
         };
@@ -203,26 +200,26 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     g.set("BANKITEM", ctor!(lua, BankItemObject))?;
     g.set("PARCEL",   ctor!(lua, ParcelObject))?;
     g.set("RECIPE", lua.create_function(|lua, v: mlua::Value| -> mlua::Result<mlua::Value> {
-        let ptr: *mut c_void = match v {
+        let ptr: *mut std::ffi::c_void = match v {
             mlua::Value::Integer(id) => {
-                if id < 0 || id > c_uint::MAX as i64 { return Ok(mlua::Value::Nil); }
-                unsafe { crate::database::recipe_db::rust_recipedb_search(id as c_uint) as *mut c_void }
+                if id < 0 || id > u32::MAX as i64 { return Ok(mlua::Value::Nil); }
+                unsafe { crate::database::recipe_db::rust_recipedb_search(id as u32) as *mut std::ffi::c_void }
             }
             mlua::Value::Number(f) => {
-                if !f.is_finite() || f < 0.0 || f > c_uint::MAX as f64 { return Ok(mlua::Value::Nil); }
-                unsafe { crate::database::recipe_db::rust_recipedb_search(f as c_uint) as *mut c_void }
+                if !f.is_finite() || f < 0.0 || f > u32::MAX as f64 { return Ok(mlua::Value::Nil); }
+                unsafe { crate::database::recipe_db::rust_recipedb_search(f as u32) as *mut std::ffi::c_void }
             }
             mlua::Value::String(ref s) => {
                 let text = s.to_str()?;
                 let cs = CString::new(text.as_bytes()).map_err(mlua::Error::external)?;
-                unsafe { crate::database::recipe_db::rust_recipedb_searchname(cs.as_ptr()) as *mut c_void }
+                unsafe { crate::database::recipe_db::rust_recipedb_searchname(cs.as_ptr()) as *mut std::ffi::c_void }
             }
             _ => std::ptr::null_mut(),
         };
         if ptr.is_null() { return Ok(mlua::Value::Nil); }
         Ok(mlua::Value::UserData(lua.create_userdata(RecipeObject { ptr })?))
     })?)?;
-    let fl_ctor = lua.create_function(|lua, id: c_uint| -> mlua::Result<mlua::Value> {
+    let fl_ctor = lua.create_function(|lua, id: u32| -> mlua::Result<mlua::Value> {
         let ptr = unsafe { ffi::map_id2fl(id) };
         if ptr.is_null() { return Ok(mlua::Value::Nil); }
         Ok(mlua::Value::UserData(lua.create_userdata(FloorListObject::new(ptr))?))
@@ -235,7 +232,7 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
 // ---------------------------------------------------------------------------
 // sl_reload
 // ---------------------------------------------------------------------------
-pub unsafe fn sl_reload() -> c_int {
+pub unsafe fn sl_reload() -> i32 {
     let lua = sl_state();
     let cfg = crate::config::config();
     match load_lua_dir(lua, &cfg.lua_dir) {
@@ -291,11 +288,11 @@ pub unsafe fn sl_fixmem() {
     }
 }
 
-pub unsafe fn sl_luasize() -> c_int {
+pub unsafe fn sl_luasize() -> i32 {
     sl_state().globals()
         .get::<mlua::Function>("collectgarbage")
         .and_then(|f| f.call::<f64>("count"))
-        .map(|kb| kb as c_int)
+        .map(|kb| kb as i32)
         .unwrap_or(0)
 }
 
@@ -303,10 +300,10 @@ pub unsafe fn sl_luasize() -> c_int {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-pub(crate) unsafe fn bl_to_lua(lua: &Lua, bl: *mut c_void) -> mlua::Result<mlua::Value> {
+pub(crate) unsafe fn bl_to_lua(lua: &Lua, bl: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
     debug_assert!(!bl.is_null(), "bl_to_lua: caller must not pass a null pointer");
     if bl.is_null() { return Ok(mlua::Value::Nil); }
-    let bl_type = (*(bl as *const BlockList)).bl_type as c_int;
+    let bl_type = (*(bl as *const BlockList)).bl_type as i32;
     match bl_type {
         ffi::BL_PC   => lua.pack(PcObject       { ptr: bl }),
         ffi::BL_MOB  => lua.pack(MobObject      { ptr: bl, deleted: Arc::new(AtomicBool::new(false)) }),
@@ -320,8 +317,8 @@ pub(crate) unsafe fn bl_to_lua(lua: &Lua, bl: *mut c_void) -> mlua::Result<mlua:
 }
 
 unsafe fn call_lua(
-    root: *const c_char,
-    method: *const c_char,
+    root: *const i8,
+    method: *const i8,
     args: mlua::MultiValue,
 ) -> bool {
     if root.is_null() { return false; }
@@ -349,19 +346,18 @@ unsafe fn call_lua(
 
 /// Dispatch a Lua script call with block_list pointer arguments (slice API).
 ///
-/// Replaces the C variadic `sl_doscript_blargs` + `rust_sl_doscript_blargs_vec` chain.
 /// Each pointer in `args` may be null (mapped to Lua nil) or a valid `*mut BlockList`.
 ///
 /// # Safety
 /// Every non-null pointer in `args` must be a valid `*mut BlockList` for the
 /// duration of this call.  Null pointers are accepted and mapped to Lua nil.
 pub unsafe fn doscript_blargs(
-    root: *const c_char,
-    method: *const c_char,
+    root: *const i8,
+    method: *const i8,
     args: &[*mut BlockList],
-) -> c_int {
+) -> i32 {
     if args.is_empty() {
-        return call_lua(root, method, mlua::MultiValue::new()) as c_int;
+        return call_lua(root, method, mlua::MultiValue::new()) as i32;
     }
     let lua = sl_state();
     let mut mv = mlua::MultiValue::new();
@@ -369,16 +365,15 @@ pub unsafe fn doscript_blargs(
         let val = if bl.is_null() {
             mlua::Value::Nil
         } else {
-            bl_to_lua(lua, bl as *mut c_void).unwrap_or(mlua::Value::Nil)
+            bl_to_lua(lua, bl as *mut std::ffi::c_void).unwrap_or(mlua::Value::Nil)
         };
         mv.push_back(val);
     }
-    call_lua(root, method, mv) as c_int
+    call_lua(root, method, mv) as i32
 }
 
 /// Dispatch a Lua script call with C string arguments (slice API).
 ///
-/// Replaces the C variadic `sl_doscript_strings` + `rust_sl_doscript_strings_vec` chain.
 /// Each pointer in `args` may be null (mapped to Lua nil) or a valid nul-terminated
 /// C string.
 ///
@@ -386,12 +381,12 @@ pub unsafe fn doscript_blargs(
 /// Every non-null pointer in `args` must be a valid nul-terminated C string for
 /// the duration of this call.
 pub unsafe fn doscript_strings(
-    root: *const c_char,
-    method: *const c_char,
-    args: &[*const c_char],
-) -> c_int {
+    root: *const i8,
+    method: *const i8,
+    args: &[*const i8],
+) -> i32 {
     if args.is_empty() {
-        return call_lua(root, method, mlua::MultiValue::new()) as c_int;
+        return call_lua(root, method, mlua::MultiValue::new()) as i32;
     }
     let lua = sl_state();
     let mut mv = mlua::MultiValue::new();
@@ -404,7 +399,7 @@ pub unsafe fn doscript_strings(
         };
         mv.push_back(val);
     }
-    call_lua(root, method, mv) as c_int
+    call_lua(root, method, mv) as i32
 }
 
 /// # Safety
@@ -412,39 +407,39 @@ pub unsafe fn doscript_strings(
 /// pointers.  `nargs` must be non-negative and accurate; the caller owns the
 /// array for the duration of this call.
 pub unsafe fn sl_doscript_blargs_vec(
-    root: *const c_char, method: *const c_char,
-    nargs: c_int, args: *const *mut c_void,
-) -> c_int {
+    root: *const i8, method: *const i8,
+    nargs: i32, args: *const *mut std::ffi::c_void,
+) -> i32 {
     debug_assert!(nargs >= 0, "sl_doscript_blargs_vec: nargs must be non-negative");
     debug_assert!(nargs <= 64, "sl_doscript_blargs_vec: nargs={nargs} exceeds sanity limit");
     if nargs <= 0 || args.is_null() {
-        return call_lua(root, method, mlua::MultiValue::new()) as c_int;
+        return call_lua(root, method, mlua::MultiValue::new()) as i32;
     }
     let slice = std::slice::from_raw_parts(args as *const *mut BlockList, nargs as usize);
     doscript_blargs(root, method, slice)
 }
 
 pub unsafe fn sl_doscript_strings_vec(
-    root: *const c_char, method: *const c_char,
-    nargs: c_int, args: *const *const c_char,
-) -> c_int {
+    root: *const i8, method: *const i8,
+    nargs: i32, args: *const *const i8,
+) -> i32 {
     if nargs <= 0 || args.is_null() {
-        return call_lua(root, method, mlua::MultiValue::new()) as c_int;
+        return call_lua(root, method, mlua::MultiValue::new()) as i32;
     }
     let slice = std::slice::from_raw_parts(args, nargs as usize);
     doscript_strings(root, method, slice)
 }
 
 pub unsafe fn sl_doscript_stackargs(
-    root: *const c_char, method: *const c_char, _nargs: c_int,
-) -> c_int {
+    root: *const i8, method: *const i8, _nargs: i32,
+) -> i32 {
     // Args-on-stack path requires direct stack access not exposed by mlua.
     // Return 0 (not found) until map_parse.c is ported and this path is audited.
     tracing::warn!("[scripting] sl_doscript_stackargs not yet implemented");
     0
 }
 
-pub unsafe fn sl_exec_str(user: *mut c_void, code: *const c_char) {
+pub unsafe fn sl_exec_str(user: *mut std::ffi::c_void, code: *const i8) {
     let s = CStr::from_ptr(code).to_string_lossy();
     let lua = sl_state();
     if let Err(e) = lua.load(s.as_ref()).eval::<()>() {
@@ -452,12 +447,11 @@ pub unsafe fn sl_exec_str(user: *mut c_void, code: *const c_char) {
     }
 }
 
-pub unsafe fn sl_updatepeople_impl(_bl: *mut c_void, _ap: *mut c_void) -> c_int {
+pub unsafe fn sl_updatepeople_impl(_bl: *mut std::ffi::c_void, _ap: *mut std::ffi::c_void) -> i32 {
     // Implement when map_foreachinarea is ported to Rust.
     0
 }
 
-// ─── FFI bridge (moved from src/ffi/scripting.rs) ─────────────────────────
 
 pub unsafe fn rust_sl_init() {
     ffi_catch!((), sl_init())
@@ -467,95 +461,95 @@ pub unsafe fn rust_sl_fixmem() {
     ffi_catch!((), sl_fixmem())
 }
 
-pub unsafe fn rust_sl_reload() -> c_int {
+pub unsafe fn rust_sl_reload() -> i32 {
     ffi_catch!(-1, sl_reload())
 }
 
-pub unsafe fn rust_sl_luasize(_user: *mut c_void) -> c_int {
+pub unsafe fn rust_sl_luasize(_user: *mut std::ffi::c_void) -> i32 {
     ffi_catch!(0, sl_luasize())
 }
 
 pub unsafe fn rust_sl_doscript_blargs_vec(
-    root:   *const c_char,
-    method: *const c_char,
-    nargs:  c_int,
-    args:   *const *mut c_void,
-) -> c_int {
+    root:   *const i8,
+    method: *const i8,
+    nargs:  i32,
+    args:   *const *mut std::ffi::c_void,
+) -> i32 {
     ffi_catch!(0, sl_doscript_blargs_vec(root, method, nargs, args))
 }
 
 pub unsafe fn rust_sl_doscript_strings_vec(
-    root:   *const c_char,
-    method: *const c_char,
-    nargs:  c_int,
-    args:   *const *const c_char,
-) -> c_int {
+    root:   *const i8,
+    method: *const i8,
+    nargs:  i32,
+    args:   *const *const i8,
+) -> i32 {
     ffi_catch!(0, sl_doscript_strings_vec(root, method, nargs, args))
 }
 
 pub unsafe fn rust_sl_doscript_stackargs(
-    root:   *const c_char,
-    method: *const c_char,
-    nargs:  c_int,
-) -> c_int {
+    root:   *const i8,
+    method: *const i8,
+    nargs:  i32,
+) -> i32 {
     ffi_catch!(0, sl_doscript_stackargs(root, method, nargs))
 }
 
 pub unsafe fn rust_sl_updatepeople(
-    bl: *mut c_void,
-    ap: *mut c_void,
-) -> c_int {
+    bl: *mut std::ffi::c_void,
+    ap: *mut std::ffi::c_void,
+) -> i32 {
     ffi_catch!(0, sl_updatepeople_impl(bl, ap))
 }
 
 /// Direct symbol used as a function pointer callback in map_foreachinarea.
 pub unsafe fn sl_updatepeople(
-    bl: *mut c_void,
-    ap: *mut c_void,
-) -> c_int {
+    bl: *mut std::ffi::c_void,
+    ap: *mut std::ffi::c_void,
+) -> i32 {
     ffi_catch!(0, sl_updatepeople_impl(bl, ap))
 }
 
-pub unsafe fn rust_sl_resumemenu(selection: c_uint, sd: *mut c_void) {
+pub unsafe fn rust_sl_resumemenu(selection: u32, sd: *mut std::ffi::c_void) {
     ffi_catch!((), async_coro::resume_menu(selection, sd))
 }
 
-pub unsafe fn rust_sl_resumemenuseq(selection: c_uint, choice: c_int, sd: *mut c_void) {
+pub unsafe fn rust_sl_resumemenuseq(selection: u32, choice: i32, sd: *mut std::ffi::c_void) {
     ffi_catch!((), async_coro::resume_menuseq(selection, choice, sd))
 }
 
 pub unsafe fn rust_sl_resumeinputseq(
-    choice: c_uint,
-    input:  *mut c_char,
-    sd:     *mut c_void,
+    choice: u32,
+    input:  *mut i8,
+    sd:     *mut std::ffi::c_void,
 ) {
     ffi_catch!((), async_coro::resume_inputseq(choice, input, sd))
 }
 
-pub unsafe fn rust_sl_resumedialog(choice: c_uint, sd: *mut c_void) {
+pub unsafe fn rust_sl_resumedialog(choice: u32, sd: *mut std::ffi::c_void) {
     ffi_catch!((), async_coro::resume_dialog(choice, sd))
 }
 
-pub unsafe fn rust_sl_resumebuy(items: *mut c_char, sd: *mut c_void) {
+pub unsafe fn rust_sl_resumebuy(items: *mut i8, sd: *mut std::ffi::c_void) {
     ffi_catch!((), async_coro::resume_buy(items, sd))
 }
 
 pub unsafe fn rust_sl_resumeinput(
-    tag:   *mut c_char,
-    input: *mut c_char,
-    sd:    *mut c_void,
+    tag:   *mut i8,
+    input: *mut i8,
+    sd:    *mut std::ffi::c_void,
 ) {
     ffi_catch!((), async_coro::resume_input(tag, input, sd))
 }
 
-pub unsafe fn rust_sl_resumesell(choice: c_uint, sd: *mut c_void) {
+pub unsafe fn rust_sl_resumesell(choice: u32, sd: *mut std::ffi::c_void) {
     ffi_catch!((), async_coro::resume_sell(choice, sd))
 }
 
-pub unsafe fn rust_sl_exec(user: *mut c_void, code: *mut c_char) {
+pub unsafe fn rust_sl_exec(user: *mut std::ffi::c_void, code: *mut i8) {
     ffi_catch!((), sl_exec_str(user, code))
 }
 
-pub unsafe fn rust_sl_async_freeco(user: *mut c_void) {
+pub unsafe fn rust_sl_async_freeco(user: *mut std::ffi::c_void) {
     ffi_catch!((), async_coro::free_coref(user))
 }

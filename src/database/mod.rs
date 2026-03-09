@@ -81,7 +81,7 @@ pub fn connect(url: &str) -> Result<(), sqlx::Error> {
 }
 
 /// Register an already-connected pool (for use from async Rust binaries that
-/// create their own pool before calling C FFI init functions).
+/// create their own pool before the server starts).
 /// Avoids the `block_on`-inside-runtime panic that `connect()` would cause.
 pub fn set_pool(pool: MySqlPool) -> Result<(), sqlx::Error> {
     if DB_POOL.set(pool).is_err() {
@@ -93,12 +93,10 @@ pub fn set_pool(pool: MySqlPool) -> Result<(), sqlx::Error> {
     Ok(())
 }
 
-// ─── FFI bridge (moved from src/ffi/database.rs) ──────────────────────────
 
-use std::os::raw::{c_char, c_int};
 
 /// Called from C's do_init() before any *_init() calls.
-pub unsafe fn rust_db_connect(url: *const c_char) -> c_int {
+pub unsafe fn rust_db_connect(url: *const i8) -> i32 {
     let _ = tracing_subscriber::fmt()
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())

@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::ffi::CStr;
-use std::os::raw::{c_char, c_int, c_uint};
 use std::ptr::null_mut;
 use std::sync::{Mutex, OnceLock};
 
@@ -9,25 +8,23 @@ use sqlx::Row;
 use super::{blocking_run, get_pool};
 use super::item_db::str_to_fixed;
 
-#[repr(C)]
 pub struct BoardData {
-    pub id: c_int,
-    pub level: c_int,
-    pub gmlevel: c_int,
-    pub path: c_int,
-    pub clan: c_int,
-    pub special: c_int,
-    pub sort: c_int,
-    pub name: [c_char; 64],
-    pub yname: [c_char; 64],
+    pub id: i32,
+    pub level: i32,
+    pub gmlevel: i32,
+    pub path: i32,
+    pub clan: i32,
+    pub special: i32,
+    pub sort: i32,
+    pub name: [i8; 64],
+    pub yname: [i8; 64],
     /// Single-byte boolean (not a pointer), matches `char script` in C struct.
-    pub script: c_char,
+    pub script: i8,
 }
 
-#[repr(C)]
 pub struct BnData {
-    pub id: c_int,
-    pub name: [c_char; 255],
+    pub id: i32,
+    pub name: [i8; 255],
 }
 
 unsafe impl Send for BoardData {}
@@ -90,7 +87,7 @@ async fn load_boards() -> Result<usize, sqlx::Error> {
         b.gmlevel = row.try_get::<u32, _>(3).map(|v| v as i32).unwrap_or(0);
         b.path    = row.try_get::<u32, _>(4).map(|v| v as i32).unwrap_or(0);
         b.clan    = row.try_get::<u32, _>(5).map(|v| v as i32).unwrap_or(0);
-        b.script  = row.try_get::<u32, _>(6).map(|v| v as c_char).unwrap_or(0);
+        b.script  = row.try_get::<u32, _>(6).map(|v| v as i8).unwrap_or(0);
         str_to_fixed(&mut b.yname, &row.try_get::<String, _>(7).unwrap_or_default());
         b.sort    = row.try_get::<u32, _>(8).map(|v| v as i32).unwrap_or(0);
     }
@@ -117,7 +114,7 @@ async fn load_bn() -> Result<usize, sqlx::Error> {
 
 // ─── Public interface ────────────────────────────────────────────────────────
 
-pub fn init() -> c_int {
+pub fn init() -> i32 {
     BOARD_DB.get_or_init(|| Mutex::new(HashMap::new()));
     BN_DB.get_or_init(|| Mutex::new(HashMap::new()));
 
@@ -167,7 +164,7 @@ pub fn searchexist(id: i32) -> *mut BoardData {
     }
 }
 
-pub unsafe fn searchname(s: *const c_char) -> *mut BoardData {
+pub unsafe fn searchname(s: *const i8) -> *mut BoardData {
     if s.is_null() { return null_mut(); }
     let target = unsafe { CStr::from_ptr(s) }.to_string_lossy().to_lowercase();
     let map = board_db().lock().unwrap();
@@ -181,18 +178,18 @@ pub unsafe fn searchname(s: *const c_char) -> *mut BoardData {
     null_mut()
 }
 
-pub unsafe fn board_id(s: *const c_char) -> c_uint {
+pub unsafe fn board_id(s: *const i8) -> u32 {
     if s.is_null() { return 0; }
     let ptr = unsafe { searchname(s) };
     if !ptr.is_null() {
-        return unsafe { (*ptr).id as c_uint };
+        return unsafe { (*ptr).id as u32 };
     }
     let str_val = unsafe { CStr::from_ptr(s) }.to_string_lossy();
     if let Ok(n) = str_val.trim().parse::<i32>() {
         if n > 0 {
             let p = searchexist(n);
             if !p.is_null() {
-                return unsafe { (*p).id as c_uint };
+                return unsafe { (*p).id as u32 };
             }
         }
     }
@@ -213,54 +210,53 @@ pub fn bn_searchexist(id: i32) -> *mut BnData {
     }
 }
 
-// ─── FFI bridge (moved from src/ffi/board_db.rs) ──────────────────────────
 
-pub fn rust_boarddb_init() -> c_int { ffi_catch!(-1, init()) }
+pub fn rust_boarddb_init() -> i32 { ffi_catch!(-1, init()) }
 
 pub fn rust_boarddb_term() { ffi_catch!((), term()) }
 
-pub fn rust_boarddb_search(id: c_int) -> *mut BoardData { ffi_catch!(null_mut(), search(id)) }
+pub fn rust_boarddb_search(id: i32) -> *mut BoardData { ffi_catch!(null_mut(), search(id)) }
 
-pub fn rust_boarddb_searchexist(id: c_int) -> *mut BoardData { ffi_catch!(null_mut(), searchexist(id)) }
+pub fn rust_boarddb_searchexist(id: i32) -> *mut BoardData { ffi_catch!(null_mut(), searchexist(id)) }
 
-pub unsafe fn rust_boarddb_id(s: *const c_char) -> c_uint { ffi_catch!(0, unsafe { board_id(s) }) }
+pub unsafe fn rust_boarddb_id(s: *const i8) -> u32 { ffi_catch!(0, unsafe { board_id(s) }) }
 
-pub fn rust_boarddb_name(id: c_int) -> *mut c_char {
+pub fn rust_boarddb_name(id: i32) -> *mut i8 {
     ffi_catch!(null_mut(), {
         let p = search(id);
         if p.is_null() { null_mut() } else { unsafe { (*p).name.as_mut_ptr() } }
     })
 }
-pub fn rust_boarddb_yname(id: c_int) -> *mut c_char {
+pub fn rust_boarddb_yname(id: i32) -> *mut i8 {
     ffi_catch!(null_mut(), {
         let p = search(id);
         if p.is_null() { null_mut() } else { unsafe { (*p).yname.as_mut_ptr() } }
     })
 }
-pub fn rust_boarddb_level(id: c_int) -> c_int {
+pub fn rust_boarddb_level(id: i32) -> i32 {
     ffi_catch!(-1, { let p = search(id); if p.is_null() { -1 } else { unsafe { (*p).level } } })
 }
-pub fn rust_boarddb_gmlevel(id: c_int) -> c_int {
+pub fn rust_boarddb_gmlevel(id: i32) -> i32 {
     ffi_catch!(-1, { let p = search(id); if p.is_null() { -1 } else { unsafe { (*p).gmlevel } } })
 }
-pub fn rust_boarddb_path(id: c_int) -> c_int {
+pub fn rust_boarddb_path(id: i32) -> i32 {
     ffi_catch!(-1, { let p = search(id); if p.is_null() { -1 } else { unsafe { (*p).path } } })
 }
-pub fn rust_boarddb_clan(id: c_int) -> c_int {
+pub fn rust_boarddb_clan(id: i32) -> i32 {
     ffi_catch!(-1, { let p = search(id); if p.is_null() { -1 } else { unsafe { (*p).clan } } })
 }
-pub fn rust_boarddb_sort(id: c_int) -> c_int {
+pub fn rust_boarddb_sort(id: i32) -> i32 {
     ffi_catch!(-1, { let p = search(id); if p.is_null() { -1 } else { unsafe { (*p).sort } } })
 }
-pub fn rust_boarddb_script(id: c_int) -> c_int {
-    ffi_catch!(-1, { let p = search(id); if p.is_null() { -1 } else { unsafe { (*p).script as c_int } } })
+pub fn rust_boarddb_script(id: i32) -> i32 {
+    ffi_catch!(-1, { let p = search(id); if p.is_null() { -1 } else { unsafe { (*p).script as i32 } } })
 }
 
-pub fn rust_bn_search(id: c_int) -> *mut BnData { ffi_catch!(null_mut(), bn_search(id)) }
+pub fn rust_bn_search(id: i32) -> *mut BnData { ffi_catch!(null_mut(), bn_search(id)) }
 
-pub fn rust_bn_searchexist(id: c_int) -> *mut BnData { ffi_catch!(null_mut(), bn_searchexist(id)) }
+pub fn rust_bn_searchexist(id: i32) -> *mut BnData { ffi_catch!(null_mut(), bn_searchexist(id)) }
 
-pub fn rust_bn_name(id: c_int) -> *mut c_char {
+pub fn rust_bn_name(id: i32) -> *mut i8 {
     ffi_catch!(null_mut(), {
         let p = bn_search(id);
         if p.is_null() { null_mut() } else { unsafe { (*p).name.as_mut_ptr() } }

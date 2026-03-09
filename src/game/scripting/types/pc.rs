@@ -1,10 +1,9 @@
 //! PcObject — Lua UserData wrapping a C `USER*` player pointer.
-//! Mirrors the `pcl_*` class from `c_src/scripting.c`.
+
 #![allow(unused_variables)]
 
 use mlua::{MetaMethod, UserData, UserDataMethods};
-use std::ffi::{c_char, CStr, CString};
-use std::os::raw::{c_int, c_uint, c_void};
+use std::ffi::{CStr, CString};
 use std::sync::atomic::Ordering;
 
 use crate::game::scripting::ffi as sffi;
@@ -15,14 +14,14 @@ use crate::game::scripting::types::registry::{
 use crate::game::scripting::types::shared;
 
 pub struct PcObject {
-    pub ptr: *mut c_void,
+    pub ptr: *mut std::ffi::c_void,
 }
 unsafe impl Send for PcObject {}
 
-fn val_to_int(v: &mlua::Value) -> c_int {
+fn val_to_int(v: &mlua::Value) -> i32 {
     match v {
-        mlua::Value::Integer(i) => *i as c_int,
-        mlua::Value::Number(f) => *f as c_int,
+        mlua::Value::Integer(i) => *i as i32,
+        mlua::Value::Number(f) => *f as i32,
         mlua::Value::Boolean(b) => {
             if *b {
                 1
@@ -44,7 +43,7 @@ fn val_to_str(v: &mlua::Value) -> Option<CString> {
     }
 }
 
-unsafe fn cstr_to_lua(lua: &mlua::Lua, p: *const c_char) -> mlua::Result<mlua::Value> {
+unsafe fn cstr_to_lua(lua: &mlua::Lua, p: *const i8) -> mlua::Result<mlua::Value> {
     if p.is_null() {
         return Ok(mlua::Value::Nil);
     }
@@ -52,8 +51,6 @@ unsafe fn cstr_to_lua(lua: &mlua::Lua, p: *const c_char) -> mlua::Result<mlua::V
     Ok(mlua::Value::String(lua.create_string(s)?))
 }
 
-// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
-// All sl_pc_* functions are defined in pc_accessors.rs as pub unsafe extern "C" fn.
 #[allow(unused_imports)]
 use crate::game::scripting::pc_accessors::*;
 use crate::game::client::visual::broadcast_update_state;
@@ -75,17 +72,17 @@ fn lua_table_to_cstrings_from(tbl: &mlua::Table, start: i64) -> mlua::Result<Vec
     Ok(out)
 }
 
-fn lua_table_to_ints(tbl: &mlua::Table) -> mlua::Result<Vec<c_int>> {
+fn lua_table_to_ints(tbl: &mlua::Table) -> mlua::Result<Vec<i32>> {
     let mut out = Vec::new();
     let len = tbl.raw_len();
     for i in 1..=len {
         let v: i64 = tbl.raw_get(i)?;
-        out.push(v as c_int);
+        out.push(v as i32);
     }
     Ok(out)
 }
 
-fn cstring_ptrs(v: &[CString]) -> Vec<*const c_char> {
+fn cstring_ptrs(v: &[CString]) -> Vec<*const i8> {
     v.iter().map(|s| s.as_ptr()).collect()
 }
 
@@ -329,7 +326,7 @@ impl UserData for PcObject {
                     const MAX_MEMBERS: usize = 256;
                     let mut ids = [0u32; MAX_MEMBERS];
                     let n = unsafe {
-                        sffi::sl_pc_getgroup(this.ptr, ids.as_mut_ptr(), MAX_MEMBERS as c_int)
+                        sffi::sl_pc_getgroup(this.ptr, ids.as_mut_ptr(), MAX_MEMBERS as i32)
                     };
                     let t = lua.create_table()?;
                     for i in 0..n.max(0) as usize {
@@ -358,9 +355,9 @@ impl UserData for PcObject {
                     return Ok(mlua::Value::Function(lua.create_function(
                         |lua, _: mlua::MultiValue| {
                             const MAX: usize = 4096;
-                            let mut ptrs: Vec<*mut c_void> = vec![std::ptr::null_mut(); MAX];
+                            let mut ptrs: Vec<*mut std::ffi::c_void> = vec![std::ptr::null_mut(); MAX];
                             let count =
-                                unsafe { sffi::sl_g_getusers(ptrs.as_mut_ptr(), MAX as c_int) }
+                                unsafe { sffi::sl_g_getusers(ptrs.as_mut_ptr(), MAX as i32) }
                                     as usize;
                             let tbl = lua.create_table()?;
                             for (i, &bl) in ptrs[..count].iter().enumerate() {
@@ -386,7 +383,7 @@ impl UserData for PcObject {
                 }
                 "getPK" => {
                     return Ok(mlua::Value::Function(lua.create_function(
-                        move |_lua, (this, id): (mlua::AnyUserData, c_int)| {
+                        move |_lua, (this, id): (mlua::AnyUserData, i32)| {
                             let sd = this.borrow::<PcObject>()?.ptr;
                             if sd.is_null() {
                                 return Ok(false);
@@ -628,13 +625,13 @@ impl UserData for PcObject {
         );
 
         // ── Named methods — health/combat ─────────────────────────────────────
-        methods.add_method("addHealth", |_, this, damage: c_int| {
+        methods.add_method("addHealth", |_, this, damage: i32| {
             unsafe { sl_pc_addhealth(this.ptr, damage) };
             Ok(())
         });
         methods.add_method(
             "removeHealth",
-            |_, this, (damage, caster): (c_int, c_int)| {
+            |_, this, (damage, caster): (i32, i32)| {
                 unsafe { sl_pc_removehealth(this.ptr, damage, caster) };
                 Ok(())
             },
@@ -647,7 +644,7 @@ impl UserData for PcObject {
             unsafe { sl_pc_resurrect(this.ptr) };
             Ok(())
         });
-        methods.add_method("showHealth", |_, this, (damage, typ): (c_int, c_int)| {
+        methods.add_method("showHealth", |_, this, (damage, typ): (i32, i32)| {
             unsafe { sl_pc_showhealth(this.ptr, damage, typ) };
             Ok(())
         });
@@ -669,7 +666,7 @@ impl UserData for PcObject {
         methods.add_method("status", |_, this, ()| {
             Ok(unsafe { sl_pc_status(this.ptr) })
         });
-        methods.add_method("warp", |_, this, (m, x, y): (c_int, c_int, c_int)| {
+        methods.add_method("warp", |_, this, (m, x, y): (i32, i32, i32)| {
             unsafe { sl_pc_warp(this.ptr, m, x, y) };
             Ok(())
         });
@@ -677,7 +674,7 @@ impl UserData for PcObject {
             unsafe { sl_pc_refresh(this.ptr) };
             Ok(())
         });
-        methods.add_method("pickUp", |_, this, id: c_uint| {
+        methods.add_method("pickUp", |_, this, id: u32| {
             unsafe { sl_pc_pickup(this.ptr, id) };
             Ok(())
         });
@@ -685,7 +682,7 @@ impl UserData for PcObject {
             unsafe { sl_pc_throwitem(this.ptr) };
             Ok(())
         });
-        methods.add_method("forceDrop", |_, this, id: c_int| {
+        methods.add_method("forceDrop", |_, this, id: i32| {
             unsafe { sl_pc_forcedrop(this.ptr, id) };
             Ok(())
         });
@@ -705,16 +702,16 @@ impl UserData for PcObject {
             unsafe { sl_pc_respawn(this.ptr) };
             Ok(())
         });
-        methods.add_method("sendHealth", |_, this, (dmg, crit): (f32, c_int)| {
+        methods.add_method("sendHealth", |_, this, (dmg, crit): (f32, i32)| {
             Ok(unsafe { sl_pc_sendhealth(this.ptr, dmg, crit) })
         });
 
         // ── Movement ──────────────────────────────────────────────────────────
-        methods.add_method("move", |_, this, speed: c_int| {
+        methods.add_method("move", |_, this, speed: i32| {
             unsafe { sl_pc_move(this.ptr, speed) };
             Ok(())
         });
-        methods.add_method("lookAt", |_, this, id: c_int| {
+        methods.add_method("lookAt", |_, this, id: i32| {
             unsafe { sl_pc_lookat(this.ptr, id) };
             Ok(())
         });
@@ -744,15 +741,15 @@ impl UserData for PcObject {
             unsafe { sl_pc_takeoff(this.ptr) };
             Ok(())
         });
-        methods.add_method("deductArmor", |_, this, v: c_int| {
+        methods.add_method("deductArmor", |_, this, v: i32| {
             unsafe { sl_pc_deductarmor(this.ptr, v) };
             Ok(())
         });
-        methods.add_method("deductWeapon", |_, this, v: c_int| {
+        methods.add_method("deductWeapon", |_, this, v: i32| {
             unsafe { sl_pc_deductweapon(this.ptr, v) };
             Ok(())
         });
-        methods.add_method("deductDura", |_, this, (eq, v): (c_int, c_int)| {
+        methods.add_method("deductDura", |_, this, (eq, v): (i32, i32)| {
             unsafe { sl_pc_deductdura(this.ptr, eq, v) };
             Ok(())
         });
@@ -760,24 +757,24 @@ impl UserData for PcObject {
             unsafe { sl_pc_deductduraequip(this.ptr) };
             Ok(())
         });
-        methods.add_method("deductDuraInv", |_, this, (slot, v): (c_int, c_int)| {
+        methods.add_method("deductDuraInv", |_, this, (slot, v): (i32, i32)| {
             unsafe { sl_pc_deductdurainv(this.ptr, slot, v) };
             Ok(())
         });
-        methods.add_method("hasEquipped", |_, this, id: c_uint| {
+        methods.add_method("hasEquipped", |_, this, id: u32| {
             Ok(unsafe { sl_pc_hasequipped(this.ptr, id) } != 0)
         });
         methods.add_method(
             "removeItemSlot",
-            |_, this, (slot, amount, typ): (c_int, c_int, c_int)| {
+            |_, this, (slot, amount, typ): (i32, i32, i32)| {
                 unsafe { sl_pc_removeitemslot(this.ptr, slot, amount, typ) };
                 Ok(())
             },
         );
-        methods.add_method("hasItem", |_, this, (id, amount): (c_uint, c_int)| {
+        methods.add_method("hasItem", |_, this, (id, amount): (u32, i32)| {
             Ok(unsafe { sl_pc_hasitem(this.ptr, id, amount) } != 0)
         });
-        methods.add_method("hasSpace", |_, this, id: c_uint| {
+        methods.add_method("hasSpace", |_, this, id: u32| {
             Ok(unsafe { sl_pc_hasspace(this.ptr, id) } != 0)
         });
 
@@ -792,7 +789,7 @@ impl UserData for PcObject {
             unsafe { sl_pc_sendminimap(this.ptr) };
             Ok(())
         });
-        methods.add_method("setMiniMapToggle", |_, this, flag: c_int| {
+        methods.add_method("setMiniMapToggle", |_, this, flag: i32| {
             unsafe { sl_pc_setminimaptoggle(this.ptr, flag) };
             Ok(())
         });
@@ -830,23 +827,23 @@ impl UserData for PcObject {
             unsafe { sl_pc_powerboard(this.ptr) };
             Ok(())
         });
-        methods.add_method("showBoard", |_, this, id: c_int| {
+        methods.add_method("showBoard", |_, this, id: i32| {
             unsafe { sl_pc_showboard(this.ptr, id) };
             Ok(())
         });
-        methods.add_method("showPost", |_, this, (id, post): (c_int, c_int)| {
+        methods.add_method("showPost", |_, this, (id, post): (i32, i32)| {
             unsafe { sl_pc_showpost(this.ptr, id, post) };
             Ok(())
         });
-        methods.add_method("changeView", |_, this, (x, y): (c_int, c_int)| {
+        methods.add_method("changeView", |_, this, (x, y): (i32, i32)| {
             unsafe { sl_pc_changeview(this.ptr, x, y) };
             Ok(())
         });
 
         // ── Social / network ─────────────────────────────────────────────────
-        methods.add_method("speak", |_, this, (msg, typ): (String, c_int)| {
+        methods.add_method("speak", |_, this, (msg, typ): (String, i32)| {
             if let Ok(cs) = CString::new(msg.as_bytes()) {
-                let len = cs.as_bytes().len() as c_int;
+                let len = cs.as_bytes().len() as i32;
                 unsafe { sl_pc_speak(this.ptr, cs.as_ptr(), len, typ) };
             }
             Ok(())
@@ -863,7 +860,7 @@ impl UserData for PcObject {
                 Ok(())
             },
         );
-        methods.add_method("sendUrl", |_, this, (typ, url): (c_int, String)| {
+        methods.add_method("sendUrl", |_, this, (typ, url): (i32, String)| {
             if let Ok(cs) = CString::new(url.as_bytes()) {
                 unsafe { sl_pc_sendurl(this.ptr, typ, cs.as_ptr()) };
             }
@@ -871,9 +868,9 @@ impl UserData for PcObject {
         });
         methods.add_method("swingTarget", |_, this, val: mlua::Value| {
             // swing.lua passes MobObject/PcObject userdata, not a raw integer.
-            let id: c_int = match val {
-                mlua::Value::Integer(n) => n as c_int,
-                mlua::Value::Number(n) => n as c_int,
+            let id: i32 = match val {
+                mlua::Value::Integer(n) => n as i32,
+                mlua::Value::Number(n) => n as i32,
                 mlua::Value::UserData(ud) => {
                     if let Ok(mob) = ud.borrow::<MobObject>() {
                         if mob.ptr.is_null() || mob.deleted.load(Ordering::Acquire) {
@@ -882,7 +879,7 @@ impl UserData for PcObject {
                         let mob_data = unsafe {
                             &*(mob.ptr as *const crate::game::mob::MobSpawnData)
                         };
-                        mob_data.bl.id as c_int
+                        mob_data.bl.id as i32
                     } else if let Ok(pc) = ud.borrow::<PcObject>() {
                         unsafe { sl_pc_bl_id(pc.ptr) }
                     } else {
@@ -896,17 +893,17 @@ impl UserData for PcObject {
         });
 
         // ── Kill registry ─────────────────────────────────────────────────────
-        methods.add_method("killCount", |_, this, mob_id: c_int| {
+        methods.add_method("killCount", |_, this, mob_id: i32| {
             Ok(unsafe { sl_pc_killcount(this.ptr, mob_id) })
         });
         methods.add_method(
             "setKillCount",
-            |_, this, (mob_id, amount): (c_int, c_int)| {
+            |_, this, (mob_id, amount): (i32, i32)| {
                 unsafe { sl_pc_setkillcount(this.ptr, mob_id, amount) };
                 Ok(())
             },
         );
-        methods.add_method("flushKills", |_, this, mob_id: c_int| {
+        methods.add_method("flushKills", |_, this, mob_id: i32| {
             unsafe { sl_pc_flushkills(this.ptr, mob_id) };
             Ok(())
         });
@@ -918,19 +915,19 @@ impl UserData for PcObject {
         // ── Threat ───────────────────────────────────────────────────────────
         methods.add_method(
             "addThreat",
-            |_, this, (mob_id, amount): (c_uint, c_uint)| {
+            |_, this, (mob_id, amount): (u32, u32)| {
                 unsafe { sl_pc_addthreat(this.ptr, mob_id, amount) };
                 Ok(())
             },
         );
         methods.add_method(
             "setThreat",
-            |_, this, (mob_id, amount): (c_uint, c_uint)| {
+            |_, this, (mob_id, amount): (u32, u32)| {
                 unsafe { sl_pc_setthreat(this.ptr, mob_id, amount) };
                 Ok(())
             },
         );
-        methods.add_method("addThreatGeneral", |_, this, amount: c_uint| {
+        methods.add_method("addThreatGeneral", |_, this, amount: u32| {
             unsafe { sl_pc_addthreatgeneral(this.ptr, amount) };
             Ok(())
         });
@@ -940,11 +937,11 @@ impl UserData for PcObject {
             let cs = CString::new(name.as_bytes()).ok();
             Ok(cs.map_or(0, |c| unsafe { sl_pc_hasspell(this.ptr, c.as_ptr()) }) != 0)
         });
-        methods.add_method("addSpell", |_, this, spell_id: c_int| {
+        methods.add_method("addSpell", |_, this, spell_id: i32| {
             unsafe { sl_pc_addspell(this.ptr, spell_id) };
             Ok(())
         });
-        methods.add_method("removeSpell", |_, this, spell_id: c_int| {
+        methods.add_method("removeSpell", |_, this, spell_id: i32| {
             unsafe { sl_pc_removespell(this.ptr, spell_id) };
             Ok(())
         });
@@ -956,7 +953,7 @@ impl UserData for PcObject {
         });
         methods.add_method(
             "hasDurationId",
-            |_, this, (name, caster): (String, c_int)| {
+            |_, this, (name, caster): (String, i32)| {
                 let cs = CString::new(name.as_bytes()).ok();
                 Ok(cs.map_or(0, |c| unsafe {
                     sl_pc_hasdurationid(this.ptr, c.as_ptr(), caster)
@@ -965,7 +962,7 @@ impl UserData for PcObject {
         );
         methods.add_method(
             "hasDurationID",
-            |_, this, (name, caster): (String, c_int)| {
+            |_, this, (name, caster): (String, i32)| {
                 let cs = CString::new(name.as_bytes()).ok();
                 Ok(cs.map_or(0, |c| unsafe {
                     sl_pc_hasdurationid(this.ptr, c.as_ptr(), caster)
@@ -978,7 +975,7 @@ impl UserData for PcObject {
         });
         methods.add_method(
             "getDurationId",
-            |_, this, (name, caster): (String, c_int)| {
+            |_, this, (name, caster): (String, i32)| {
                 let cs = CString::new(name.as_bytes()).ok();
                 Ok(cs.map_or(0, |c| unsafe {
                     sl_pc_getdurationid(this.ptr, c.as_ptr(), caster)
@@ -987,7 +984,7 @@ impl UserData for PcObject {
         );
         methods.add_method(
             "getDurationID",
-            |_, this, (name, caster): (String, c_int)| {
+            |_, this, (name, caster): (String, i32)| {
                 let cs = CString::new(name.as_bytes()).ok();
                 Ok(cs.map_or(0, |c| unsafe {
                     sl_pc_getdurationid(this.ptr, c.as_ptr(), caster)
@@ -1000,7 +997,7 @@ impl UserData for PcObject {
         });
         methods.add_method(
             "setDuration",
-            |_, this, (name, time_ms, caster, recast): (String, c_int, Option<c_int>, Option<c_int>)| {
+            |_, this, (name, time_ms, caster, recast): (String, i32, Option<i32>, Option<i32>)| {
                 if let Ok(cs) = CString::new(name.as_bytes()) {
                     unsafe {
                         sl_pc_setduration(
@@ -1015,15 +1012,15 @@ impl UserData for PcObject {
         );
         methods.add_method(
             "flushDuration",
-            |_, this, (level, min_id, max_id): (c_int, Option<c_int>, Option<c_int>)| {
-                unsafe { sl_pc_flushduration(this.ptr, level, min_id.unwrap_or(0), max_id.unwrap_or(c_int::MAX)) };
+            |_, this, (level, min_id, max_id): (i32, Option<i32>, Option<i32>)| {
+                unsafe { sl_pc_flushduration(this.ptr, level, min_id.unwrap_or(0), max_id.unwrap_or(i32::MAX)) };
                 Ok(())
             },
         );
         methods.add_method(
             "flushDurationNoUncast",
-            |_, this, (level, min_id, max_id): (c_int, Option<c_int>, Option<c_int>)| {
-                unsafe { sl_pc_flushdurationnouncast(this.ptr, level, min_id.unwrap_or(0), max_id.unwrap_or(c_int::MAX)) };
+            |_, this, (level, min_id, max_id): (i32, Option<i32>, Option<i32>)| {
+                unsafe { sl_pc_flushdurationnouncast(this.ptr, level, min_id.unwrap_or(0), max_id.unwrap_or(i32::MAX)) };
                 Ok(())
             },
         );
@@ -1033,7 +1030,7 @@ impl UserData for PcObject {
         });
 
         // ── Aether system ────────────────────────────────────────────────────
-        methods.add_method("setAether", |_, this, (name, time_ms): (String, c_int)| {
+        methods.add_method("setAether", |_, this, (name, time_ms): (String, i32)| {
             if let Ok(cs) = CString::new(name.as_bytes()) {
                 unsafe { sl_pc_setaether(this.ptr, cs.as_ptr(), time_ms) };
             }
@@ -1059,11 +1056,11 @@ impl UserData for PcObject {
             }
             Ok(())
         });
-        methods.add_method("updatePath", |_, this, (path, mark): (c_int, c_int)| {
+        methods.add_method("updatePath", |_, this, (path, mark): (i32, i32)| {
             unsafe { sl_pc_updatepath(this.ptr, path, mark) };
             Ok(())
         });
-        methods.add_method("updateCountry", |_, this, country: c_int| {
+        methods.add_method("updateCountry", |_, this, country: i32| {
             unsafe { sl_pc_updatecountry(this.ptr, country) };
             Ok(())
         });
@@ -1077,19 +1074,19 @@ impl UserData for PcObject {
             let cs = CString::new(name.as_bytes()).ok();
             Ok(cs.map_or(0, |c| unsafe { sl_pc_getcasterid(this.ptr, c.as_ptr()) }))
         });
-        methods.add_method("setTimer", |_, this, (typ, length): (c_int, c_int)| {
-            unsafe { sl_pc_settimer(this.ptr, typ, length as c_uint) };
+        methods.add_method("setTimer", |_, this, (typ, length): (i32, i32)| {
+            unsafe { sl_pc_settimer(this.ptr, typ, length as u32) };
             Ok(())
         });
-        methods.add_method("addTime", |_, this, v: c_int| {
+        methods.add_method("addTime", |_, this, v: i32| {
             unsafe { sl_pc_addtime(this.ptr, v) };
             Ok(())
         });
-        methods.add_method("removeTime", |_, this, v: c_int| {
+        methods.add_method("removeTime", |_, this, v: i32| {
             unsafe { sl_pc_removetime(this.ptr, v) };
             Ok(())
         });
-        methods.add_method("setHeroShow", |_, this, flag: c_int| {
+        methods.add_method("setHeroShow", |_, this, flag: i32| {
             unsafe { sl_pc_setheroshow(this.ptr, flag) };
             Ok(())
         });
@@ -1097,7 +1094,7 @@ impl UserData for PcObject {
         // ── Legends ──────────────────────────────────────────────────────────
         methods.add_method(
             "addLegend",
-            |_, this, (text, name, icon, color, tchaid): (String, String, c_int, c_int, c_uint)| {
+            |_, this, (text, name, icon, color, tchaid): (String, String, i32, i32, u32)| {
                 let t = CString::new(text.as_bytes()).ok();
                 let n = CString::new(name.as_bytes()).ok();
                 if let (Some(tc), Some(nc)) = (t, n) {
@@ -1124,23 +1121,23 @@ impl UserData for PcObject {
             }
             Ok(())
         });
-        methods.add_method("removeLegendByColor", |_, this, color: c_int| {
+        methods.add_method("removeLegendByColor", |_, this, color: i32| {
             unsafe { sl_pc_removelegendbycolor(this.ptr, color) };
             Ok(())
         });
-        methods.add_method("removeLegendbyColor", |_, this, color: c_int| {
+        methods.add_method("removeLegendbyColor", |_, this, color: i32| {
             unsafe { sl_pc_removelegendbycolor(this.ptr, color) };
             Ok(())
         });
 
         // ── Inventory ────────────────────────────────────────────────────────────
-        methods.add_method("addItem", |_, this, (id, amount, dura, owner, engrave): (c_int, c_int, c_int, c_int, String)| {
+        methods.add_method("addItem", |_, this, (id, amount, dura, owner, engrave): (i32, i32, i32, i32, String)| {
             if let Ok(cs) = CString::new(engrave.as_bytes()) {
-                unsafe { sl_pc_additem(this.ptr, id as c_uint, amount as c_uint, dura, owner as c_uint, cs.as_ptr()) };
+                unsafe { sl_pc_additem(this.ptr, id as u32, amount as u32, dura, owner as u32, cs.as_ptr()) };
             }
             Ok(())
         });
-        methods.add_method("getInventoryItem", |lua, this, slot: c_int| {
+        methods.add_method("getInventoryItem", |lua, this, slot: i32| {
             if slot < 0 || slot >= 52 { return Ok(mlua::Value::Nil); }
             let ptr = unsafe { sl_pc_getinventoryitem(this.ptr, slot) };
             if ptr.is_null() { return Ok(mlua::Value::Nil); }
@@ -1148,7 +1145,7 @@ impl UserData for PcObject {
                 crate::game::scripting::types::item::BItemObject { ptr }
             )?))
         });
-        methods.add_method("getEquippedItem", |lua, this, slot: c_int| {
+        methods.add_method("getEquippedItem", |lua, this, slot: i32| {
             if slot < 0 || slot >= 15 { return Ok(mlua::Value::Nil); }
             let ptr = unsafe { sl_pc_getequippeditem_sd(this.ptr, slot) };
             if ptr.is_null() { return Ok(mlua::Value::Nil); }
@@ -1156,62 +1153,62 @@ impl UserData for PcObject {
                 crate::game::scripting::types::item::BItemObject { ptr }
             )?))
         });
-        methods.add_method("removeItem", |_, this, (id, amount, typ): (c_int, c_int, c_int)| {
-            unsafe { sl_pc_removeitem(this.ptr, id as c_uint, amount as c_uint, typ, 0, std::ptr::null()) }; Ok(())
+        methods.add_method("removeItem", |_, this, (id, amount, typ): (i32, i32, i32)| {
+            unsafe { sl_pc_removeitem(this.ptr, id as u32, amount as u32, typ, 0, std::ptr::null()) }; Ok(())
         });
-        methods.add_method("removeItemDura", |_, this, (id, typ): (c_int, c_int)| {
-            unsafe { sl_pc_removeitemdura(this.ptr, id as c_uint, 1, typ) }; Ok(())
+        methods.add_method("removeItemDura", |_, this, (id, typ): (i32, i32)| {
+            unsafe { sl_pc_removeitemdura(this.ptr, id as u32, 1, typ) }; Ok(())
         });
-        methods.add_method("hasItemDura", |_, this, (id, amount): (c_int, c_int)| {
-            Ok(unsafe { sl_pc_hasitemdura(this.ptr, id as c_uint, amount as c_uint) } != 0)
+        methods.add_method("hasItemDura", |_, this, (id, amount): (i32, i32)| {
+            Ok(unsafe { sl_pc_hasitemdura(this.ptr, id as u32, amount as u32) } != 0)
         });
 
         // ── Bank ─────────────────────────────────────────────────────────────────
-        methods.add_method("checkBankItems", |_, this, slot: c_int| {
+        methods.add_method("checkBankItems", |_, this, slot: i32| {
             if slot < 0 || slot >= 255 { return Ok(0i32); }
             Ok(unsafe { sl_pc_checkbankitems(this.ptr, slot) })
         });
-        methods.add_method("checkBankAmounts", |_, this, slot: c_int| {
+        methods.add_method("checkBankAmounts", |_, this, slot: i32| {
             if slot < 0 || slot >= 255 { return Ok(0i32); }
             Ok(unsafe { sl_pc_checkbankamounts(this.ptr, slot) })
         });
-        methods.add_method("checkBankOwners", |_, this, slot: c_int| {
+        methods.add_method("checkBankOwners", |_, this, slot: i32| {
             if slot < 0 || slot >= 255 { return Ok(0i32); }
             Ok(unsafe { sl_pc_checkbankowners(this.ptr, slot) })
         });
-        methods.add_method("checkBankEngraves", |lua, this, slot: c_int| {
+        methods.add_method("checkBankEngraves", |lua, this, slot: i32| {
             if slot < 0 || slot >= 255 { return Ok(mlua::Value::Nil); }
             unsafe { cstr_to_lua(lua, sl_pc_checkbankengraves(this.ptr, slot)) }
         });
-        methods.add_method("bankDeposit", |_, this, (item, amount, owner, engrave): (c_int, c_int, c_int, String)| {
+        methods.add_method("bankDeposit", |_, this, (item, amount, owner, engrave): (i32, i32, i32, String)| {
             if let Ok(cs) = CString::new(engrave.as_bytes()) {
-                unsafe { sl_pc_bankdeposit(this.ptr, item as c_uint, amount as c_uint, owner as c_uint, cs.as_ptr()) };
+                unsafe { sl_pc_bankdeposit(this.ptr, item as u32, amount as u32, owner as u32, cs.as_ptr()) };
             }
             Ok(())
         });
-        methods.add_method("bankWithdraw", |_, this, (item, amount, owner, engrave): (c_int, c_int, c_int, String)| {
+        methods.add_method("bankWithdraw", |_, this, (item, amount, owner, engrave): (i32, i32, i32, String)| {
             if let Ok(cs) = CString::new(engrave.as_bytes()) {
-                unsafe { sl_pc_bankwithdraw(this.ptr, item as c_uint, amount as c_uint, owner as c_uint, cs.as_ptr()) };
+                unsafe { sl_pc_bankwithdraw(this.ptr, item as u32, amount as u32, owner as u32, cs.as_ptr()) };
             }
             Ok(())
         });
-        methods.add_method("bankCheckAmount", |_, this, (item, amount, owner, engrave): (c_int, c_int, c_int, String)| {
+        methods.add_method("bankCheckAmount", |_, this, (item, amount, owner, engrave): (i32, i32, i32, String)| {
             let cs = CString::new(engrave.as_bytes()).ok();
-            Ok(cs.map_or(0, |c| unsafe { sl_pc_bankcheckamount(this.ptr, item as c_uint, amount as c_uint, owner as c_uint, c.as_ptr()) }))
+            Ok(cs.map_or(0, |c| unsafe { sl_pc_bankcheckamount(this.ptr, item as u32, amount as u32, owner as u32, c.as_ptr()) }))
         });
 
         // ── Clan bank ────────────────────────────────────────────────────────────
-        methods.add_method("getClanItems",         |_, this, slot: c_int| Ok(unsafe { sl_pc_getclanitems(this.ptr, slot) }));
-        methods.add_method("getClanAmounts",       |_, this, slot: c_int| Ok(unsafe { sl_pc_getclanamounts(this.ptr, slot) }));
-        methods.add_method("clanBankDeposit",      |_, this, (item, amount): (c_int, c_int)| { unsafe { sl_pc_clanbankdeposit(this.ptr, item as c_uint, amount as c_uint, 0, std::ptr::null()) }; Ok(()) });
-        methods.add_method("clanBankWithdraw",     |_, this, (item, amount): (c_int, c_int)| { unsafe { sl_pc_clanbankwithdraw(this.ptr, item as c_uint, amount as c_uint, 0, std::ptr::null()) }; Ok(()) });
-        methods.add_method("checkClanItemAmounts", |_, this, (item, amount): (c_int, c_int)| Ok(unsafe { sl_pc_checkclankitemamounts(this.ptr, item, amount) }));
+        methods.add_method("getClanItems",         |_, this, slot: i32| Ok(unsafe { sl_pc_getclanitems(this.ptr, slot) }));
+        methods.add_method("getClanAmounts",       |_, this, slot: i32| Ok(unsafe { sl_pc_getclanamounts(this.ptr, slot) }));
+        methods.add_method("clanBankDeposit",      |_, this, (item, amount): (i32, i32)| { unsafe { sl_pc_clanbankdeposit(this.ptr, item as u32, amount as u32, 0, std::ptr::null()) }; Ok(()) });
+        methods.add_method("clanBankWithdraw",     |_, this, (item, amount): (i32, i32)| { unsafe { sl_pc_clanbankwithdraw(this.ptr, item as u32, amount as u32, 0, std::ptr::null()) }; Ok(()) });
+        methods.add_method("checkClanItemAmounts", |_, this, (item, amount): (i32, i32)| Ok(unsafe { sl_pc_checkclankitemamounts(this.ptr, item, amount) }));
 
         // ── Spell lists ──────────────────────────────────────────────────────────
         methods.add_method("getAllDurations", |lua, this, ()| {
             const MAX: usize = 200;
-            let mut ptrs: Vec<*const c_char> = vec![std::ptr::null(); MAX];
-            let count = unsafe { sl_pc_getalldurations(this.ptr, ptrs.as_mut_ptr(), MAX as c_int) } as usize;
+            let mut ptrs: Vec<*const i8> = vec![std::ptr::null(); MAX];
+            let count = unsafe { sl_pc_getalldurations(this.ptr, ptrs.as_mut_ptr(), MAX as i32) } as usize;
             let tbl = lua.create_table()?;
             for (i, &p) in ptrs[..count].iter().enumerate() {
                 if !p.is_null() {
@@ -1223,16 +1220,16 @@ impl UserData for PcObject {
         });
         methods.add_method("getSpells", |lua, this, ()| {
             const MAX: usize = 52;
-            let mut ids: Vec<c_int> = vec![0; MAX];
-            let count = unsafe { sl_pc_getspells(this.ptr, ids.as_mut_ptr(), MAX as c_int) } as usize;
+            let mut ids: Vec<i32> = vec![0; MAX];
+            let count = unsafe { sl_pc_getspells(this.ptr, ids.as_mut_ptr(), MAX as i32) } as usize;
             let tbl = lua.create_table()?;
             for (i, &id) in ids[..count].iter().enumerate() { tbl.raw_set(i + 1, id as i64)?; }
             Ok(tbl)
         });
         methods.add_method("getSpellName", |lua, this, ()| {
             const MAX: usize = 52;
-            let mut ptrs: Vec<*const c_char> = vec![std::ptr::null(); MAX];
-            let count = unsafe { sl_pc_getspellnames(this.ptr, ptrs.as_mut_ptr(), MAX as c_int) } as usize;
+            let mut ptrs: Vec<*const i8> = vec![std::ptr::null(); MAX];
+            let count = unsafe { sl_pc_getspellnames(this.ptr, ptrs.as_mut_ptr(), MAX as i32) } as usize;
             let tbl = lua.create_table()?;
             for (i, &p) in ptrs[..count].iter().enumerate() {
                 if !p.is_null() {
@@ -1244,8 +1241,8 @@ impl UserData for PcObject {
         });
         methods.add_method("getUnknownSpells", |lua, this, ()| {
             const MAX: usize = 52;
-            let mut ids: Vec<c_int> = vec![0; MAX];
-            let count = unsafe { sl_pc_getunknownspells(this.ptr, ids.as_mut_ptr(), MAX as c_int) } as usize;
+            let mut ids: Vec<i32> = vec![0; MAX];
+            let count = unsafe { sl_pc_getunknownspells(this.ptr, ids.as_mut_ptr(), MAX as i32) } as usize;
             let tbl = lua.create_table()?;
             for (i, &id) in ids[..count].iter().enumerate() { tbl.raw_set(i + 1, id as i64)?; }
             Ok(tbl)
@@ -1259,37 +1256,37 @@ impl UserData for PcObject {
         });
 
         // ── Combat ───────────────────────────────────────────────────────────────
-        methods.add_method("giveXP",        |_, this, amount: c_int| { unsafe { sl_pc_givexp(this.ptr, amount as c_uint) }; Ok(()) });
+        methods.add_method("giveXP",        |_, this, amount: i32| { unsafe { sl_pc_givexp(this.ptr, amount as u32) }; Ok(()) });
         methods.add_method("updateState",   |_, this, ()| { unsafe { broadcast_update_state(this.ptr as *mut crate::game::pc::MapSessionData) }; Ok(()) });
-        methods.add_method("addMagic",      |_, this, amount: c_int| { unsafe { sl_pc_addmagic(this.ptr, amount) }; Ok(()) });
-        methods.add_method("addManaExtend", |_, this, amount: c_int| { unsafe { sl_pc_addmanaextend(this.ptr, amount) }; Ok(()) });
-        methods.add_method("setTimeValues", |_, this, newval: c_int| { unsafe { sl_pc_settimevalues(this.ptr, newval as c_uint) }; Ok(()) });
-        methods.add_method("setPK",         |_, this, id: c_int| { unsafe { sl_pc_setpk(this.ptr, id) }; Ok(()) });
+        methods.add_method("addMagic",      |_, this, amount: i32| { unsafe { sl_pc_addmagic(this.ptr, amount) }; Ok(()) });
+        methods.add_method("addManaExtend", |_, this, amount: i32| { unsafe { sl_pc_addmanaextend(this.ptr, amount) }; Ok(()) });
+        methods.add_method("setTimeValues", |_, this, newval: i32| { unsafe { sl_pc_settimevalues(this.ptr, newval as u32) }; Ok(()) });
+        methods.add_method("setPK",         |_, this, id: i32| { unsafe { sl_pc_setpk(this.ptr, id) }; Ok(()) });
         methods.add_method("activeSpells",  |_, this, name: String| {
             let cs = CString::new(name.as_bytes()).ok();
             Ok(cs.map_or(0, |c| unsafe { sl_pc_activespells(this.ptr, c.as_ptr()) }) != 0)
         });
-        methods.add_method("getEquippedDura", |_, this, (id, slot): (c_int, c_int)| {
-            Ok(unsafe { sl_pc_getequippeddura(this.ptr, id as c_uint, slot) })
+        methods.add_method("getEquippedDura", |_, this, (id, slot): (i32, i32)| {
+            Ok(unsafe { sl_pc_getequippeddura(this.ptr, id as u32, slot) })
         });
-        methods.add_method("addHealthExtend", |_, this, (dmg, _sleep, _deduct, _ac, _ds, _print): (c_int, c_int, c_int, c_int, c_int, c_int)| {
+        methods.add_method("addHealthExtend", |_, this, (dmg, _sleep, _deduct, _ac, _ds, _print): (i32, i32, i32, i32, i32, i32)| {
             unsafe { sl_pc_addhealth_extend(this.ptr, dmg) }; Ok(())
         });
-        methods.add_method("removeHealthExtend", |_, this, (dmg, _sleep, _deduct, _ac, _ds, _print): (c_int, c_int, c_int, c_int, c_int, c_int)| {
+        methods.add_method("removeHealthExtend", |_, this, (dmg, _sleep, _deduct, _ac, _ds, _print): (i32, i32, i32, i32, i32, i32)| {
             unsafe { sl_pc_removehealth_extend(this.ptr, dmg) }; Ok(())
         });
-        methods.add_method("addHealth2", |_, this, (amount, typ): (c_int, c_int)| {
+        methods.add_method("addHealth2", |_, this, (amount, typ): (i32, i32)| {
             unsafe { sl_pc_addhealth2(this.ptr, amount, typ) }; Ok(())
         });
-        methods.add_method("removeHealthWithoutDamageNumbers", |_, this, (dmg, typ): (c_int, c_int)| {
+        methods.add_method("removeHealthWithoutDamageNumbers", |_, this, (dmg, typ): (i32, i32)| {
             unsafe { sl_pc_removehealth_nodmgnum(this.ptr, dmg, typ) }; Ok(())
         });
 
         // ── Economy ──────────────────────────────────────────────────────────────
-        methods.add_method("addGold",    |_, this, amount: c_int| { unsafe { sl_pc_addgold(this.ptr, amount) }; Ok(()) });
-        methods.add_method("removeGold", |_, this, amount: c_int| { unsafe { sl_pc_removegold(this.ptr, amount) }; Ok(()) });
-        methods.add_method("logBuySell", |_, this, (item, amount, gold, flag): (c_int, c_int, c_int, c_int)| {
-            unsafe { sl_pc_logbuysell(this.ptr, item as c_uint, amount as c_uint, gold as c_uint, flag) }; Ok(())
+        methods.add_method("addGold",    |_, this, amount: i32| { unsafe { sl_pc_addgold(this.ptr, amount) }; Ok(()) });
+        methods.add_method("removeGold", |_, this, amount: i32| { unsafe { sl_pc_removegold(this.ptr, amount) }; Ok(()) });
+        methods.add_method("logBuySell", |_, this, (item, amount, gold, flag): (i32, i32, i32, i32)| {
+            unsafe { sl_pc_logbuysell(this.ptr, item as u32, amount as u32, gold as u32, flag) }; Ok(())
         });
 
         // ── Ranged ───────────────────────────────────────────────────────────────
@@ -1310,7 +1307,7 @@ impl UserData for PcObject {
         });
 
         // ── Misc ─────────────────────────────────────────────────────────────────
-        methods.add_method("talkSelf", |_, this, (color, msg): (c_int, String)| {
+        methods.add_method("talkSelf", |_, this, (color, msg): (i32, String)| {
             if let Ok(cs) = CString::new(msg.as_bytes()) {
                 unsafe { sl_pc_talkself(this.ptr, color, cs.as_ptr()) };
             }
@@ -1322,13 +1319,13 @@ impl UserData for PcObject {
             }
             Ok(())
         });
-        methods.add_method("broadcast", |_, this, (msg, m): (String, c_int)| {
+        methods.add_method("broadcast", |_, this, (msg, m): (String, i32)| {
             if let Ok(cs) = CString::new(msg.as_bytes()) {
                 unsafe { sl_pc_broadcast_sd(this.ptr, cs.as_ptr(), m) };
             }
             Ok(())
         });
-        methods.add_method("killRank", |_, this, mob_id: c_int| Ok(unsafe { sl_pc_killrank(this.ptr, mob_id) }));
+        methods.add_method("killRank", |_, this, mob_id: i32| Ok(unsafe { sl_pc_killrank(this.ptr, mob_id) }));
         methods.add_method("getParcel", |lua, this, ()| {
             let ptr = unsafe { sl_pc_getparcel(this.ptr) };
             if ptr.is_null() { return Ok(mlua::Value::Nil); }
@@ -1338,8 +1335,8 @@ impl UserData for PcObject {
         });
         methods.add_method("getParcelList", |lua, this, ()| {
             const MAX: usize = 64;
-            let mut ptrs: Vec<*mut c_void> = vec![std::ptr::null_mut(); MAX];
-            let count = unsafe { sl_pc_getparcellist(this.ptr, ptrs.as_mut_ptr(), MAX as c_int) } as usize;
+            let mut ptrs: Vec<*mut std::ffi::c_void> = vec![std::ptr::null_mut(); MAX];
+            let count = unsafe { sl_pc_getparcellist(this.ptr, ptrs.as_mut_ptr(), MAX as i32) } as usize;
             let tbl = lua.create_table()?;
             for (i, &p) in ptrs[..count].iter().enumerate() {
                 if !p.is_null() {
@@ -1350,9 +1347,9 @@ impl UserData for PcObject {
             }
             Ok(tbl)
         });
-        methods.add_method("removeParcel", |_, this, (sender, item, amount, pos, owner, engrave, npcflag): (c_int, c_int, c_int, c_int, c_int, String, c_int)| {
+        methods.add_method("removeParcel", |_, this, (sender, item, amount, pos, owner, engrave, npcflag): (i32, i32, i32, i32, i32, String, i32)| {
             if let Ok(cs) = CString::new(engrave.as_bytes()) {
-                unsafe { sl_pc_removeparcel(this.ptr, sender, item as c_uint, amount as c_uint, pos, owner as c_uint, cs.as_ptr(), npcflag) };
+                unsafe { sl_pc_removeparcel(this.ptr, sender, item as u32, amount as u32, pos, owner as u32, cs.as_ptr(), npcflag) };
             }
             Ok(())
         });
@@ -1366,16 +1363,16 @@ impl UserData for PcObject {
             Ok(())
         });
         methods.add_method("mapSelection", |_, _this, _: mlua::MultiValue| Ok(mlua::Value::Nil));
-        methods.add_method("getCreationItems", |lua, this, len: c_int| {
+        methods.add_method("getCreationItems", |lua, this, len: i32| {
             let max = (len.max(0) as usize).min(52);
-            let mut out: Vec<c_uint> = vec![0; max.max(1)];
+            let mut out: Vec<u32> = vec![0; max.max(1)];
             let count = unsafe { sl_pc_getcreationitems(this.ptr, len, out.as_mut_ptr()) } as usize;
             let tbl = lua.create_table()?;
             for (i, &v) in out[..count.min(max)].iter().enumerate() { tbl.raw_set(i + 1, v as i64)?; }
             Ok(tbl)
         });
-        methods.add_method("getCreationAmounts", |_, this, (len, item_id): (c_int, c_int)| {
-            Ok(unsafe { sl_pc_getcreationamounts(this.ptr, len, item_id as c_uint) })
+        methods.add_method("getCreationAmounts", |_, this, (len, item_id): (i32, i32)| {
+            Ok(unsafe { sl_pc_getcreationamounts(this.ptr, len, item_id as u32) })
         });
 
         // ── Async dialog methods — Task 10 ───────────────────────────────────
@@ -1390,7 +1387,7 @@ impl UserData for PcObject {
             let gfx = lua_table_to_ints(&gfx_tbl)?;
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
 unsafe {
-                sffi::sl_pc_dialog_send(this.ptr, cs.as_ptr(), gfx.as_ptr(), gfx.len() as c_int);            }
+                sffi::sl_pc_dialog_send(this.ptr, cs.as_ptr(), gfx.as_ptr(), gfx.len() as i32);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -1411,7 +1408,7 @@ unsafe {
             let strs = lua_table_to_cstrings_from(&entries_tbl, 2)?;
             let ptrs = cstring_ptrs(&strs);
             unsafe {
-                sffi::sl_pc_dialogseq_send(this.ptr, ptrs.as_ptr(), ptrs.len() as c_int, can_continue as c_int);            }
+                sffi::sl_pc_dialogseq_send(this.ptr, ptrs.as_ptr(), ptrs.len() as i32, can_continue as i32);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -1420,7 +1417,7 @@ unsafe {
             let ptrs = cstring_ptrs(&strs);
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             unsafe {
-                sffi::sl_pc_menu_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int);            }
+                sffi::sl_pc_menu_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -1429,7 +1426,7 @@ unsafe {
             let ptrs = cstring_ptrs(&strs);
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             unsafe {
-                sffi::sl_pc_menuseq_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int);            }
+                sffi::sl_pc_menuseq_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -1441,7 +1438,7 @@ unsafe {
                 .map(|c| c.to_str().unwrap_or("").to_owned())
                 .collect();
             unsafe {
-                sffi::sl_pc_menustring_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int);
+                sffi::sl_pc_menustring_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
                 crate::game::scripting::async_coro::store_menu_opts(this.ptr, strings);            }
             Ok(mlua::Value::Nil)
         });
@@ -1454,7 +1451,7 @@ unsafe {
                 .map(|c| c.to_str().unwrap_or("").to_owned())
                 .collect();
             unsafe {
-                sffi::sl_pc_menustring2_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as c_int);
+                sffi::sl_pc_menustring2_send(this.ptr, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
                 crate::game::scripting::async_coro::store_menu_opts(this.ptr, strings);            }
             Ok(mlua::Value::Nil)
         });
@@ -1471,7 +1468,7 @@ unsafe {
             unsafe {
                 sffi::sl_pc_buy_send(this.ptr, cs.as_ptr(),
                     items.as_ptr(), values.as_ptr(),
-                    dn_p.as_ptr(), bt_p.as_ptr(), items.len() as c_int);            }
+                    dn_p.as_ptr(), bt_p.as_ptr(), items.len() as i32);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -1479,7 +1476,7 @@ unsafe {
             let items = lua_table_to_ints(&items_tbl)?;
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             unsafe {
-                sffi::sl_pc_buydialog_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as c_int);            }
+                sffi::sl_pc_buydialog_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as i32);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -1491,7 +1488,7 @@ unsafe {
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             unsafe {
                 sffi::sl_pc_buyextend_send(this.ptr, cs.as_ptr(),
-                    items.as_ptr(), prices.as_ptr(), maxs.as_ptr(), items.len() as c_int);            }
+                    items.as_ptr(), prices.as_ptr(), maxs.as_ptr(), items.len() as i32);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -1499,7 +1496,7 @@ unsafe {
             let items = lua_table_to_ints(&items_tbl)?;
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             unsafe {
-                sffi::sl_pc_sell_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as c_int);            }
+                sffi::sl_pc_sell_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as i32);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -1507,7 +1504,7 @@ unsafe {
             let items = lua_table_to_ints(&items_tbl)?;
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             unsafe {
-                sffi::sl_pc_sell2_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as c_int);            }
+                sffi::sl_pc_sell2_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as i32);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -1515,7 +1512,7 @@ unsafe {
             let items = lua_table_to_ints(&items_tbl)?;
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             unsafe {
-                sffi::sl_pc_sellextend_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as c_int);            }
+                sffi::sl_pc_sellextend_send(this.ptr, cs.as_ptr(), items.as_ptr(), items.len() as i32);            }
             Ok(mlua::Value::Nil)
         });
 
@@ -1573,7 +1570,7 @@ unsafe {
     }
 }
 
-fn extract_bl_ptr(ud: &mlua::AnyUserData) -> *mut c_void {
+fn extract_bl_ptr(ud: &mlua::AnyUserData) -> *mut std::ffi::c_void {
     if let Ok(pc) = ud.borrow::<PcObject>() { return pc.ptr; }
     if let Ok(mob) = ud.borrow::<crate::game::scripting::types::mob::MobObject>() { return mob.ptr; }
     if let Ok(npc) = ud.borrow::<crate::game::scripting::types::npc::NpcObject>() { return npc.ptr; }

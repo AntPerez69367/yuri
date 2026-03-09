@@ -221,7 +221,7 @@ pub async fn send_to_char(state: &Arc<MapState>, msg: Vec<u8>) {
     }
 }
 
-/// Expire auth tokens older than 30 seconds (mirrors C auth_timer).
+/// Expire auth tokens older than 30 seconds.
 pub async fn expire_auth(state: &Arc<MapState>) {
     let now = std::time::Instant::now();
     let mut auth = state.auth_db.lock().await;

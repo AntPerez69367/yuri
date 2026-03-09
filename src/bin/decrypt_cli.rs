@@ -1,8 +1,8 @@
 /// decrypt_cli — packet decryption test tool
 ///
-/// Rust port of c_src/decrypt_cli.c.
+/// Packet decryption CLI utility.
 /// Uses the pure-Rust crypt functions in yuri::network::crypt directly
-/// (no C FFI required).
+
 
 use yuri::network::crypt::{populate_table, generate_key2, tk_crypt_dynamic};
 

@@ -382,7 +382,7 @@ async fn handle_show_posts(state: &Arc<CharState>, map_idx: usize, pkt: &[u8]) {
     let popup   = pkt[18];
     let name    = read_str(pkt, 19, 16);
 
-    // Compute flags1, flags2 (mirrors C logic)
+    // Compute flags1, flags2.
     let flags1: u32 = if popup != 0 && board != 0 {
         if flags == 6 { 6 } else if flags & 1 == 0 { 0 } else { 2 }
     } else {
@@ -406,7 +406,9 @@ async fn handle_show_posts(state: &Arc<CharState>, map_idx: usize, pkt: &[u8]) {
     let offset = bcount * 20;
 
     // boards_show_array_1: board_name(4)+color(4)+post_id(4)+month(4)+day(4)+user[32]+topic[64] = 116
-    let rows: Vec<(i32, String, String, i32, i32, i32, i32)> = if board == 0 {
+    // BrdHighlighted is int(11) signed, but stored as u32 here (bit-cast); all other
+    // columns are unsigned. The packet writer casts to u32 anyway so this is safe.
+    let rows: Vec<(u32, String, String, u32, u32, u32, u32)> = if board == 0 {
         sqlx::query_as(
             "SELECT `MalNew`, `MalChaName`, `MalSubject`, `MalPosition`, \
              `MalMonth`, `MalDay`, `MalId` FROM `Mail` \
@@ -415,7 +417,7 @@ async fn handle_show_posts(state: &Arc<CharState>, map_idx: usize, pkt: &[u8]) {
         ).bind(&name).bind(offset).fetch_all(&state.db).await.unwrap_or_default()
     } else {
         sqlx::query_as(
-            "SELECT `BrdHighlighted`, `BrdChaName`, `BrdTopic`, `BrdPosition`, \
+            "SELECT CAST(`BrdHighlighted` AS UNSIGNED), `BrdChaName`, `BrdTopic`, `BrdPosition`, \
              `BrdMonth`, `BrdDay`, `BrdBtlId` FROM `Boards` \
              WHERE `BrdBnmId` = ? ORDER BY `BrdPosition` DESC LIMIT 20 OFFSET ?"
         ).bind(board).bind(offset).fetch_all(&state.db).await.unwrap_or_default()
@@ -429,11 +431,11 @@ async fn handle_show_posts(state: &Arc<CharState>, map_idx: usize, pkt: &[u8]) {
     write_u32_le(&mut resp, total_len);
     resp.extend_from_slice(&header);
     for (color, user, topic, post_id, month, day, board_name) in &rows {
-        write_u32_le(&mut resp, *board_name as u32);
-        write_u32_le(&mut resp, *color as u32);
-        write_u32_le(&mut resp, *post_id as u32);
-        write_u32_le(&mut resp, *month as u32);
-        write_u32_le(&mut resp, *day as u32);
+        write_u32_le(&mut resp, *board_name);
+        write_u32_le(&mut resp, *color);
+        write_u32_le(&mut resp, *post_id);
+        write_u32_le(&mut resp, *month);
+        write_u32_le(&mut resp, *day);
         write_str_padded(&mut resp, user, 32);
         write_str_padded(&mut resp, topic, 64);
     }
@@ -535,7 +537,7 @@ async fn handle_user_list(state: &Arc<CharState>, map_idx: usize, pkt: &[u8]) {
     if pkt.len() < 4 { return; }
     let sfd = u16::from_le_bytes([pkt[2], pkt[3]]);
 
-    let rows: Vec<(i32, i32, i32, String, i32, u32)> = sqlx::query_as(
+    let rows: Vec<(u32, u32, u32, String, u32, u32)> = sqlx::query_as(
         "SELECT `ChaPthId`, `ChaMark`, `ChaClnId`, `ChaName`, \
          `ChaHunter`, `ChaNation` FROM `Character` WHERE `ChaOnline` = 1 \
          AND `ChaHeroes` = 1 GROUP BY `ChaName`, `ChaId` ORDER BY \

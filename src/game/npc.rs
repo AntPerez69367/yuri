@@ -1,8 +1,7 @@
-//! NPC game logic — replaces `c_src/npc.c`.
+//! NPC game logic.
 
 #![allow(non_snake_case, dead_code)]
 
-use std::ffi::{c_char, c_int, c_uint, c_uchar, c_ushort, c_void};
 use std::sync::atomic::{AtomicU32, Ordering};
 use crate::database::map_db::{BlockList, GlobalReg};
 use crate::servers::char::charstatus::{Item, MAX_EQUIP};
@@ -21,11 +20,10 @@ pub const NPC_START_NUM: u32      = 3221225472;
 pub const NPCT_START_NUM: u32     = 3321225472;
 pub const F1_NPC: u32             = 4294967295;
 
-pub const BL_PC:  c_int = 0x01;
-pub const BL_MOB: c_int = 0x02;  // used by npc_move_sub (Task 10)
-pub const BL_NPC: c_int = 0x04;
+pub const BL_PC:  i32 = 0x01;
+pub const BL_MOB: i32 = 0x02;  // used by npc_move_sub (Task 10)
+pub const BL_NPC: i32 = 0x04;
 
-/// Mirrors `struct npc_data` from `map_server.h`. Must be 20416 bytes on 64-bit.
 ///
 /// # Layout
 ///
@@ -40,7 +38,7 @@ pub const BL_NPC: c_int = 0x04;
 ///  20180     name[64]              64
 ///  20244     npc_name[64]          64
 ///  20308     itemreal_name[64]     64
-///  20372     state..retdist        10   (10 × c_char)
+///  20372     state..retdist        10   (10 × i8)
 ///  20382     _pad                   2   (align movetimer to 4-byte boundary)
 ///  20384     movetimer              4
 ///  20388     movetime               4
@@ -51,7 +49,7 @@ pub const BL_NPC: c_int = 0x04;
 /// ```
 ///
 /// `_pad: [u8; 2]` before `movetimer` is required because the preceding 10
-/// `c_char` fields leave the current offset at 20382, which is not 4-byte
+/// `i8` fields leave the current offset at 20382, which is not 4-byte
 /// aligned (20382 % 4 == 2).
 #[repr(C)]
 pub struct NpcData {
@@ -59,48 +57,48 @@ pub struct NpcData {
     pub equip:         [Item; MAX_EQUIP],
     pub registry:      [GlobalReg; MAX_GLOBALNPCREG],
     pub gfx:           GfxViewer,
-    pub id:            c_uint,
-    pub actiontime:    c_uint,
-    pub owner:         c_uint,
-    pub duration:      c_uint,
-    pub lastaction:    c_uint,
-    pub time:          c_uint,
-    pub duratime:      c_uint,
-    pub item_look:     c_uint,
-    pub item_owner:    c_uint,
-    pub item_color:    c_uint,
-    pub item_id:       c_uint,
-    pub item_slot:     c_uint,
-    pub item_pos:      c_uint,
-    pub item_amount:   c_uint,
-    pub item_dura:     c_uint,
-    pub name:          [c_char; 64],
-    pub npc_name:      [c_char; 64],
-    pub itemreal_name: [c_char; 64],
-    pub state:         c_char,
-    pub side:          c_char,
-    pub canmove:       c_char,
-    pub npctype:       c_char,
-    pub clone:         c_char,
-    pub shop_npc:      c_char,
-    pub repair_npc:    c_char,
-    pub bank_npc:      c_char,
-    pub receive_item:  c_char,
-    pub retdist:       c_char,
+    pub id:            u32,
+    pub actiontime:    u32,
+    pub owner:         u32,
+    pub duration:      u32,
+    pub lastaction:    u32,
+    pub time:          u32,
+    pub duratime:      u32,
+    pub item_look:     u32,
+    pub item_owner:    u32,
+    pub item_color:    u32,
+    pub item_id:       u32,
+    pub item_slot:     u32,
+    pub item_pos:      u32,
+    pub item_amount:   u32,
+    pub item_dura:     u32,
+    pub name:          [i8; 64],
+    pub npc_name:      [i8; 64],
+    pub itemreal_name: [i8; 64],
+    pub state:         i8,
+    pub side:          i8,
+    pub canmove:       i8,
+    pub npctype:       i8,
+    pub clone:         i8,
+    pub shop_npc:      i8,
+    pub repair_npc:    i8,
+    pub bank_npc:      i8,
+    pub receive_item:  i8,
+    pub retdist:       i8,
     pub _pad:          [u8; 2],
-    pub movetimer:     c_uint,
-    pub movetime:      c_uint,
-    pub sex:           c_ushort,
-    pub face:          c_ushort,
-    pub face_color:    c_ushort,
-    pub hair:          c_ushort,
-    pub hair_color:    c_ushort,
-    pub armor_color:   c_ushort,
-    pub skin_color:    c_ushort,
-    pub startm:        c_ushort,
-    pub startx:        c_ushort,
-    pub starty:        c_ushort,
-    pub returning:     c_uchar,
+    pub movetimer:     u32,
+    pub movetime:      u32,
+    pub sex:           u16,
+    pub face:          u16,
+    pub face_color:    u16,
+    pub hair:          u16,
+    pub hair_color:    u16,
+    pub armor_color:   u16,
+    pub skin_color:    u16,
+    pub startm:        u16,
+    pub startx:        u16,
+    pub starty:        u16,
+    pub returning:     u8,
     // 3 bytes trailing padding added automatically by repr(C) to align struct to 8 bytes
 }
 
@@ -112,7 +110,6 @@ pub struct NpcData {
 pub static NPC_ID: AtomicU32 = AtomicU32::new(NPC_START_NUM);
 pub static NPCTEMP_ID: AtomicU32 = AtomicU32::new(NPCT_START_NUM);
 
-// Direct Rust imports replacing extern "C" declarations.
 #[cfg(not(test))]
 use crate::game::map_server::{
     map_addiddb, map_deliddb, map_canmove, map_id2npc,
@@ -124,21 +121,19 @@ use crate::game::map_parse::visual::clif_lookgone;
 #[cfg(not(test))]
 use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from};
 
-// map_id2bl returns *mut c_void; wrap for c_void usage (npc uses it as void pointer)
+// map_id2bl returns *mut std::ffi::c_void; wrap for std::ffi::c_void usage (npc uses it as void pointer)
 #[cfg(not(test))]
-unsafe fn map_id2bl(id: c_uint) -> *mut c_void {
+unsafe fn map_id2bl(id: u32) -> *mut std::ffi::c_void {
     crate::game::map_server::map_id2bl(id)
 }
 
-// map_id2sd returns *mut c_void — pass through
+// map_id2sd returns *mut std::ffi::c_void — pass through
 #[cfg(not(test))]
-unsafe fn map_id2sd(id: c_uint) -> *mut c_void {
+unsafe fn map_id2sd(id: u32) -> *mut std::ffi::c_void {
     crate::game::map_server::map_id2sd(id)
 }
 
-// Variadic extern "C" (must keep for fn pointer type compatibility)
 #[cfg(not(test))]
-// Replacing extern "C" variadic block with typed Rust imports.
 use crate::game::block::{foreach_in_area, foreach_in_cell, foreach_in_rect, AreaType};
 use crate::game::map_parse::visual::{
     clif_cnpclook_inner, clif_mob_look_start_func_inner, clif_mob_look_close_func_inner,
@@ -147,34 +142,34 @@ use crate::game::map_parse::visual::{
 use crate::game::map_parse::movement::clif_npc_move_inner;
 
 /// Dispatch a Lua event with a single block_list argument.
-unsafe fn sl_doscript_simple(root: *const c_char, method: *const c_char, bl: *mut BlockList) -> c_int {
+unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
 }
 
 /// Dispatch a Lua event with two block_list arguments.
-unsafe fn sl_doscript_2(root: *const c_char, method: *const c_char, bl1: *mut BlockList, bl2: *mut BlockList) -> c_int {
+unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut BlockList, bl2: *mut BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
 }
 
-/// Enum value for `AREA` as defined in `c_src/map_parse.h`:
+/// Enum value for `AREA`:
 /// `enum { ALL_CLIENT=0, SAMESRV=1, SAMEMAP=2, SAMEMAP_WOS=3, AREA=4, ... }`
-const AREA: c_int = 4;
+const AREA: i32 = 4;
 
-/// Enum value for `LOOK_SEND` as defined in `c_src/map_parse.h`:
+/// Enum value for `LOOK_SEND`:
 /// `enum { LOOK_GET=0, LOOK_SEND=1 }`
-const LOOK_SEND: c_int = 1;
+const LOOK_SEND: i32 = 1;
 
 /// Returns an available NPC ID, allocating a new one if needed.
 ///
 /// Scans from `NPC_START_NUM` upward for a slot not present in the ID
 /// database.  When the scan reaches `NPC_ID` it bumps the high-water mark
-/// and returns it.  Mirrors `npc_get_new_npcid` in `npc.c`.
+/// and returns it.
 ///
 /// # Safety
 ///
 /// Caller must hold the server-wide lock; mutates the `NPC_ID` global and
 /// calls `map_id2bl` which reads the C-managed entity table.
-pub unsafe fn npc_get_new_npcid() -> c_uint {
+pub unsafe fn npc_get_new_npcid() -> u32 {
     let mut x = NPC_START_NUM;
     loop {
         let cur = NPC_ID.load(Ordering::Relaxed);
@@ -200,7 +195,7 @@ pub unsafe fn npc_get_new_npcid() -> c_uint {
 /// # Safety
 ///
 /// Same requirements as [`npc_get_new_npcid`].
-pub unsafe fn npc_get_new_npctempid() -> c_uint {
+pub unsafe fn npc_get_new_npctempid() -> u32 {
     let mut x = NPCT_START_NUM;
     loop {
         let cur = NPCTEMP_ID.load(Ordering::Relaxed);
@@ -226,8 +221,8 @@ pub unsafe fn npc_get_new_npctempid() -> c_uint {
 /// # Safety
 ///
 /// Mutates the `NPCTEMP_ID` global; caller must hold the server-wide lock.
-pub unsafe fn npc_idlower(id: c_int) -> c_int {
-    let id_u = id as c_uint;
+pub unsafe fn npc_idlower(id: i32) -> i32 {
+    let id_u = id as u32;
     if id_u >= NPCT_START_NUM && id_u != F1_NPC {
         let cur = NPCTEMP_ID.load(Ordering::Relaxed);
         NPCTEMP_ID.store(cur.saturating_sub(1), Ordering::Relaxed);
@@ -239,13 +234,12 @@ pub unsafe fn npc_idlower(id: c_int) -> c_int {
 ///
 /// Walks `nd.registry` looking for a case-insensitive match on the key
 /// string.  Returns the stored `val` if found, or `0` if the key is absent.
-/// Mirrors `npc_readglobalreg` in `npc.c`.
 ///
 /// # Safety
 ///
 /// `nd` must be a valid, aligned, non-null pointer to an `NpcData`.
 /// `reg` must be a valid null-terminated C string.
-pub unsafe fn npc_readglobalreg(nd: *mut NpcData, reg: *const c_char) -> c_int {
+pub unsafe fn npc_readglobalreg(nd: *mut NpcData, reg: *const i8) -> i32 {
     let nd = &*nd;
     let reg_key = std::ffi::CStr::from_ptr(reg).to_bytes();
     for entry in &nd.registry {
@@ -267,14 +261,13 @@ pub unsafe fn npc_readglobalreg(nd: *mut NpcData, reg: *const c_char) -> c_int {
 /// entry is found, the first empty slot is used.
 ///
 /// Returns `0` on success, `1` if the registry is full.
-/// Mirrors `npc_setglobalreg` in `npc.c`.
 ///
 /// # Safety
 ///
 /// `nd` must be a valid, aligned, non-null pointer to an `NpcData`.
 /// `reg` must be a valid null-terminated C string whose length (including
 /// the NUL) fits within 64 bytes.
-pub unsafe fn npc_setglobalreg(nd: *mut NpcData, reg: *const c_char, val: c_int) -> c_int {
+pub unsafe fn npc_setglobalreg(nd: *mut NpcData, reg: *const i8, val: i32) -> i32 {
     let nd = &mut *nd;
     let reg_cstr = std::ffi::CStr::from_ptr(reg);
     let reg_key  = reg_cstr.to_bytes();
@@ -300,7 +293,7 @@ pub unsafe fn npc_setglobalreg(nd: *mut NpcData, reg: *const c_char, val: c_int)
             let bytes = reg_cstr.to_bytes();
             let copy_len = bytes.len().min(entry.str.len() - 1);
             for (dst, &src) in entry.str.iter_mut().zip(bytes[..copy_len].iter()) {
-                *dst = src as c_char;
+                *dst = src as i8;
             }
             entry.str[copy_len] = 0;
             entry.val = val;
@@ -322,24 +315,23 @@ pub unsafe fn npc_setglobalreg(nd: *mut NpcData, reg: *const c_char, val: c_int)
 /// that it has gone, updates the NPC's position fields, re-inserts it into
 /// the new cell, then broadcasts its new appearance to nearby players.
 ///
-/// Mirrors `npc_warp` in `c_src/npc.c`.
 ///
 /// # Safety
 ///
 /// `nd` must be a valid, aligned, non-null pointer to an `NpcData` that is
 /// currently registered in the map block-grid.  Caller must hold the
 /// server-wide lock.
-pub unsafe fn npc_warp(nd: *mut NpcData, m: c_int, x: c_int, y: c_int) -> c_int {
+pub unsafe fn npc_warp(nd: *mut NpcData, m: i32, x: i32, y: i32) -> i32 {
     if nd.is_null() { return 0; }
     let nd = &mut *nd;
     if nd.bl.id < NPC_START_NUM { return 0; }
 
     map_delblock(&raw mut nd.bl);
     clif_lookgone(&raw mut nd.bl);
-    nd.bl.m = m as c_ushort;
-    nd.bl.x = x as c_ushort;
-    nd.bl.y = y as c_ushort;
-    nd.bl.bl_type = BL_NPC as c_uchar;
+    nd.bl.m = m as u16;
+    nd.bl.x = x as u16;
+    nd.bl.y = y as u16;
+    nd.bl.bl_type = BL_NPC as u8;
 
     if map_addblock(&raw mut nd.bl) != 0 {
         tracing::error!("Error warping npcchar.");
@@ -368,17 +360,16 @@ pub unsafe fn npc_warp(nd: *mut NpcData, m: c_int, x: c_int, y: c_int) -> c_int 
 /// second argument to `sl_doscript_blargs`; otherwise only the NPC's own
 /// `block_list` is passed.
 ///
-/// Mirrors `npc_action` in `c_src/npc.c`.
 ///
 /// # Safety
 ///
 /// `nd` must be a valid, aligned, non-null pointer to a live `NpcData`.
 /// Caller must hold the server-wide lock.
-pub unsafe fn npc_action(nd: *mut NpcData) -> c_int {
+pub unsafe fn npc_action(nd: *mut NpcData) -> i32 {
     if nd.is_null() { return 0; }
     let nd = &mut *nd;
 
-    nd.time = nd.time.wrapping_add(100);  // mirrors C unsigned int overflow semantics
+    nd.time = nd.time.wrapping_add(100);
 
     let tsd: *mut std::ffi::c_void = if nd.owner != 0 {
         map_id2sd(nd.owner)
@@ -392,9 +383,9 @@ pub unsafe fn npc_action(nd: *mut NpcData) -> c_int {
             // SAFETY: map_id2sd returns *mut map_sessiondata whose first field `bl`
             // (struct block_list) is at byte offset 0. Casting to *mut BlockList is
             // equivalent to &tsd->bl as used in C npc_action.
-            sl_doscript_2(nd.name.as_ptr(), b"action\0".as_ptr() as *const c_char, &raw mut nd.bl, tsd as *mut BlockList);
+            sl_doscript_2(nd.name.as_ptr(), b"action\0".as_ptr() as *const i8, &raw mut nd.bl, tsd as *mut BlockList);
         } else {
-            sl_doscript_simple(nd.name.as_ptr(), b"action\0".as_ptr() as *const c_char, &raw mut nd.bl);
+            sl_doscript_simple(nd.name.as_ptr(), b"action\0".as_ptr() as *const i8, &raw mut nd.bl);
         }
     }
     0
@@ -403,16 +394,15 @@ pub unsafe fn npc_action(nd: *mut NpcData) -> c_int {
 /// Advances the move timer for `nd` by 100 ms and fires the `"move"` Lua event
 /// when `nd.movetimer` reaches `nd.movetime`.
 ///
-/// Mirrors `npc_movetime` in `c_src/npc.c`.
 ///
 /// # Safety
 ///
 /// Same requirements as [`npc_action`].
-pub unsafe fn npc_movetime(nd: *mut NpcData) -> c_int {
+pub unsafe fn npc_movetime(nd: *mut NpcData) -> i32 {
     if nd.is_null() { return 0; }
     let nd = &mut *nd;
 
-    nd.movetimer = nd.movetimer.wrapping_add(100);  // mirrors C unsigned int overflow semantics
+    nd.movetimer = nd.movetimer.wrapping_add(100);
 
     let tsd: *mut std::ffi::c_void = if nd.owner != 0 {
         map_id2sd(nd.owner)
@@ -424,9 +414,9 @@ pub unsafe fn npc_movetime(nd: *mut NpcData) -> c_int {
         nd.movetimer = 0;
         if !tsd.is_null() {
             // SAFETY: see npc_action — map_sessiondata.bl is at offset 0.
-            sl_doscript_2(nd.name.as_ptr(), b"move\0".as_ptr() as *const c_char, &raw mut nd.bl, tsd as *mut BlockList);
+            sl_doscript_2(nd.name.as_ptr(), b"move\0".as_ptr() as *const i8, &raw mut nd.bl, tsd as *mut BlockList);
         } else {
-            sl_doscript_simple(nd.name.as_ptr(), b"move\0".as_ptr() as *const c_char, &raw mut nd.bl);
+            sl_doscript_simple(nd.name.as_ptr(), b"move\0".as_ptr() as *const i8, &raw mut nd.bl);
         }
     }
     0
@@ -435,16 +425,15 @@ pub unsafe fn npc_movetime(nd: *mut NpcData) -> c_int {
 /// Advances the duration timer for `nd` by 100 ms and fires the `"endAction"`
 /// Lua event when `nd.duratime` reaches `nd.duration`.
 ///
-/// Mirrors `npc_duration` in `c_src/npc.c`.
 ///
 /// # Safety
 ///
 /// Same requirements as [`npc_action`].
-pub unsafe fn npc_duration(nd: *mut NpcData) -> c_int {
+pub unsafe fn npc_duration(nd: *mut NpcData) -> i32 {
     if nd.is_null() { return 0; }
     let nd = &mut *nd;
 
-    nd.duratime = nd.duratime.wrapping_add(100);  // mirrors C unsigned int overflow semantics
+    nd.duratime = nd.duratime.wrapping_add(100);
 
     let tsd: *mut std::ffi::c_void = if nd.owner != 0 {
         map_id2sd(nd.owner)
@@ -456,9 +445,9 @@ pub unsafe fn npc_duration(nd: *mut NpcData) -> c_int {
         nd.duratime = 0;
         if !tsd.is_null() {
             // SAFETY: see npc_action — map_sessiondata.bl is at offset 0.
-            sl_doscript_2(nd.name.as_ptr(), b"endAction\0".as_ptr() as *const c_char, &raw mut nd.bl, tsd as *mut BlockList);
+            sl_doscript_2(nd.name.as_ptr(), b"endAction\0".as_ptr() as *const i8, &raw mut nd.bl, tsd as *mut BlockList);
         } else {
-            sl_doscript_simple(nd.name.as_ptr(), b"endAction\0".as_ptr() as *const c_char, &raw mut nd.bl);
+            sl_doscript_simple(nd.name.as_ptr(), b"endAction\0".as_ptr() as *const i8, &raw mut nd.bl);
         }
     }
     0
@@ -471,13 +460,12 @@ pub unsafe fn npc_duration(nd: *mut NpcData) -> c_int {
 /// `npc_action`, `npc_movetime`, and `npc_duration` as appropriate based on
 /// their configured intervals.
 ///
-/// Mirrors `npc_runtimers` in `c_src/npc.c`.
 ///
 /// # Safety
 ///
 /// Caller must hold the server-wide lock.  `map_id2npc` must be safe to call
 /// for any ID in the scanned ranges.
-pub unsafe fn npc_runtimers(_id: c_int, _n: c_int) -> c_int {
+pub unsafe fn npc_runtimers(_id: i32, _n: i32) -> i32 {
     // regular NPCs
     let mut x = NPC_START_NUM;
     let npc_hi = NPC_ID.load(Ordering::Relaxed);
@@ -519,28 +507,26 @@ pub unsafe fn npc_runtimers(_id: c_int, _n: c_int) -> c_int {
 }
 
 // ---------------------------------------------------------------------------
-// npc_src_* — no-ops: the file-based NPC loader was replaced by SQL and is
-// fully commented out in the C source.  These stubs exist only for ABI
+// npc_src_* — no-ops: NPC loading is done via SQL.
 // compatibility so that any remaining C call sites link without error.
 // ---------------------------------------------------------------------------
 
 /// No-op stub — SQL-backed NPC loader has no source list to clear.
-pub fn npc_src_clear() -> c_int { 0 }
+pub fn npc_src_clear() -> i32 { 0 }
 
 /// No-op stub — file-based NPC source registration is unused.
-pub fn npc_src_add(_file: *const c_char) -> c_int { 0 }
+pub fn npc_src_add(_file: *const i8) -> i32 { 0 }
 
 /// No-op stub — warp source registration is unused.
-pub fn npc_warp_add(_file: *const c_char) -> c_int { 0 }
+pub fn npc_warp_add(_file: *const i8) -> i32 { 0 }
 
 // ---------------------------------------------------------------------------
 // warp_init — load Warps table into the map block grid
 // ---------------------------------------------------------------------------
 
 /// Loads warp data from the `Warps` table into the map grid.
-/// Mirrors `warp_init` in `npc.c`.
 #[cfg(not(test))]
-pub async unsafe fn warp_init_async() -> c_int {
+pub async unsafe fn warp_init_async() -> i32 {
     let p = get_pool();
 
     #[derive(sqlx::FromRow)]
@@ -624,7 +610,7 @@ pub async unsafe fn warp_init_async() -> c_int {
 
 /// Blocking wrapper. Must be called after the sqlx pool is initialized.
 #[cfg(not(test))]
-pub unsafe fn warp_init() -> c_int {
+pub unsafe fn warp_init() -> i32 {
     blocking_run(async { unsafe { warp_init_async().await } })
 }
 
@@ -638,10 +624,10 @@ fn server_id() -> u32 {
 }
 
 #[cfg(not(test))]
-fn copy_str_to_array<const N: usize>(s: &str, dst: &mut [c_char; N]) {
+fn copy_str_to_array<const N: usize>(s: &str, dst: &mut [i8; N]) {
     let copy_len = s.len().min(N - 1);
     for (d, b) in dst.iter_mut().zip(s.bytes().take(copy_len)) {
-        *d = b as c_char;
+        *d = b as i8;
     }
     dst[copy_len] = 0;
 }
@@ -649,9 +635,8 @@ fn copy_str_to_array<const N: usize>(s: &str, dst: &mut [c_char; N]) {
 /// Async implementation of npc_init. Loads all NPCs from DB, allocates NpcData
 /// structs, registers them in the block grid, then loads equipment for npctype==1.
 ///
-/// Mirrors `npc_init` in `c_src/npc.c`.
 #[cfg(not(test))]
-pub async unsafe fn npc_init_async() -> c_int {
+pub async unsafe fn npc_init_async() -> i32 {
     let p = get_pool();
     let sid = server_id();
 
@@ -661,20 +646,20 @@ pub async unsafe fn npc_init_async() -> c_int {
         npc_identifier: String,
         npc_description: String,
         npc_type:       u32,   // SQLDT_UCHAR in C — use u32, downcast
-        npc_map_id:     u16,
-        npc_x:          u16,
-        npc_y:          u16,
+        npc_map_id:     u32,
+        npc_x:          u32,
+        npc_y:          u32,
         npc_look:       u32,
         npc_look_color: u32,
         npc_timer:      u32,
-        npc_sex:        u16,
+        npc_sex:        u32,
         npc_side:       u32,   // SQLDT_UCHAR — use u32, downcast
         npc_state:      u32,   // SQLDT_UCHAR — use u32, downcast
-        npc_face:       u16,
-        npc_face_color: u16,
-        npc_hair:       u16,
-        npc_hair_color: u16,
-        npc_skin_color: u16,
+        npc_face:       u32,
+        npc_face_color: u32,
+        npc_hair:       u32,
+        npc_hair_color: u32,
+        npc_skin_color: u32,
         npc_is_char:    u32,   // SQLDT_UCHAR — use u32, downcast
         npc_is_f1npc:   u32,
         npc_is_repair:  u32,   // SQLDT_UCHAR — use u32, downcast
@@ -735,8 +720,8 @@ pub async unsafe fn npc_init_async() -> c_int {
         copy_str_to_array(&row.npc_description, &mut (*nd).npc_name);
 
         // Set block_list fields
-        (*nd).bl.bl_type = BL_NPC as c_uchar;
-        (*nd).bl.subtype = row.npc_type as c_uchar;
+        (*nd).bl.bl_type = BL_NPC as u8;
+        (*nd).bl.subtype = row.npc_type as u8;
         (*nd).bl.graphic_id = row.npc_look;
         (*nd).bl.graphic_color = row.npc_look_color;
 
@@ -744,37 +729,37 @@ pub async unsafe fn npc_init_async() -> c_int {
         let m   = row.npc_map_id;
         let xc  = row.npc_x;
         let yc  = row.npc_y;
-        if m as c_ushort != (*nd).startm || xc as c_ushort != (*nd).startx || yc as c_ushort != (*nd).starty {
-            npc_warp(nd, m as c_int, xc as c_int, yc as c_int);
+        if m as u16 != (*nd).startm || xc as u16 != (*nd).startx || yc as u16 != (*nd).starty {
+            npc_warp(nd, m as i32, xc as i32, yc as i32);
         }
 
-        (*nd).startm  = m as c_ushort;
-        (*nd).startx  = xc as c_ushort;
-        (*nd).starty  = yc as c_ushort;
+        (*nd).startm  = m as u16;
+        (*nd).startx  = xc as u16;
+        (*nd).starty  = yc as u16;
         (*nd).id      = row.row_npc_id;
         (*nd).actiontime = row.npc_timer;
-        (*nd).sex     = row.npc_sex as c_ushort;
-        (*nd).side    = row.npc_side as c_char;
-        (*nd).state   = row.npc_state as c_char;
-        (*nd).face    = row.npc_face as c_ushort;
-        (*nd).face_color  = row.npc_face_color as c_ushort;
-        (*nd).hair    = row.npc_hair as c_ushort;
-        (*nd).hair_color  = row.npc_hair_color as c_ushort;
+        (*nd).sex     = row.npc_sex as u16;
+        (*nd).side    = row.npc_side as i8;
+        (*nd).state   = row.npc_state as i8;
+        (*nd).face    = row.npc_face as u16;
+        (*nd).face_color  = row.npc_face_color as u16;
+        (*nd).hair    = row.npc_hair as u16;
+        (*nd).hair_color  = row.npc_hair_color as u16;
         (*nd).armor_color = 0;
-        (*nd).skin_color  = row.npc_skin_color as c_ushort;
-        (*nd).npctype = row.npc_is_char as c_char;
-        (*nd).shop_npc    = row.npc_is_shop as c_char;
-        (*nd).repair_npc  = row.npc_is_repair as c_char;
-        (*nd).bank_npc    = row.npc_is_bank as c_char;
-        (*nd).retdist     = row.npc_return_dist as c_char;
+        (*nd).skin_color  = row.npc_skin_color as u16;
+        (*nd).npctype = row.npc_is_char as i8;
+        (*nd).shop_npc    = row.npc_is_shop as i8;
+        (*nd).repair_npc  = row.npc_is_repair as i8;
+        (*nd).bank_npc    = row.npc_is_bank as i8;
+        (*nd).retdist     = row.npc_return_dist as i8;
         (*nd).movetime    = row.npc_move_time;
-        (*nd).receive_item = row.npc_can_receive as c_char;
+        (*nd).receive_item = row.npc_can_receive as i8;
 
         // ID assignment: if bl.id < NPC_START_NUM, this is a new/fresh NPC
         if (*nd).bl.id < NPC_START_NUM {
-            (*nd).bl.m = m as c_ushort;
-            (*nd).bl.x = xc as c_ushort;
-            (*nd).bl.y = yc as c_ushort;
+            (*nd).bl.m = m as u16;
+            (*nd).bl.x = xc as u16;
+            (*nd).bl.y = yc as u16;
 
             if row.npc_is_f1npc == 1 {
                 (*nd).bl.id = F1_NPC;
@@ -852,12 +837,11 @@ pub async unsafe fn npc_init_async() -> c_int {
 
 /// Blocking wrapper. Must be called after the sqlx pool is initialized.
 #[cfg(not(test))]
-pub unsafe fn npc_init() -> c_int {
+pub unsafe fn npc_init() -> i32 {
     blocking_run(async { unsafe { npc_init_async().await } })
 }
 
 // ---------------------------------------------------------------------------
-// npc_helper_mob_is_dead / npc_helper_pc_is_skip — ported from c_src/npc.c
 // ---------------------------------------------------------------------------
 
 /// Returns 1 if the MOB pointed to by `bl` is in the MOB_DEAD state, 0 otherwise.
@@ -865,7 +849,7 @@ pub unsafe fn npc_init() -> c_int {
 ///
 /// # Safety
 /// `bl` must point to a valid `MobSpawnData` (i.e. `bl.bl_type == BL_MOB`).
-pub unsafe fn npc_helper_mob_is_dead(bl: *mut BlockList) -> c_int {
+pub unsafe fn npc_helper_mob_is_dead(bl: *mut BlockList) -> i32 {
     if bl.is_null() { return 0; }
     let mob = bl as *const crate::game::mob::MobSpawnData;
     if (*mob).state == crate::game::mob::MOB_DEAD { 1 } else { 0 }
@@ -879,7 +863,7 @@ pub unsafe fn npc_helper_mob_is_dead(bl: *mut BlockList) -> c_int {
 /// `bl` must point to a valid `MapSessionData` and `npc_bl` to a valid `BlockList`
 /// whose `.m` field is a loaded map ID.
 #[cfg(not(test))]
-pub unsafe fn npc_helper_pc_is_skip(bl: *mut BlockList, npc_bl: *mut BlockList) -> c_int {
+pub unsafe fn npc_helper_pc_is_skip(bl: *mut BlockList, npc_bl: *mut BlockList) -> i32 {
     use crate::game::pc::{MapSessionData, PC_DIE};
     if bl.is_null() || npc_bl.is_null() { return 0; }
     let sd = bl as *const MapSessionData;
@@ -902,20 +886,18 @@ pub unsafe fn npc_helper_pc_is_skip(bl: *mut BlockList, npc_bl: *mut BlockList) 
 
 /// Test stub — map access is not available in unit tests.
 #[cfg(test)]
-pub unsafe fn npc_helper_pc_is_skip(_bl: *mut BlockList, _npc_bl: *mut BlockList) -> c_int {
+pub unsafe fn npc_helper_pc_is_skip(_bl: *mut BlockList, _npc_bl: *mut BlockList) -> i32 {
     0
 }
 
 // ---------------------------------------------------------------------------
-// npc_move_sub — va_list callback for map_foreachincell during NPC movement
+// npc_move_sub — callback for map_foreachincell during NPC movement
 // ---------------------------------------------------------------------------
 
 /// Callback for `map_foreachincell` during NPC movement — checks for blocking entities.
 ///
-/// Receives the candidate `block_list*` and the NPC pointer via `va_list`.
 /// Sets `nd.canmove = 1` if the cell is occupied by a non-passable entity.
 ///
-/// Logic (mirrors `npc_move_sub` in `c_src/npc.c` exactly):
 /// - `BL_NPC`: skip if `bl.subtype != 0` (non-zero subtype NPCs don't block).
 /// - `BL_MOB`: skip if the mob is in `MOB_DEAD` state.
 /// - `BL_PC`:  skip if dead/invisible/GM (delegated to `npc_helper_pc_is_skip`).
@@ -931,15 +913,15 @@ pub unsafe fn npc_move_sub_inner(bl: *mut BlockList, nd: *mut NpcData) -> i32 {
 
     let bl_ref = &*bl;
     match bl_ref.bl_type {
-        x if x == BL_NPC as c_uchar => {
+        x if x == BL_NPC as u8 => {
             // Non-zero subtype NPCs do not block movement.
             if bl_ref.subtype != 0 { return 0; }
         }
-        x if x == BL_MOB as c_uchar => {
+        x if x == BL_MOB as u8 => {
             // Dead mobs do not block movement.
             if npc_helper_mob_is_dead(bl) != 0 { return 0; }
         }
-        x if x == BL_PC as c_uchar => {
+        x if x == BL_PC as u8 => {
             // Dead / invisible / GM players do not block movement.
             if npc_helper_pc_is_skip(bl, &raw mut (*nd).bl as *mut BlockList) != 0 { return 0; }
         }
@@ -963,33 +945,32 @@ pub unsafe fn npc_move_sub_inner(bl: *mut BlockList, nd: *mut NpcData) -> i32 {
 /// checks for warps and blocking entities, then calls `map_moveblock` if the move is valid.
 /// Broadcasts visibility updates to nearby players.
 ///
-/// Mirrors `npc_move` in `c_src/npc.c`.
 ///
 /// # Safety
 ///
 /// `nd` must be a valid, aligned, non-null pointer to a live `NpcData`.
 /// Caller must hold the server-wide lock.
 #[cfg(not(test))]
-pub unsafe fn npc_move(nd: *mut NpcData) -> c_int {
+pub unsafe fn npc_move(nd: *mut NpcData) -> i32 {
     if nd.is_null() { return 0; }
     let nd = &mut *nd;
 
-    let m = nd.bl.m as c_int;
-    let backx = nd.bl.x as c_int;
-    let backy = nd.bl.y as c_int;
+    let m = nd.bl.m as i32;
+    let backx = nd.bl.x as i32;
+    let backy = nd.bl.y as i32;
     let mut dx = backx;
     let mut dy = backy;
-    let direction = nd.side as c_int;
+    let direction = nd.side as i32;
     let mut x0 = backx;
     let mut y0 = backy;
-    let mut x1: c_int = 0;
-    let mut y1: c_int = 0;
-    let mut nothingnew: c_int = 0;
+    let mut x1: i32 = 0;
+    let mut y1: i32 = 0;
+    let mut nothingnew: i32 = 0;
 
     let md = crate::database::map_db::get_map_ptr(nd.bl.m);
     if md.is_null() { return 0; }
-    let map_xs = (*md).xs as c_int;
-    let map_ys = (*md).ys as c_int;
+    let map_xs = (*md).xs as i32;
+    let map_ys = (*md).ys as i32;
 
     match direction {
         0 => {
@@ -1094,8 +1075,8 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> c_int {
     if dy < 0 { dy = backy; }
 
     if dx != backx || dy != backy {
-        nd.bl.bx = backx as c_uint;
-        nd.bl.by = backy as c_uint;
+        nd.bl.bx = backx as u32;
+        nd.bl.by = backy as u32;
         map_moveblock(&raw mut nd.bl, dx, dy);
 
         if nothingnew == 0 {
@@ -1151,7 +1132,7 @@ mod tests {
 
     #[test]
     fn npc_data_canmove_offset() {
-        // canmove is the 3rd of 10 c_char fields starting at offset 20372
+        // canmove is the 3rd of 10 i8 fields starting at offset 20372
         // state=20372, side=20373, canmove=20374
         assert_eq!(std::mem::offset_of!(NpcData, canmove), 20374);
     }
@@ -1168,7 +1149,7 @@ mod tests {
     #[test]
     fn globalreg_set_then_read() {
         let mut nd = unsafe { Box::<NpcData>::new_zeroed().assume_init() };
-        let key = b"mykey\0".as_ptr() as *const c_char;
+        let key = b"mykey\0".as_ptr() as *const i8;
         unsafe {
             assert_eq!(npc_setglobalreg(&raw mut *nd, key, 42), 0);
             assert_eq!(npc_readglobalreg(&raw mut *nd, key), 42);
@@ -1178,7 +1159,7 @@ mod tests {
     #[test]
     fn globalreg_set_zero_clears_key() {
         let mut nd = unsafe { Box::<NpcData>::new_zeroed().assume_init() };
-        let key = b"mykey\0".as_ptr() as *const c_char;
+        let key = b"mykey\0".as_ptr() as *const i8;
         unsafe {
             npc_setglobalreg(&raw mut *nd, key, 99);
             npc_setglobalreg(&raw mut *nd, key, 0);
@@ -1193,7 +1174,7 @@ mod tests {
         unsafe {
             let orig = NPCTEMP_ID.load(Ordering::Relaxed);
             NPCTEMP_ID.store(NPCT_START_NUM + 5, Ordering::Relaxed);
-            npc_idlower((NPCT_START_NUM + 1) as c_int);
+            npc_idlower((NPCT_START_NUM + 1) as i32);
             assert_eq!(NPCTEMP_ID.load(Ordering::Relaxed), NPCT_START_NUM + 4);
             NPCTEMP_ID.store(orig, Ordering::Relaxed);
         }
@@ -1206,61 +1187,60 @@ mod tests {
             let orig = NPCTEMP_ID.load(Ordering::Relaxed);
             NPCTEMP_ID.store(NPCT_START_NUM + 5, Ordering::Relaxed);
             // NPC_START_NUM is not a temp NPC — counter should not change
-            npc_idlower(NPC_START_NUM as c_int);
+            npc_idlower(NPC_START_NUM as i32);
             assert_eq!(NPCTEMP_ID.load(Ordering::Relaxed), NPCT_START_NUM + 5);
             NPCTEMP_ID.store(orig, Ordering::Relaxed);
         }
     }
 }
 
-// ─── FFI bridge (moved from src/ffi/npc.rs) ───────────────────────────────
 
 // npc_init, warp_init, and npc_runtimers are on the original function definitions above.
 
-pub unsafe fn npc_action_ffi(nd: *mut NpcData) -> c_int {
+pub unsafe fn npc_action_ffi(nd: *mut NpcData) -> i32 {
     npc_action(nd)
 }
 
-pub unsafe fn npc_movetime_ffi(nd: *mut NpcData) -> c_int {
+pub unsafe fn npc_movetime_ffi(nd: *mut NpcData) -> i32 {
     npc_movetime(nd)
 }
 
-pub unsafe fn npc_duration_ffi(nd: *mut NpcData) -> c_int {
+pub unsafe fn npc_duration_ffi(nd: *mut NpcData) -> i32 {
     npc_duration(nd)
 }
 
-pub unsafe fn npc_warp_ffi(nd: *mut NpcData, m: c_int, x: c_int, y: c_int) -> c_int {
+pub unsafe fn npc_warp_ffi(nd: *mut NpcData, m: i32, x: i32, y: i32) -> i32 {
     npc_warp(nd, m, x, y)
 }
 
-pub unsafe fn npc_move_ffi(nd: *mut NpcData) -> c_int {
+pub unsafe fn npc_move_ffi(nd: *mut NpcData) -> i32 {
     npc_move(nd)
 }
 
-pub unsafe fn npc_readglobalreg_ffi(nd: *mut NpcData, reg: *const c_char) -> c_int {
+pub unsafe fn npc_readglobalreg_ffi(nd: *mut NpcData, reg: *const i8) -> i32 {
     npc_readglobalreg(nd, reg)
 }
 
-pub unsafe fn npc_setglobalreg_ffi(nd: *mut NpcData, reg: *const c_char, val: c_int) -> c_int {
+pub unsafe fn npc_setglobalreg_ffi(nd: *mut NpcData, reg: *const i8, val: i32) -> i32 {
     npc_setglobalreg(nd, reg, val)
 }
 
-pub unsafe fn npc_idlower_ffi(id: c_int) -> c_int {
+pub unsafe fn npc_idlower_ffi(id: i32) -> i32 {
     npc_idlower(id)
 }
 
-pub unsafe fn npc_src_clear_ffi() -> c_int {
+pub unsafe fn npc_src_clear_ffi() -> i32 {
     npc_src_clear()
 }
 
-pub unsafe fn npc_src_add_ffi(f: *const c_char) -> c_int {
+pub unsafe fn npc_src_add_ffi(f: *const i8) -> i32 {
     npc_src_add(f)
 }
 
-pub unsafe fn npc_warp_add_ffi(f: *const c_char) -> c_int {
+pub unsafe fn npc_warp_add_ffi(f: *const i8) -> i32 {
     npc_warp_add(f)
 }
 
-pub unsafe fn npc_get_new_npctempid_ffi() -> c_uint {
+pub unsafe fn npc_get_new_npctempid_ffi() -> u32 {
     npc_get_new_npctempid()
 }

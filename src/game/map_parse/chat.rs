@@ -1,12 +1,7 @@
-//! Port of the chat/social helpers from `c_src/map_parse.c`.
-//!
 //! Covers broadcast, whisper, say, ignore list, and NPC speech callbacks.
-//! Functions declared `pub unsafe extern "C"` so they remain
-//! callable from any remaining C code that has not yet been ported.
 
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
-use std::ffi::{c_char, c_int, c_void};
 
 use crate::database::map_db::BlockList;
 use crate::database::map_db::map;
@@ -33,7 +28,6 @@ use super::packet::{
 use crate::game::block::{foreach_in_area, AreaType};
 
 // crate::session::get_fd_max() is defined in the binary (src/bin/map_server.rs) — cannot import from library.
-// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
 
 use crate::game::map_server::map_name2sd;
 use crate::game::map_parse::combat::clif_sendaction;
@@ -42,23 +36,23 @@ use crate::game::gm_command::rust_is_command;
 use crate::database::magic_db::rust_magicdb_yname;
 use crate::game::client::handlers::clif_Hacker;
 
-// Alias for the async coroutine freeer (returns () in Rust, was c_int in C — return unused).
+// Alias for the async coroutine freeer (returns () in Rust, was i32 in C — return unused).
 #[inline]
-unsafe fn sl_async_freeco(sd: *mut c_void) {
+unsafe fn sl_async_freeco(sd: *mut std::ffi::c_void) {
     crate::game::scripting::rust_sl_async_freeco(sd);
 }
 
 /// Dispatch a Lua event with a single block_list argument.
 #[cfg(not(test))]
 #[allow(dead_code)]
-unsafe fn sl_doscript_simple(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
 }
 
 /// Dispatch a Lua event with two block_list arguments.
 #[cfg(not(test))]
 #[allow(dead_code)]
-unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
 }
 
@@ -95,8 +89,7 @@ fn buf_put_be32(buf: &mut [u8], pos: usize, val: u32) {
 
 /// Send a guide popup packet to a single player.
 ///
-/// Mirrors `clif_sendguidespecific` from `c_src/map_parse.c` ~line 690.
-pub unsafe fn clif_sendguidespecific(sd: *mut MapSessionData, guide: c_int) -> c_int {
+pub unsafe fn clif_sendguidespecific(sd: *mut MapSessionData, guide: i32) -> i32 {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -120,8 +113,7 @@ pub unsafe fn clif_sendguidespecific(sd: *mut MapSessionData, guide: c_int) -> c
 
 /// foreachinarea callback: send a global broadcast to one player.
 ///
-/// Mirrors `clif_broadcast_sub` from `c_src/map_parse.c` ~line 710.
-pub unsafe fn clif_broadcast_sub_inner(bl: *mut BlockList, msg: *const c_char) -> i32 {
+pub unsafe fn clif_broadcast_sub_inner(bl: *mut BlockList, msg: *const i8) -> i32 {
     let sd = bl as *mut MapSessionData;
     if sd.is_null() { return 0; }
 
@@ -155,8 +147,7 @@ pub unsafe fn clif_broadcast_sub_inner(bl: *mut BlockList, msg: *const c_char) -
 
 /// foreachinarea callback: send a GM broadcast to one player.
 ///
-/// Mirrors `clif_gmbroadcast_sub` from `c_src/map_parse.c` ~line 740.
-pub unsafe fn clif_gmbroadcast_sub_inner(bl: *mut BlockList, msg: *const c_char) -> i32 {
+pub unsafe fn clif_gmbroadcast_sub_inner(bl: *mut BlockList, msg: *const i8) -> i32 {
     let sd = bl as *mut MapSessionData;
     if sd.is_null() { return 0; }
 
@@ -186,8 +177,7 @@ pub unsafe fn clif_gmbroadcast_sub_inner(bl: *mut BlockList, msg: *const c_char)
 
 /// foreachinarea callback: send a broadcast only if the player is a GM.
 ///
-/// Mirrors `clif_broadcasttogm_sub` from `c_src/map_parse.c` ~line 768.
-pub unsafe fn clif_broadcasttogm_sub_inner(bl: *mut BlockList, msg: *const c_char) -> i32 {
+pub unsafe fn clif_broadcasttogm_sub_inner(bl: *mut BlockList, msg: *const i8) -> i32 {
     let sd = bl as *mut MapSessionData;
     if sd.is_null() { return 0; }
 
@@ -219,8 +209,7 @@ pub unsafe fn clif_broadcasttogm_sub_inner(bl: *mut BlockList, msg: *const c_cha
 
 /// Send a broadcast message to all players on a map (or all maps if m == -1).
 ///
-/// Mirrors `clif_broadcast` from `c_src/map_parse.c` ~line 797.
-pub unsafe fn clif_broadcast(msg: *const c_char, m: c_int) -> c_int {
+pub unsafe fn clif_broadcast(msg: *const i8, m: i32) -> i32 {
     if m == -1 {
         for x in 0..65535usize {
             if map_isloaded(x) {
@@ -237,8 +226,7 @@ pub unsafe fn clif_broadcast(msg: *const c_char, m: c_int) -> c_int {
 
 /// Send a GM broadcast message to all GMs on a map (or all maps if m == -1).
 ///
-/// Mirrors `clif_gmbroadcast` from `c_src/map_parse.c` ~line 811.
-pub unsafe fn clif_gmbroadcast(msg: *const c_char, m: c_int) -> c_int {
+pub unsafe fn clif_gmbroadcast(msg: *const i8, m: i32) -> i32 {
     if m == -1 {
         for x in 0..65535usize {
             if map_isloaded(x) {
@@ -255,8 +243,7 @@ pub unsafe fn clif_gmbroadcast(msg: *const c_char, m: c_int) -> c_int {
 
 /// Send a broadcast message to all GMs on a map (or all maps if m == -1).
 ///
-/// Mirrors `clif_broadcasttogm` from `c_src/map_parse.c` ~line 824.
-pub unsafe fn clif_broadcasttogm(msg: *const c_char, m: c_int) -> c_int {
+pub unsafe fn clif_broadcasttogm(msg: *const i8, m: i32) -> i32 {
     if m == -1 {
         for x in 0..65535usize {
             if map_isloaded(x) {
@@ -273,8 +260,7 @@ pub unsafe fn clif_broadcasttogm(msg: *const c_char, m: c_int) -> c_int {
 
 /// Send a GUI text popup to a single player.
 ///
-/// Mirrors `clif_guitextsd` from `c_src/map_parse.c` ~line 4363.
-pub unsafe fn clif_guitextsd(msg: *const c_char, sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_guitextsd(msg: *const i8, sd: *mut MapSessionData) -> i32 {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -301,8 +287,7 @@ pub unsafe fn clif_guitextsd(msg: *const c_char, sd: *mut MapSessionData) -> c_i
 
 /// foreachinarea callback: send a GUI text popup to one player.
 ///
-/// Mirrors `clif_guitext` from `c_src/map_parse.c` ~line 4388.
-pub unsafe fn clif_guitext_inner(bl: *mut BlockList, msg: *const c_char) -> i32 {
+pub unsafe fn clif_guitext_inner(bl: *mut BlockList, msg: *const i8) -> i32 {
     let sd = bl as *mut MapSessionData;
     if sd.is_null() { return 0; }
 
@@ -332,13 +317,12 @@ pub unsafe fn clif_guitext_inner(bl: *mut BlockList, msg: *const c_char) -> i32 
 
 /// Handle an emotion packet from the client.
 ///
-/// Mirrors `clif_parseemotion` from `c_src/map_parse.c` ~line 5867.
-pub unsafe fn clif_parseemotion(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parseemotion(sd: *mut MapSessionData) -> i32 {
     use super::packet::rfifob;
     if (*sd).status.state == 0 {
         clif_sendaction(
             &raw mut (*sd).bl,
-            rfifob((*sd).fd, 5) as c_int + 11,
+            rfifob((*sd).fd, 5) as i32 + 11,
             0x4E,
             0,
         );
@@ -352,12 +336,11 @@ pub unsafe fn clif_parseemotion(sd: *mut MapSessionData) -> c_int {
 ///
 /// Type 0 = wisp/blue, 3 = mini text, 5 = system, 11 = group/subpath, 12 = clan.
 ///
-/// Mirrors `clif_sendmsg` from `c_src/map_parse.c` ~line 5874.
 pub unsafe fn clif_sendmsg(
     sd: *mut MapSessionData,
-    mut msg_type: c_int,
-    buf: *const c_char,
-) -> c_int {
+    mut msg_type: i32,
+    buf: *const i8,
+) -> i32 {
     if buf.is_null() { return 0; }
 
     let advice_flag = (*sd).status.setting_flags & FLAG_ADVICE as u16;
@@ -393,8 +376,7 @@ pub unsafe fn clif_sendmsg(
 
 /// Send a mini status-text message to a single player.
 ///
-/// Mirrors `clif_sendminitext` from `c_src/map_parse.c` ~line 5913.
-pub unsafe fn clif_sendminitext(sd: *mut MapSessionData, msg: *const c_char) -> c_int {
+pub unsafe fn clif_sendminitext(sd: *mut MapSessionData, msg: *const i8) -> i32 {
     if sd.is_null() { return 0; }
     if libc_strlen(msg) == 0 { return 0; }
     clif_sendmsg(sd, 3, msg);
@@ -405,19 +387,18 @@ pub unsafe fn clif_sendminitext(sd: *mut MapSessionData, msg: *const c_char) -> 
 
 /// Deliver an incoming whisper to the destination player.
 ///
-/// Mirrors `clif_sendwisp` from `c_src/map_parse.c` ~line 5920.
 pub unsafe fn clif_sendwisp(
     sd: *mut MapSessionData,
-    srcname: *const c_char,
-    msg: *const c_char,
-) -> c_int {
+    srcname: *const i8,
+    msg: *const i8,
+) -> i32 {
     let msglen = libc_strlen(msg);
     let srclen = libc_strlen(srcname);
 
     let src_sd = map_name2sd(srcname);
     if src_sd.is_null() { return 0; }
 
-    let class_name = rust_classdb_name((*src_sd).status.class as c_int, (*src_sd).status.mark as c_int);
+    let class_name = rust_classdb_name((*src_sd).status.class as i32, (*src_sd).status.mark as i32);
     let buf2: Vec<u8>;
     let newlen: usize;
     if !class_name.is_null() {
@@ -443,14 +424,14 @@ pub unsafe fn clif_sendwisp(
 
     if (*map.add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
         let cant = b"Your voice is carried away.\0";
-        clif_sendminitext(sd, cant.as_ptr() as *const c_char);
+        clif_sendminitext(sd, cant.as_ptr() as *const i8);
         return 0;
     }
 
     // combined is not null-terminated — clif_sendmsg uses len, not CStr
     // Temporarily null-terminate for C call
     combined.push(0);
-    clif_sendmsg(sd, 0, combined.as_ptr() as *const c_char);
+    clif_sendmsg(sd, 0, combined.as_ptr() as *const i8);
     0
 }
 
@@ -458,12 +439,11 @@ pub unsafe fn clif_sendwisp(
 
 /// Echo a whisper back to the sender (shows "dstname> msg").
 ///
-/// Mirrors `clif_retrwisp` from `c_src/map_parse.c` ~line 5955.
 pub unsafe fn clif_retrwisp(
     sd: *mut MapSessionData,
-    dstname: *mut c_char,
-    msg: *mut c_char,
-) -> c_int {
+    dstname: *mut i8,
+    msg: *mut i8,
+) -> i32 {
     let dst_str = std::ffi::CStr::from_ptr(dstname).to_bytes();
     let msg_str = std::ffi::CStr::from_ptr(msg).to_bytes();
 
@@ -474,7 +454,7 @@ pub unsafe fn clif_retrwisp(
     buf.extend_from_slice(msg_str);
     buf.push(0);
 
-    clif_sendmsg(sd, 0, buf.as_ptr() as *const c_char);
+    clif_sendmsg(sd, 0, buf.as_ptr() as *const i8);
     0
 }
 
@@ -482,9 +462,8 @@ pub unsafe fn clif_retrwisp(
 
 /// Tell the player their whisper failed.
 ///
-/// Mirrors `clif_failwisp` from `c_src/map_parse.c` ~line 5975.
-pub unsafe fn clif_failwisp(sd: *mut MapSessionData) -> c_int {
-    clif_sendmsg(sd, 0, map_msg[MAP_WHISPFAIL].message.as_ptr() as *const c_char);
+pub unsafe fn clif_failwisp(sd: *mut MapSessionData) -> i32 {
+    clif_sendmsg(sd, 0, map_msg[MAP_WHISPFAIL].message.as_ptr() as *const i8);
     0
 }
 
@@ -492,14 +471,13 @@ pub unsafe fn clif_failwisp(sd: *mut MapSessionData) -> c_int {
 
 /// Send a blue (whisper-style type 0) system message.
 ///
-/// Mirrors `clif_sendbluemessage` from `c_src/map_parse.c` ~line 7651.
-pub unsafe fn clif_sendbluemessage(sd: *mut MapSessionData, msg: *mut c_char) -> c_int {
+pub unsafe fn clif_sendbluemessage(sd: *mut MapSessionData, msg: *mut i8) -> i32 {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
     }
 
-    let mlen = libc_strlen(msg as *const c_char);
+    let mlen = libc_strlen(msg as *const i8);
 
     wfifohead((*sd).fd, mlen + 8);
     wfifob((*sd).fd, 0, 0xAA);
@@ -520,8 +498,7 @@ pub unsafe fn clif_sendbluemessage(sd: *mut MapSessionData, msg: *mut c_char) ->
 
 /// Send a positional sound effect to all nearby clients.
 ///
-/// Mirrors `clif_playsound` from `c_src/map_parse.c` ~line 7669.
-pub unsafe fn clif_playsound(bl: *mut BlockList, sound: c_int) -> c_int {
+pub unsafe fn clif_playsound(bl: *mut BlockList, sound: i32) -> i32 {
     let mut buf2 = [0u8; 32];
 
     buf2[0] = 0xAA;
@@ -548,8 +525,7 @@ pub unsafe fn clif_playsound(bl: *mut BlockList, sound: c_int) -> c_int {
 
 /// Add a player name to the ignore list (no-op if already present).
 ///
-/// Mirrors `ignorelist_add` from `c_src/map_parse.c` ~line 6617.
-pub unsafe fn ignorelist_add(sd: *mut MapSessionData, name: *const c_char) -> c_int {
+pub unsafe fn ignorelist_add(sd: *mut MapSessionData, name: *const i8) -> i32 {
     // Check if name is already on the list
     let mut current = (*sd).IgnoreList;
     while !current.is_null() {
@@ -579,8 +555,7 @@ pub unsafe fn ignorelist_add(sd: *mut MapSessionData, name: *const c_char) -> c_
 ///
 /// Returns 0 on success, 1 if not found, 2 if list is empty.
 ///
-/// Mirrors `ignorelist_remove` from `c_src/map_parse.c` ~line 6643.
-pub unsafe fn ignorelist_remove(sd: *mut MapSessionData, name: *const c_char) -> c_int {
+pub unsafe fn ignorelist_remove(sd: *mut MapSessionData, name: *const i8) -> i32 {
     if (*sd).IgnoreList.is_null() {
         return 2;
     }
@@ -593,11 +568,11 @@ pub unsafe fn ignorelist_remove(sd: *mut MapSessionData, name: *const c_char) ->
             // Found: unlink
             if !prev.is_null() {
                 (*prev).Next = (*current).Next;
-                libc::free(current as *mut c_void);
+                libc::free(current as *mut std::ffi::c_void);
             } else {
                 // Head-node removal: advance list pointer before freeing
                 (*sd).IgnoreList = (*current).Next;
-                libc::free(current as *mut c_void);
+                libc::free(current as *mut std::ffi::c_void);
             }
             return 0;
         }
@@ -613,11 +588,10 @@ pub unsafe fn ignorelist_remove(sd: *mut MapSessionData, name: *const c_char) ->
 /// Check whether `sd` is ignoring `dst_sd` or vice versa. Returns 1 if
 /// communication is allowed, 0 if blocked.
 ///
-/// Mirrors `clif_isignore` from `c_src/map_parse.c` ~line 6687.
 pub unsafe fn clif_isignore(
     sd: *mut MapSessionData,
     dst_sd: *mut MapSessionData,
-) -> c_int {
+) -> i32 {
     // Check if sd's name is in dst_sd's ignore list
     let mut current = (*dst_sd).IgnoreList;
     while !current.is_null() {
@@ -643,11 +617,10 @@ pub unsafe fn clif_isignore(
 
 /// Check whether `sd` is allowed to whisper `dst_sd`.
 ///
-/// Mirrors `canwhisper` from `c_src/map_parse.c` ~line 6716.
 pub unsafe fn canwhisper(
     sd: *mut MapSessionData,
     dst_sd: *mut MapSessionData,
-) -> c_int {
+) -> i32 {
     if dst_sd.is_null() { return 0; }
 
     if (*sd).uFlags & U_FLAG_SILENCED != 0 {
@@ -667,23 +640,22 @@ pub unsafe fn canwhisper(
 
 /// Send a party chat message to all group members.
 ///
-/// Mirrors `clif_sendgroupmessage` from `c_src/map_parse.c` ~line 6458.
 pub unsafe fn clif_sendgroupmessage(
     sd: *mut MapSessionData,
     msg: *mut u8,
-    msglen: c_int,
-) -> c_int {
+    msglen: i32,
+) -> i32 {
     if sd.is_null() { return 0; }
 
     if (*sd).uFlags & U_FLAG_SILENCED != 0 {
         let cant = b"You are silenced.\0";
-        clif_sendbluemessage(sd, cant.as_ptr() as *mut c_char);
+        clif_sendbluemessage(sd, cant.as_ptr() as *mut i8);
         return 0;
     }
 
     if (*map.add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
         let cant = b"Your voice is swept away by a strange wind.\0";
-        clif_sendminitext(sd, cant.as_ptr() as *const c_char);
+        clif_sendminitext(sd, cant.as_ptr() as *const i8);
         return 0;
     }
 
@@ -698,7 +670,7 @@ pub unsafe fn clif_sendgroupmessage(
     for i in 0..(*sd).group_count as usize {
         let idx = base + i;
         if idx >= groups.len() { break; }
-        let tsd = rust_session_get_data_checked(groups[idx] as c_int);
+        let tsd = rust_session_get_data_checked(groups[idx] as i32);
         if !tsd.is_null() && clif_isignore(sd, tsd) != 0 {
             clif_sendmsg(tsd as *mut MapSessionData, 11, buf2_c.as_ptr());
         }
@@ -710,23 +682,22 @@ pub unsafe fn clif_sendgroupmessage(
 
 /// Send a sub-path (class channel) chat message.
 ///
-/// Mirrors `clif_sendsubpathmessage` from `c_src/map_parse.c` ~line 6493.
 pub unsafe fn clif_sendsubpathmessage(
     sd: *mut MapSessionData,
     msg: *mut u8,
-    msglen: c_int,
-) -> c_int {
+    msglen: i32,
+) -> i32 {
     if sd.is_null() { return 0; }
 
     if (*sd).uFlags & U_FLAG_SILENCED != 0 {
         let cant = b"You are silenced.\0";
-        clif_sendbluemessage(sd, cant.as_ptr() as *mut c_char);
+        clif_sendbluemessage(sd, cant.as_ptr() as *mut i8);
         return 0;
     }
 
     if (*map.add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
         let cant = b"Your voice is swept away by a strange wind.\0";
-        clif_sendminitext(sd, cant.as_ptr() as *const c_char);
+        clif_sendminitext(sd, cant.as_ptr() as *const i8);
         return 0;
     }
 
@@ -755,21 +726,20 @@ pub unsafe fn clif_sendsubpathmessage(
 
 /// Send a clan chat message to all clan members.
 ///
-/// Mirrors `clif_sendclanmessage` from `c_src/map_parse.c` ~line 6534.
 pub unsafe fn clif_sendclanmessage(
     sd: *mut MapSessionData,
     msg: *mut u8,
-    msglen: c_int,
-) -> c_int {
+    msglen: i32,
+) -> i32 {
     if (*sd).uFlags & U_FLAG_SILENCED != 0 {
         let cant = b"You are silenced.\0";
-        clif_sendbluemessage(sd, cant.as_ptr() as *mut c_char);
+        clif_sendbluemessage(sd, cant.as_ptr() as *mut i8);
         return 0;
     }
 
     if (*map.add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
         let cant = b"Your voice is swept away by a strange wind.\0";
-        clif_sendminitext(sd, cant.as_ptr() as *const c_char);
+        clif_sendminitext(sd, cant.as_ptr() as *const i8);
         return 0;
     }
 
@@ -798,21 +768,20 @@ pub unsafe fn clif_sendclanmessage(
 
 /// Send a novice/tutor channel message.
 ///
-/// Mirrors `clif_sendnovicemessage` from `c_src/map_parse.c` ~line 6574.
 pub unsafe fn clif_sendnovicemessage(
     sd: *mut MapSessionData,
     msg: *mut u8,
-    msglen: c_int,
-) -> c_int {
+    msglen: i32,
+) -> i32 {
     if (*sd).uFlags & U_FLAG_SILENCED != 0 {
         let cant = b"You are silenced.\0";
-        clif_sendbluemessage(sd, cant.as_ptr() as *mut c_char);
+        clif_sendbluemessage(sd, cant.as_ptr() as *mut i8);
         return 0;
     }
 
     if (*map.add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
         let cant = b"Your voice is swept away by a strange wind.\0";
-        clif_sendminitext(sd, cant.as_ptr() as *const c_char);
+        clif_sendminitext(sd, cant.as_ptr() as *const i8);
         return 0;
     }
 
@@ -821,7 +790,7 @@ pub unsafe fn clif_sendnovicemessage(
     std::ptr::copy_nonoverlapping(msg as *const i8, message.as_mut_ptr(), copy_len);
     let msg_str = i8_slice_to_str(&message[..copy_len]);
 
-    let class_name = rust_classdb_name((*sd).status.class as c_int, (*sd).status.mark as c_int);
+    let class_name = rust_classdb_name((*sd).status.class as i32, (*sd).status.mark as i32);
     let class_str = if !class_name.is_null() {
         let s = std::ffi::CStr::from_ptr(class_name).to_string_lossy().into_owned();
         drop(std::ffi::CString::from_raw(class_name));
@@ -838,7 +807,7 @@ pub unsafe fn clif_sendnovicemessage(
 
     // Non-tutors get a copy of their own message (so it appears on their screen)
     if (*sd).status.tutor == 0 {
-        clif_sendmsg(sd, 11, buf2.as_ptr() as *const c_char);
+        clif_sendmsg(sd, 11, buf2.as_ptr() as *const i8);
     }
 
     for i in 0..crate::session::get_fd_max() {
@@ -849,7 +818,7 @@ pub unsafe fn clif_sendnovicemessage(
             && ((*tsd).status.tutor != 0 || (*tsd).status.gm_level > 0)
             && (*tsd).status.novice_chat != 0
         {
-            clif_sendmsg(tsd, 12, buf2.as_ptr() as *const c_char);
+            clif_sendmsg(tsd, 12, buf2.as_ptr() as *const i8);
         }
     }
     0
@@ -859,25 +828,24 @@ pub unsafe fn clif_sendnovicemessage(
 
 /// Parse an incoming whisper packet and dispatch it.
 ///
-/// Mirrors `clif_parsewisp` from `c_src/map_parse.c` ~line 6731.
-pub unsafe fn clif_parsewisp(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsewisp(sd: *mut MapSessionData) -> i32 {
     use super::packet::{rfifob, rfifop, rfiforest, rfifow};
 
     if (*sd).status.setting_flags & FLAG_WHISPER as u16 == 0 && (*sd).status.gm_level == 0 {
         let msg = b"You have whispering turned off.\0";
-        clif_sendbluemessage(sd, msg.as_ptr() as *mut c_char);
+        clif_sendbluemessage(sd, msg.as_ptr() as *mut i8);
         return 0;
     }
 
     if (*sd).uFlags & U_FLAG_SILENCED != 0 {
         let msg = b"You are silenced.\0";
-        clif_sendbluemessage(sd, msg.as_ptr() as *mut c_char);
+        clif_sendbluemessage(sd, msg.as_ptr() as *mut i8);
         return 0;
     }
 
     if (*map.add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
         let msg = b"Your voice is swept away by a strange wind.\0";
-        clif_sendminitext(sd, msg.as_ptr() as *const c_char);
+        clif_sendminitext(sd, msg.as_ptr() as *const i8);
         return 0;
     }
 
@@ -894,7 +862,7 @@ pub unsafe fn clif_parsewisp(sd: *mut MapSessionData) -> c_int {
         || msglen > rfiforest((*sd).fd) as usize
         || msglen > pkt_size
     {
-        clif_Hacker((*sd).status.name.as_mut_ptr() as *mut c_char, b"Whisper packet\0".as_ptr() as *const c_char);
+        clif_Hacker((*sd).status.name.as_mut_ptr() as *mut i8, b"Whisper packet\0".as_ptr() as *const i8);
         return 0;
     }
 
@@ -908,52 +876,52 @@ pub unsafe fn clif_parsewisp(sd: *mut MapSessionData) -> c_int {
     std::ptr::copy_nonoverlapping(src_msg, msg_buf.as_mut_ptr(), msglen.min(80));
     msg_buf[80] = 0;
 
-    let dst_name_c = dst_name.as_ptr() as *const c_char;
-    let msg_c = msg_buf.as_ptr() as *const c_char;
+    let dst_name_c = dst_name.as_ptr() as *const i8;
+    let msg_c = msg_buf.as_ptr() as *const i8;
 
     // "!" → clan chat
     if dst_name[0] == b'!' && dst_name[1] == 0 {
         if (*sd).status.clan == 0 {
             let m = b"You are not in a clan\0";
-            clif_sendbluemessage(sd, m.as_ptr() as *mut c_char);
+            clif_sendbluemessage(sd, m.as_ptr() as *mut i8);
         } else if (*sd).status.clan_chat != 0 {
-            crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const c_char, b"clanChatLog\0".as_ptr() as *const c_char, &[(*sd).status.name.as_ptr(), msg_c]);
-            clif_sendclanmessage(sd, rfifop((*sd).fd, 7 + dstlen) as *mut u8, msglen as c_int);
+            crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const i8, b"clanChatLog\0".as_ptr() as *const i8, &[(*sd).status.name.as_ptr(), msg_c]);
+            clif_sendclanmessage(sd, rfifop((*sd).fd, 7 + dstlen) as *mut u8, msglen as i32);
         } else {
             let m = b"Clan chat is off.\0";
-            clif_sendbluemessage(sd, m.as_ptr() as *mut c_char);
+            clif_sendbluemessage(sd, m.as_ptr() as *mut i8);
         }
     // "!!" → group chat
     } else if dst_name[0] == b'!' && dst_name[1] == b'!' && dst_name[2] == 0 {
         if (*sd).group_count == 0 {
             let m = b"You are not in a group\0";
-            clif_sendbluemessage(sd, m.as_ptr() as *mut c_char);
+            clif_sendbluemessage(sd, m.as_ptr() as *mut i8);
         } else {
-            crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const c_char, b"groupChatLog\0".as_ptr() as *const c_char, &[(*sd).status.name.as_ptr(), msg_c]);
-            clif_sendgroupmessage(sd, rfifop((*sd).fd, 7 + dstlen) as *mut u8, msglen as c_int);
+            crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const i8, b"groupChatLog\0".as_ptr() as *const i8, &[(*sd).status.name.as_ptr(), msg_c]);
+            clif_sendgroupmessage(sd, rfifop((*sd).fd, 7 + dstlen) as *mut u8, msglen as i32);
         }
     // "@" → subpath chat
     } else if dst_name[0] == b'@' && dst_name[1] == 0 {
-        if rust_classdb_chat((*sd).status.class as c_int) != 0 {
-            crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const c_char, b"subPathChatLog\0".as_ptr() as *const c_char, &[(*sd).status.name.as_ptr(), msg_c]);
-            clif_sendsubpathmessage(sd, rfifop((*sd).fd, 7 + dstlen) as *mut u8, msglen as c_int);
+        if rust_classdb_chat((*sd).status.class as i32) != 0 {
+            crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const i8, b"subPathChatLog\0".as_ptr() as *const i8, &[(*sd).status.name.as_ptr(), msg_c]);
+            clif_sendsubpathmessage(sd, rfifop((*sd).fd, 7 + dstlen) as *mut u8, msglen as i32);
         } else {
             let m = b"You cannot do that.\0";
-            clif_sendbluemessage(sd, m.as_ptr() as *mut c_char);
+            clif_sendbluemessage(sd, m.as_ptr() as *mut i8);
         }
     // "?" → novice chat
     } else if dst_name[0] == b'?' && dst_name[1] == 0 {
         if (*sd).status.tutor == 0 && (*sd).status.gm_level == 0 {
             if (*sd).status.level < 99 {
-                crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const c_char, b"noviceChatLog\0".as_ptr() as *const c_char, &[(*sd).status.name.as_ptr(), msg_c]);
-                clif_sendnovicemessage(sd, rfifop((*sd).fd, 7 + dstlen) as *mut u8, msglen as c_int);
+                crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const i8, b"noviceChatLog\0".as_ptr() as *const i8, &[(*sd).status.name.as_ptr(), msg_c]);
+                clif_sendnovicemessage(sd, rfifop((*sd).fd, 7 + dstlen) as *mut u8, msglen as i32);
             } else {
                 let m = b"You cannot do that.\0";
-                clif_sendbluemessage(sd, m.as_ptr() as *mut c_char);
+                clif_sendbluemessage(sd, m.as_ptr() as *mut i8);
             }
         } else {
-            crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const c_char, b"noviceChatLog\0".as_ptr() as *const c_char, &[(*sd).status.name.as_ptr(), msg_c]);
-            clif_sendnovicemessage(sd, rfifop((*sd).fd, 7 + dstlen) as *mut u8, msglen as c_int);
+            crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const i8, b"noviceChatLog\0".as_ptr() as *const i8, &[(*sd).status.name.as_ptr(), msg_c]);
+            clif_sendnovicemessage(sd, rfifop((*sd).fd, 7 + dstlen) as *mut u8, msglen as i32);
         }
     // named whisper
     } else {
@@ -961,40 +929,40 @@ pub unsafe fn clif_parsewisp(sd: *mut MapSessionData) -> c_int {
         if dst_sd.is_null() {
             let target = std::ffi::CStr::from_ptr(dst_name_c).to_string_lossy();
             let nf = format!("{} is nowhere to be found.\0", target);
-            clif_sendbluemessage(sd, nf.as_ptr() as *mut c_char);
+            clif_sendbluemessage(sd, nf.as_ptr() as *mut i8);
         } else if canwhisper(sd, dst_sd) != 0 {
             if (*dst_sd).afk != 0 {
                 let afk_msg = std::ffi::CStr::from_ptr((*dst_sd).afkmessage.as_ptr());
                 let has_afk_msg = !afk_msg.to_bytes().is_empty();
 
-                crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const c_char, b"whisperLog\0".as_ptr() as *const c_char, &[(*dst_sd).status.name.as_ptr(), (*sd).status.name.as_ptr(), msg_c]);
+                crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const i8, b"whisperLog\0".as_ptr() as *const i8, &[(*dst_sd).status.name.as_ptr(), (*sd).status.name.as_ptr(), msg_c]);
 
-                clif_sendwisp(dst_sd, (*sd).status.name.as_ptr() as *const c_char, msg_c);
-                clif_sendwisp(dst_sd, (*dst_sd).status.name.as_ptr() as *const c_char, (*dst_sd).afkmessage.as_ptr() as *const c_char);
+                clif_sendwisp(dst_sd, (*sd).status.name.as_ptr() as *const i8, msg_c);
+                clif_sendwisp(dst_sd, (*dst_sd).status.name.as_ptr() as *const i8, (*dst_sd).afkmessage.as_ptr() as *const i8);
 
                 if (*sd).status.gm_level == 0 && (*dst_sd).optFlags & OPT_FLAG_STEALTH != 0 {
                     // don't reveal their presence — strText was formatted but C never sent it here
                 } else {
-                    clif_retrwisp(sd, (*dst_sd).status.name.as_mut_ptr() as *mut c_char, msg_buf.as_mut_ptr() as *mut c_char);
-                    clif_retrwisp(sd, (*dst_sd).status.name.as_mut_ptr() as *mut c_char, (*dst_sd).afkmessage.as_mut_ptr() as *mut c_char);
+                    clif_retrwisp(sd, (*dst_sd).status.name.as_mut_ptr() as *mut i8, msg_buf.as_mut_ptr() as *mut i8);
+                    clif_retrwisp(sd, (*dst_sd).status.name.as_mut_ptr() as *mut i8, (*dst_sd).afkmessage.as_mut_ptr() as *mut i8);
                 }
                 let _ = has_afk_msg;
             } else {
-                crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const c_char, b"whisperLog\0".as_ptr() as *const c_char, &[(*dst_sd).status.name.as_ptr(), (*sd).status.name.as_ptr(), msg_c]);
+                crate::game::scripting::doscript_strings(b"characterLog\0".as_ptr() as *const i8, b"whisperLog\0".as_ptr() as *const i8, &[(*dst_sd).status.name.as_ptr(), (*sd).status.name.as_ptr(), msg_c]);
 
-                clif_sendwisp(dst_sd, (*sd).status.name.as_ptr() as *const c_char, msg_c);
+                clif_sendwisp(dst_sd, (*sd).status.name.as_ptr() as *const i8, msg_c);
 
                 if (*sd).status.gm_level == 0 && (*dst_sd).optFlags & OPT_FLAG_STEALTH != 0 {
                     let target = std::ffi::CStr::from_ptr(dst_name_c).to_string_lossy();
                     let nf = format!("{} is nowhere to be found.\0", target);
-                    clif_sendbluemessage(sd, nf.as_ptr() as *mut c_char);
+                    clif_sendbluemessage(sd, nf.as_ptr() as *mut i8);
                 } else {
-                    clif_retrwisp(sd, (*dst_sd).status.name.as_mut_ptr() as *mut c_char, msg_buf.as_mut_ptr() as *mut c_char);
+                    clif_retrwisp(sd, (*dst_sd).status.name.as_mut_ptr() as *mut i8, msg_buf.as_mut_ptr() as *mut i8);
                 }
             }
         } else {
             let m = b"They cannot hear you right now.\0";
-            clif_sendbluemessage(sd, m.as_ptr() as *mut c_char);
+            clif_sendbluemessage(sd, m.as_ptr() as *mut i8);
         }
     }
     0
@@ -1004,14 +972,13 @@ pub unsafe fn clif_parsewisp(sd: *mut MapSessionData) -> c_int {
 
 /// Broadcast a player say/shout and fire NPC speech callbacks.
 ///
-/// Mirrors `clif_sendsay` from `c_src/map_parse.c` ~line 6869.
 pub unsafe fn clif_sendsay(
     sd: *mut MapSessionData,
-    msg: *mut c_char,
-    msglen: c_int,
-    say_type: c_int,
-) -> c_int {
-    let namelen = libc_strlen((*sd).status.name.as_ptr() as *const c_char);
+    msg: *mut i8,
+    msglen: i32,
+    say_type: i32,
+) -> i32 {
+    let namelen = libc_strlen((*sd).status.name.as_ptr() as *const i8);
 
     if say_type == 1 {
         (*sd).talktype = 1;
@@ -1027,11 +994,11 @@ pub unsafe fn clif_sendsay(
 
     for i in 0..MAX_SPELLS {
         if (*sd).status.skill[i] > 0 {
-            let yname = rust_magicdb_yname((*sd).status.skill[i] as c_int);
-            sl_doscript_simple(yname, b"on_say\0".as_ptr() as *const c_char, &raw mut (*sd).bl);
+            let yname = rust_magicdb_yname((*sd).status.skill[i] as i32);
+            sl_doscript_simple(yname, b"on_say\0".as_ptr() as *const i8, &raw mut (*sd).bl);
         }
     }
-    sl_doscript_simple(b"onSay\0".as_ptr() as *const c_char, std::ptr::null(), &raw mut (*sd).bl);
+    sl_doscript_simple(b"onSay\0".as_ptr() as *const i8, std::ptr::null(), &raw mut (*sd).bl);
     0
 }
 
@@ -1039,18 +1006,17 @@ pub unsafe fn clif_sendsay(
 
 /// Broadcast a player's scripted say and log it; handles language channels.
 ///
-/// Mirrors `clif_sendscriptsay` from `c_src/map_parse.c` ~line 6893.
 pub unsafe fn clif_sendscriptsay(
     sd: *mut MapSessionData,
-    msg: *const c_char,
-    msglen: c_int,
-    say_type: c_int,
-) -> c_int {
-    let namelen = libc_strlen((*sd).status.name.as_ptr() as *const c_char);
+    msg: *const i8,
+    msglen: i32,
+    say_type: i32,
+) -> i32 {
+    let namelen = libc_strlen((*sd).status.name.as_ptr() as *const i8);
 
     if (*map.add((*sd).bl.m as usize)).cantalk == 1 && (*sd).status.gm_level == 0 {
         let m = b"Your voice is swept away by a strange wind.\0";
-        clif_sendminitext(sd, m.as_ptr() as *const c_char);
+        clif_sendminitext(sd, m.as_ptr() as *const i8);
         return 0;
     }
 
@@ -1060,7 +1026,7 @@ pub unsafe fn clif_sendscriptsay(
 
     if (*sd).uFlags & U_FLAG_SILENCED != 0 {
         let m = b"Shut up for now. ^^\0";
-        clif_sendminitext(sd, m.as_ptr() as *const c_char);
+        clif_sendminitext(sd, m.as_ptr() as *const i8);
         return 0;
     }
 
@@ -1101,7 +1067,7 @@ pub unsafe fn clif_sendscriptsay(
         buf[12 + pname.len()] = b' ';
         buf[13 + pname.len()..13 + pname.len() + msglen as usize].copy_from_slice(msg_bytes);
 
-        clif_send(buf.as_ptr(), buf_size as c_int, &raw mut (*sd).bl, SAMEAREA);
+        clif_send(buf.as_ptr(), buf_size as i32, &raw mut (*sd).bl, SAMEAREA);
     } else {
         if rust_session_exists((*sd).fd) == 0 {
             rust_session_set_eof((*sd).fd, 8);
@@ -1128,7 +1094,7 @@ pub unsafe fn clif_sendscriptsay(
         buf[13 + namelen..13 + namelen + msglen as usize].copy_from_slice(msg_bytes);
 
         let send_target = if say_type == 1 { SAMEMAP } else { SAMEAREA };
-        clif_send(buf.as_ptr(), buf_size as c_int, &raw mut (*sd).bl, send_target);
+        clif_send(buf.as_ptr(), buf_size as i32, &raw mut (*sd).bl, send_target);
     }
 
     // Copy msg to speech
@@ -1153,8 +1119,7 @@ pub unsafe fn clif_sendscriptsay(
 
 /// foreachinarea callback: fire NPC speech handler if player is nearby.
 ///
-/// Mirrors `clif_sendnpcsay` from `c_src/map_parse.c` ~line 7089.
-pub unsafe fn clif_sendnpcsay_inner(bl: *mut BlockList, _msg: *const c_char, sd_arg: *mut MapSessionData) -> i32 {
+pub unsafe fn clif_sendnpcsay_inner(bl: *mut BlockList, _msg: *const i8, sd_arg: *mut MapSessionData) -> i32 {
     if (*bl).subtype != SCRIPT { return 0; }
 
     if sd_arg.is_null() { return 0; }
@@ -1164,8 +1129,8 @@ pub unsafe fn clif_sendnpcsay_inner(bl: *mut BlockList, _msg: *const c_char, sd_
 
     if clif_distance(bl, &raw mut (*sd_arg).bl) <= 10 {
         (*sd_arg).last_click = (*bl).id;
-        sl_async_freeco(sd_arg as *mut c_void);
-        sl_doscript_2((*nd).name.as_ptr() as *const c_char, b"onSayClick\0".as_ptr() as *const c_char, &raw mut (*sd_arg).bl, bl);
+        sl_async_freeco(sd_arg as *mut std::ffi::c_void);
+        sl_doscript_2((*nd).name.as_ptr() as *const i8, b"onSayClick\0".as_ptr() as *const i8, &raw mut (*sd_arg).bl, bl);
     }
     0
 }
@@ -1174,8 +1139,7 @@ pub unsafe fn clif_sendnpcsay_inner(bl: *mut BlockList, _msg: *const c_char, sd_
 
 /// foreachinarea callback: mob speech handler (currently a no-op in C).
 ///
-/// Mirrors `clif_sendmobsay` from `c_src/map_parse.c` ~line 7108.
-pub unsafe fn clif_sendmobsay_inner(_bl: *mut BlockList, _msg: *const c_char, _sd: *mut MapSessionData) -> i32 {
+pub unsafe fn clif_sendmobsay_inner(_bl: *mut BlockList, _msg: *const i8, _sd: *mut MapSessionData) -> i32 {
     0
 }
 
@@ -1183,8 +1147,7 @@ pub unsafe fn clif_sendmobsay_inner(_bl: *mut BlockList, _msg: *const c_char, _s
 
 /// foreachinarea callback: fire NPC speech handler (yell range = 20).
 ///
-/// Mirrors `clif_sendnpcyell` from `c_src/map_parse.c` ~line 7134.
-pub unsafe fn clif_sendnpcyell_inner(bl: *mut BlockList, _msg: *const c_char, sd_arg: *mut MapSessionData) -> i32 {
+pub unsafe fn clif_sendnpcyell_inner(bl: *mut BlockList, _msg: *const i8, sd_arg: *mut MapSessionData) -> i32 {
     if (*bl).subtype != SCRIPT { return 0; }
 
     if sd_arg.is_null() { return 0; }
@@ -1194,8 +1157,8 @@ pub unsafe fn clif_sendnpcyell_inner(bl: *mut BlockList, _msg: *const c_char, sd
 
     if clif_distance(bl, &raw mut (*sd_arg).bl) <= 20 {
         (*sd_arg).last_click = (*bl).id;
-        sl_async_freeco(sd_arg as *mut c_void);
-        sl_doscript_2((*nd).name.as_ptr() as *const c_char, b"onSayClick\0".as_ptr() as *const c_char, &raw mut (*sd_arg).bl, bl);
+        sl_async_freeco(sd_arg as *mut std::ffi::c_void);
+        sl_doscript_2((*nd).name.as_ptr() as *const i8, b"onSayClick\0".as_ptr() as *const i8, &raw mut (*sd_arg).bl, bl);
     }
     0
 }
@@ -1204,8 +1167,7 @@ pub unsafe fn clif_sendnpcyell_inner(bl: *mut BlockList, _msg: *const c_char, sd
 
 /// foreachinarea callback: mob yell handler (currently a no-op in C).
 ///
-/// Mirrors `clif_sendmobyell` from `c_src/map_parse.c` ~line 7156.
-pub unsafe fn clif_sendmobyell_inner(_bl: *mut BlockList, _msg: *const c_char, _sd: *mut MapSessionData) -> i32 {
+pub unsafe fn clif_sendmobyell_inner(_bl: *mut BlockList, _msg: *const i8, _sd: *mut MapSessionData) -> i32 {
     0
 }
 
@@ -1213,8 +1175,7 @@ pub unsafe fn clif_sendmobyell_inner(_bl: *mut BlockList, _msg: *const c_char, _
 
 /// Send an NPC/object speech-bubble packet to one player.
 ///
-/// Mirrors `clif_speak` from `c_src/map_parse.c` ~line 7183.
-pub unsafe fn clif_speak_inner(bl: *mut BlockList, msg: *const c_char, nd: *mut BlockList, speak_type: c_int) -> i32 {
+pub unsafe fn clif_speak_inner(bl: *mut BlockList, msg: *const i8, nd: *mut BlockList, speak_type: i32) -> i32 {
     let sd = bl as *mut MapSessionData;
     if sd.is_null() || nd.is_null() { return 0; }
 
@@ -1245,8 +1206,7 @@ pub unsafe fn clif_speak_inner(bl: *mut BlockList, msg: *const c_char, nd: *mut 
 
 /// Handle an ignore-list add/remove packet from the client.
 ///
-/// Mirrors `clif_parseignore` from `c_src/map_parse.c` ~line 7213.
-pub unsafe fn clif_parseignore(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parseignore(sd: *mut MapSessionData) -> i32 {
     use super::packet::rfifob;
 
     let icmd = rfifob((*sd).fd, 5);
@@ -1259,13 +1219,13 @@ pub unsafe fn clif_parseignore(sd: *mut MapSessionData) -> c_int {
                 // Add
                 let src = super::packet::rfifop((*sd).fd, 7);
                 std::ptr::copy_nonoverlapping(src as *const i8, name_buf.as_mut_ptr(), nlen.min(31));
-                ignorelist_add(sd, name_buf.as_ptr() as *const c_char);
+                ignorelist_add(sd, name_buf.as_ptr() as *const i8);
             }
             0x03 => {
                 // Remove
                 let src = super::packet::rfifop((*sd).fd, 7);
                 std::ptr::copy_nonoverlapping(src as *const i8, name_buf.as_mut_ptr(), nlen.min(31));
-                ignorelist_remove(sd, name_buf.as_ptr() as *const c_char);
+                ignorelist_remove(sd, name_buf.as_ptr() as *const i8);
             }
             _ => {}
         }
@@ -1277,22 +1237,21 @@ pub unsafe fn clif_parseignore(sd: *mut MapSessionData) -> c_int {
 
 /// Parse an incoming say packet from the client.
 ///
-/// Mirrors `clif_parsesay` from `c_src/map_parse.c` ~line 7241.
-pub unsafe fn clif_parsesay(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsesay(sd: *mut MapSessionData) -> i32 {
     use super::packet::{rfifob, rfifop};
 
-    let msg = rfifop((*sd).fd, 7) as *const c_char;
+    let msg = rfifop((*sd).fd, 7) as *const i8;
 
     (*sd).talktype = rfifob((*sd).fd, 5);
 
     if (*sd).talktype > 1 || rfifob((*sd).fd, 6) > 100 {
         let m = b"I just told the GM on you!\0";
-        clif_sendminitext(sd, m.as_ptr() as *const c_char);
-        libc::printf(b"Talk Hacker: %s\n\0".as_ptr() as *const c_char, (*sd).status.name.as_ptr());
+        clif_sendminitext(sd, m.as_ptr() as *const i8);
+        libc::printf(b"Talk Hacker: %s\n\0".as_ptr() as *const i8, (*sd).status.name.as_ptr());
         return 0;
     }
 
-    if rust_is_command(sd, msg, rfifob((*sd).fd, 6) as c_int) != 0 {
+    if rust_is_command(sd, msg, rfifob((*sd).fd, 6) as i32) != 0 {
         return 0;
     }
 
@@ -1303,11 +1262,11 @@ pub unsafe fn clif_parsesay(sd: *mut MapSessionData) -> c_int {
 
     for i in 0..MAX_SPELLS {
         if (*sd).status.skill[i] > 0 {
-            let yname = rust_magicdb_yname((*sd).status.skill[i] as c_int);
-            sl_doscript_simple(yname, b"on_say\0".as_ptr() as *const c_char, &raw mut (*sd).bl);
+            let yname = rust_magicdb_yname((*sd).status.skill[i] as i32);
+            sl_doscript_simple(yname, b"on_say\0".as_ptr() as *const i8, &raw mut (*sd).bl);
         }
     }
-    sl_doscript_simple(b"onSay\0".as_ptr() as *const c_char, std::ptr::null(), &raw mut (*sd).bl);
+    sl_doscript_simple(b"onSay\0".as_ptr() as *const i8, std::ptr::null(), &raw mut (*sd).bl);
     0
 }
 
@@ -1315,7 +1274,7 @@ pub unsafe fn clif_parsesay(sd: *mut MapSessionData) -> c_int {
 
 /// Measure a C string length (mirrors `strlen`).
 #[inline]
-unsafe fn libc_strlen(s: *const c_char) -> usize {
+unsafe fn libc_strlen(s: *const i8) -> usize {
     if s.is_null() { return 0; }
     let mut p = s as *const u8;
     let mut n = 0usize;
@@ -1323,9 +1282,9 @@ unsafe fn libc_strlen(s: *const c_char) -> usize {
     n
 }
 
-/// Case-insensitive comparison of a `[i8]` slice against a `*const c_char`.
-unsafe fn strcasecmp_cstr(a: *const i8, b: *const c_char) -> c_int {
-    libc::strcasecmp(a as *const c_char, b)
+/// Case-insensitive comparison of a `[i8]` slice against a `*const i8`.
+unsafe fn strcasecmp_cstr(a: *const i8, b: *const i8) -> i32 {
+    libc::strcasecmp(a as *const i8, b)
 }
 
 /// Convert an `i8` slice (null-terminated or not) to a `&str`.
@@ -1338,7 +1297,7 @@ unsafe fn i8_slice_to_str(s: &[i8]) -> &str {
 /// Build `"[prefix name][(classname)] message"` for group/clan/subpath chat.
 unsafe fn format_chat_prefix(sd: *mut MapSessionData, open: &[u8], close: &[u8], msg: &[i8]) -> Vec<u8> {
     let name = i8_slice_to_str(&(*sd).status.name);
-    let class_name = rust_classdb_name((*sd).status.class as c_int, (*sd).status.mark as c_int);
+    let class_name = rust_classdb_name((*sd).status.class as i32, (*sd).status.mark as i32);
     let class_str = if !class_name.is_null() {
         let s = std::ffi::CStr::from_ptr(class_name).to_string_lossy().into_owned();
         drop(std::ffi::CString::from_raw(class_name));
@@ -1360,7 +1319,7 @@ unsafe fn format_chat_prefix(sd: *mut MapSessionData, open: &[u8], close: &[u8],
 }
 
 /// Manhattan distance between two block_list entries.
-unsafe fn clif_distance(bl: *const BlockList, bl2: *const BlockList) -> c_int {
+unsafe fn clif_distance(bl: *const BlockList, bl2: *const BlockList) -> i32 {
     let dx = ((*bl).x as i32) - ((*bl2).x as i32);
     let dy = ((*bl).y as i32) - ((*bl2).y as i32);
     dx.abs() + dy.abs()
@@ -1368,7 +1327,7 @@ unsafe fn clif_distance(bl: *const BlockList, bl2: *const BlockList) -> c_int {
 
 /// Retrieve session data for fd, returning null if session does not exist.
 #[inline]
-unsafe fn rust_session_get_data_checked(fd: c_int) -> *mut MapSessionData {
+unsafe fn rust_session_get_data_checked(fd: i32) -> *mut MapSessionData {
     if rust_session_exists(fd) != 0 {
         rust_session_get_data(fd) as *mut MapSessionData
     } else {

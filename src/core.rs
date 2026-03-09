@@ -182,7 +182,6 @@ mod tests {
     }
 }
 
-// ─── FFI bridge (moved from src/ffi/core.rs) ──────────────────────────────
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -218,11 +217,11 @@ pub unsafe fn rust_set_termfunc(func: Option<unsafe fn()>) {
     }
 }
 
-/// Handle a signal (called from C signal handlers)
+/// Handle a signal.
 ///
 /// # Safety
 /// Should only be called from signal handlers
-pub unsafe fn rust_handle_signal(signum: std::os::raw::c_int) {
+pub unsafe fn rust_handle_signal(signum: i32) {
     if let Some(signal) = Signal::from_signal_num(signum) {
         if signal.should_shutdown() {
             SHUTDOWN_PENDING.store(true, Ordering::SeqCst);
@@ -240,9 +239,9 @@ pub fn rust_request_shutdown() {
 
 /// Check if server shutdown has been requested
 /// Returns 1 if shutdown requested, 0 otherwise
-pub fn rust_should_shutdown() -> std::os::raw::c_int {
+pub fn rust_should_shutdown() -> i32 {
     if SHUTDOWN_PENDING.load(Ordering::SeqCst) {
-        eprintln!("[core] [signal] Processing shutdown signal");
+        tracing::info!("[core] [signal] Processing shutdown signal");
         if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
             let mut state = state_lock.lock().unwrap();
             state.call_term_func();

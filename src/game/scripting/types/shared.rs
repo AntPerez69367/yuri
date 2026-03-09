@@ -4,8 +4,6 @@
 //! via `typel_extendproto` and inherited by pcl_type, mobl_type, npcl_type.
 //! Here we achieve the same with free functions called from each type's __index.
 
-use std::ffi::{c_char, c_int, c_uint};
-use std::os::raw::c_void;
 
 use crate::database::map_db::{BlockList, MapData};
 use crate::game::types::GfxViewer;
@@ -17,21 +15,20 @@ use crate::game::scripting::types::item::fixed_str;
 
 /// Create a `getObjectsInCell` / `getAliveObjectsInCell` / `getObjectsInCellWithTraps`
 /// Lua function. `variant` is the method name string that selects the FFI call.
-/// Mirrors `bll_getobjects_cell` / `bll_getaliveobjects_cell` from scripting.c.
 pub fn make_cell_query_fn(lua: &mlua::Lua, variant: &str) -> mlua::Result<mlua::Value> {
     let variant = variant.to_string();
     lua.create_function(
-        move |lua, (_self, m, x, y, bl_type): (mlua::Value, c_int, c_int, c_int, c_int)| {
+        move |lua, (_self, m, x, y, bl_type): (mlua::Value, i32, i32, i32, i32)| {
             const MAX: usize = 256;
-            let mut ptrs = vec![std::ptr::null_mut::<c_void>(); MAX];
+            let mut ptrs = vec![std::ptr::null_mut::<std::ffi::c_void>(); MAX];
             let raw_count = unsafe {
                 match variant.as_str() {
                     "getAliveObjectsInCell" =>
-                        sffi::sl_g_getaliveobjectscell(m, x, y, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
+                        sffi::sl_g_getaliveobjectscell(m, x, y, bl_type, ptrs.as_mut_ptr(), MAX as i32),
                     "getObjectsInCellWithTraps" =>
-                        sffi::sl_g_getobjectscellwithtraps(m, x, y, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
+                        sffi::sl_g_getobjectscellwithtraps(m, x, y, bl_type, ptrs.as_mut_ptr(), MAX as i32),
                     _ =>
-                        sffi::sl_g_getobjectscell(m, x, y, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
+                        sffi::sl_g_getobjectscell(m, x, y, bl_type, ptrs.as_mut_ptr(), MAX as i32),
                 }
             };
             let count = (raw_count.max(0) as usize).min(MAX);
@@ -54,33 +51,32 @@ pub fn make_cell_query_fn(lua: &mlua::Lua, variant: &str) -> mlua::Result<mlua::
 /// The entity's stable numeric ID is captured at __index lookup time and re-resolved
 /// to a live pointer via `map_id2bl` on each invocation, so the closure never holds
 /// a dangling pointer if the C entity is freed between calls.
-/// Mirrors `bll_getobjects_area` / `bll_getaliveobjects_area` from scripting.c.
-pub fn make_area_query_fn(lua: &mlua::Lua, variant: &str, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+pub fn make_area_query_fn(lua: &mlua::Lua, variant: &str, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
     if self_ptr.is_null() {
         return Err(mlua::Error::external("null self_ptr in make_area_query_fn"));
     }
     let variant = variant.to_string();
     // Extract the stable BL id now; the raw pointer may dangle after the entity is freed.
-    let entity_id: c_uint = unsafe { (*(self_ptr as *mut BlockList)).id };
+    let entity_id: u32 = unsafe { (*(self_ptr as *mut BlockList)).id };
     lua.create_function(
-        move |lua, (_self, bl_type): (mlua::Value, c_int)| {
+        move |lua, (_self, bl_type): (mlua::Value, i32)| {
             const MAX: usize = 512;
             // Re-resolve the entity pointer on every call so we never use a dangling ptr.
             let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
             if bl_ptr.is_null() {
                 return Ok(lua.create_table()?);
             }
-            let mut ptrs = vec![std::ptr::null_mut::<c_void>(); MAX];
+            let mut ptrs = vec![std::ptr::null_mut::<std::ffi::c_void>(); MAX];
             let raw_count = unsafe {
                 match variant.as_str() {
                     "getAliveObjectsInArea" =>
-                        sffi::sl_g_getaliveobjectsarea(bl_ptr, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
+                        sffi::sl_g_getaliveobjectsarea(bl_ptr, bl_type, ptrs.as_mut_ptr(), MAX as i32),
                     "getObjectsInSameMap" =>
-                        sffi::sl_g_getobjectssamemap(bl_ptr, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
+                        sffi::sl_g_getobjectssamemap(bl_ptr, bl_type, ptrs.as_mut_ptr(), MAX as i32),
                     "getAliveObjectsInSameMap" =>
-                        sffi::sl_g_getaliveobjectssamemap(bl_ptr, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
+                        sffi::sl_g_getaliveobjectssamemap(bl_ptr, bl_type, ptrs.as_mut_ptr(), MAX as i32),
                     _ =>
-                        sffi::sl_g_getobjectsarea(bl_ptr, bl_type, ptrs.as_mut_ptr(), MAX as c_int),
+                        sffi::sl_g_getobjectsarea(bl_ptr, bl_type, ptrs.as_mut_ptr(), MAX as i32),
                 }
             };
             let count = (raw_count.max(0) as usize).min(MAX);
@@ -98,13 +94,12 @@ pub fn make_area_query_fn(lua: &mlua::Lua, variant: &str, self_ptr: *mut c_void)
 }
 
 /// Create a `getObjectsInMap` Lua function.
-/// Mirrors `bll_getobjects_map` from scripting.c.
 pub fn make_map_query_fn(lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
-    lua.create_function(|lua, (_self, m, bl_type): (mlua::Value, c_int, c_int)| {
+    lua.create_function(|lua, (_self, m, bl_type): (mlua::Value, i32, i32)| {
         const MAX: usize = 4096;
-        let mut ptrs = vec![std::ptr::null_mut::<c_void>(); MAX];
+        let mut ptrs = vec![std::ptr::null_mut::<std::ffi::c_void>(); MAX];
         let raw_count = unsafe {
-            sffi::sl_g_getobjectsinmap(m, bl_type, ptrs.as_mut_ptr(), MAX as c_int)
+            sffi::sl_g_getobjectsinmap(m, bl_type, ptrs.as_mut_ptr(), MAX as i32)
         };
         let count = (raw_count.max(0) as usize).min(MAX);
         let tbl = lua.create_table()?;
@@ -121,9 +116,8 @@ pub fn make_map_query_fn(lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
 
 /// Create a `getBlock` Lua method.
 /// Takes a BL id (integer), calls `map_id2bl`, and returns the typed object or nil.
-/// Mirrors `bll_getblock` from scripting.c.
 pub fn make_getblock_fn(lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
-    lua.create_function(|lua, (_self, id): (mlua::Value, c_uint)| {
+    lua.create_function(|lua, (_self, id): (mlua::Value, u32)| {
         let bl = unsafe { sffi::map_id2bl(id) };
         if bl.is_null() {
             return Ok(mlua::Value::Nil);
@@ -135,24 +129,24 @@ pub fn make_getblock_fn(lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
 
 // ── Shared block-object method factories — Task 6 ─────────────────────────────
 
-fn val_to_int(v: &mlua::Value) -> c_int {
+fn val_to_int(v: &mlua::Value) -> i32 {
     match v {
-        mlua::Value::Integer(i) => *i as c_int,
-        mlua::Value::Number(f)  => *f as c_int,
+        mlua::Value::Integer(i) => *i as i32,
+        mlua::Value::Number(f)  => *f as i32,
         _ => 0,
     }
 }
 
 /// Resolve a Lua value to an item database ID.
 /// Integers pass through directly; strings are resolved via itemdb_searchname.
-fn val_to_item_id(v: &mlua::Value) -> c_int {
+fn val_to_item_id(v: &mlua::Value) -> i32 {
     match v {
-        mlua::Value::Integer(i) => *i as c_int,
-        mlua::Value::Number(f)  => *f as c_int,
+        mlua::Value::Integer(i) => *i as i32,
+        mlua::Value::Number(f)  => *f as i32,
         mlua::Value::String(s)  => {
             if let Some(cs) = s.to_str().ok().and_then(|r| std::ffi::CString::new(r.as_bytes()).ok()) {
                 let data = unsafe { crate::database::item_db::rust_itemdb_searchname(cs.as_ptr()) };
-                if !data.is_null() { return unsafe { (*data).id } as c_int; }
+                if !data.is_null() { return unsafe { (*data).id } as i32; }
             }
             0
         }
@@ -162,14 +156,14 @@ fn val_to_item_id(v: &mlua::Value) -> c_int {
 
 /// Safely extract the stable BL entity id from a raw pointer at factory-creation time.
 /// Returns `None` if `ptr` is null, avoiding unsafe dereference of a null pointer.
-fn extract_entity_id(ptr: *mut c_void) -> Option<c_uint> {
+fn extract_entity_id(ptr: *mut std::ffi::c_void) -> Option<u32> {
     if ptr.is_null() {
         return None;
     }
     Some(unsafe { (*(ptr as *mut BlockList)).id })
 }
 
-pub fn make_sendanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+pub fn make_sendanimation_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
     let Some(entity_id) = extract_entity_id(self_ptr) else {
         return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
     };
@@ -184,7 +178,7 @@ pub fn make_sendanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Re
     }).map(mlua::Value::Function)
 }
 
-pub fn make_playsound_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+pub fn make_playsound_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
     let Some(entity_id) = extract_entity_id(self_ptr) else {
         return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
     };
@@ -198,7 +192,7 @@ pub fn make_playsound_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result
     }).map(mlua::Value::Function)
 }
 
-pub fn make_sendaction_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+pub fn make_sendaction_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
     let Some(entity_id) = extract_entity_id(self_ptr) else {
         return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
     };
@@ -213,7 +207,7 @@ pub fn make_sendaction_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Resul
     }).map(mlua::Value::Function)
 }
 
-pub fn make_msg_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+pub fn make_msg_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
     let Some(entity_id) = extract_entity_id(self_ptr) else {
         return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
     };
@@ -238,7 +232,7 @@ pub fn make_msg_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua:
     }).map(mlua::Value::Function)
 }
 
-pub fn make_dropitem_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+pub fn make_dropitem_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
     let Some(entity_id) = extract_entity_id(self_ptr) else {
         return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
     };
@@ -254,7 +248,7 @@ pub fn make_dropitem_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<
     }).map(mlua::Value::Function)
 }
 
-pub fn make_dropitemxy_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+pub fn make_dropitemxy_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
     let Some(entity_id) = extract_entity_id(self_ptr) else {
         return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
     };
@@ -273,7 +267,7 @@ pub fn make_dropitemxy_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Resul
     }).map(mlua::Value::Function)
 }
 
-pub fn make_objectcanmove_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+pub fn make_objectcanmove_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
     let Some(entity_id) = extract_entity_id(self_ptr) else {
         return lua.create_function(|_, _: mlua::MultiValue| Ok(false)).map(mlua::Value::Function);
     };
@@ -288,7 +282,7 @@ pub fn make_objectcanmove_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Re
     }).map(mlua::Value::Function)
 }
 
-pub fn make_objectcanmovefrom_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+pub fn make_objectcanmovefrom_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
     let Some(entity_id) = extract_entity_id(self_ptr) else {
         return lua.create_function(|_, _: mlua::MultiValue| Ok(false)).map(mlua::Value::Function);
     };
@@ -303,7 +297,7 @@ pub fn make_objectcanmovefrom_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua
     }).map(mlua::Value::Function)
 }
 
-pub fn make_repeatanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+pub fn make_repeatanimation_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
     let Some(entity_id) = extract_entity_id(self_ptr) else {
         return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
     };
@@ -318,7 +312,7 @@ pub fn make_repeatanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::
     }).map(mlua::Value::Function)
 }
 
-pub fn make_selfanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+pub fn make_selfanimation_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
     let Some(entity_id) = extract_entity_id(self_ptr) else {
         return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
     };
@@ -334,7 +328,7 @@ pub fn make_selfanimation_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Re
     }).map(mlua::Value::Function)
 }
 
-pub fn make_selfanimationxy_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+pub fn make_selfanimationxy_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
     let Some(entity_id) = extract_entity_id(self_ptr) else {
         return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
     };
@@ -352,7 +346,7 @@ pub fn make_selfanimationxy_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::
     }).map(mlua::Value::Function)
 }
 
-pub fn make_sendparcel_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+pub fn make_sendparcel_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
     let Some(entity_id) = extract_entity_id(self_ptr) else {
         return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
     };
@@ -381,7 +375,7 @@ pub fn make_sendparcel_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Resul
     }).map(mlua::Value::Function)
 }
 
-pub fn make_throwblock_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Result<mlua::Value> {
+pub fn make_throwblock_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
     let Some(entity_id) = extract_entity_id(self_ptr) else {
         return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
     };
@@ -410,11 +404,11 @@ pub fn make_throwblock_fn(lua: &mlua::Lua, self_ptr: *mut c_void) -> mlua::Resul
 /// Dereferences the raw `MapData` pointer returned by `get_map_ptr`.
 pub unsafe fn map_field(
     lua: &mlua::Lua,
-    m: c_int,
+    m: i32,
     key: &str,
 ) -> Option<mlua::Result<mlua::Value>> {
     // Reject negative indices and values that wrap when cast to u16 (e.g. -1 → 65535).
-    if !(0..=u16::MAX as c_int).contains(&m) {
+    if !(0..=u16::MAX as i32).contains(&m) {
         return Some(Ok(mlua::Value::Nil));
     }
     let mp: *mut MapData = get_map_ptr(m as u16);
@@ -527,7 +521,7 @@ pub unsafe fn gfx_read(lua: &mlua::Lua, gfx: *const GfxViewer, key: &str) -> Opt
 ///
 /// # Safety
 /// Dereferences `gfx`.
-pub unsafe fn gfx_write(gfx: *mut GfxViewer, key: &str, val: c_int, str_val: Option<&[u8]>) -> bool {
+pub unsafe fn gfx_write(gfx: *mut GfxViewer, key: &str, val: i32, str_val: Option<&[u8]>) -> bool {
     if gfx.is_null() {
         return false;
     }
@@ -568,7 +562,7 @@ pub unsafe fn gfx_write(gfx: *mut GfxViewer, key: &str, val: c_int, str_val: Opt
                 if cap > 0 {
                     let n = bytes.len().min(cap);
                     for i in 0..n {
-                        *dst.add(i) = bytes[i] as c_char;
+                        *dst.add(i) = bytes[i] as i8;
                     }
                     *dst.add(n) = 0;
                 }

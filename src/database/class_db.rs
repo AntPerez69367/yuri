@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::ffi::{CStr, CString};
 use std::fs;
-use std::os::raw::{c_char, c_int, c_uint};
 use std::path::PathBuf;
 use std::ptr::null_mut;
 use std::sync::{Arc, Mutex, OnceLock};
@@ -13,15 +12,14 @@ use super::{blocking_run, get_pool};
 use super::item_db::str_to_fixed;
 
 #[derive(Clone)]
-#[repr(C)]
 pub struct ClassData {
     /// 16 rank name strings, each 32 bytes (rank0..rank15)
-    pub ranks: [[c_char; 32]; 16],
+    pub ranks: [[i8; 32]; 16],
     pub id: u16,
     pub path: u16,
-    pub level: [c_uint; 99],
-    pub chat: c_int,
-    pub icon: c_int,
+    pub level: [u32; 99],
+    pub chat: i32,
+    pub icon: i32,
 }
 
 unsafe impl Send for ClassData {}
@@ -110,7 +108,7 @@ fn load_leveldb(data_dir: &str) -> Result<usize, std::io::Error> {
 
 // ─── Public interface (called by ffi::class_db) ─────────────────────────────
 
-pub unsafe fn init(data_dir: *const c_char) -> c_int {
+pub unsafe fn init(data_dir: *const i8) -> i32 {
     // Issue 3: clear stale entries on re-initialization so old data does not
     // persist if init() is called more than once.
     let lock = CLASS_DB.get_or_init(|| Mutex::new(HashMap::new()));
@@ -153,7 +151,7 @@ pub fn searchexist(id: i32) -> Option<Arc<ClassData>> {
     map.get(&(id as u32)).cloned()
 }
 
-pub fn level(path: i32, lvl: i32) -> c_uint {
+pub fn level(path: i32, lvl: i32) -> u32 {
     let map = db().lock().unwrap();
     match map.get(&(path as u32)) {
         Some(c) if (lvl as usize) < 99 => c.level[lvl as usize],
@@ -163,7 +161,7 @@ pub fn level(path: i32, lvl: i32) -> c_uint {
 
 /// Returns an owned CString (allocated on the Rust heap). The returned pointer
 /// must be freed by the caller via rust_classdb_free_name().
-pub fn name(id: i32, rank: i32) -> *mut c_char {
+pub fn name(id: i32, rank: i32) -> *mut i8 {
     // Issue 1: clone the rank bytes while holding the lock, then release the
     // lock before constructing CString, so the returned pointer is fully
     // caller-owned and not tied to the HashMap's lifetime.
@@ -182,34 +180,33 @@ pub fn name(id: i32, rank: i32) -> *mut c_char {
     }
 }
 
-pub fn path(id: i32) -> c_int {
+pub fn path(id: i32) -> i32 {
     let map = db().lock().unwrap();
     match map.get(&(id as u32)) {
-        Some(c) => c.path as c_int,
+        Some(c) => c.path as i32,
         None => 0,
     }
 }
 
 /// Issue 5: direct map lookup, no unsafe dereference of a raw pointer.
-pub fn chat(id: i32) -> c_int {
+pub fn chat(id: i32) -> i32 {
     let map = db().lock().unwrap();
     map.get(&(id as u32)).map(|c| c.chat).unwrap_or(0)
 }
 
 /// Issue 5: direct map lookup, no unsafe dereference of a raw pointer.
-pub fn icon(id: i32) -> c_int {
+pub fn icon(id: i32) -> i32 {
     let map = db().lock().unwrap();
     map.get(&(id as u32)).map(|c| c.icon).unwrap_or(0)
 }
 
-// ─── FFI bridge (moved from src/ffi/class_db.rs) ──────────────────────────
 
 /// Exposed for C code that declares `extern struct class_data* cdata[20]`.
 // SAFETY: Array of raw pointers populated once in rust_classdb_init, read-only thereafter.
 // Single-threaded game loop — no concurrent access.
 pub static mut cdata: [*mut ClassData; 20] = [null_mut(); 20];
 
-pub unsafe fn rust_classdb_init(data_dir: *const c_char) -> c_int {
+pub unsafe fn rust_classdb_init(data_dir: *const i8) -> i32 {
     ffi_catch!(-1, unsafe { init(data_dir) })
 }
 
@@ -217,11 +214,11 @@ pub fn rust_classdb_term() {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(term));
 }
 
-pub fn rust_classdb_search(id: c_int) -> *mut ClassData {
+pub fn rust_classdb_search(id: i32) -> *mut ClassData {
     ffi_catch!(null_mut(), Arc::into_raw(search(id)) as *mut ClassData)
 }
 
-pub fn rust_classdb_searchexist(id: c_int) -> *mut ClassData {
+pub fn rust_classdb_searchexist(id: i32) -> *mut ClassData {
     ffi_catch!(null_mut(), match searchexist(id) {
         Some(arc) => Arc::into_raw(arc) as *mut ClassData,
         None => null_mut(),
@@ -238,15 +235,15 @@ pub fn rust_classdb_free(ptr: *mut ClassData) {
     }
 }
 
-pub fn rust_classdb_level(path: c_int, lvl: c_int) -> c_uint {
+pub fn rust_classdb_level(path: i32, lvl: i32) -> u32 {
     ffi_catch!(0, level(path, lvl))
 }
 
-pub fn rust_classdb_name(id: c_int, rank: c_int) -> *mut c_char {
+pub fn rust_classdb_name(id: i32, rank: i32) -> *mut i8 {
     ffi_catch!(null_mut(), name(id, rank))
 }
 
-pub unsafe fn rust_classdb_free_name(ptr: *mut c_char) {
+pub unsafe fn rust_classdb_free_name(ptr: *mut i8) {
     if !ptr.is_null() {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             unsafe { drop(std::ffi::CString::from_raw(ptr)); }
@@ -254,14 +251,14 @@ pub unsafe fn rust_classdb_free_name(ptr: *mut c_char) {
     }
 }
 
-pub fn rust_classdb_path(id: c_int) -> c_int {
+pub fn rust_classdb_path(id: i32) -> i32 {
     ffi_catch!(0, path(id))
 }
 
-pub fn rust_classdb_chat(id: c_int) -> c_int {
+pub fn rust_classdb_chat(id: i32) -> i32 {
     ffi_catch!(0, chat(id))
 }
 
-pub fn rust_classdb_icon(id: c_int) -> c_int {
+pub fn rust_classdb_icon(id: i32) -> i32 {
     ffi_catch!(0, icon(id))
 }

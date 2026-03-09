@@ -217,10 +217,10 @@ pub async fn set_char_password(pool: &MySqlPool, name: &str, pass: &str, newpass
 }
 
 /// Load a character from DB and return it as a raw byte blob for zlib transfer.
-/// Mirrors mmo_char_fromdb in char_db.c.
+/// Load character data from the database.
 pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -> Result<Vec<u8>> {
 
-    // Update character name to match login name (mirrors C line 427)
+    // Update character name to match login name.
     let _ = sqlx::query("UPDATE `Character` SET `ChaName` = ? WHERE `ChaId` = ?")
         .bind(login_name).bind(char_id).execute(pool).await;
 
@@ -548,7 +548,7 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
 }
 
 /// Save a character from a raw byte blob back to the DB.
-/// Mirrors mmo_char_todb + sub-table save functions in char_db.c.
+/// Save character data and all sub-tables to the database.
 pub async fn save_char_bytes(pool: &MySqlPool, raw: &[u8]) -> Result<()> {
 
     let s = match char_status_from_bytes(raw) {

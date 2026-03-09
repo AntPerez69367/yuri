@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::ffi::CStr;
-use std::os::raw::{c_char, c_int, c_uchar, c_uint};
 use std::ptr::null_mut;
 use std::sync::{Mutex, OnceLock};
 
@@ -10,66 +9,65 @@ use sqlx::Row;
 
 use super::{blocking_run, get_pool};
 
-const ITM_ETC: c_uchar = 18;
+const ITM_ETC: u8 = 18;
 
-#[repr(C)]
 pub struct ItemData {
-    pub id: c_uint,
-    pub sound: c_uint,
-    pub min_sdam: c_uint,
-    pub max_sdam: c_uint,
-    pub min_ldam: c_uint,
-    pub max_ldam: c_uint,
-    pub sound_hit: c_uint,
-    pub time: c_uint,
-    pub amount: c_uint,
-    pub name: [c_char; 64],
-    pub yname: [c_char; 64],
-    pub text: [c_char; 64],
-    pub buytext: [c_char; 64],
-    pub typ: c_uchar,
-    pub class: c_uchar,
-    pub sex: c_uchar,
-    pub level: c_uchar,
-    pub icon_color: c_uchar,
-    pub ethereal: c_uchar,
-    pub unequip: c_uchar,
-    // 1 byte padding (implicit via #[repr(C)] alignment)
-    pub price: c_int,
-    pub sell: c_int,
-    pub rank: c_int,
-    pub stack_amount: c_int,
-    pub look: c_int,
-    pub look_color: c_int,
-    pub dura: c_int,
-    pub might: c_int,
-    pub will: c_int,
-    pub grace: c_int,
-    pub ac: c_int,
-    pub dam: c_int,
-    pub hit: c_int,
-    pub vita: c_int,
-    pub mana: c_int,
-    pub protection: c_int,
-    pub protected: c_int,
-    pub healing: c_int,
-    pub wisdom: c_int,
-    pub con: c_int,
-    pub attack_speed: c_int,
-    pub icon: c_int,
-    pub mightreq: c_int,
-    pub depositable: c_int,
-    pub exchangeable: c_int,
-    pub droppable: c_int,
-    pub thrown: c_int,
-    pub thrownconfirm: c_int,
-    pub repairable: c_int,
-    pub max_amount: c_int,
-    pub skinnable: c_int,
-    pub bod: c_int,
-    pub script: *mut c_char,
-    pub equip_script: *mut c_char,
-    pub unequip_script: *mut c_char,
+    pub id: u32,
+    pub sound: u32,
+    pub min_sdam: u32,
+    pub max_sdam: u32,
+    pub min_ldam: u32,
+    pub max_ldam: u32,
+    pub sound_hit: u32,
+    pub time: u32,
+    pub amount: u32,
+    pub name: [i8; 64],
+    pub yname: [i8; 64],
+    pub text: [i8; 64],
+    pub buytext: [i8; 64],
+    pub typ: u8,
+    pub class: u8,
+    pub sex: u8,
+    pub level: u8,
+    pub icon_color: u8,
+    pub ethereal: u8,
+    pub unequip: u8,
+    // 1 byte padding (implicit alignment)
+    pub price: i32,
+    pub sell: i32,
+    pub rank: i32,
+    pub stack_amount: i32,
+    pub look: i32,
+    pub look_color: i32,
+    pub dura: i32,
+    pub might: i32,
+    pub will: i32,
+    pub grace: i32,
+    pub ac: i32,
+    pub dam: i32,
+    pub hit: i32,
+    pub vita: i32,
+    pub mana: i32,
+    pub protection: i32,
+    pub protected: i32,
+    pub healing: i32,
+    pub wisdom: i32,
+    pub con: i32,
+    pub attack_speed: i32,
+    pub icon: i32,
+    pub mightreq: i32,
+    pub depositable: i32,
+    pub exchangeable: i32,
+    pub droppable: i32,
+    pub thrown: i32,
+    pub thrownconfirm: i32,
+    pub repairable: i32,
+    pub max_amount: i32,
+    pub skinnable: i32,
+    pub bod: i32,
+    pub script: *mut i8,
+    pub equip_script: *mut i8,
+    pub unequip_script: *mut i8,
 }
 
 // SAFETY: `script`, `equip_script`, and `unequip_script` are always `null_mut()` —
@@ -85,11 +83,11 @@ fn db() -> &'static Mutex<HashMap<u32, Box<ItemData>>> {
     ITEM_DB.get().expect("[item_db] not initialized")
 }
 
-pub(crate) fn str_to_fixed<const N: usize>(dst: &mut [c_char; N], src: &str) {
+pub(crate) fn str_to_fixed<const N: usize>(dst: &mut [i8; N], src: &str) {
     let bytes = src.as_bytes();
     let len = bytes.len().min(N - 1);
     for i in 0..len {
-        dst[i] = bytes[i] as c_char;
+        dst[i] = bytes[i] as i8;
     }
     dst[len] = 0;
 }
@@ -239,7 +237,7 @@ async fn load_items() -> Result<usize, sqlx::Error> {
 
 // ─── Public interface (called by ffi::item_db) ──────────────────────────────
 
-pub fn init() -> c_int {
+pub fn init() -> i32 {
     ITEM_DB.get_or_init(|| Mutex::new(HashMap::new()));
     match blocking_run(load_items()) {
         Ok(n) => {
@@ -297,7 +295,7 @@ pub fn searchexist(id: u32) -> *mut ItemData {
 /// only while the database is initialized and the entry is not removed (e.g. by `term()`).
 /// A safer alternative would be to clone the matching entry and return `Box::into_raw` of
 /// the clone, or change the return type to `Option<ItemData>`.
-pub unsafe fn searchname(s: *const c_char) -> *mut ItemData {
+pub unsafe fn searchname(s: *const i8) -> *mut ItemData {
     if s.is_null() {
         return null_mut();
     }
@@ -317,19 +315,18 @@ pub unsafe fn searchname(s: *const c_char) -> *mut ItemData {
     null_mut()
 }
 
-// ─── FFI bridge (moved from src/ffi/item_db.rs) ───────────────────────────
 
-pub fn rust_itemdb_init() -> c_int { ffi_catch!(-1, init()) }
+pub fn rust_itemdb_init() -> i32 { ffi_catch!(-1, init()) }
 
 pub fn rust_itemdb_term() { ffi_catch!((), term()) }
 
-pub fn rust_itemdb_search(id: c_uint) -> *mut ItemData { ffi_catch!(null_mut(), search(id)) }
+pub fn rust_itemdb_search(id: u32) -> *mut ItemData { ffi_catch!(null_mut(), search(id)) }
 
-pub fn rust_itemdb_searchexist(id: c_uint) -> *mut ItemData { ffi_catch!(null_mut(), searchexist(id)) }
+pub fn rust_itemdb_searchexist(id: u32) -> *mut ItemData { ffi_catch!(null_mut(), searchexist(id)) }
 
-pub unsafe fn rust_itemdb_searchname(s: *const c_char) -> *mut ItemData { ffi_catch!(null_mut(), unsafe { searchname(s) }) }
+pub unsafe fn rust_itemdb_searchname(s: *const i8) -> *mut ItemData { ffi_catch!(null_mut(), unsafe { searchname(s) }) }
 
-pub unsafe fn rust_itemdb_id(s: *const c_char) -> c_uint {
+pub unsafe fn rust_itemdb_id(s: *const i8) -> u32 {
     if s.is_null() { return 0; }
     ffi_catch!(0, {
         let ptr = unsafe { searchname(s) };
@@ -347,186 +344,186 @@ pub unsafe fn rust_itemdb_id(s: *const c_char) -> c_uint {
     })
 }
 
-pub fn rust_itemdb_type(id: c_uint) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).typ as c_int } } })
+pub fn rust_itemdb_type(id: u32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).typ as i32 } } })
 }
 
 static UNKNOWN_ITEM_NAME: &[u8] = b"??\0";
 
-pub fn rust_itemdb_name(id: c_uint) -> *mut c_char {
-    ffi_catch!(UNKNOWN_ITEM_NAME.as_ptr() as *mut c_char, {
+pub fn rust_itemdb_name(id: u32) -> *mut i8 {
+    ffi_catch!(UNKNOWN_ITEM_NAME.as_ptr() as *mut i8, {
         let p = search(id);
-        if p.is_null() { UNKNOWN_ITEM_NAME.as_ptr() as *mut c_char } else { unsafe { (*p).name.as_mut_ptr() } }
+        if p.is_null() { UNKNOWN_ITEM_NAME.as_ptr() as *mut i8 } else { unsafe { (*p).name.as_mut_ptr() } }
     })
 }
-pub fn rust_itemdb_yname(id: c_uint) -> *mut c_char {
-    ffi_catch!(UNKNOWN_ITEM_NAME.as_ptr() as *mut c_char, {
+pub fn rust_itemdb_yname(id: u32) -> *mut i8 {
+    ffi_catch!(UNKNOWN_ITEM_NAME.as_ptr() as *mut i8, {
         let p = search(id);
-        if p.is_null() { UNKNOWN_ITEM_NAME.as_ptr() as *mut c_char } else { unsafe { (*p).yname.as_mut_ptr() } }
+        if p.is_null() { UNKNOWN_ITEM_NAME.as_ptr() as *mut i8 } else { unsafe { (*p).yname.as_mut_ptr() } }
     })
 }
-pub fn rust_itemdb_text(id: c_uint) -> *mut c_char {
-    ffi_catch!(UNKNOWN_ITEM_NAME.as_ptr() as *mut c_char, {
+pub fn rust_itemdb_text(id: u32) -> *mut i8 {
+    ffi_catch!(UNKNOWN_ITEM_NAME.as_ptr() as *mut i8, {
         let p = search(id);
-        if p.is_null() { UNKNOWN_ITEM_NAME.as_ptr() as *mut c_char } else { unsafe { (*p).text.as_mut_ptr() } }
+        if p.is_null() { UNKNOWN_ITEM_NAME.as_ptr() as *mut i8 } else { unsafe { (*p).text.as_mut_ptr() } }
     })
 }
-pub fn rust_itemdb_buytext(id: c_uint) -> *mut c_char {
-    ffi_catch!(UNKNOWN_ITEM_NAME.as_ptr() as *mut c_char, {
+pub fn rust_itemdb_buytext(id: u32) -> *mut i8 {
+    ffi_catch!(UNKNOWN_ITEM_NAME.as_ptr() as *mut i8, {
         let p = search(id);
-        if p.is_null() { UNKNOWN_ITEM_NAME.as_ptr() as *mut c_char } else { unsafe { (*p).buytext.as_mut_ptr() } }
+        if p.is_null() { UNKNOWN_ITEM_NAME.as_ptr() as *mut i8 } else { unsafe { (*p).buytext.as_mut_ptr() } }
     })
 }
-pub fn rust_itemdb_price(id: c_uint) -> c_int {
+pub fn rust_itemdb_price(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).price } } })
 }
-pub fn rust_itemdb_sell(id: c_uint) -> c_int {
+pub fn rust_itemdb_sell(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).sell } } })
 }
-pub fn rust_itemdb_rank(id: c_uint) -> c_int {
+pub fn rust_itemdb_rank(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).rank } } })
 }
-pub fn rust_itemdb_stackamount(id: c_uint) -> c_int {
+pub fn rust_itemdb_stackamount(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).stack_amount } } })
 }
-pub fn rust_itemdb_look(id: c_uint) -> c_int {
+pub fn rust_itemdb_look(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).look } } })
 }
-pub fn rust_itemdb_lookcolor(id: c_uint) -> c_int {
+pub fn rust_itemdb_lookcolor(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).look_color } } })
 }
-pub fn rust_itemdb_icon(id: c_uint) -> c_int {
+pub fn rust_itemdb_icon(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).icon } } })
 }
-pub fn rust_itemdb_iconcolor(id: c_uint) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).icon_color as c_int } } })
+pub fn rust_itemdb_iconcolor(id: u32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).icon_color as i32 } } })
 }
-pub fn rust_itemdb_sound(id: c_uint) -> c_uint {
+pub fn rust_itemdb_sound(id: u32) -> u32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).sound } } })
 }
-pub fn rust_itemdb_soundhit(id: c_uint) -> c_uint {
+pub fn rust_itemdb_soundhit(id: u32) -> u32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).sound_hit } } })
 }
-pub fn rust_itemdb_dura(id: c_uint) -> c_int {
+pub fn rust_itemdb_dura(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).dura } } })
 }
-pub fn rust_itemdb_might(id: c_uint) -> c_int {
+pub fn rust_itemdb_might(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).might } } })
 }
-pub fn rust_itemdb_will(id: c_uint) -> c_int {
+pub fn rust_itemdb_will(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).will } } })
 }
-pub fn rust_itemdb_grace(id: c_uint) -> c_int {
+pub fn rust_itemdb_grace(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).grace } } })
 }
-pub fn rust_itemdb_ac(id: c_uint) -> c_int {
+pub fn rust_itemdb_ac(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).ac } } })
 }
-pub fn rust_itemdb_dam(id: c_uint) -> c_int {
+pub fn rust_itemdb_dam(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).dam } } })
 }
-pub fn rust_itemdb_hit(id: c_uint) -> c_int {
+pub fn rust_itemdb_hit(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).hit } } })
 }
-pub fn rust_itemdb_vita(id: c_uint) -> c_int {
+pub fn rust_itemdb_vita(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).vita } } })
 }
-pub fn rust_itemdb_mana(id: c_uint) -> c_int {
+pub fn rust_itemdb_mana(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).mana } } })
 }
-pub fn rust_itemdb_protection(id: c_uint) -> c_int {
+pub fn rust_itemdb_protection(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).protection } } })
 }
-pub fn rust_itemdb_protected(id: c_uint) -> c_int {
+pub fn rust_itemdb_protected(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).protected } } })
 }
-pub fn rust_itemdb_minSdam(id: c_uint) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).min_sdam as c_int } } })
+pub fn rust_itemdb_minSdam(id: u32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).min_sdam as i32 } } })
 }
-pub fn rust_itemdb_maxSdam(id: c_uint) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).max_sdam as c_int } } })
+pub fn rust_itemdb_maxSdam(id: u32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).max_sdam as i32 } } })
 }
-pub fn rust_itemdb_minLdam(id: c_uint) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).min_ldam as c_int } } })
+pub fn rust_itemdb_minLdam(id: u32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).min_ldam as i32 } } })
 }
-pub fn rust_itemdb_maxLdam(id: c_uint) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).max_ldam as c_int } } })
+pub fn rust_itemdb_maxLdam(id: u32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).max_ldam as i32 } } })
 }
-pub fn rust_itemdb_mindam(id: c_uint) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).min_sdam as c_int } } })
+pub fn rust_itemdb_mindam(id: u32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).min_sdam as i32 } } })
 }
-pub fn rust_itemdb_maxdam(id: c_uint) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).max_sdam as c_int } } })
+pub fn rust_itemdb_maxdam(id: u32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).max_sdam as i32 } } })
 }
-pub fn rust_itemdb_mincritdam(_id: c_uint) -> c_int { 0 }
-pub fn rust_itemdb_maxcritdam(_id: c_uint) -> c_int { 0 }
-pub fn rust_itemdb_mightreq(id: c_uint) -> c_int {
+pub fn rust_itemdb_mincritdam(_id: u32) -> i32 { 0 }
+pub fn rust_itemdb_maxcritdam(_id: u32) -> i32 { 0 }
+pub fn rust_itemdb_mightreq(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).mightreq } } })
 }
-pub fn rust_itemdb_depositable(id: c_uint) -> c_int {
+pub fn rust_itemdb_depositable(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).depositable } } })
 }
-pub fn rust_itemdb_exchangeable(id: c_uint) -> c_int {
+pub fn rust_itemdb_exchangeable(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).exchangeable } } })
 }
-pub fn rust_itemdb_droppable(id: c_uint) -> c_int {
+pub fn rust_itemdb_droppable(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).droppable } } })
 }
-pub fn rust_itemdb_thrown(id: c_uint) -> c_int {
+pub fn rust_itemdb_thrown(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).thrown } } })
 }
-pub fn rust_itemdb_thrownconfirm(id: c_uint) -> c_int {
+pub fn rust_itemdb_thrownconfirm(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).thrownconfirm } } })
 }
-pub fn rust_itemdb_repairable(id: c_uint) -> c_int {
+pub fn rust_itemdb_repairable(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).repairable } } })
 }
-pub fn rust_itemdb_maxamount(id: c_uint) -> c_int {
+pub fn rust_itemdb_maxamount(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).max_amount } } })
 }
-pub fn rust_itemdb_skinnable(id: c_uint) -> c_int {
+pub fn rust_itemdb_skinnable(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).skinnable } } })
 }
-pub fn rust_itemdb_unequip(id: c_uint) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).unequip as c_int } } })
+pub fn rust_itemdb_unequip(id: u32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).unequip as i32 } } })
 }
-pub fn rust_itemdb_ethereal(id: c_uint) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).ethereal as c_int } } })
+pub fn rust_itemdb_ethereal(id: u32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).ethereal as i32 } } })
 }
-pub fn rust_itemdb_healing(id: c_uint) -> c_int {
+pub fn rust_itemdb_healing(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).healing } } })
 }
-pub fn rust_itemdb_wisdom(id: c_uint) -> c_int {
+pub fn rust_itemdb_wisdom(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).wisdom } } })
 }
-pub fn rust_itemdb_con(id: c_uint) -> c_int {
+pub fn rust_itemdb_con(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).con } } })
 }
-pub fn rust_itemdb_attackspeed(id: c_uint) -> c_int {
+pub fn rust_itemdb_attackspeed(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).attack_speed } } })
 }
-pub fn rust_itemdb_level(id: c_uint) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).level as c_int } } })
+pub fn rust_itemdb_level(id: u32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).level as i32 } } })
 }
-pub fn rust_itemdb_class(id: c_uint) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).class as c_int } } })
+pub fn rust_itemdb_class(id: u32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).class as i32 } } })
 }
-pub fn rust_itemdb_sex(id: c_uint) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).sex as c_int } } })
+pub fn rust_itemdb_sex(id: u32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).sex as i32 } } })
 }
-pub fn rust_itemdb_time(id: c_uint) -> c_int {
-    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).time as c_int } } })
+pub fn rust_itemdb_time(id: u32) -> i32 {
+    ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).time as i32 } } })
 }
-pub fn rust_itemdb_script(_id: c_uint) -> *mut c_char { null_mut() }
-pub fn rust_itemdb_equipscript(_id: c_uint) -> *mut c_char { null_mut() }
-pub fn rust_itemdb_unequipscript(_id: c_uint) -> *mut c_char { null_mut() }
-pub fn rust_itemdb_breakondeath(id: c_uint) -> c_int {
+pub fn rust_itemdb_script(_id: u32) -> *mut i8 { null_mut() }
+pub fn rust_itemdb_equipscript(_id: u32) -> *mut i8 { null_mut() }
+pub fn rust_itemdb_unequipscript(_id: u32) -> *mut i8 { null_mut() }
+pub fn rust_itemdb_breakondeath(id: u32) -> i32 {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).bod } } })
 }
-pub fn rust_itemdb_reqvita(_id: c_uint) -> c_int { 0 }
-pub fn rust_itemdb_reqmana(_id: c_uint) -> c_int { 0 }
-pub fn rust_itemdb_dodge(_id: c_uint) -> c_int { 0 }
-pub fn rust_itemdb_block(_id: c_uint) -> c_int { 0 }
-pub fn rust_itemdb_parry(_id: c_uint) -> c_int { 0 }
-pub fn rust_itemdb_resist(_id: c_uint) -> c_int { 0 }
-pub fn rust_itemdb_physdeduct(_id: c_uint) -> c_int { 0 }
+pub fn rust_itemdb_reqvita(_id: u32) -> i32 { 0 }
+pub fn rust_itemdb_reqmana(_id: u32) -> i32 { 0 }
+pub fn rust_itemdb_dodge(_id: u32) -> i32 { 0 }
+pub fn rust_itemdb_block(_id: u32) -> i32 { 0 }
+pub fn rust_itemdb_parry(_id: u32) -> i32 { 0 }
+pub fn rust_itemdb_resist(_id: u32) -> i32 { 0 }
+pub fn rust_itemdb_physdeduct(_id: u32) -> i32 { 0 }

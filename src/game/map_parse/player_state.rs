@@ -1,14 +1,9 @@
-//! Port of the player-state send helpers from `c_src/map_parse.c`.
-//!
 //! Covers the initial login packet sequence and periodic state updates sent
 //! to a single player's own socket (as opposed to area-broadcast packets).
 //!
-//! Functions declared `pub unsafe extern "C"` so they remain
-//! callable from any remaining C code that has not yet been ported.
 
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
-use std::ffi::{c_char, c_int};
 use std::ptr;
 
 use crate::database::map_db::BlockList;
@@ -32,20 +27,20 @@ use super::packet::{
 
 // Constants not in packet.rs — defined locally (from map_server.h / map_parse.h).
 const OUT_STATUS: u8 = 0x08; // packet id for clif_sendstatus
-const BL_ALL:  c_int = 0x0F;  // all block-list types
+const BL_ALL:  i32 = 0x0F;  // all block-list types
 
 // ─── Local helpers ────────────────────────────────────────────────────────────
 
 /// Replace the first occurrence of `orig` (NUL-terminated) in `src` with
 /// `rep` (NUL-terminated).  Uses a 4096-byte module-local static buffer —
-/// identical semantics to the deleted C `replace_str` in sl_compat.c.
+
 /// Not thread-safe (single-threaded map server loop).
-unsafe fn replace_str_local(src: *const c_char, orig: &[u8], rep: *const c_char) -> *const c_char {
+unsafe fn replace_str_local(src: *const i8, orig: &[u8], rep: *const i8) -> *const i8 {
     let orig_bytes = match orig.iter().position(|&b| b == 0) {
         Some(n) => &orig[..n],
         None => orig,
     };
-    let p = libc::strstr(src, orig_bytes.as_ptr() as *const c_char);
+    let p = libc::strstr(src, orig_bytes.as_ptr() as *const i8);
     if p.is_null() { return src; }
     static mut REPL_BUF: [u8; 4096] = [0u8; 4096];
     let prefix_len = (p as usize).saturating_sub(src as usize);
@@ -59,10 +54,9 @@ unsafe fn replace_str_local(src: *const c_char, orig: &[u8], rep: *const c_char)
     let tail_len = libc::strlen(tail).min(4095 - after_rep);
     std::ptr::copy_nonoverlapping(tail as *const u8, REPL_BUF.as_mut_ptr().add(after_rep), tail_len);
     REPL_BUF[after_rep + tail_len] = 0;
-    REPL_BUF.as_ptr() as *const c_char
+    REPL_BUF.as_ptr() as *const i8
 }
 
-// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
 
 use crate::game::map_server::{cur_time, cur_year};
 use crate::database::class_db::rust_classdb_name;
@@ -89,12 +83,12 @@ use crate::game::map_parse::visual::{
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 // enum { LOOK_GET = 0, LOOK_SEND = 1 } from map_parse.h
-const LOOK_GET: c_int = 0;
+const LOOK_GET: i32 = 0;
 
 // BL_* type constants (from map_server.h)
-const BL_PC:  c_int = 0x01;
-const BL_MOB: c_int = 0x02;
-const BL_NPC: c_int = 0x04;
+const BL_PC:  i32 = 0x01;
+const BL_MOB: i32 = 0x02;
+const BL_NPC: i32 = 0x04;
 
 // optFlag_walkthrough = 128 (from map_server.h)
 const OPT_WALKTHROUGH: u64 = 128;
@@ -110,8 +104,7 @@ const OPT_WALKTHROUGH: u64 = 128;
 ///   [5]      = 0x06
 ///   [6]      = 0x00
 ///
-/// Mirrors `clif_sendack` from `c_src/map_parse.c` ~line 4274.
-pub unsafe fn clif_sendack(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendack(sd: *mut MapSessionData) -> i32 {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -135,8 +128,7 @@ pub unsafe fn clif_sendack(sd: *mut MapSessionData) -> c_int {
 
 /// Send the profile retrieval trigger packet.
 ///
-/// Mirrors `clif_retrieveprofile` from `c_src/map_parse.c` ~line 4297.
-pub unsafe fn clif_retrieveprofile(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_retrieveprofile(sd: *mut MapSessionData) -> i32 {
     let fd = (*sd).fd;
     wfifob(fd, 0, 0xAA);
     wfifob(fd, 1, 0x00);
@@ -152,8 +144,7 @@ pub unsafe fn clif_retrieveprofile(sd: *mut MapSessionData) -> c_int {
 
 /// Send the AFK / screensaver state packet.
 ///
-/// Mirrors `clif_screensaver` from `c_src/map_parse.c` ~line 4310.
-pub unsafe fn clif_screensaver(sd: *mut MapSessionData, screen: c_int) -> c_int {
+pub unsafe fn clif_screensaver(sd: *mut MapSessionData, screen: i32) -> i32 {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -186,8 +177,7 @@ pub unsafe fn clif_screensaver(sd: *mut MapSessionData, screen: c_int) -> c_int 
 ///   [5]    = cur_time
 ///   [6]    = cur_year
 ///
-/// Mirrors `clif_sendtime` from `c_src/map_parse.c` ~line 4328.
-pub unsafe fn clif_sendtime(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendtime(sd: *mut MapSessionData) -> i32 {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -220,8 +210,7 @@ pub unsafe fn clif_sendtime(sd: *mut MapSessionData) -> c_int {
 ///   [13]     = 0x03
 ///   [14..15] = BE u16 0x0000
 ///
-/// Mirrors `clif_sendid` from `c_src/map_parse.c` ~line 4346.
-pub unsafe fn clif_sendid(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendid(sd: *mut MapSessionData) -> i32 {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -251,8 +240,7 @@ pub unsafe fn clif_sendid(sd: *mut MapSessionData) -> c_int {
 ///   2. BGM packet (0x19): bgm type, bgm id × 2, setting flags.
 /// Followed by a call to `clif_sendweather` (still in C).
 ///
-/// Mirrors `clif_sendmapinfo` from `c_src/map_parse.c` ~line 4382.
-pub unsafe fn clif_sendmapinfo(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendmapinfo(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
@@ -262,7 +250,7 @@ pub unsafe fn clif_sendmapinfo(sd: *mut MapSessionData) -> c_int {
     let m  = (*sd).bl.m as usize;
 
     // Safety: map[] is initialised by rust_map_init before any player can reach
-    // this code.  Accessing map[sd->bl.m] mirrors the C code exactly.
+    // Accessing map[sd->bl.m]:
     let md = &*map.add(m);
 
     // ── Packet 1: map header ─────────────────────────────────────────────────
@@ -337,8 +325,7 @@ pub unsafe fn clif_sendmapinfo(sd: *mut MapSessionData) -> c_int {
 /// Writes absolute position and computes the viewport offset depending on
 /// whether the map is larger than the 16 × 14 client viewport.
 ///
-/// Mirrors `clif_sendxy` from `c_src/map_parse.c` ~line 4471.
-pub unsafe fn clif_sendxy(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendxy(sd: *mut MapSessionData) -> i32 {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -399,8 +386,7 @@ pub unsafe fn clif_sendxy(sd: *mut MapSessionData) -> c_int {
 /// meaningful to the caller — no "click" flag is present in either packet
 /// variant (both write 0x00 at [13]).
 ///
-/// Mirrors `clif_sendxynoclick` from `c_src/map_parse.c` ~line 4516.
-pub unsafe fn clif_sendxynoclick(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendxynoclick(sd: *mut MapSessionData) -> i32 {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -450,8 +436,7 @@ pub unsafe fn clif_sendxynoclick(sd: *mut MapSessionData) -> c_int {
 /// Adjusts `dx`/`dy` to prevent the viewport from scrolling off the map edge,
 /// then stores the resulting offsets in `sd->viewx`/`sd->viewy`.
 ///
-/// Mirrors `clif_sendxychange` from `c_src/map_parse.c` ~line 4558.
-pub unsafe fn clif_sendxychange(sd: *mut MapSessionData, dx: c_int, dy: c_int) -> c_int {
+pub unsafe fn clif_sendxychange(sd: *mut MapSessionData, dx: i32, dy: i32) -> i32 {
     if sd.is_null() { return 0; }
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
@@ -502,8 +487,7 @@ pub unsafe fn clif_sendxychange(sd: *mut MapSessionData, dx: c_int, dy: c_int) -
 /// `flags` is a bitmask of `SFLAG_*` values.  `SFLAG_ALWAYSON` is always
 /// added; `SFLAG_GMON` is added for GMs who are walking-through.
 ///
-/// Mirrors `clif_sendstatus` from `c_src/map_parse.c` ~line 4595.
-pub unsafe fn clif_sendstatus(sd: *mut MapSessionData, flags: c_int) -> c_int {
+pub unsafe fn clif_sendstatus(sd: *mut MapSessionData, flags: i32) -> i32 {
     if sd.is_null() { return 0; }
 
     let mut f = flags | SFLAG_ALWAYSON;
@@ -597,8 +581,7 @@ pub unsafe fn clif_sendstatus(sd: *mut MapSessionData, flags: c_int) -> c_int {
 /// Send the client option flags (weather, magic, advice, fastmove, sound,
 /// helm, realm) to the player.
 ///
-/// Mirrors `clif_sendoptions` from `c_src/map_parse.c` ~line 4680.
-pub unsafe fn clif_sendoptions(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendoptions(sd: *mut MapSessionData) -> i32 {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -636,8 +619,7 @@ pub unsafe fn clif_sendoptions(sd: *mut MapSessionData) -> c_int {
 ///   - Exchange / group flags
 ///   - Legend entries (icon, color, text — with optional $player substitution)
 ///
-/// Mirrors `clif_mystaytus` from `c_src/map_parse.c` ~line 2747.
-pub unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
     if rust_session_exists((*sd).fd) == 0 {
@@ -655,8 +637,8 @@ pub unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> c_int {
 
     // Get class name (may return null).
     let class_name = rust_classdb_name(
-        (*sd).status.class as c_int,
-        (*sd).status.mark  as c_int,
+        (*sd).status.class as i32,
+        (*sd).status.mark  as i32,
     );
 
     if rust_session_exists((*sd).fd) == 0 {
@@ -680,7 +662,7 @@ pub unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> c_int {
         wfifob(fd, 8 + len, 0);
         len += 1;
     } else {
-        let cname = rust_clandb_name((*sd).status.clan as c_int);
+        let cname = rust_clandb_name((*sd).status.clan as i32);
         if cname.is_null() {
             wfifob(fd, 8 + len, 0);
             len += 1;
@@ -816,7 +798,7 @@ pub unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> c_int {
             wfifob(fd, 11 + len, 0);
             wfifob(fd, 12 + len, 0);
             wfifol(fd, 13 + len, 0);
-            wfifob(fd, 14 + len, 0); // mirrors C wfifob[len+14]=0 (overlap, harmless)
+            wfifob(fd, 14 + len, 0); // overlap write, harmless
             len += 10;
         }
     }
@@ -847,7 +829,7 @@ pub unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> c_int {
 
         if lg.tchaid > 0 {
             let char_name = clif_getName(lg.tchaid);
-            let text_ptr  = lg.text.as_ptr() as *const c_char;
+            let text_ptr  = lg.text.as_ptr() as *const i8;
             let buff      = replace_str_local(text_ptr, b"$player\0", char_name);
             let buff_ptr  = buff as *const u8;
             let buff_len  = if buff.is_null() { 0 } else { cstr_len(buff_ptr) };
@@ -876,8 +858,7 @@ pub unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> c_int {
 /// Trigger an area scan to send all nearby PC, NPC, and MOB looks to the
 /// player.
 ///
-/// Mirrors `clif_getchararea` from `c_src/map_parse.c` ~line 3895.
-pub unsafe fn clif_getchararea(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_getchararea(sd: *mut MapSessionData) -> i32 {
     let m = (*sd).bl.m as i32;
     let x = (*sd).bl.x as i32;
     let y = (*sd).bl.y as i32;
@@ -899,8 +880,7 @@ pub unsafe fn clif_getchararea(sd: *mut MapSessionData) -> c_int {
 /// groups and the player has GROUP enabled, it is disabled and the group is
 /// disbanded.
 ///
-/// Mirrors `clif_refresh` from `c_src/map_parse.c` ~line 8531.
-pub unsafe fn clif_refresh(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_refresh(sd: *mut MapSessionData) -> i32 {
     clif_sendmapinfo(sd);
     clif_sendxy(sd);
     clif_mob_look_start(sd);
@@ -948,7 +928,7 @@ pub unsafe fn clif_refresh(sd: *mut MapSessionData) -> c_int {
             }
             let msg = b"Join a group     :OFF\0";
             clif_sendstatus(sd, 0);
-            clif_sendminitext(sd, msg.as_ptr() as *const c_char);
+            clif_sendminitext(sd, msg.as_ptr() as *const i8);
         }
     }
     0
@@ -962,8 +942,7 @@ pub unsafe fn clif_refresh(sd: *mut MapSessionData) -> c_int {
 /// which only captures the low byte of the big-endian value.  This is an
 /// existing C bug; we replicate it faithfully.
 ///
-/// Mirrors `clif_sendminimap` from `c_src/map_parse.c` ~line 11437.
-pub unsafe fn clif_sendminimap(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendminimap(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
     wfifohead(fd, 0);
@@ -991,7 +970,7 @@ unsafe fn cstr_len(ptr: *const u8) -> usize {
 
 /// Copy `len` bytes from `src` into the WFIFO buffer at `pos`.
 #[inline]
-unsafe fn copy_cstr_to_wfifo(fd: c_int, pos: usize, src: *const u8, len: usize) {
+unsafe fn copy_cstr_to_wfifo(fd: i32, pos: usize, src: *const u8, len: usize) {
     if len == 0 || src.is_null() { return; }
     let dst = rust_session_wdata_ptr(fd, pos);
     if !dst.is_null() {

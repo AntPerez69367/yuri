@@ -1,6 +1,6 @@
 //! Client event and packet handler functions.
 //!
-//! Ported from `c_src/sl_compat.c` lines 2334–3613.
+
 //!
 //! Functions ported:
 //!   clif_quit, clif_stoptimers, clif_handle_disconnect,
@@ -13,7 +13,6 @@
 #![allow(non_snake_case)]
 
 use std::ffi::CStr;
-use std::os::raw::{c_char, c_int, c_uint, c_void};
 
 use crate::database::{blocking_run, get_pool};
 use crate::database::map_db::BlockList;
@@ -35,7 +34,7 @@ use crate::game::map_parse::visual::{clif_lookgone, clif_object_look_specific};
 use crate::game::mob::{BL_PC, MAX_MAGIC_TIMERS};
 use crate::game::pc::{rust_pc_stoptimer, MapSessionData};
 
-// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
+
 
 use crate::game::pc::{
     rust_pc_changeitem as pc_changeitem, rust_pc_readglobalreg as pc_readglobalreg,
@@ -59,14 +58,14 @@ use crate::game::map_parse::visual::clif_object_look_sub_inner;
 /// Dispatch a Lua event with a single block_list argument.
 #[cfg(not(test))]
 #[allow(dead_code)]
-unsafe fn sl_doscript_simple(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
 }
 
 /// Dispatch a Lua event with two block_list arguments.
 #[cfg(not(test))]
 #[allow(dead_code)]
-unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::c_char, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> std::ffi::c_int {
+unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
 }
 
@@ -74,7 +73,7 @@ unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::
 // ─── Map data read helper ─────────────────────────────────────────────────────
 
 #[inline]
-unsafe fn read_obj(m: c_int, x: c_int, y: c_int) -> u16 {
+unsafe fn read_obj(m: i32, x: i32, y: i32) -> u16 {
     use crate::database::map_db::map;
     let md = &*map.add(m as usize);
     if md.obj.is_null() { return 0; }
@@ -84,20 +83,20 @@ unsafe fn read_obj(m: c_int, x: c_int, y: c_int) -> u16 {
 // ─── Session buffer read helpers ─────────────────────────────────────────────
 
 #[inline]
-unsafe fn rbyte(fd: c_int, pos: usize) -> u8 {
+unsafe fn rbyte(fd: i32, pos: usize) -> u8 {
     let p = rust_session_rdata_ptr(fd, pos);
     if p.is_null() { 0 } else { *p }
 }
 
 #[inline]
-unsafe fn rword_be(fd: c_int, pos: usize) -> u16 {
+unsafe fn rword_be(fd: i32, pos: usize) -> u16 {
     let p = rust_session_rdata_ptr(fd, pos);
     if p.is_null() { return 0; }
     u16::from_be_bytes([*p, *p.add(1)])
 }
 
 #[inline]
-unsafe fn rlong_be(fd: c_int, pos: usize) -> u32 {
+unsafe fn rlong_be(fd: i32, pos: usize) -> u32 {
     let p = rust_session_rdata_ptr(fd, pos);
     if p.is_null() { return 0; }
     u32::from_be_bytes([*p, *p.add(1), *p.add(2), *p.add(3)])
@@ -106,40 +105,37 @@ unsafe fn rlong_be(fd: c_int, pos: usize) -> u32 {
 // ─── Functions ───────────────────────────────────────────────────────────────
 
 /// Remove `sd` from the block grid and broadcast a look-gone packet to visible players.
-/// Replaces `clif_quit` in `c_src/sl_compat.c` (line 2674).
-///
+////
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_quit(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_quit(sd: *mut MapSessionData) -> i32 {
     map_delblock(&raw mut (*sd).bl);
     clif_lookgone(&raw mut (*sd).bl);
     0
 }
 
 /// Remove all active duration and aether timers for `sd`.
-/// Replaces `clif_stoptimers` in `c_src/sl_compat.c` (line 3178).
-///
+////
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_stoptimers(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_stoptimers(sd: *mut MapSessionData) -> i32 {
     let sd = &mut *sd;
     for x in 0..MAX_MAGIC_TIMERS {
         if sd.status.dura_aether[x].dura_timer != 0 {
-            timer_remove(sd.status.dura_aether[x].dura_timer as c_int);
+            timer_remove(sd.status.dura_aether[x].dura_timer as i32);
         }
         if sd.status.dura_aether[x].aether_timer != 0 {
-            timer_remove(sd.status.dura_aether[x].aether_timer as c_int);
+            timer_remove(sd.status.dura_aether[x].aether_timer as i32);
         }
     }
     0
 }
 
 /// Handle a clean disconnect: cancel exchange, run logout script, save, remove from world.
-/// Replaces `clif_handle_disconnect` in `c_src/sl_compat.c` (line 3190).
-///
+////
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
     if (*sd).exchange.target != 0 {
         let tsd = map_id2sd((*sd).exchange.target) as *mut MapSessionData;
         clif_exchange_close(sd);
@@ -150,11 +146,11 @@ pub unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> c_int {
     }
 
     rust_pc_stoptimer(sd);
-    sl_async_freeco(sd as *mut c_void);
+    sl_async_freeco(sd as *mut std::ffi::c_void);
     clif_leavegroup(sd);
     clif_stoptimers(sd);
-    sl_doscript_simple(c"logout".as_ptr(), std::ptr::null::<c_char>(), &raw mut (*sd).bl);
-    sl_intif_savequit(sd as *mut c_void);
+    sl_doscript_simple(c"logout".as_ptr(), std::ptr::null::<i8>(), &raw mut (*sd).bl);
+    sl_intif_savequit(sd as *mut std::ffi::c_void);
     clif_quit(sd);
     map_deliddb(&raw mut (*sd).bl);
 
@@ -168,23 +164,22 @@ pub unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> c_int {
         tracing::error!("[handle_disconnect] ChaOnline update failed: {e}");
     }
 
-    let name = CStr::from_ptr((*sd).status.name.as_ptr() as *const c_char).to_string_lossy();
+    let name = CStr::from_ptr((*sd).status.name.as_ptr() as *const i8).to_string_lossy();
     tracing::info!("[map] [handle_disconnect] name={name}");
     0
 }
 
 /// Send any missing objects that the client requested by ID.
-/// Replaces `clif_handle_missingobject` in `c_src/sl_compat.c` (line 3222).
-///
+////
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_handle_missingobject(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_handle_missingobject(sd: *mut MapSessionData) -> i32 {
     let id = rlong_be((*sd).fd, 5);
     let bl = map_id2bl(id) as *mut BlockList;
     if !bl.is_null() {
-        if (*bl).bl_type as c_int == BL_PC {
-            clif_charspecific((*sd).status.id as c_int, id as c_int);
-            clif_charspecific(id as c_int, (*sd).status.id as c_int);
+        if (*bl).bl_type as i32 == BL_PC {
+            clif_charspecific((*sd).status.id as i32, id as i32);
+            clif_charspecific(id as i32, (*sd).status.id as i32);
         } else {
             clif_object_look_specific(sd, id);
         }
@@ -193,54 +188,51 @@ pub unsafe fn clif_handle_missingobject(sd: *mut MapSessionData) -> c_int {
 }
 
 /// Dispatch a menu-input packet to the appropriate handler.
-/// Replaces `clif_handle_menuinput` in `c_src/sl_compat.c` (line 3237).
-///
+////
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_handle_menuinput(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_handle_menuinput(sd: *mut MapSessionData) -> i32 {
     if hasCoref(sd) == 0 {
         return 0;
     }
     match rbyte((*sd).fd, 5) {
-        0 => sl_async_freeco(sd as *mut c_void),
+        0 => sl_async_freeco(sd as *mut std::ffi::c_void),
         1 => { clif_parsemenu(sd); }
         2 => { clif_parsebuy(sd); }
         3 => { clif_parseinput(sd); }
         4 => { clif_parsesell(sd); }
-        _ => sl_async_freeco(sd as *mut c_void),
+        _ => sl_async_freeco(sd as *mut std::ffi::c_void),
     }
     0
 }
 
 /// Handle a powerboard interaction: route the powerBoard Lua script with optional target.
-/// Replaces `clif_handle_powerboards` in `c_src/sl_compat.c` (line 3255).
-///
+////
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_handle_powerboards(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_handle_powerboards(sd: *mut MapSessionData) -> i32 {
     let tsd = map_id2sd(rlong_be((*sd).fd, 11)) as *mut MapSessionData;
     if !tsd.is_null() {
-        (*sd).pbColor = rbyte((*sd).fd, 15) as c_int;
+        (*sd).pbColor = rbyte((*sd).fd, 15) as i32;
     } else {
         (*sd).pbColor = 0;
     }
 
     if !tsd.is_null() {
-        sl_doscript_2(c"powerBoard".as_ptr(), std::ptr::null::<c_char>(), &raw mut (*sd).bl, &raw mut (*tsd).bl);
+        sl_doscript_2(c"powerBoard".as_ptr(), std::ptr::null::<i8>(), &raw mut (*sd).bl, &raw mut (*tsd).bl);
     } else {
-        sl_doscript_2(c"powerBoard".as_ptr(), std::ptr::null::<c_char>(), &raw mut (*sd).bl, std::ptr::null_mut::<BlockList>());
+        sl_doscript_2(c"powerBoard".as_ptr(), std::ptr::null::<i8>(), &raw mut (*sd).bl, std::ptr::null_mut::<BlockList>());
     }
     0
 }
 
 /// Handle a boards/nmail packet: show boards, read/post/delete posts, send nmail.
-/// Replaces `clif_handle_boards` in `c_src/sl_compat.c` (line 3272).
-///
+////
 /// Note: case 8 intentionally falls through to case 9 (matching C behavior).
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_handle_boards(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_handle_boards(sd: *mut MapSessionData) -> i32 {
     match rbyte((*sd).fd, 5) {
         1 => {
             (*sd).bcount = 0;
@@ -251,20 +243,20 @@ pub unsafe fn clif_handle_boards(sd: *mut MapSessionData) -> c_int {
             if rbyte((*sd).fd, 8) == 127 {
                 (*sd).bcount = 0;
             }
-            boards_showposts(sd, rword_be((*sd).fd, 6) as c_int);
+            boards_showposts(sd, rword_be((*sd).fd, 6) as i32);
         }
         3 => {
             boards_readpost(
                 sd,
-                rword_be((*sd).fd, 6) as c_int,
-                rword_be((*sd).fd, 8) as c_int,
+                rword_be((*sd).fd, 6) as i32,
+                rword_be((*sd).fd, 8) as i32,
             );
         }
         4 => {
-            boards_post(sd, rword_be((*sd).fd, 6) as c_int);
+            boards_post(sd, rword_be((*sd).fd, 6) as i32);
         }
         5 => {
-            boards_delete(sd, rword_be((*sd).fd, 6) as c_int);
+            boards_delete(sd, rword_be((*sd).fd, 6) as i32);
         }
         6 => {
             if (*sd).status.level >= 10 {
@@ -278,8 +270,8 @@ pub unsafe fn clif_handle_boards(sd: *mut MapSessionData) -> c_int {
         }
         7 => {
             if (*sd).status.gm_level != 0 {
-                let board = rword_be((*sd).fd, 6) as c_int;
-                let post  = rword_be((*sd).fd, 8) as c_int;
+                let board = rword_be((*sd).fd, 6) as i32;
+                let post  = rword_be((*sd).fd, 8) as i32;
                 let color = map_getpostcolor(board, post) ^ 1;
                 map_changepostcolor(board, post, color);
                 nmail_sendmessage(sd, c"Post updated.".as_ptr(), 6, 0);
@@ -287,7 +279,7 @@ pub unsafe fn clif_handle_boards(sd: *mut MapSessionData) -> c_int {
         }
         8 => {
             // C fallthrough: case 8 runs the Lua write script, then falls into case 9.
-            let board = rword_be((*sd).fd, 6) as c_int;
+            let board = rword_be((*sd).fd, 6) as i32;
             sl_doscript_simple(rust_boarddb_yname(board), c"write".as_ptr(), &raw mut (*sd).bl);
             (*sd).bcount = 0;
             boards_showposts(sd, 0);
@@ -302,14 +294,13 @@ pub unsafe fn clif_handle_boards(sd: *mut MapSessionData) -> c_int {
 }
 
 /// Correct the player's position after a movement obstruction, then resync the client.
-/// Replaces `clif_handle_obstruction` in `c_src/sl_compat.c` (line 3430).
-///
+////
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_handle_obstruction(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_handle_obstruction(sd: *mut MapSessionData) -> i32 {
     (*sd).canmove = 0;
-    let xold = rword_be((*sd).fd, 5) as c_int;
-    let yold = rword_be((*sd).fd, 7) as c_int;
+    let xold = rword_be((*sd).fd, 5) as i32;
+    let yold = rword_be((*sd).fd, 7) as i32;
     let mut nx = xold;
     let mut ny = yold;
 
@@ -328,24 +319,22 @@ pub unsafe fn clif_handle_obstruction(sd: *mut MapSessionData) -> c_int {
 }
 
 /// Resume a Lua NPC menu with the player's selection.
-/// Replaces `clif_parsemenu` in `c_src/sl_compat.c` (line 3454).
-///
+////
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_parsemenu(sd: *mut MapSessionData) -> c_int {
-    let selection = rword_be((*sd).fd, 10) as c_uint;
-    rust_sl_resumemenu(selection, sd as *mut c_void);
+pub unsafe fn clif_parsemenu(sd: *mut MapSessionData) -> i32 {
+    let selection = rword_be((*sd).fd, 10) as u32;
+    rust_sl_resumemenu(selection, sd as *mut std::ffi::c_void);
     0
 }
 
 /// Post an item from inventory onto an adjacent board/prop when the client requests it.
-/// Replaces `clif_postitem` in `c_src/sl_compat.c` (line 4151).
-///
+////
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_postitem(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_postitem(sd: *mut MapSessionData) -> i32 {
     use crate::game::map_parse::dialogs::clif_input;
-    let slot = rbyte((*sd).fd, 5) as c_int - 1;
+    let slot = rbyte((*sd).fd, 5) as i32 - 1;
     let (mut x, mut y) = (0i32, 0i32);
     let bx = (*sd).bl.x as i32;
     let by = (*sd).bl.y as i32;
@@ -357,10 +346,10 @@ pub unsafe fn clif_postitem(sd: *mut MapSessionData) -> c_int {
         _ => {}
     }
     if x < 0 || y < 0 { return 0; }
-    let obj = read_obj((*sd).bl.m as c_int, x as c_int, y as c_int) as c_int;
+    let obj = read_obj((*sd).bl.m as i32, x as i32, y as i32) as i32;
     if obj == 1619 || obj == 1620 {
         if (*sd).status.inventory[slot as usize].amount > 1 {
-            clif_input(sd, (*sd).last_click as c_int, c"How many would you like to post?".as_ptr(), c"".as_ptr());
+            clif_input(sd, (*sd).last_click as i32, c"How many would you like to post?".as_ptr(), c"".as_ptr());
         }
     }
     (*sd).invslot = slot as u8;
@@ -368,17 +357,16 @@ pub unsafe fn clif_postitem(sd: *mut MapSessionData) -> c_int {
 }
 
 /// Swap two inventory slots from a client rearrange packet.
-/// Replaces `clif_parsechangepos` in `c_src/sl_compat.c` (line 3067).
-///
+////
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_parsechangepos(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsechangepos(sd: *mut MapSessionData) -> i32 {
     use crate::game::map_parse::chat::clif_sendminitext;
     if rbyte((*sd).fd, 5) == 0 {
         pc_changeitem(
             sd,
-            rbyte((*sd).fd, 6) as c_int - 1,
-            rbyte((*sd).fd, 7) as c_int - 1,
+            rbyte((*sd).fd, 6) as i32 - 1,
+            rbyte((*sd).fd, 7) as i32 - 1,
         );
     } else {
         clif_sendminitext(sd, c"You are busy.".as_ptr());
@@ -387,15 +375,14 @@ pub unsafe fn clif_parsechangepos(sd: *mut MapSessionData) -> c_int {
 }
 
 /// Save the player's friend list (20 slots) from a client update packet.
-/// Replaces `clif_parsefriends` in `c_src/sl_compat.c` (line 3113).
-///
+////
 /// # Safety
 /// `sd` must be valid. `friend_list` is a raw byte buffer of length `len`.
 pub unsafe fn clif_parsefriends(
     sd: *mut MapSessionData,
-    friend_list: *const c_char,
-    len: c_int,
-) -> c_int {
+    friend_list: *const i8,
+    len: i32,
+) -> i32 {
     if sd.is_null() || friend_list.is_null() || len <= 0 { return 0; }
 
     // Parse up to 20 null-terminated names separated by 0x0C control bytes.
@@ -460,8 +447,7 @@ pub unsafe fn clif_parsefriends(
 }
 
 /// Return the AccountId for the given character ID, or 0 if not found.
-/// Replaces `clif_isregistered` in `c_src/sl_compat.c` (line 3555).
-pub unsafe fn clif_isregistered(id: c_uint) -> c_int {
+pub unsafe fn clif_isregistered(id: u32) -> i32 {
     blocking_run(async move {
         sqlx::query_scalar::<_, u32>(
             "SELECT `AccountId` FROM `Accounts` WHERE \
@@ -474,13 +460,12 @@ pub unsafe fn clif_isregistered(id: c_uint) -> c_int {
     })
     .ok()
     .flatten()
-    .unwrap_or(0) as c_int
+    .unwrap_or(0) as i32
 }
 
 /// Return a heap-allocated C string with the account email for character `id`, or NULL.
 /// The caller does not free the pointer (leaked to match original C behaviour).
-/// Replaces `clif_getaccountemail` in `c_src/sl_compat.c` (line 3571).
-pub unsafe fn clif_getaccountemail(id: c_uint) -> *const c_char {
+pub unsafe fn clif_getaccountemail(id: u32) -> *const i8 {
     let acct_id = clif_isregistered(id);
     if acct_id == 0 { return std::ptr::null(); }
     let email: Option<String> = blocking_run(async move {
@@ -495,27 +480,25 @@ pub unsafe fn clif_getaccountemail(id: c_uint) -> *const c_char {
     .unwrap_or(None);
     match email {
         Some(s) => match std::ffi::CString::new(s) {
-            Ok(cs) => cs.into_raw() as *const c_char, // leaked intentionally
+            Ok(cs) => cs.into_raw() as *const i8, // leaked intentionally
             Err(_) => std::ptr::null(),
         },
         None => std::ptr::null(),
     }
 }
 
-/// Busy-wait for `milliseconds` milliseconds (mirrors C `clock()` spin loop).
-/// Replaces `clif_delay` in `c_src/sl_compat.c` (line 2669).
-pub unsafe fn clif_delay(milliseconds: c_int) {
+/// Busy-wait for `milliseconds` milliseconds.
+pub unsafe fn clif_delay(milliseconds: i32) {
     let dur = std::time::Duration::from_millis(milliseconds as u64);
     let start = std::time::Instant::now();
     while start.elapsed() < dur {}
 }
 
 /// Send a heartbeat packet (opcode 0x3B) to the player with id `id`.
-/// Replaces `clif_sendheartbeat` in `c_src/sl_compat.c` (line 2574).
-pub unsafe fn clif_sendheartbeat(id: c_int, _none: c_int) -> c_int {
+pub unsafe fn clif_sendheartbeat(id: i32, _none: i32) -> i32 {
     use crate::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
     use crate::game::map_server::map_id2sd;
-    let sd = map_id2sd(id as c_uint) as *mut MapSessionData;
+    let sd = map_id2sd(id as u32) as *mut MapSessionData;
     if sd.is_null() { return 1; }
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
@@ -538,25 +521,23 @@ pub unsafe fn clif_sendheartbeat(id: c_int, _none: c_int) -> c_int {
 }
 
 /// `foreach_in_cell` callback: run the floor NPC's "click2" script.
-/// Replaces `clif_runfloor_sub` in `c_src/sl_compat.c` (line 2887).
 #[cfg(not(test))]
 pub unsafe fn clif_runfloor_sub_inner(bl: *mut crate::database::map_db::BlockList, sd: *mut MapSessionData) -> i32 {
     use crate::game::pc::FLOOR;
     if bl.is_null() || sd.is_null() { return 0; }
     use crate::game::npc::NpcData;
-    if (*bl).subtype as c_int != FLOOR as c_int { return 0; }
+    if (*bl).subtype as i32 != FLOOR as i32 { return 0; }
     let nd = bl as *mut NpcData;
-    sl_async_freeco(sd as *mut c_void);
+    sl_async_freeco(sd as *mut std::ffi::c_void);
     sl_doscript_2((*nd).name.as_ptr(), c"click2".as_ptr(), &raw mut (*sd).bl, &raw mut (*nd).bl);
     0
 }
 
 /// Propagate a kill-registry entry to all group members on the same map.
-/// Replaces `clif_addtokillreg` in `c_src/sl_compat.c` (line 2560).
-///
+////
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_addtokillreg(sd: *mut MapSessionData, mob: c_int) -> c_int {
+pub unsafe fn clif_addtokillreg(sd: *mut MapSessionData, mob: i32) -> i32 {
     use crate::game::pc::{groups, MAX_GROUP_MEMBERS};
     use crate::game::map_server::map_id2sd;
     if sd.is_null() { return 0; }
@@ -572,12 +553,11 @@ pub unsafe fn clif_addtokillreg(sd: *mut MapSessionData, mob: c_int) -> c_int {
 }
 
 /// Handle a client item-drop request.
-/// Replaces `clif_parsedropitem` in `c_src/sl_compat.c` (line 2901).
-///
+////
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 #[cfg(not(test))]
-pub unsafe fn clif_parsedropitem(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsedropitem(sd: *mut MapSessionData) -> i32 {
     if pc_readglobalreg(sd, c"goldbardupe".as_ptr()) != 0 { return 0; }
     if (*sd).status.gm_level == 0 {
         if (*sd).status.state == 3 {
@@ -590,26 +570,26 @@ pub unsafe fn clif_parsedropitem(sd: *mut MapSessionData) -> c_int {
         }
     }
     (*sd).fakeDrop = 0;
-    let id = rbyte((*sd).fd, 5) as c_int - 1;
-    let all = rbyte((*sd).fd, 6) as c_int;
+    let id = rbyte((*sd).fd, 5) as i32 - 1;
+    let all = rbyte((*sd).fd, 6) as i32;
     if id as usize >= (*sd).status.maxinv as usize { return 0; }
     if (*sd).status.inventory[id as usize].id != 0 {
-        if itemdb_droppable((*sd).status.inventory[id as usize].id as c_uint) != 0 {
+        if itemdb_droppable((*sd).status.inventory[id as usize].id as u32) != 0 {
             clif_sendminitext(sd, c"You can't drop this item.".as_ptr());
             return 0;
         }
     }
     clif_sendaction(&raw mut (*sd).bl, 5, 20, 0);
     (*sd).invslot = id as u8;
-    sl_doscript_simple(itemdb_yname((*sd).status.inventory[id as usize].id as c_uint), c"on_drop".as_ptr(), &raw mut (*sd).bl);
+    sl_doscript_simple(itemdb_yname((*sd).status.inventory[id as usize].id as u32), c"on_drop".as_ptr(), &raw mut (*sd).bl);
     for x in 0..MAX_MAGIC_TIMERS {
         if (*sd).status.dura_aether[x].id > 0 && (*sd).status.dura_aether[x].duration > 0 {
-            sl_doscript_simple(magicdb_yname((*sd).status.dura_aether[x].id as c_int), c"on_drop_while_cast".as_ptr(), &raw mut (*sd).bl);
+            sl_doscript_simple(magicdb_yname((*sd).status.dura_aether[x].id as i32), c"on_drop_while_cast".as_ptr(), &raw mut (*sd).bl);
         }
     }
     for x in 0..MAX_MAGIC_TIMERS {
         if (*sd).status.dura_aether[x].id > 0 && (*sd).status.dura_aether[x].aether > 0 {
-            sl_doscript_simple(magicdb_yname((*sd).status.dura_aether[x].id as c_int), c"on_drop_while_aether".as_ptr(), &raw mut (*sd).bl);
+            sl_doscript_simple(magicdb_yname((*sd).status.dura_aether[x].id as i32), c"on_drop_while_aether".as_ptr(), &raw mut (*sd).bl);
         }
     }
     if (*sd).fakeDrop != 0 { return 0; }
@@ -619,40 +599,40 @@ pub unsafe fn clif_parsedropitem(sd: *mut MapSessionData) -> c_int {
 
 // ─── Constants needed by handler functions ─────────────────────────────────
 
-const SAMEAREA: c_int = 6;
-const BL_ALL:   c_int = 0x0F;
-const LOOK_GET:  c_int = 0;
+const SAMEAREA: i32 = 6;
+const BL_ALL:   i32 = 0x0F;
+const LOOK_GET:  i32 = 0;
 
-// ─── Board questionnaire struct (mirrors map_server.h `struct board_questionaire`) ──
+// ─── Board questionnaire struct ─────────────────────────────────────────────
 
 #[repr(C)]
 pub struct BoardQuestionaire {
     pub header:     [u8; 255],
     pub question:   [u8; 255],
-    pub input_lines: c_uint,
+    pub input_lines: u32,
 }
 
 // ─── WFIFO write helpers ────────────────────────────────────────────────────
 
-/// Write big-endian u16 at `pos` in the send-FIFO. Mirrors `WFIFOW(fd,pos) = SWAP16(val)`.
+/// Write big-endian u16 at `pos` in the send-FIFO.
 #[inline]
-unsafe fn wbe16(fd: c_int, pos: usize, val: u16) {
+unsafe fn wbe16(fd: i32, pos: usize, val: u16) {
     use crate::session::rust_session_wdata_ptr;
     let p = rust_session_wdata_ptr(fd, pos) as *mut u16;
     if !p.is_null() { p.write_unaligned(val.to_be()); }
 }
 
-/// Write big-endian u32 at `pos` in the send-FIFO. Mirrors `WFIFOL(fd,pos) = SWAP32(val)`.
+/// Write big-endian u32 at `pos` in the send-FIFO.
 #[inline]
-unsafe fn wbe32(fd: c_int, pos: usize, val: u32) {
+unsafe fn wbe32(fd: i32, pos: usize, val: u32) {
     use crate::session::rust_session_wdata_ptr;
     let p = rust_session_wdata_ptr(fd, pos) as *mut u32;
     if !p.is_null() { p.write_unaligned(val.to_be()); }
 }
 
-/// Copy null-terminated string bytes starting at `pos`. Mirrors `strcpy(WFIFOP(fd,pos), s)`.
+/// Copy null-terminated string bytes starting at `pos`.
 #[inline]
-unsafe fn wfifo_strcpy(fd: c_int, pos: usize, s: &[u8]) {
+unsafe fn wfifo_strcpy(fd: i32, pos: usize, s: &[u8]) {
     use crate::session::rust_session_wdata_ptr;
     let p = rust_session_wdata_ptr(fd, pos);
     if !p.is_null() {
@@ -663,14 +643,13 @@ unsafe fn wfifo_strcpy(fd: c_int, pos: usize, s: &[u8]) {
 
 // ─── Static buffer for clif_getName ────────────────────────────────────────
 
-/// Mirrors C `static char name[16]` in `clif_getName`.
+/// Reusable 16-byte name buffer.
 static NAME_BUF: std::sync::Mutex<[u8; 16]> = std::sync::Mutex::new([0u8; 16]);
 
 // ─── New ported functions ───────────────────────────────────────────────────
 
 /// Look up a character name by ChaId; returns pointer into a static 16-byte buffer.
-/// Replaces `clif_getName` in `c_src/sl_compat.c` (line 2334).
-pub unsafe fn clif_getName(id: c_uint) -> *mut c_char {
+pub unsafe fn clif_getName(id: u32) -> *mut i8 {
     let name: String = blocking_run(async move {
         sqlx::query_scalar::<_, String>(
             "SELECT `ChaName` FROM `Character` WHERE `ChaId` = ?"
@@ -687,17 +666,16 @@ pub unsafe fn clif_getName(id: c_uint) -> *mut c_char {
     let bytes = name.as_bytes();
     let n = bytes.len().min(15);
     buf[..n].copy_from_slice(&bytes[..n]);
-    buf.as_mut_ptr() as *mut c_char
+    buf.as_mut_ptr() as *mut i8
 }
 
 /// Log a possible hacking event and broadcast to GMs.
-/// Replaces `clif_Hacker` in `c_src/sl_compat.c` (line 2355).
-pub unsafe fn clif_Hacker(name: *mut c_char, reason: *const c_char) -> c_int {
+pub unsafe fn clif_Hacker(name: *mut i8, reason: *const i8) -> i32 {
     let name_s = if name.is_null() { "[?]" }
         else { CStr::from_ptr(name).to_str().unwrap_or("[?]") };
     let reason_s = if reason.is_null() { "" }
         else { CStr::from_ptr(reason).to_str().unwrap_or("") };
-    eprintln!("{} possibly hacking{}", name_s, reason_s);
+    tracing::warn!("{} possibly hacking{}", name_s, reason_s);
     let msg = std::ffi::CString::new(
         format!("{} possibly hacking: {}", name_s, reason_s)
     ).unwrap_or_default();
@@ -706,10 +684,9 @@ pub unsafe fn clif_Hacker(name: *mut c_char, reason: *const c_char) -> c_int {
 }
 
 /// Accept a character-load request; look up ChaId by name, then call intif_load.
-/// Replaces `clif_accept2` in `c_src/sl_compat.c` (line 2379).
 pub unsafe fn clif_accept2(
-    fd: c_int, name: *mut c_char, name_len: c_int,
-) -> c_int {
+    fd: i32, name: *mut i8, name_len: i32,
+) -> i32 {
     if name_len <= 0 || name_len > 16 {
         rust_session_set_eof(fd, 11);
         return 0;
@@ -720,7 +697,7 @@ pub unsafe fn clif_accept2(
     }
     let mut n = [0u8; 16];
     std::ptr::copy_nonoverlapping(name as *const u8, n.as_mut_ptr(), name_len as usize);
-    let name_str = CStr::from_ptr(n.as_ptr() as *const c_char)
+    let name_str = CStr::from_ptr(n.as_ptr() as *const i8)
         .to_str().unwrap_or("").to_owned();
     let id: u32 = blocking_run(async move {
         sqlx::query_scalar::<_, u32>(
@@ -733,17 +710,16 @@ pub unsafe fn clif_accept2(
     .ok()
     .flatten()
     .unwrap_or(0);
-    crate::game::map_char::rust_intif_load(fd, id, n.as_ptr() as *const c_char);
+    crate::game::map_char::rust_intif_load(fd, id, n.as_ptr() as *const i8);
     0
 }
 
 /// Send a server-transfer packet to redirect the client to another map server.
-/// Replaces `clif_transfer` in `c_src/sl_compat.c` (line 2440).
 #[cfg(not(test))]
 pub unsafe fn clif_transfer(
-    sd: *mut MapSessionData, serverid: c_int,
-    _m: c_int, _x: c_int, _y: c_int,
-) -> c_int {
+    sd: *mut MapSessionData, serverid: i32,
+    _m: i32, _x: i32, _y: i32,
+) -> i32 {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -756,7 +732,7 @@ pub unsafe fn clif_transfer(
     };
     let xk = crate::config::config().xor_key.as_bytes();
     let xk_len = xk.len().min(9);
-    let name_bytes = CStr::from_ptr((*sd).status.name.as_ptr() as *const c_char).to_bytes();
+    let name_bytes = CStr::from_ptr((*sd).status.name.as_ptr() as *const i8).to_bytes();
     let name_len = name_bytes.len();
 
     use crate::session::{rust_session_wdata_ptr, rust_session_wfifohead, rust_session_commit};
@@ -784,11 +760,10 @@ pub unsafe fn clif_transfer(
 }
 
 /// Send a test server-transfer packet (hardcoded IP 192.88.99.100, port 2001).
-/// Replaces `clif_transfer_test` in `c_src/sl_compat.c` (line 2472).
 #[cfg(not(test))]
 pub unsafe fn clif_transfer_test(
-    sd: *mut MapSessionData, _m: c_int, _x: c_int, _y: c_int,
-) -> c_int {
+    sd: *mut MapSessionData, _m: i32, _x: i32, _y: i32,
+) -> i32 {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -826,13 +801,12 @@ pub unsafe fn clif_transfer_test(
 }
 
 /// Send the board questionnaire dialog to `sd`.
-/// Replaces `clif_sendBoardQuestionaire` in `c_src/sl_compat.c` (line 2502).
 #[cfg(not(test))]
 pub unsafe fn clif_sendBoardQuestionaire(
     sd: *mut MapSessionData,
     q: *const BoardQuestionaire,
-    count: c_int,
-) -> c_int {
+    count: i32,
+) -> i32 {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -849,7 +823,7 @@ pub unsafe fn clif_sendBoardQuestionaire(
     let mut len: usize = 7;
     for i in 0..count as usize {
         let item = &*q.add(i);
-        let hlen = CStr::from_ptr(item.header.as_ptr() as *const c_char).to_bytes().len();
+        let hlen = CStr::from_ptr(item.header.as_ptr() as *const i8).to_bytes().len();
         *w(len) = hlen as u8;
         len += 1;
         std::ptr::copy_nonoverlapping(item.header.as_ptr(), w(len), hlen);
@@ -859,7 +833,7 @@ pub unsafe fn clif_sendBoardQuestionaire(
         len += 2;
         *w(len) = item.input_lines as u8;
         len += 1;
-        let qlen = CStr::from_ptr(item.question.as_ptr() as *const c_char).to_bytes().len();
+        let qlen = CStr::from_ptr(item.question.as_ptr() as *const i8).to_bytes().len();
         *w(len) = qlen as u8;
         len += 1;
         std::ptr::copy_nonoverlapping(item.question.as_ptr(), w(len), qlen);
@@ -876,9 +850,8 @@ pub unsafe fn clif_sendBoardQuestionaire(
 }
 
 /// Handle client setting-toggle request (whisper, group, shout, etc.).
-/// Replaces `clif_changestatus` in `c_src/sl_compat.c` (line 3616).
 #[cfg(not(test))]
-pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: c_int) -> c_int {
+pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
     use crate::game::pc::{
         FLAG_WHISPER, FLAG_GROUP, FLAG_SHOUT, FLAG_ADVICE, FLAG_MAGIC,
         FLAG_WEATHER, FLAG_REALM, FLAG_EXCHANGE, FLAG_FASTMOVE, FLAG_SOUND,
@@ -973,9 +946,9 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: c_int) -> c_int 
             clif_sendstatus(sd, 0);
         }
         0x07 => {
-            let oldm = (*sd).bl.m as c_int;
-            let oldx = (*sd).bl.x as c_int;
-            let oldy = (*sd).bl.y as c_int;
+            let oldm = (*sd).bl.m as i32;
+            let oldx = (*sd).bl.x as i32;
+            let oldy = (*sd).bl.y as i32;
             (*sd).status.setting_flags ^= FLAG_REALM as u16;
             clif_quit(sd);
             clif_sendmapinfo(sd);
@@ -1067,12 +1040,12 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: c_int) -> c_int 
     0
 }
 
-// ─── createdb_start (ported from c_src/sl_compat.c / c_src/creation_db.c) ───
+// ─── createdb_start ─────────────────────────────────────────────────────────
 //
 // Opcode 0x6B — item creation system.
 // Reads ingredient items from the session buffer, builds a Lua `creationItems`
 // table, and dispatches `itemCreation(pc)` script.
-pub unsafe fn createdb_start(sd: *mut c_void) -> c_int {
+pub unsafe fn createdb_start(sd: *mut std::ffi::c_void) -> i32 {
     use crate::database::item_db::rust_itemdb_stackamount;
     use crate::session::rust_session_rdata_ptr;
     use crate::game::scripting::sl_state;
@@ -1124,7 +1097,7 @@ pub unsafe fn createdb_start(sd: *mut c_void) -> c_int {
         Ok(())
     })();
 
-    sl_async_freeco(sd as *mut c_void);
+    sl_async_freeco(sd as *mut std::ffi::c_void);
 
     let bl_ptr = &mut (*sd).bl as *mut BlockList;
     crate::game::scripting::doscript_blargs(

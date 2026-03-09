@@ -1,14 +1,9 @@
-//! Object collection functions — ported from `c_src/sl_compat.c`.
+//! Object collection functions for block-grid spatial queries.
 //!
-//! These 8 functions are called from Lua scripts via C ABI. They collect
-//! `BlockList` pointers into a caller-supplied flat array, filtered by entity
-//! type and optionally by liveness (dead mobs / stealthed PCs excluded).
+//! Uses the closure API from `crate::game::block` for spatial queries.
 //!
-//! Each function mirrors the corresponding `sl_g_*` helper that used
-//! `map_foreachincell` / `map_foreachinarea` with a va_list callback in C.
 //! Here the closure API from `crate::game::block` replaces that pattern.
 
-use std::os::raw::{c_int, c_void};
 use crate::game::block::{self, AreaType};
 use crate::database::map_db::BlockList;
 
@@ -16,9 +11,9 @@ use crate::database::map_db::BlockList;
 
 /// Write `bl` into `out_ptrs[count]` if `count < max_count`, then increment.
 #[inline(always)]
-unsafe fn push_ptr(out_ptrs: *mut *mut c_void, count: &mut c_int, max_count: c_int, bl: *mut BlockList) {
+unsafe fn push_ptr(out_ptrs: *mut *mut std::ffi::c_void, count: &mut i32, max_count: i32, bl: *mut BlockList) {
     if *count < max_count {
-        *out_ptrs.add(*count as usize) = bl as *mut c_void;
+        *out_ptrs.add(*count as usize) = bl as *mut std::ffi::c_void;
         *count += 1;
     }
 }
@@ -27,19 +22,18 @@ unsafe fn push_ptr(out_ptrs: *mut *mut c_void, count: &mut c_int, max_count: c_i
 
 /// Collect up to `max_count` entity pointers of `bl_type` at cell (x, y) on map `m`.
 ///
-/// Mirrors `sl_g_getobjectscell` / `bll_getobjects_cell` from `scripting.c`.
 ///
 /// # Safety
 /// `out_ptrs` must point to a caller-allocated array of at least `max_count`
-/// `*mut c_void` slots. `m`, `x`, `y` must identify a valid, loaded map cell.
+/// `*mut std::ffi::c_void` slots. `m`, `x`, `y` must identify a valid, loaded map cell.
 pub unsafe fn sl_g_getobjectscell(
-    m: c_int,
-    x: c_int,
-    y: c_int,
-    bl_type: c_int,
-    out_ptrs: *mut *mut c_void,
-    max_count: c_int,
-) -> c_int {
+    m: i32,
+    x: i32,
+    y: i32,
+    bl_type: i32,
+    out_ptrs: *mut *mut std::ffi::c_void,
+    max_count: i32,
+) -> i32 {
     if out_ptrs.is_null() { return 0; }
     let mut count = 0i32;
     block::foreach_in_cell(m, x, y, bl_type, |bl| {
@@ -57,13 +51,13 @@ pub unsafe fn sl_g_getobjectscell(
 /// Same as `sl_g_getobjectscell`.
 // TODO: port map_foreachincellwithtraps
 pub unsafe fn sl_g_getobjectscellwithtraps(
-    m: c_int,
-    x: c_int,
-    y: c_int,
-    bl_type: c_int,
-    out_ptrs: *mut *mut c_void,
-    max_count: c_int,
-) -> c_int {
+    m: i32,
+    x: i32,
+    y: i32,
+    bl_type: i32,
+    out_ptrs: *mut *mut std::ffi::c_void,
+    max_count: i32,
+) -> i32 {
     if out_ptrs.is_null() { return 0; }
     let mut count = 0i32;
     block::foreach_in_cell(m, x, y, bl_type, |bl| {
@@ -75,19 +69,18 @@ pub unsafe fn sl_g_getobjectscellwithtraps(
 
 /// Like `sl_g_getobjectscell` but skips dead mobs and stealthed / dead PCs.
 ///
-/// Mirrors `sl_g_getaliveobjectscell` from `sl_compat.c`.
 ///
 /// # Safety
 /// Same as `sl_g_getobjectscell`.
 #[cfg(not(test))]
 pub unsafe fn sl_g_getaliveobjectscell(
-    m: c_int,
-    x: c_int,
-    y: c_int,
-    bl_type: c_int,
-    out_ptrs: *mut *mut c_void,
-    max_count: c_int,
-) -> c_int {
+    m: i32,
+    x: i32,
+    y: i32,
+    bl_type: i32,
+    out_ptrs: *mut *mut std::ffi::c_void,
+    max_count: i32,
+) -> i32 {
     if out_ptrs.is_null() { return 0; }
     let mut count = 0i32;
     block::foreach_in_cell(m, x, y, bl_type, |bl| {
@@ -103,16 +96,15 @@ pub unsafe fn sl_g_getaliveobjectscell(
 
 /// Collect up to `max_count` entity pointers of `bl_type` across the entire map `m`.
 ///
-/// Mirrors `sl_g_getobjectsinmap` / `bll_getobjects_map` from `scripting.c`.
 ///
 /// # Safety
 /// `out_ptrs` must point to a caller-allocated array of at least `max_count` slots.
 pub unsafe fn sl_g_getobjectsinmap(
-    m: c_int,
-    bl_type: c_int,
-    out_ptrs: *mut *mut c_void,
-    max_count: c_int,
-) -> c_int {
+    m: i32,
+    bl_type: i32,
+    out_ptrs: *mut *mut std::ffi::c_void,
+    max_count: i32,
+) -> i32 {
     if out_ptrs.is_null() { return 0; }
     let mut count = 0i32;
     block::foreach_in_area(m, 0, 0, AreaType::SameMap, bl_type, |bl| {
@@ -127,22 +119,21 @@ pub unsafe fn sl_g_getobjectsinmap(
 /// Collect up to `max_count` entity pointers of `bl_type` within AREA range
 /// of `bl_ptr`'s position.
 ///
-/// Mirrors `sl_g_getobjectsarea` / `bll_getobjects_area` from `scripting.c`.
 ///
 /// # Safety
 /// `bl_ptr` must be a valid, non-null `*mut BlockList`. `out_ptrs` must point
 /// to a caller-allocated array of at least `max_count` slots.
 pub unsafe fn sl_g_getobjectsarea(
-    bl_ptr: *mut c_void,
-    bl_type: c_int,
-    out_ptrs: *mut *mut c_void,
-    max_count: c_int,
-) -> c_int {
+    bl_ptr: *mut std::ffi::c_void,
+    bl_type: i32,
+    out_ptrs: *mut *mut std::ffi::c_void,
+    max_count: i32,
+) -> i32 {
     if bl_ptr.is_null() { return 0; }
     if out_ptrs.is_null() { return 0; }
     let bl = &*(bl_ptr as *const BlockList);
     let mut count = 0i32;
-    block::foreach_in_area(bl.m as c_int, bl.x as c_int, bl.y as c_int, AreaType::Area, bl_type, |b| {
+    block::foreach_in_area(bl.m as i32, bl.x as i32, bl.y as i32, AreaType::Area, bl_type, |b| {
         push_ptr(out_ptrs, &mut count, max_count, b);
         0
     });
@@ -151,22 +142,21 @@ pub unsafe fn sl_g_getobjectsarea(
 
 /// Like `sl_g_getobjectsarea` but skips dead mobs and stealthed / dead PCs.
 ///
-/// Mirrors `sl_g_getaliveobjectsarea` from `sl_compat.c`.
 ///
 /// # Safety
 /// Same as `sl_g_getobjectsarea`.
 #[cfg(not(test))]
 pub unsafe fn sl_g_getaliveobjectsarea(
-    bl_ptr: *mut c_void,
-    bl_type: c_int,
-    out_ptrs: *mut *mut c_void,
-    max_count: c_int,
-) -> c_int {
+    bl_ptr: *mut std::ffi::c_void,
+    bl_type: i32,
+    out_ptrs: *mut *mut std::ffi::c_void,
+    max_count: i32,
+) -> i32 {
     if bl_ptr.is_null() { return 0; }
     if out_ptrs.is_null() { return 0; }
     let bl = &*(bl_ptr as *const BlockList);
     let mut count = 0i32;
-    block::foreach_in_area(bl.m as c_int, bl.x as c_int, bl.y as c_int, AreaType::Area, bl_type, |b| {
+    block::foreach_in_area(bl.m as i32, bl.x as i32, bl.y as i32, AreaType::Area, bl_type, |b| {
         if block::is_alive(b) {
             push_ptr(out_ptrs, &mut count, max_count, b);
         }
@@ -180,21 +170,20 @@ pub unsafe fn sl_g_getaliveobjectsarea(
 /// Collect up to `max_count` entity pointers of `bl_type` across the whole map
 /// that `bl_ptr` is on.
 ///
-/// Mirrors `sl_g_getobjectssamemap` / `bll_getobjects_samemap` from `scripting.c`.
 ///
 /// # Safety
 /// Same as `sl_g_getobjectsarea`.
 pub unsafe fn sl_g_getobjectssamemap(
-    bl_ptr: *mut c_void,
-    bl_type: c_int,
-    out_ptrs: *mut *mut c_void,
-    max_count: c_int,
-) -> c_int {
+    bl_ptr: *mut std::ffi::c_void,
+    bl_type: i32,
+    out_ptrs: *mut *mut std::ffi::c_void,
+    max_count: i32,
+) -> i32 {
     if bl_ptr.is_null() { return 0; }
     if out_ptrs.is_null() { return 0; }
     let bl = &*(bl_ptr as *const BlockList);
     let mut count = 0i32;
-    block::foreach_in_area(bl.m as c_int, bl.x as c_int, bl.y as c_int, AreaType::SameMap, bl_type, |b| {
+    block::foreach_in_area(bl.m as i32, bl.x as i32, bl.y as i32, AreaType::SameMap, bl_type, |b| {
         push_ptr(out_ptrs, &mut count, max_count, b);
         0
     });
@@ -203,22 +192,21 @@ pub unsafe fn sl_g_getobjectssamemap(
 
 /// Like `sl_g_getobjectssamemap` but skips dead mobs and stealthed / dead PCs.
 ///
-/// Mirrors `sl_g_getaliveobjectssamemap` from `sl_compat.c`.
 ///
 /// # Safety
 /// Same as `sl_g_getobjectsarea`.
 #[cfg(not(test))]
 pub unsafe fn sl_g_getaliveobjectssamemap(
-    bl_ptr: *mut c_void,
-    bl_type: c_int,
-    out_ptrs: *mut *mut c_void,
-    max_count: c_int,
-) -> c_int {
+    bl_ptr: *mut std::ffi::c_void,
+    bl_type: i32,
+    out_ptrs: *mut *mut std::ffi::c_void,
+    max_count: i32,
+) -> i32 {
     if bl_ptr.is_null() { return 0; }
     if out_ptrs.is_null() { return 0; }
     let bl = &*(bl_ptr as *const BlockList);
     let mut count = 0i32;
-    block::foreach_in_area(bl.m as c_int, bl.x as c_int, bl.y as c_int, AreaType::SameMap, bl_type, |b| {
+    block::foreach_in_area(bl.m as i32, bl.x as i32, bl.y as i32, AreaType::SameMap, bl_type, |b| {
         if block::is_alive(b) {
             push_ptr(out_ptrs, &mut count, max_count, b);
         }
@@ -244,7 +232,7 @@ mod tests {
     /// queried cell.
     ///
     /// This exercises the `push_ptr` write-into-array path end-to-end through
-    /// the public C ABI entry point.
+    /// the Lua-callable entry point.
     #[test]
     fn test_sl_g_getobjectscell_writes_ptr_and_count() {
         unsafe {
@@ -264,7 +252,7 @@ mod tests {
             test_set_map(slot_ptr);
 
             // Allocate an output array with 4 slots.
-            let mut out_ptrs: [*mut c_void; 4] = [std::ptr::null_mut(); 4];
+            let mut out_ptrs: [*mut std::ffi::c_void; 4] = [std::ptr::null_mut(); 4];
 
             let count = sl_g_getobjectscell(
                 0,          // map slot 0

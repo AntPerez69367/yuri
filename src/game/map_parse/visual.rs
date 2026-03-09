@@ -1,11 +1,8 @@
-//! Port of the visual/look system from `c_src/map_parse.c`.
-//!
 //! Covers object spawn packets, look callbacks, and the area-broadcast
 //! helpers that send appearance data to players.
 
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
-use std::ffi::{c_int, c_uint};
 
 use crate::database::map_db::BlockList;
 use crate::game::mob::{MobSpawnData, MOB_DEAD};
@@ -27,21 +24,19 @@ use crate::session::{rust_session_exists, rust_session_set_eof};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-/// `enum { LOOK_GET, LOOK_SEND }` from `c_src/map_parse.h`.
-const LOOK_GET:  c_int = 0;
-const LOOK_SEND: c_int = 1;
+const LOOK_GET:  i32 = 0;
+const LOOK_SEND: i32 = 1;
 
 /// `ITM_TRAPS` item type constant (from item_db).
-const ITM_TRAPS: c_int = 4;
+const ITM_TRAPS: i32 = 4;
 
-/// `bl_type` field is `u8`; BL_* constants from pc.rs are `c_int`.
+/// `bl_type` field is `u8`; BL_* constants from pc.rs are `i32`.
 /// These local aliases allow direct comparison without casts at every use site.
 const BL_PC_U8:   u8 = BL_PC   as u8;
 const BL_MOB_U8:  u8 = BL_MOB  as u8;
 const BL_NPC_U8:  u8 = BL_NPC  as u8;
 const BL_ITEM_U8: u8 = BL_ITEM as u8;
 
-// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
 
 use crate::game::client::clif_send;
 use crate::game::block::map_addblock;
@@ -53,9 +48,9 @@ use crate::database::item_db::{
 };
 use crate::game::pc::rust_pc_isequip;
 
-// map_id2bl returns *mut c_void in map_server — wrap with cast.
+// map_id2bl returns *mut std::ffi::c_void in map_server — wrap with cast.
 #[inline]
-unsafe fn map_id2bl(id: c_uint) -> *mut BlockList {
+unsafe fn map_id2bl(id: u32) -> *mut BlockList {
     crate::game::map_server::map_id2bl(id) as *mut BlockList
 }
 
@@ -65,8 +60,7 @@ use crate::game::map_parse::combat::clif_sendanimations;
 
 /// Send an object-despawn packet to all nearby clients.
 ///
-/// Mirrors `clif_lookgone` from `c_src/map_parse.c` (~line 2747).
-pub unsafe fn clif_lookgone(bl: *mut BlockList) -> c_int {
+pub unsafe fn clif_lookgone(bl: *mut BlockList) -> i32 {
     let mut buf = [0u8; 16];
 
     let bl_ref = &*bl;
@@ -108,7 +102,6 @@ pub unsafe fn clif_lookgone(bl: *mut BlockList) -> c_int {
 
 /// Initialise the mob-look accumulation fields on a player session.
 ///
-/// Typed inner function replacing the old variadic `clif_mob_look_start_func` callback.
 ///
 /// Called with `BL_PC` type so `bl` is a `MapSessionData`.
 /// Mirrors `clif_mob_look_start_func` (~line 1426).
@@ -131,7 +124,6 @@ pub unsafe fn clif_mob_look_start_func_inner(bl: *mut BlockList) -> i32 {
 
 // ─── clif_mob_look_close_func ─────────────────────────────────────────────────
 
-/// Typed inner function replacing the old variadic `clif_mob_look_close_func` callback.
 ///
 /// Flush the accumulated mob-look packet buffer to the client.
 /// Mirrors `clif_mob_look_close_func` (~line 1446).
@@ -157,7 +149,6 @@ pub unsafe fn clif_mob_look_close_func_inner(bl: *mut BlockList) -> i32 {
 
 // ─── clif_object_look_sub ────────────────────────────────────────────────────
 
-/// Typed inner function replacing the old variadic `clif_object_look_sub` callback.
 ///
 /// Write one object entry into the batched mob-look packet buffer.
 ///
@@ -203,7 +194,7 @@ pub unsafe fn clif_object_look_sub_inner(bl: *mut BlockList, look_type: i32, arg
                 wfifob((*sd).fd, len + 20, 0);
                 wfifob((*sd).fd, len + 21, 0); // # of animations active
 
-                let mut animlen: c_int = 0;
+                let mut animlen: i32 = 0;
                 let mut n: usize = 0;
                 for x in 0..50usize {
                     if (*mob).da[x].duration != 0 && (*mob).da[x].animation != 0 {
@@ -217,7 +208,7 @@ pub unsafe fn clif_object_look_sub_inner(bl: *mut BlockList, look_type: i32, arg
 
                 wfifob((*sd).fd, len + 21, animlen as u8);
                 wfifob((*sd).fd, len + 22 + nlen, 0); // pass flag
-                (*sd).mob_len += 15 + nlen as c_int;
+                (*sd).mob_len += 15 + nlen as i32;
             } else if (*(*mob).data).isnpc == 1 {
                 wfifob((*sd).fd, len + 11, 12);
                 wfifow((*sd).fd, len + 16, (32768u16.wrapping_add((*mob).look)).swap_bytes());
@@ -277,7 +268,6 @@ pub unsafe fn clif_object_look_sub_inner(bl: *mut BlockList, look_type: i32, arg
 
 // ─── clif_object_look_sub2 ───────────────────────────────────────────────────
 
-/// Typed inner function replacing the old variadic `clif_object_look_sub2` callback.
 ///
 /// Send a single-object look packet immediately (not batched).
 /// Same argument layout as `clif_object_look_sub_inner`.
@@ -395,7 +385,7 @@ pub unsafe fn clif_object_look_sub2_inner(bl: *mut BlockList, look_type: i32, ar
 /// Send a single-object look packet for a specific block-list ID.
 ///
 /// Mirrors `clif_object_look_specific` (~line 1716).
-pub unsafe fn clif_object_look_specific(sd: *mut MapSessionData, id: c_uint) -> c_int {
+pub unsafe fn clif_object_look_specific(sd: *mut MapSessionData, id: u32) -> i32 {
     if sd.is_null() { return 0; }
 
     let b = map_id2bl(id);
@@ -483,7 +473,7 @@ pub unsafe fn clif_object_look_specific(sd: *mut MapSessionData, id: c_uint) -> 
 /// Initialise mob-look accumulation state and reserve send-buffer space.
 ///
 /// Direct call (not callback). Mirrors `clif_mob_look_start` (~line 1813).
-pub unsafe fn clif_mob_look_start(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_mob_look_start(sd: *mut MapSessionData) -> i32 {
     (*sd).mob_count = 0;
     (*sd).mob_len   = 0;
     (*sd).mob_item  = 0;
@@ -502,7 +492,7 @@ pub unsafe fn clif_mob_look_start(sd: *mut MapSessionData) -> c_int {
 /// Flush the batched mob-look packet if any entries were accumulated.
 ///
 /// Direct call (not callback). Mirrors `clif_mob_look_close` (~line 1832).
-pub unsafe fn clif_mob_look_close(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_mob_look_close(sd: *mut MapSessionData) -> i32 {
     if (*sd).mob_count == 0 { return 0; }
 
     if (*sd).mob_item == 0 {
@@ -518,7 +508,6 @@ pub unsafe fn clif_mob_look_close(sd: *mut MapSessionData) -> c_int {
 
 // ─── clif_cnpclook_sub ───────────────────────────────────────────────────────
 
-/// Typed inner function replacing the old variadic `clif_cnpclook_sub` callback.
 ///
 /// Send full NPC (charstate NPC) appearance packet to a player.
 ///
@@ -782,7 +771,6 @@ pub unsafe fn clif_cnpclook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
 
 // ─── clif_cmoblook_sub ───────────────────────────────────────────────────────
 
-/// Typed inner function replacing the old variadic `clif_cmoblook_sub` callback.
 ///
 /// Send full character-mob (charstate mob) appearance packet to a player.
 ///
@@ -1044,7 +1032,6 @@ pub unsafe fn clif_cmoblook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
 
 // ─── clif_charlook_sub ───────────────────────────────────────────────────────
 
-/// Typed inner function replacing the old variadic `clif_charlook_sub` callback.
 ///
 /// Send full player appearance packet to another player.
 ///
@@ -1163,24 +1150,24 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         if (*sd).status.equip[EQ_ARMOR as usize].custom_look != 0 {
             wfifow((*src_sd).fd, 26, ((*sd).status.equip[EQ_ARMOR as usize].custom_look as u16).swap_bytes());
         } else {
-            wfifow((*src_sd).fd, 26, (rust_itemdb_look(rust_pc_isequip(sd, EQ_ARMOR) as c_uint) as u16).swap_bytes());
+            wfifow((*src_sd).fd, 26, (rust_itemdb_look(rust_pc_isequip(sd, EQ_ARMOR) as u32) as u16).swap_bytes());
         }
         if (*sd).status.armor_color > 0 {
             wfifob((*src_sd).fd, 28, (*sd).status.armor_color as u8);
         } else if (*sd).status.equip[EQ_ARMOR as usize].custom_look != 0 {
             wfifob((*src_sd).fd, 28, (*sd).status.equip[EQ_ARMOR as usize].custom_look_color as u8);
         } else {
-            wfifob((*src_sd).fd, 28, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_ARMOR) as c_uint) as u8);
+            wfifob((*src_sd).fd, 28, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_ARMOR) as u32) as u8);
         }
     }
 
     // coat
     if rust_pc_isequip(sd, EQ_COAT) != 0 {
-        wfifow((*src_sd).fd, 26, (rust_itemdb_look(rust_pc_isequip(sd, EQ_COAT) as c_uint) as u16).swap_bytes());
+        wfifow((*src_sd).fd, 26, (rust_itemdb_look(rust_pc_isequip(sd, EQ_COAT) as u32) as u16).swap_bytes());
         if (*sd).status.armor_color > 0 {
             wfifob((*src_sd).fd, 28, (*sd).status.armor_color as u8);
         } else {
-            wfifob((*src_sd).fd, 28, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_COAT) as c_uint) as u8);
+            wfifob((*src_sd).fd, 28, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_COAT) as u32) as u8);
         }
     }
 
@@ -1192,8 +1179,8 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         wfifow((*src_sd).fd, 29, ((*sd).status.equip[EQ_WEAP as usize].custom_look as u16).swap_bytes());
         wfifob((*src_sd).fd, 31, (*sd).status.equip[EQ_WEAP as usize].custom_look_color as u8);
     } else {
-        wfifow((*src_sd).fd, 29, (rust_itemdb_look(rust_pc_isequip(sd, EQ_WEAP) as c_uint) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 31, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_WEAP) as c_uint) as u8);
+        wfifow((*src_sd).fd, 29, (rust_itemdb_look(rust_pc_isequip(sd, EQ_WEAP) as u32) as u16).swap_bytes());
+        wfifob((*src_sd).fd, 31, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_WEAP) as u32) as u8);
     }
 
     // shield
@@ -1204,14 +1191,14 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         wfifow((*src_sd).fd, 32, ((*sd).status.equip[EQ_SHIELD as usize].custom_look as u16).swap_bytes());
         wfifob((*src_sd).fd, 34, (*sd).status.equip[EQ_SHIELD as usize].custom_look_color as u8);
     } else {
-        wfifow((*src_sd).fd, 32, (rust_itemdb_look(rust_pc_isequip(sd, EQ_SHIELD) as c_uint) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 34, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_SHIELD) as c_uint) as u8);
+        wfifow((*src_sd).fd, 32, (rust_itemdb_look(rust_pc_isequip(sd, EQ_SHIELD) as u32) as u16).swap_bytes());
+        wfifob((*src_sd).fd, 34, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_SHIELD) as u32) as u8);
     }
 
     // helm
     if rust_pc_isequip(sd, EQ_HELM) == 0
         || ((*sd).status.setting_flags & FLAG_HELM as u16) == 0
-        || rust_itemdb_look(rust_pc_isequip(sd, EQ_HELM) as c_uint) == -1
+        || rust_itemdb_look(rust_pc_isequip(sd, EQ_HELM) as u32) == -1
     {
         wfifob((*src_sd).fd, 35, 0);
         wfifow((*src_sd).fd, 36, 0xFFFF);
@@ -1221,8 +1208,8 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
             wfifob((*src_sd).fd, 36, (*sd).status.equip[EQ_HELM as usize].custom_look as u8);
             wfifob((*src_sd).fd, 37, (*sd).status.equip[EQ_HELM as usize].custom_look_color as u8);
         } else {
-            wfifob((*src_sd).fd, 36, rust_itemdb_look(rust_pc_isequip(sd, EQ_HELM) as c_uint) as u8);
-            wfifob((*src_sd).fd, 37, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_HELM) as c_uint) as u8);
+            wfifob((*src_sd).fd, 36, rust_itemdb_look(rust_pc_isequip(sd, EQ_HELM) as u32) as u8);
+            wfifob((*src_sd).fd, 37, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_HELM) as u32) as u8);
         }
     }
 
@@ -1231,8 +1218,8 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         wfifow((*src_sd).fd, 38, 0xFFFF);
         wfifob((*src_sd).fd, 40, 0);
     } else {
-        wfifow((*src_sd).fd, 38, (rust_itemdb_look(rust_pc_isequip(sd, EQ_FACEACC) as c_uint) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 40, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_FACEACC) as c_uint) as u8);
+        wfifow((*src_sd).fd, 38, (rust_itemdb_look(rust_pc_isequip(sd, EQ_FACEACC) as u32) as u16).swap_bytes());
+        wfifob((*src_sd).fd, 40, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_FACEACC) as u32) as u8);
     }
 
     // crown
@@ -1245,8 +1232,8 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
             wfifow((*src_sd).fd, 41, ((*sd).status.equip[EQ_CROWN as usize].custom_look as u16).swap_bytes());
             wfifob((*src_sd).fd, 43, (*sd).status.equip[EQ_CROWN as usize].custom_look_color as u8);
         } else {
-            wfifow((*src_sd).fd, 41, (rust_itemdb_look(rust_pc_isequip(sd, EQ_CROWN) as c_uint) as u16).swap_bytes());
-            wfifob((*src_sd).fd, 43, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_CROWN) as c_uint) as u8);
+            wfifow((*src_sd).fd, 41, (rust_itemdb_look(rust_pc_isequip(sd, EQ_CROWN) as u32) as u16).swap_bytes());
+            wfifob((*src_sd).fd, 43, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_CROWN) as u32) as u8);
         }
     }
 
@@ -1255,8 +1242,8 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         wfifow((*src_sd).fd, 44, 0xFFFF);
         wfifob((*src_sd).fd, 46, 0);
     } else {
-        wfifow((*src_sd).fd, 44, (rust_itemdb_look(rust_pc_isequip(sd, EQ_FACEACCTWO) as c_uint) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 46, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_FACEACCTWO) as c_uint) as u8);
+        wfifow((*src_sd).fd, 44, (rust_itemdb_look(rust_pc_isequip(sd, EQ_FACEACCTWO) as u32) as u16).swap_bytes());
+        wfifob((*src_sd).fd, 46, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_FACEACCTWO) as u32) as u8);
     }
 
     // mantle
@@ -1264,20 +1251,20 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         wfifow((*src_sd).fd, 47, 0xFFFF);
         wfifob((*src_sd).fd, 49, 0xFF);
     } else {
-        wfifow((*src_sd).fd, 47, (rust_itemdb_look(rust_pc_isequip(sd, EQ_MANTLE) as c_uint) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 49, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_MANTLE) as c_uint) as u8);
+        wfifow((*src_sd).fd, 47, (rust_itemdb_look(rust_pc_isequip(sd, EQ_MANTLE) as u32) as u16).swap_bytes());
+        wfifob((*src_sd).fd, 49, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_MANTLE) as u32) as u8);
     }
 
     // necklace
     if rust_pc_isequip(sd, EQ_NECKLACE) == 0
         || ((*sd).status.setting_flags & FLAG_NECKLACE as u16) == 0
-        || rust_itemdb_look(rust_pc_isequip(sd, EQ_NECKLACE) as c_uint) == -1
+        || rust_itemdb_look(rust_pc_isequip(sd, EQ_NECKLACE) as u32) == -1
     {
         wfifow((*src_sd).fd, 50, 0xFFFF);
         wfifob((*src_sd).fd, 52, 0);
     } else {
-        wfifow((*src_sd).fd, 50, (rust_itemdb_look(rust_pc_isequip(sd, EQ_NECKLACE) as c_uint) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 52, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_NECKLACE) as c_uint) as u8);
+        wfifow((*src_sd).fd, 50, (rust_itemdb_look(rust_pc_isequip(sd, EQ_NECKLACE) as u32) as u16).swap_bytes());
+        wfifob((*src_sd).fd, 52, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_NECKLACE) as u32) as u8);
     }
 
     // boots
@@ -1288,8 +1275,8 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         wfifow((*src_sd).fd, 53, ((*sd).status.equip[EQ_BOOTS as usize].custom_look as u16).swap_bytes());
         wfifob((*src_sd).fd, 55, (*sd).status.equip[EQ_BOOTS as usize].custom_look_color as u8);
     } else {
-        wfifow((*src_sd).fd, 53, (rust_itemdb_look(rust_pc_isequip(sd, EQ_BOOTS) as c_uint) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 55, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_BOOTS) as c_uint) as u8);
+        wfifow((*src_sd).fd, 53, (rust_itemdb_look(rust_pc_isequip(sd, EQ_BOOTS) as u32) as u16).swap_bytes());
+        wfifob((*src_sd).fd, 55, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_BOOTS) as u32) as u8);
     }
 
     // 56 = title colour, 57 = outline colour (128=black), 58 = normal colour
@@ -1321,10 +1308,10 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         wfifob((*src_sd).fd, 58, 2);
     }
 
-    let mut exist: c_int = -1;
+    let mut exist: i32 = -1;
     for x in 0..20usize {
         if (*src_sd).pvp[x][0] == (*sd).bl.id {
-            exist = x as c_int;
+            exist = x as i32;
             break;
         }
     }
@@ -1431,7 +1418,7 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
 /// Add a player to the block grid and send their appearance to nearby clients.
 ///
 /// Thin wrapper — mirrors `clif_spawn` (~line 4075).
-pub unsafe fn clif_spawn(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_spawn(sd: *mut MapSessionData) -> i32 {
     if map_addblock(&mut (*sd).bl) != 0 {
         // printf("Error Spawn\n") — silently ignore in Rust
     }

@@ -1,6 +1,6 @@
 //! Global Lua functions (91 total) — registered in sl_init.
 
-use std::ffi::{CStr, CString, c_char, c_int, c_uint, c_uchar, c_void};
+use std::ffi::{CStr, CString};
 use mlua::{Lua, Value};
 
 use crate::database::{blocking_run, get_pool};
@@ -99,13 +99,13 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("broadcast", lua.create_function(|_, (m, msg): (i32, String)| {
         let cmsg = CString::new(msg).map_err(mlua::Error::external)?;
-        unsafe { sffi::clif_broadcast(cmsg.as_ptr(), m as c_int); }
+        unsafe { sffi::clif_broadcast(cmsg.as_ptr(), m as i32); }
         Ok(())
     })?)?;
 
     g.set("gmbroadcast", lua.create_function(|_, (m, msg): (i32, String)| {
         let cmsg = CString::new(msg).map_err(mlua::Error::external)?;
-        unsafe { sffi::clif_gmbroadcast(cmsg.as_ptr(), m as c_int); }
+        unsafe { sffi::clif_gmbroadcast(cmsg.as_ptr(), m as i32); }
         Ok(())
     })?)?;
 
@@ -258,7 +258,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         if m < 0 { return Ok(()); }
         let mp = unsafe { get_map_ptr(m as u16) };
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(()); }
-        unsafe { (*mp).pvp = pvp as c_uchar; }
+        unsafe { (*mp).pvp = pvp as u8; }
         Ok(())
     })?)?;
 
@@ -270,7 +270,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("setWeatherM", lua.create_function(|_, (m, w): (i32, i32)| {
-        unsafe { crate::game::scripting::map_globals::sl_g_setweatherm(m as c_int, w as c_uchar); }
+        unsafe { crate::game::scripting::map_globals::sl_g_setweatherm(m as i32, w as u8); }
         Ok(())
     })?)?;
 
@@ -288,7 +288,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("setWeather", lua.create_function(|_, (region, indoor, w): (i32, i32, i32)| {
-        unsafe { crate::game::scripting::map_globals::sl_g_setweather(region as c_uchar, indoor as c_uchar, w as c_uchar); }
+        unsafe { crate::game::scripting::map_globals::sl_g_setweather(region as u8, indoor as u8, w as u8); }
         Ok(())
     })?)?;
 
@@ -299,7 +299,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
             let md = unsafe { &mut *ptr };
             if md.xs == 0 { continue; }
             if md.region as i32 == region && md.indoor as i32 == indoor && md.light == 0 {
-                md.light = light as c_uchar;
+                md.light = light as u8;
             }
         }
         Ok(())
@@ -323,7 +323,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("setMapRegistry", lua.create_function(|_, (m, key, val): (i32, String, i32)| {
         let ckey = CString::new(key).map_err(mlua::Error::external)?;
-        unsafe { sffi::map_setglobalreg(m as c_int, ckey.as_ptr(), val as c_int); }
+        unsafe { sffi::map_setglobalreg(m as i32, ckey.as_ptr(), val as i32); }
         Ok(())
     })?)?;
 
@@ -420,7 +420,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
             sffi::sl_g_setmap(
                 vi(&args, 0), cmapfile.as_ptr(), ctitle.as_ptr(),
                 vi(&args, 3), vi(&args, 4), vi(&args, 5), vi(&args, 6),
-                vi(&args, 7) as c_uchar, vi(&args, 8),
+                vi(&args, 7) as u8, vi(&args, 8),
                 vi(&args, 9), vi(&args, 10), vi(&args, 11),
                 vi(&args, 12), vi(&args, 13), vi(&args, 14),
                 vi(&args, 15), vi(&args, 16), vi(&args, 17), vi(&args, 18),
@@ -433,7 +433,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // setPostColor / throw / saveMap
     // -----------------------------------------------------------------------
     g.set("setPostColor", lua.create_function(|_, (board, post, color): (i32, i32, i32)| {
-        unsafe { sffi::map_changepostcolor(board as c_int, post as c_int, color as c_int); }
+        unsafe { sffi::map_changepostcolor(board as i32, post as i32, color as i32); }
         Ok(())
     })?)?;
 
@@ -534,7 +534,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("getMobAttributes", lua.create_function(|lua, id: u32| {
         let tbl = lua.create_table()?;
-        let db = unsafe { sffi::rust_mobdb_search(id as c_uint) };
+        let db = unsafe { sffi::rust_mobdb_search(id as u32) };
         if !db.is_null() {
             let d = unsafe { &*db };
             tbl.set(1,  d.vita as i64)?;
@@ -723,7 +723,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
             let bytes = name.as_bytes();
             let copy_len = bytes.len().min(dst.len() - 1);
             for (i, &b) in bytes.iter().take(copy_len).enumerate() {
-                dst[i] = b as c_char;
+                dst[i] = b as i8;
             }
             dst[copy_len] = 0;
         }
@@ -759,13 +759,13 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // Clan member management
     // -----------------------------------------------------------------------
     g.set("removeClanMember", lua.create_function(|_, id: i32| {
-        let sd = unsafe { sffi::map_id2sd(id as c_uint) as *mut crate::game::pc::MapSessionData };
+        let sd = unsafe { sffi::map_id2sd(id as u32) as *mut crate::game::pc::MapSessionData };
         if !sd.is_null() {
             unsafe {
                 (*sd).status.clan = 0;
                 (*sd).status.clan_title[0] = 0;
                 (*sd).status.clan_rank = 0;
-                sffi::clif_mystaytus(sd as *mut c_void);
+                sffi::clif_mystaytus(sd as *mut std::ffi::c_void);
             }
         }
         let ok = blocking_run(sqlx::query!(
@@ -776,13 +776,13 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("addClanMember", lua.create_function(|_, (id, clan): (i32, i32)| {
-        let sd = unsafe { sffi::map_id2sd(id as c_uint) as *mut crate::game::pc::MapSessionData };
+        let sd = unsafe { sffi::map_id2sd(id as u32) as *mut crate::game::pc::MapSessionData };
         if !sd.is_null() {
             unsafe {
                 (*sd).status.clan = clan as u32;
                 (*sd).status.clan_title[0] = 0;
                 (*sd).status.clan_rank = 1;
-                sffi::clif_mystaytus(sd as *mut c_void);
+                sffi::clif_mystaytus(sd as *mut std::ffi::c_void);
             }
         }
         let ok = blocking_run(sqlx::query!(
@@ -793,7 +793,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("updateClanMemberRank", lua.create_function(|_, (id, rank): (i32, i32)| {
-        let sd = unsafe { sffi::map_id2sd(id as c_uint) as *mut crate::game::pc::MapSessionData };
+        let sd = unsafe { sffi::map_id2sd(id as u32) as *mut crate::game::pc::MapSessionData };
         if !sd.is_null() {
             unsafe { (*sd).status.clan_rank = rank; }
         }
@@ -804,7 +804,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("updateClanMemberTitle", lua.create_function(|_, (id, title): (i32, String)| {
-        let sd = unsafe { sffi::map_id2sd(id as c_uint) as *mut crate::game::pc::MapSessionData };
+        let sd = unsafe { sffi::map_id2sd(id as u32) as *mut crate::game::pc::MapSessionData };
         if !sd.is_null() {
             unsafe {
                 let dst = &mut (*sd).status.clan_title;
@@ -812,7 +812,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
                 let copy_len = bytes.len().min(dst.len() - 1);
                 for (i, &b) in bytes.iter().take(copy_len).enumerate() { dst[i] = b as i8; }
                 dst[copy_len] = 0;
-                sffi::clif_mystaytus(sd as *mut c_void);
+                sffi::clif_mystaytus(sd as *mut std::ffi::c_void);
             }
         }
         let ok = blocking_run(sqlx::query!(
@@ -825,7 +825,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // Path member management
     // -----------------------------------------------------------------------
     g.set("removePathMember", lua.create_function(|_, id: i32| {
-        let sd = unsafe { sffi::map_id2sd(id as c_uint) as *mut crate::game::pc::MapSessionData };
+        let sd = unsafe { sffi::map_id2sd(id as u32) as *mut crate::game::pc::MapSessionData };
         if !sd.is_null() {
             let new_class = unsafe {
                 crate::database::class_db::path((*sd).status.class as i32) as u8
@@ -833,7 +833,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
             unsafe {
                 (*sd).status.class = new_class;
                 (*sd).status.class_rank = 0;
-                sffi::clif_mystaytus(sd as *mut c_void);
+                sffi::clif_mystaytus(sd as *mut std::ffi::c_void);
             }
             let ok = blocking_run(sqlx::query!(
                 "UPDATE `Character` SET `ChaPthId`=?,`ChaPthRank`='0' WHERE `ChaId`=?",
@@ -854,12 +854,12 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("addPathMember", lua.create_function(|_, (id, cls): (i32, i32)| {
-        let sd = unsafe { sffi::map_id2sd(id as c_uint) as *mut crate::game::pc::MapSessionData };
+        let sd = unsafe { sffi::map_id2sd(id as u32) as *mut crate::game::pc::MapSessionData };
         if !sd.is_null() {
             unsafe {
                 (*sd).status.class = cls as u8;
                 (*sd).status.class_rank = 0;
-                sffi::clif_mystaytus(sd as *mut c_void);
+                sffi::clif_mystaytus(sd as *mut std::ffi::c_void);
             }
         }
         let ok = blocking_run(sqlx::query!(
@@ -920,10 +920,10 @@ fn realtime() -> (i32, i32, i32, i32) {
     )
 }
 
-fn vi(args: &[Value], idx: usize) -> c_int {
+fn vi(args: &[Value], idx: usize) -> i32 {
     args.get(idx).map(|v| match v {
-        Value::Integer(i) => *i as c_int,
-        Value::Number(f)  => *f as c_int,
+        Value::Integer(i) => *i as i32,
+        Value::Number(f)  => *f as i32,
         _                 => 0,
     }).unwrap_or(0)
 }

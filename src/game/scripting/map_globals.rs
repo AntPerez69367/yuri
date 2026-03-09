@@ -1,7 +1,5 @@
-//! Rust implementations of sl_g_* global helpers previously in c_src/sl_compat.c.
+//! Global scripting helpers.
 
-use std::ffi::{c_char, c_int, c_uchar, c_void};
-use std::os::raw::c_uint;
 
 use crate::database::map_db::{BlockList, WarpList, BLOCK_SIZE, MAX_MAPREG};
 use crate::game::block::map_delblock;
@@ -12,7 +10,6 @@ use crate::game::client::visual::clif_sendweather;
 use crate::game::map_server::{map_deliddb, map_id2sd, map_readglobalreg, map_setglobalreg};
 use crate::game::pc::MapSessionData;
 
-// Direct Rust imports replacing extern "C" declarations.
 use crate::game::map_parse::chat::{clif_sendmsg, clif_playsound, clif_speak_inner};
 use crate::game::map_parse::visual::clif_lookgone;
 use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from, clif_sendside};
@@ -22,43 +19,37 @@ use crate::network::crypt::send_metalist;
 use crate::game::block::map_addblock;
 
 // ---------------------------------------------------------------------------
-// Ported from c_src/sl_compat.c — thin helpers that avoided Rust knowing about
-// C struct layouts. Now Rust knows the layouts, so these are trivial wrappers.
 // ---------------------------------------------------------------------------
 
-/// Thin wrapper around `map_is_loaded` for code that still holds a `c_int` map index.
-/// Replaces `int sl_map_isloaded(int m) { return map_isloaded(m); }` in sl_compat.c.
+/// Thin wrapper around `map_is_loaded` for code that still holds a `i32` map index.
 /// Called from `src/game/map_char.rs`.
-pub unsafe fn sl_map_isloaded(m: c_int) -> c_int {
-    map_is_loaded(m) as c_int
+pub unsafe fn sl_map_isloaded(m: i32) -> i32 {
+    map_is_loaded(m) as i32
 }
 
 /// Extract `bl.m` from a `USER*` (= `MapSessionData*`) and call `map_readglobalreg`.
-/// Replaces the C `map_readglobalreg_sd` bridge in sl_compat.c that was needed
 /// before Rust knew the `MapSessionData` layout.
-pub unsafe fn map_readglobalreg_sd(sd: *mut c_void, attrname: *const c_char) -> c_int {
+pub unsafe fn map_readglobalreg_sd(sd: *mut std::ffi::c_void, attrname: *const i8) -> i32 {
     let sd = sd as *const MapSessionData;
-    map_readglobalreg((*sd).bl.m as c_int, attrname)
+    map_readglobalreg((*sd).bl.m as i32, attrname)
 }
 
 /// Extract `bl.m` from a `USER*` (= `MapSessionData*`) and call `map_setglobalreg`.
-/// Replaces the C `map_setglobalreg_sd` bridge in sl_compat.c.
-pub unsafe fn map_setglobalreg_sd(sd: *mut c_void, attrname: *const c_char, val: c_int) -> c_int {
+pub unsafe fn map_setglobalreg_sd(sd: *mut std::ffi::c_void, attrname: *const i8, val: i32) -> i32 {
     let sd = sd as *const MapSessionData;
-    map_setglobalreg((*sd).bl.m as c_int, attrname, val)
+    map_setglobalreg((*sd).bl.m as i32, attrname, val)
 }
 
 /// Set weather on all maps matching `region`/`indoor`, broadcasting to sessions on each map.
 ///
-/// Mirrors `sl_g_setweather` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_setweather(region: c_uchar, indoor: c_uchar, weather: c_uchar) {
+pub unsafe fn sl_g_setweather(region: u8, indoor: u8, weather: u8) {
     let t = libc::time(std::ptr::null_mut()) as u32;
     for x in 0..65535u16 {
         let ptr = get_map_ptr(x);
         if ptr.is_null() || (*ptr).xs == 0 { continue; }
-        let mut timer = map_readglobalreg(x as c_int, c"artificial_weather_timer".as_ptr()) as u32;
+        let mut timer = map_readglobalreg(x as i32, c"artificial_weather_timer".as_ptr()) as u32;
         if timer > 0 && timer <= t {
-            map_setglobalreg(x as c_int, c"artificial_weather_timer".as_ptr(), 0);
+            map_setglobalreg(x as i32, c"artificial_weather_timer".as_ptr(), 0);
             timer = 0;
         }
         if (*ptr).region != region || (*ptr).indoor != indoor || timer != 0 { continue; }
@@ -74,8 +65,7 @@ pub unsafe fn sl_g_setweather(region: c_uchar, indoor: c_uchar, weather: c_uchar
 
 /// Set weather on a single map, broadcasting to sessions on that map.
 ///
-/// Mirrors `sl_g_setweatherm` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_setweatherm(m: c_int, weather: c_uchar) {
+pub unsafe fn sl_g_setweatherm(m: i32, weather: u8) {
     let ptr = get_map_ptr(m as u16);
     if ptr.is_null() || (*ptr).xs == 0 { return; }
     let t = libc::time(std::ptr::null_mut()) as u32;
@@ -96,8 +86,8 @@ pub unsafe fn sl_g_setweatherm(m: c_int, weather: c_uchar) {
 
 /// Collect pointers to all online player block-lists into `out_ptrs`.
 ///
-/// Returns the count written. Mirrors `sl_g_getusers` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_getusers(out_ptrs: *mut *mut c_void, max_count: c_int) -> c_int {
+/// Returns the count written.
+pub unsafe fn sl_g_getusers(out_ptrs: *mut *mut std::ffi::c_void, max_count: i32) -> i32 {
     let mut count = 0i32;
     for i in 0..crate::session::get_fd_max() {
         if count >= max_count { break; }
@@ -105,7 +95,7 @@ pub unsafe fn sl_g_getusers(out_ptrs: *mut *mut c_void, max_count: c_int) -> c_i
         if rust_session_get_eof(i) != 0 { continue; }
         let tsd = rust_session_get_data(i) as *mut MapSessionData;
         if tsd.is_null() { continue; }
-        *out_ptrs.add(count as usize) = &mut (*tsd).bl as *mut _ as *mut c_void;
+        *out_ptrs.add(count as usize) = &mut (*tsd).bl as *mut _ as *mut std::ffi::c_void;
         count += 1;
     }
     count
@@ -113,18 +103,16 @@ pub unsafe fn sl_g_getusers(out_ptrs: *mut *mut c_void, max_count: c_int) -> c_i
 
 /// Return `map[m].pvp`, or 0 if the map slot is not loaded.
 ///
-/// Mirrors `sl_g_getmappvp` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_getmappvp(m: c_int) -> c_int {
+pub unsafe fn sl_g_getmappvp(m: i32) -> i32 {
     let ptr = get_map_ptr(m as u16);
     if ptr.is_null() || (*ptr).xs == 0 { return 0; }
-    (*ptr).pvp as c_int
+    (*ptr).pvp as i32
 }
 
 /// Copy `map[m].title` into `buf` (null-terminated, at most `buflen` bytes including NUL).
 ///
 /// Returns 1 on success, 0 if the map is not loaded or args are invalid.
-/// Mirrors `sl_g_getmaptitle` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_getmaptitle(m: c_int, buf: *mut c_char, buflen: c_int) -> c_int {
+pub unsafe fn sl_g_getmaptitle(m: i32, buf: *mut i8, buflen: i32) -> i32 {
     if buf.is_null() || buflen <= 0 { return 0; }
     let ptr = get_map_ptr(m as u16);
     if ptr.is_null() || (*ptr).xs == 0 { return 0; }
@@ -144,40 +132,36 @@ pub unsafe fn sl_g_getmaptitle(m: c_int, buf: *mut c_char, buflen: c_int) -> c_i
 /// Send a colored message to a specific player by ID.
 ///
 /// `target == 0` is a no-op (area broadcast not implemented here).
-/// Mirrors `sl_g_msg` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_msg(bl: *mut c_void, color: c_int, msg: *const c_char, target: c_int) {
+pub unsafe fn sl_g_msg(bl: *mut std::ffi::c_void, color: i32, msg: *const i8, target: i32) {
     if bl.is_null() || msg.is_null() || target == 0 { return; }
-    let tsd = map_id2sd(target as c_uint) as *mut MapSessionData;
+    let tsd = map_id2sd(target as u32) as *mut MapSessionData;
     if !tsd.is_null() { clif_sendmsg(tsd, color, msg); }
 }
 
 /// Return 1 if cell (x, y) on bl's map is passable from `side`, else 0.
 ///
-/// Mirrors `sl_g_objectcanmove` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_objectcanmove(bl: *mut c_void, x: c_int, y: c_int, side: c_int) -> c_int {
+pub unsafe fn sl_g_objectcanmove(bl: *mut std::ffi::c_void, x: i32, y: i32, side: i32) -> i32 {
     if bl.is_null() { return 0; }
-    let m = (*(bl as *mut BlockList)).m as c_int;
+    let m = (*(bl as *mut BlockList)).m as i32;
     if clif_object_canmove(m, x, y, side) != 0 { 0 } else { 1 }
 }
 
 /// Return 1 if the block at (x, y) can move from that cell toward `side`, else 0.
 ///
-/// Mirrors `sl_g_objectcanmovefrom` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_objectcanmovefrom(bl: *mut c_void, x: c_int, y: c_int, side: c_int) -> c_int {
+pub unsafe fn sl_g_objectcanmovefrom(bl: *mut std::ffi::c_void, x: i32, y: i32, side: i32) -> i32 {
     if bl.is_null() { return 0; }
-    let m = (*(bl as *mut BlockList)).m as c_int;
+    let m = (*(bl as *mut BlockList)).m as i32;
     if clif_object_canmove_from(m, x, y, side) != 0 { 0 } else { 1 }
 }
 
 /// Remove a floor item from the spatial grid and ID DB, broadcasting disappearance.
 ///
 /// Does NOT free memory — the Lua object may still hold references.
-/// Mirrors `sl_fl_delete` in `c_src/sl_compat.c`.
-pub unsafe fn sl_fl_delete(bl_ptr: *mut c_void) {
+pub unsafe fn sl_fl_delete(bl_ptr: *mut std::ffi::c_void) {
     use crate::game::pc::BL_PC;
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
-    if (*bl).bl_type as c_int == BL_PC { return; }
+    if (*bl).bl_type as i32 == BL_PC { return; }
     map_delblock(bl);
     map_deliddb(bl);
     if (*bl).id > 0 { clif_lookgone(bl); }
@@ -185,29 +169,25 @@ pub unsafe fn sl_fl_delete(bl_ptr: *mut c_void) {
 
 /// Remove block from the map ID database only (no grid, no broadcast, no free).
 ///
-/// Mirrors `sl_g_deliddb` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_deliddb(bl_ptr: *mut c_void) {
+pub unsafe fn sl_g_deliddb(bl_ptr: *mut std::ffi::c_void) {
     if bl_ptr.is_null() { return; }
     map_deliddb(bl_ptr as *mut BlockList);
 }
 
 /// No-op — permanent spawn tracking is handled in Lua.
 ///
-/// Mirrors `sl_g_addpermanentspawn` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_addpermanentspawn(_bl_ptr: *mut c_void) {}
+pub unsafe fn sl_g_addpermanentspawn(_bl_ptr: *mut std::ffi::c_void) {}
 
 /// Broadcast block's look packet to surrounding players.
 ///
-/// Mirrors `sl_g_sendside` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_sendside(bl: *mut c_void) {
+pub unsafe fn sl_g_sendside(bl: *mut std::ffi::c_void) {
     if bl.is_null() { return; }
     clif_sendside(bl as *mut BlockList);
 }
 
 /// Play a sound effect at bl's position.
 ///
-/// Mirrors `sl_g_playsound` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_playsound(bl: *mut c_void, sound: c_int) {
+pub unsafe fn sl_g_playsound(bl: *mut std::ffi::c_void, sound: i32) {
     if bl.is_null() { return; }
     clif_playsound(bl as *mut BlockList, sound);
 }
@@ -215,12 +195,11 @@ pub unsafe fn sl_g_playsound(bl: *mut c_void, sound: c_int) {
 /// Delete a non-PC block from the world and free its memory.
 ///
 /// Unlike `sl_fl_delete`, this frees the block — callers guarantee no Lua reference remains.
-/// Mirrors `sl_g_delete_bl` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_delete_bl(bl_ptr: *mut c_void) {
+pub unsafe fn sl_g_delete_bl(bl_ptr: *mut std::ffi::c_void) {
     use crate::game::pc::BL_PC;
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
-    if (*bl).bl_type as c_int == BL_PC { return; }
+    if (*bl).bl_type as i32 == BL_PC { return; }
     map_delblock(bl);
     map_deliddb(bl);
     if (*bl).id > 0 {
@@ -231,8 +210,7 @@ pub unsafe fn sl_g_delete_bl(bl_ptr: *mut c_void) {
 
 /// Broadcast an action animation at bl's position.
 ///
-/// Mirrors `sl_g_sendaction` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_sendaction(bl_ptr: *mut c_void, action: c_int, speed: c_int) {
+pub unsafe fn sl_g_sendaction(bl_ptr: *mut std::ffi::c_void, action: i32, speed: i32) {
     if bl_ptr.is_null() { return; }
     clif_sendaction(bl_ptr as *mut BlockList, action, speed, 0);
 }
@@ -240,11 +218,10 @@ pub unsafe fn sl_g_sendaction(bl_ptr: *mut c_void, action: c_int, speed: c_int) 
 /// Send a throw animation packet from bl's position toward (x, y).
 ///
 /// Packet layout: opcode 0xAA, length 0x001B, type 0x16 subtype 0x03.
-/// Mirrors `sl_g_throwblock` in `c_src/sl_compat.c`.
 pub unsafe fn sl_g_throwblock(
-    bl_ptr: *mut c_void,
-    x: c_int, y: c_int,
-    icon: c_int, color: c_int, action: c_int,
+    bl_ptr: *mut std::ffi::c_void,
+    x: i32, y: i32,
+    icon: i32, color: i32, action: i32,
 ) {
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
@@ -268,31 +245,29 @@ pub unsafe fn sl_g_throwblock(
 
 /// Drop an item at bl's position.
 ///
-/// Mirrors `sl_g_dropitem` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_dropitem(bl_ptr: *mut c_void, item_id: c_int, amount: c_int, owner: c_int) {
+pub unsafe fn sl_g_dropitem(bl_ptr: *mut std::ffi::c_void, item_id: i32, amount: i32, owner: i32) {
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
-    let id = item_id as c_uint;
-    let sd = if owner != 0 { map_id2sd(owner as c_uint) as *mut MapSessionData } else { std::ptr::null_mut() };
+    let id = item_id as u32;
+    let sd = if owner != 0 { map_id2sd(owner as u32) as *mut MapSessionData } else { std::ptr::null_mut() };
     let dura = crate::database::item_db::rust_itemdb_dura(id);
     let prot = crate::database::item_db::rust_itemdb_protected(id);
     crate::game::mob::rust_mob_dropitem(
-        (*bl).id as c_uint, id, amount, dura, prot, 0,
-        (*bl).m as c_int, (*bl).x as c_int, (*bl).y as c_int, sd,
+        (*bl).id as u32, id, amount, dura, prot, 0,
+        (*bl).m as i32, (*bl).x as i32, (*bl).y as i32, sd,
     );
 }
 
 /// Drop an item at a specific map coordinate, ignoring bl's position.
 ///
-/// Mirrors `sl_g_dropitemxy` in `c_src/sl_compat.c`.
 pub unsafe fn sl_g_dropitemxy(
-    _bl_ptr: *mut c_void,
-    item_id: c_int, amount: c_int,
-    m: c_int, x: c_int, y: c_int,
-    owner: c_int,
+    _bl_ptr: *mut std::ffi::c_void,
+    item_id: i32, amount: i32,
+    m: i32, x: i32, y: i32,
+    owner: i32,
 ) {
-    let id = item_id as c_uint;
-    let sd = if owner != 0 { map_id2sd(owner as c_uint) as *mut MapSessionData } else { std::ptr::null_mut() };
+    let id = item_id as u32;
+    let sd = if owner != 0 { map_id2sd(owner as u32) as *mut MapSessionData } else { std::ptr::null_mut() };
     let dura = crate::database::item_db::rust_itemdb_dura(id);
     let prot = crate::database::item_db::rust_itemdb_protected(id);
     crate::game::mob::rust_mob_dropitem(0, id, amount, dura, prot, 0, m, x, y, sd);
@@ -300,12 +275,11 @@ pub unsafe fn sl_g_dropitemxy(
 
 /// Insert a parcel into the Parcels table, assigning the next available slot.
 ///
-/// Mirrors `sl_g_sendparcel` in `c_src/sl_compat.c`.
 pub unsafe fn sl_g_sendparcel(
-    _bl_ptr: *mut c_void,
-    receiver: c_int, sender: c_int,
-    item: c_int, amount: c_int, owner: c_int,
-    engrave: *const c_char, npcflag: c_int,
+    _bl_ptr: *mut std::ffi::c_void,
+    receiver: i32, sender: i32,
+    item: i32, amount: i32, owner: i32,
+    engrave: *const i8, npcflag: i32,
 ) {
     let engrave_str: String = if engrave.is_null() {
         String::new()
@@ -348,12 +322,11 @@ pub unsafe fn sl_g_sendparcel(
 // ─── Task 1.4: NPC/Animation/Packet Broadcast Functions ──────────────────────
 
 /// BL_PC type constant — matches C enum value.
-const BL_PC_TYPE: c_int = 0x01;
+const BL_PC_TYPE: i32 = 0x01;
 
 /// Broadcast a spell/skill animation to all PCs in AREA around bl.
 ///
-/// Mirrors `sl_g_sendanimation` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_sendanimation(bl_ptr: *mut c_void, anim: c_int, times: c_int) {
+pub unsafe fn sl_g_sendanimation(bl_ptr: *mut std::ffi::c_void, anim: i32, times: i32) {
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
     let m  = (*bl).m as i32;
@@ -366,13 +339,12 @@ pub unsafe fn sl_g_sendanimation(bl_ptr: *mut c_void, anim: c_int, times: c_int)
 
 /// Broadcast an animation at position (x, y) to all PCs in AREA around bl.
 ///
-/// Mirrors `sl_g_sendanimxy` in `c_src/sl_compat.c`.
 pub unsafe fn sl_g_sendanimxy(
-    bl_ptr: *mut c_void,
-    anim: c_int,
-    x: c_int,
-    y: c_int,
-    times: c_int,
+    bl_ptr: *mut std::ffi::c_void,
+    anim: i32,
+    x: i32,
+    y: i32,
+    times: i32,
 ) {
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
@@ -387,8 +359,7 @@ pub unsafe fn sl_g_sendanimxy(
 /// Broadcast a repeating animation to all PCs in AREA around bl.
 ///
 /// `duration` is in milliseconds; divided by 1000 before sending on the wire.
-/// Mirrors `sl_g_repeatanimation` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_repeatanimation(bl_ptr: *mut c_void, anim: c_int, duration: c_int) {
+pub unsafe fn sl_g_repeatanimation(bl_ptr: *mut std::ffi::c_void, anim: i32, duration: i32) {
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
     let m  = (*bl).m as i32;
@@ -405,16 +376,16 @@ pub unsafe fn sl_g_repeatanimation(bl_ptr: *mut c_void, anim: c_int, duration: c
 /// Send a self-targeted animation from `bl` to the single player at `target_id`.
 ///
 /// Resolves the target's map/cell via `map_id2sd`, then broadcasts to that
-/// exact cell only.  Mirrors `sl_g_selfanimation` in `c_src/sl_compat.c`.
+/// Sends a self-animation to all players in the exact cell.
 pub unsafe fn sl_g_selfanimation(
-    bl_ptr: *mut c_void,
-    target_id: c_int,
-    anim: c_int,
-    times: c_int,
+    bl_ptr: *mut std::ffi::c_void,
+    target_id: i32,
+    anim: i32,
+    times: i32,
 ) {
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
-    let sd = map_id2sd(target_id as c_uint) as *mut MapSessionData;
+    let sd = map_id2sd(target_id as u32) as *mut MapSessionData;
     if sd.is_null() { return; }
     let m  = (*sd).bl.m as i32;
     let x  = (*sd).bl.x as i32;
@@ -427,16 +398,16 @@ pub unsafe fn sl_g_selfanimation(
 /// Send a self-targeted XY animation to the single player at `target_id`.
 ///
 /// Resolves the target's map/cell, then broadcasts the XY animation to that
-/// exact cell only.  Mirrors `sl_g_selfanimationxy` in `c_src/sl_compat.c`.
+/// Sends a self-animation at the specified (x,y) to players in the exact cell.
 pub unsafe fn sl_g_selfanimationxy(
-    _bl_ptr: *mut c_void,
-    target_id: c_int,
-    anim: c_int,
-    x: c_int,
-    y: c_int,
-    times: c_int,
+    _bl_ptr: *mut std::ffi::c_void,
+    target_id: i32,
+    anim: i32,
+    x: i32,
+    y: i32,
+    times: i32,
 ) {
-    let sd = map_id2sd(target_id as c_uint) as *mut MapSessionData;
+    let sd = map_id2sd(target_id as u32) as *mut MapSessionData;
     if sd.is_null() { return; }
     let m  = (*sd).bl.m as i32;
     let sx = (*sd).bl.x as i32;
@@ -448,8 +419,7 @@ pub unsafe fn sl_g_selfanimationxy(
 
 /// Send a talk/speech packet from `bl` to all PCs in AREA.
 ///
-/// Mirrors `sl_g_talk` in `c_src/sl_compat.c`.
-pub unsafe fn sl_g_talk(bl_ptr: *mut c_void, talk_type: c_int, msg: *const c_char) {
+pub unsafe fn sl_g_talk(bl_ptr: *mut std::ffi::c_void, talk_type: i32, msg: *const i8) {
     if bl_ptr.is_null() || msg.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
     let m  = (*bl).m as i32;
@@ -465,7 +435,6 @@ pub unsafe fn sl_g_talk(bl_ptr: *mut c_void, talk_type: c_int, msg: *const c_cha
 /// Iterates every fd slot, finds live sessions, and calls `send_metalist`
 /// for each.  `send_metalist` is still in C (map_parse.c); called via FFI.
 ///
-/// Mirrors `sl_g_sendmeta` in `c_src/sl_compat.c`.
 pub unsafe fn sl_g_sendmeta() {
     for i in 0..crate::session::get_fd_max() {
         if rust_session_exists(i) == 0 { continue; }
@@ -501,17 +470,16 @@ pub unsafe fn sl_g_sendmeta() {
 ///   [28]   action
 ///   [29]   0             padding
 ///
-/// Mirrors `sl_g_throw` in `c_src/sl_compat.c`.
 pub unsafe fn sl_g_throw(
-    id: c_int,
-    m: c_int,
-    x: c_int,
-    y: c_int,
-    x2: c_int,
-    y2: c_int,
-    icon: c_int,
-    color: c_int,
-    action: c_int,
+    id: i32,
+    m: i32,
+    x: i32,
+    y: i32,
+    x2: i32,
+    y2: i32,
+    icon: i32,
+    color: i32,
+    action: i32,
 ) {
     let mut buf = [0u8; 30];
     buf[0]      = 0xAA;
@@ -543,20 +511,20 @@ pub unsafe fn sl_g_throw(
 ///
 /// Allocates a zeroed `NpcData`, fills all fields from the arguments,
 /// registers it in the block grid and ID database, then fires the `on_spawn`
-/// Lua event.  Mirrors `sl_g_addnpc` in `c_src/sl_compat.c`.
+/// Handles the Lua event to dynamically add an NPC to the map.
 ///
 /// `npc_yname` may be null; defaults to `"nothing"` in that case.
 pub unsafe fn sl_g_addnpc(
-    name:     *const c_char,
-    m:        c_int,
-    x:        c_int,
-    y:        c_int,
-    subtype:  c_int,
-    timer:    c_int,
-    duration: c_int,
-    owner:    c_int,
-    movetime: c_int,
-    npc_yname: *const c_char,
+    name:     *const i8,
+    m:        i32,
+    x:        i32,
+    y:        i32,
+    subtype:  i32,
+    timer:    i32,
+    duration: i32,
+    owner:    i32,
+    movetime: i32,
+    npc_yname: *const i8,
 ) {
     use crate::game::npc::{NpcData, BL_NPC, npc_get_new_npctempid};
     use crate::game::map_server::map_addiddb;
@@ -573,7 +541,7 @@ pub unsafe fn sl_g_addnpc(
         let src = std::ffi::CStr::from_ptr(name).to_bytes();
         let dst = &mut (*raw).name;
         let n = src.len().min(dst.len() - 1);
-        for i in 0..n { dst[i] = src[i] as c_char; }
+        for i in 0..n { dst[i] = src[i] as i8; }
         dst[n] = 0;
     }
     let yname: &[u8] = if npc_yname.is_null() {
@@ -584,7 +552,7 @@ pub unsafe fn sl_g_addnpc(
     {
         let dst = &mut (*raw).npc_name;
         let n = yname.len().min(dst.len() - 1);
-        for i in 0..n { dst[i] = yname[i] as c_char; }
+        for i in 0..n { dst[i] = yname[i] as i8; }
         dst[n] = 0;
     }
 
@@ -601,10 +569,10 @@ pub unsafe fn sl_g_addnpc(
     (*raw).bl.prev        = std::ptr::null_mut();
 
     // NpcData-specific fields.
-    (*raw).actiontime = timer as c_uint;
-    (*raw).duration   = duration as c_uint;
-    (*raw).owner      = owner as c_uint;
-    (*raw).movetime   = movetime as c_uint;
+    (*raw).actiontime = timer as u32;
+    (*raw).duration   = duration as u32;
+    (*raw).owner      = owner as u32;
+    (*raw).movetime   = movetime as u32;
 
     // Register in spatial grid and ID database.
     map_addblock(&mut (*raw).bl);
@@ -623,7 +591,6 @@ pub unsafe fn sl_g_addnpc(
 /// Reconfigure a map slot at runtime: reload its tile data from a binary `.map`
 /// file and update all scalar fields (BGM, PvP flags, light, etc.).
 ///
-/// Faithfully ported from `int sl_g_setmap(...)` in `c_src/sl_compat.c`.
 ///
 /// Memory model
 /// ------------
@@ -642,27 +609,26 @@ pub unsafe fn sl_g_addnpc(
 /// `map_initblock`. `m` must be a valid index in `0..MAP_SLOTS`.  `mapfile`
 /// must be a valid null-terminated C string pointing to a readable file.
 pub unsafe fn sl_g_setmap(
-    m: c_int,
-    mapfile: *const c_char,
-    title: *const c_char,
-    bgm: c_int,
-    bgmtype: c_int,
-    pvp: c_int,
-    spell: c_int,
-    light: c_uchar,
-    weather: c_int,
-    sweeptime: c_int,
-    cantalk: c_int,
-    show_ghosts: c_int,
-    region: c_int,
-    indoor: c_int,
-    warpout: c_int,
-    bind: c_int,
-    reqlvl: c_int,
-    reqvita: c_int,
-    reqmana: c_int,
-) -> c_int {
-    use std::ffi::c_ushort;
+    m: i32,
+    mapfile: *const i8,
+    title: *const i8,
+    bgm: i32,
+    bgmtype: i32,
+    pvp: i32,
+    spell: i32,
+    light: u8,
+    weather: i32,
+    sweeptime: i32,
+    cantalk: i32,
+    show_ghosts: i32,
+    region: i32,
+    indoor: i32,
+    warpout: i32,
+    bind: i32,
+    reqlvl: i32,
+    reqvita: i32,
+    reqmana: i32,
+) -> i32 {
     use crate::database::map_db::{GlobalReg, parse_map_file};
     use crate::database::map_db::rust_map_loadregistry;
 
@@ -697,11 +663,11 @@ pub unsafe fn sl_g_setmap(
         let src = std::ffi::CStr::from_ptr(title).to_bytes();
         let dst = &mut slot.title;
         let n = src.len().min(dst.len() - 1);
-        for i in 0..n { dst[i] = src[i] as std::ffi::c_char; }
+        for i in 0..n { dst[i] = src[i] as i8; }
         dst[n] = 0;
     }
-    slot.bgm       = bgm as c_ushort;
-    slot.bgmtype   = bgmtype as c_ushort;
+    slot.bgm       = bgm as u16;
+    slot.bgmtype   = bgmtype as u16;
     slot.pvp       = pvp as u8;
     slot.spell     = spell as u8;
     slot.light     = light;
@@ -746,8 +712,8 @@ pub unsafe fn sl_g_setmap(
     slot.map  = std::mem::replace(&mut tiles.map,  std::ptr::null_mut());
 
     // ── Block grid dimensions ───────────────────────────────────────────────
-    let new_bxs = ((tiles.xs as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as c_ushort;
-    let new_bys = ((tiles.ys as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as c_ushort;
+    let new_bxs = ((tiles.xs as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as u16;
+    let new_bys = ((tiles.ys as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as u16;
     slot.bxs = new_bxs;
     slot.bys = new_bys;
     let new_block_count = new_bxs as usize * new_bys as usize;
@@ -803,7 +769,7 @@ pub unsafe fn sl_g_setmap(
     // ── Registry + client update ────────────────────────────────────────────
     rust_map_loadregistry(m);
     foreach_in_area(m, 0, 0, AreaType::SameMap, BL_PC_TYPE, |bl| {
-        crate::game::scripting::sl_updatepeople(bl as *mut c_void, std::ptr::null_mut())
+        crate::game::scripting::sl_updatepeople(bl as *mut std::ffi::c_void, std::ptr::null_mut())
     });
 
     0
