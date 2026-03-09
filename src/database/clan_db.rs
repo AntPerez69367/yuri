@@ -120,7 +120,7 @@ pub fn term() {
 }
 
 /// Create-if-missing. Returns mutable pointer so C can write clanbanks into it.
-
+///
 /// # Pointer validity invariant
 ///
 /// The returned pointer is valid as long as:
@@ -193,23 +193,17 @@ pub fn name(id: i32) -> *const c_char {
 
 // ─── FFI bridge (moved from src/ffi/clan_db.rs) ───────────────────────────
 
-#[no_mangle]
-pub extern "C" fn rust_clandb_init() -> c_int { ffi_catch!(-1, init()) }
+pub fn rust_clandb_init() -> c_int { ffi_catch!(-1, init()) }
 
-#[no_mangle]
-pub extern "C" fn rust_clandb_term() { ffi_catch!((), term()) }
+pub fn rust_clandb_term() { ffi_catch!((), term()) }
 
-#[no_mangle]
-pub extern "C" fn rust_clandb_search(id: c_int) -> *mut ClanData { ffi_catch!(null_mut(), search(id)) }
+pub fn rust_clandb_search(id: c_int) -> *mut ClanData { ffi_catch!(null_mut(), search(id)) }
 
-#[no_mangle]
-pub extern "C" fn rust_clandb_searchexist(id: c_int) -> *mut ClanData { ffi_catch!(null_mut(), searchexist(id)) }
+pub fn rust_clandb_searchexist(id: c_int) -> *mut ClanData { ffi_catch!(null_mut(), searchexist(id)) }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_clandb_searchname(s: *const c_char) -> *mut ClanData {
+pub unsafe fn rust_clandb_searchname(s: *const c_char) -> *mut ClanData {
     if s.is_null() { return null_mut(); }
     ffi_catch!(null_mut(), unsafe { searchname(s) })
 }
 
-#[no_mangle]
-pub extern "C" fn rust_clandb_name(id: c_int) -> *const c_char { ffi_catch!(b"??\0".as_ptr() as *const c_char, name(id)) }
+pub fn rust_clandb_name(id: c_int) -> *const c_char { ffi_catch!(b"??\0".as_ptr() as *const c_char, name(id)) }

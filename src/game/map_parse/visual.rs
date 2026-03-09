@@ -41,56 +41,32 @@ const BL_MOB_U8:  u8 = BL_MOB  as u8;
 const BL_NPC_U8:  u8 = BL_NPC  as u8;
 const BL_ITEM_U8: u8 = BL_ITEM as u8;
 
-// ─── External C functions not yet ported ─────────────────────────────────────
+// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
 
-extern "C" {
-    /// Broadcast a packet buffer to the area around a block_list entry.
-    /// Declared in `c_src/map_parse.h`.
-    fn clif_send(
-        buf: *const u8,
-        len: c_int,
-        bl: *mut BlockList,
-        target: c_int,
-    ) -> c_int;
+use crate::game::client::clif_send;
+use crate::game::block::map_addblock;
+use crate::game::map_parse::groups::clif_isingroup;
+use crate::game::map_parse::movement::clif_sendchararea;
+use crate::database::item_db::{
+    rust_itemdb_look, rust_itemdb_lookcolor, rust_itemdb_icon, rust_itemdb_iconcolor,
+    rust_itemdb_type,
+};
+use crate::game::pc::rust_pc_isequip;
 
-    /// Look up a block_list entry by ID. Remains in C.
-    fn map_id2bl(id: c_uint) -> *mut BlockList;
-
-    /// Add a block to the grid. Remains in C.
-    fn map_addblock(bl: *mut BlockList) -> c_int;
-
-    /// Whether two players share a group. Remains in C.
-    fn clif_isingroup(sd: *mut MapSessionData, tsd: *mut MapSessionData) -> c_int;
-
-    /// Send active animations to a player. Remains in C.
-    fn clif_sendanimations(src_sd: *mut MapSessionData, sd: *mut MapSessionData) -> c_int;
-
-    /// Return the look value for an item by id. Rust implementation in item_db.rs.
-    fn rust_itemdb_look(id: c_uint) -> c_int;
-    /// Return the look color for an item by id.
-    fn rust_itemdb_lookcolor(id: c_uint) -> c_int;
-    /// Return the icon id for an item by id.
-    fn rust_itemdb_icon(id: c_uint) -> c_int;
-    /// Return the icon color for an item by id.
-    fn rust_itemdb_iconcolor(id: c_uint) -> c_int;
-    /// Return the item type.
-    fn rust_itemdb_type(id: c_uint) -> c_int;
-
-    /// Check whether a player has equipped a particular item slot (Rust impl in pc.rs).
-    fn rust_pc_isequip(sd: *mut MapSessionData, slot: c_int) -> c_int;
-
-    /// Send char area to a player (foreachinarea wrapper). Remains in C until
-    /// `clif_charlook_sub` callers are unified.
-    fn clif_sendchararea(sd: *mut MapSessionData) -> c_int;
+// map_id2bl returns *mut c_void in map_server — wrap with cast.
+#[inline]
+unsafe fn map_id2bl(id: c_uint) -> *mut BlockList {
+    crate::game::map_server::map_id2bl(id) as *mut BlockList
 }
+
+use crate::game::map_parse::combat::clif_sendanimations;
 
 // ─── clif_lookgone ────────────────────────────────────────────────────────────
 
 /// Send an object-despawn packet to all nearby clients.
 ///
 /// Mirrors `clif_lookgone` from `c_src/map_parse.c` (~line 2747).
-#[no_mangle]
-pub unsafe extern "C" fn clif_lookgone(bl: *mut BlockList) -> c_int {
+pub unsafe fn clif_lookgone(bl: *mut BlockList) -> c_int {
     let mut buf = [0u8; 16];
 
     let bl_ref = &*bl;
@@ -132,10 +108,11 @@ pub unsafe extern "C" fn clif_lookgone(bl: *mut BlockList) -> c_int {
 
 /// Initialise the mob-look accumulation fields on a player session.
 ///
-/// `map_foreachinarea` callback. Called with `BL_PC` type so `bl` is a
-/// `MapSessionData`.  Mirrors `clif_mob_look_start_func` (~line 1426).
-#[no_mangle]
-pub unsafe extern "C" fn clif_mob_look_start_func(bl: *mut BlockList, mut _ap: ...) -> c_int {
+/// Typed inner function replacing the old variadic `clif_mob_look_start_func` callback.
+///
+/// Called with `BL_PC` type so `bl` is a `MapSessionData`.
+/// Mirrors `clif_mob_look_start_func` (~line 1426).
+pub unsafe fn clif_mob_look_start_func_inner(bl: *mut BlockList) -> i32 {
     let sd = bl as *mut MapSessionData;
     if sd.is_null() { return 0; }
 
@@ -154,11 +131,11 @@ pub unsafe extern "C" fn clif_mob_look_start_func(bl: *mut BlockList, mut _ap: .
 
 // ─── clif_mob_look_close_func ─────────────────────────────────────────────────
 
-/// Flush the accumulated mob-look packet buffer to the client.
+/// Typed inner function replacing the old variadic `clif_mob_look_close_func` callback.
 ///
-/// `map_foreachinarea` callback.  Mirrors `clif_mob_look_close_func` (~line 1446).
-#[no_mangle]
-pub unsafe extern "C" fn clif_mob_look_close_func(bl: *mut BlockList, mut _ap: ...) -> c_int {
+/// Flush the accumulated mob-look packet buffer to the client.
+/// Mirrors `clif_mob_look_close_func` (~line 1446).
+pub unsafe fn clif_mob_look_close_func_inner(bl: *mut BlockList) -> i32 {
     let sd = bl as *mut MapSessionData;
     if sd.is_null() { return 0; }
 
@@ -180,30 +157,28 @@ pub unsafe extern "C" fn clif_mob_look_close_func(bl: *mut BlockList, mut _ap: .
 
 // ─── clif_object_look_sub ────────────────────────────────────────────────────
 
+/// Typed inner function replacing the old variadic `clif_object_look_sub` callback.
+///
 /// Write one object entry into the batched mob-look packet buffer.
 ///
-/// `map_foreachinarea` callback.  va_list args:
-///   1. `type: c_int`   — `LOOK_GET` or `LOOK_SEND`
-///   2. if `LOOK_SEND`: `b: *mut BlockList` — the object to render
-///      if `LOOK_GET`:  `sd: *mut MapSessionData` — the receiving player
+/// Args:
+///   - `bl`:        the block-list entry being iterated
+///   - `look_type`: `LOOK_GET` or `LOOK_SEND`
+///   - `arg`:       if `LOOK_SEND`, `bl` is the receiving player and `arg` is the object;
+///                  if `LOOK_GET`, `bl` is the object and `arg` is cast to `*mut MapSessionData`.
 ///
 /// Mirrors `clif_object_look_sub` (~line 1472).
-#[no_mangle]
-pub unsafe extern "C" fn clif_object_look_sub(bl: *mut BlockList, mut ap: ...) -> c_int {
-    let look_type = ap.arg::<c_int>();
-
+pub unsafe fn clif_object_look_sub_inner(bl: *mut BlockList, look_type: i32, arg: *mut BlockList) -> i32 {
     let (sd, b): (*mut MapSessionData, *mut BlockList) = if look_type == LOOK_SEND {
-        // bl is the receiving player, next arg is the object
+        // bl is the receiving player, arg is the object
         if bl.is_null() { return 0; }
-        let b_arg = ap.arg::<*mut BlockList>();
-        if b_arg.is_null() { return 0; }
-        (bl as *mut MapSessionData, b_arg)
+        if arg.is_null() { return 0; }
+        (bl as *mut MapSessionData, arg)
     } else {
-        // bl is the object, next arg is the receiving player
+        // bl is the object, arg is the receiving player
         if bl.is_null() { return 0; }
-        let sd_arg = ap.arg::<*mut MapSessionData>();
-        if sd_arg.is_null() { return 0; }
-        (sd_arg, bl)
+        if arg.is_null() { return 0; }
+        (arg as *mut MapSessionData, bl)
     };
 
     if (*b).bl_type == BL_PC_U8 { return 0; }
@@ -302,24 +277,20 @@ pub unsafe extern "C" fn clif_object_look_sub(bl: *mut BlockList, mut ap: ...) -
 
 // ─── clif_object_look_sub2 ───────────────────────────────────────────────────
 
-/// Send a single-object look packet immediately (not batched).
+/// Typed inner function replacing the old variadic `clif_object_look_sub2` callback.
 ///
-/// `map_foreachinarea` callback.  va_list args same as `clif_object_look_sub`.
+/// Send a single-object look packet immediately (not batched).
+/// Same argument layout as `clif_object_look_sub_inner`.
 /// Mirrors `clif_object_look_sub2` (~line 1592).
-#[no_mangle]
-pub unsafe extern "C" fn clif_object_look_sub2(bl: *mut BlockList, mut ap: ...) -> c_int {
-    let look_type = ap.arg::<c_int>();
-
+pub unsafe fn clif_object_look_sub2_inner(bl: *mut BlockList, look_type: i32, arg: *mut BlockList) -> i32 {
     let (sd, b): (*mut MapSessionData, *mut BlockList) = if look_type == LOOK_SEND {
         if bl.is_null() { return 0; }
-        let b_arg = ap.arg::<*mut BlockList>();
-        if b_arg.is_null() { return 0; }
-        (bl as *mut MapSessionData, b_arg)
+        if arg.is_null() { return 0; }
+        (bl as *mut MapSessionData, arg)
     } else {
         if bl.is_null() { return 0; }
-        let sd_arg = ap.arg::<*mut MapSessionData>();
-        if sd_arg.is_null() { return 0; }
-        (sd_arg, bl)
+        if arg.is_null() { return 0; }
+        (arg as *mut MapSessionData, bl)
     };
 
     if rust_session_exists((*sd).fd) == 0 {
@@ -424,8 +395,7 @@ pub unsafe extern "C" fn clif_object_look_sub2(bl: *mut BlockList, mut ap: ...) 
 /// Send a single-object look packet for a specific block-list ID.
 ///
 /// Mirrors `clif_object_look_specific` (~line 1716).
-#[no_mangle]
-pub unsafe extern "C" fn clif_object_look_specific(sd: *mut MapSessionData, id: c_uint) -> c_int {
+pub unsafe fn clif_object_look_specific(sd: *mut MapSessionData, id: c_uint) -> c_int {
     if sd.is_null() { return 0; }
 
     let b = map_id2bl(id);
@@ -513,8 +483,7 @@ pub unsafe extern "C" fn clif_object_look_specific(sd: *mut MapSessionData, id: 
 /// Initialise mob-look accumulation state and reserve send-buffer space.
 ///
 /// Direct call (not callback). Mirrors `clif_mob_look_start` (~line 1813).
-#[no_mangle]
-pub unsafe extern "C" fn clif_mob_look_start(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_mob_look_start(sd: *mut MapSessionData) -> c_int {
     (*sd).mob_count = 0;
     (*sd).mob_len   = 0;
     (*sd).mob_item  = 0;
@@ -533,8 +502,7 @@ pub unsafe extern "C" fn clif_mob_look_start(sd: *mut MapSessionData) -> c_int {
 /// Flush the batched mob-look packet if any entries were accumulated.
 ///
 /// Direct call (not callback). Mirrors `clif_mob_look_close` (~line 1832).
-#[no_mangle]
-pub unsafe extern "C" fn clif_mob_look_close(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_mob_look_close(sd: *mut MapSessionData) -> c_int {
     if (*sd).mob_count == 0 { return 0; }
 
     if (*sd).mob_item == 0 {
@@ -550,29 +518,27 @@ pub unsafe extern "C" fn clif_mob_look_close(sd: *mut MapSessionData) -> c_int {
 
 // ─── clif_cnpclook_sub ───────────────────────────────────────────────────────
 
+/// Typed inner function replacing the old variadic `clif_cnpclook_sub` callback.
+///
 /// Send full NPC (charstate NPC) appearance packet to a player.
 ///
-/// `map_foreachinarea` callback.  va_list args:
-///   1. `type: c_int`  — `LOOK_GET` or `LOOK_SEND`
-///   2. if `LOOK_GET`:  `sd: *mut MapSessionData` — the receiving player
-///      if `LOOK_SEND`: `nd: *mut NpcData` — the NPC to render
+/// Args:
+///   - `bl`:        the block-list entry being iterated
+///   - `look_type`: `LOOK_GET` or `LOOK_SEND`
+///   - `arg`:       if `LOOK_GET`, `bl` is the NPC and `arg` is cast to `*mut MapSessionData`;
+///                  if `LOOK_SEND`, `bl` is the player and `arg` is cast to `*mut NpcData`.
 ///
 /// Mirrors `clif_cnpclook_sub` (~line 2773).
-#[no_mangle]
-pub unsafe extern "C" fn clif_cnpclook_sub(bl: *mut BlockList, mut ap: ...) -> c_int {
-    let look_type = ap.arg::<c_int>();
-
+pub unsafe fn clif_cnpclook_inner(bl: *mut BlockList, look_type: i32, arg: *mut BlockList) -> i32 {
     let (nd, sd): (*mut NpcData, *mut MapSessionData) = if look_type == LOOK_GET {
         if bl.is_null() { return 0; }
-        let sd_arg = ap.arg::<*mut MapSessionData>();
-        if sd_arg.is_null() { return 0; }
-        (bl as *mut NpcData, sd_arg)
+        if arg.is_null() { return 0; }
+        (bl as *mut NpcData, arg as *mut MapSessionData)
     } else {
         // LOOK_SEND
         if bl.is_null() { return 0; }
-        let nd_arg = ap.arg::<*mut NpcData>();
-        if nd_arg.is_null() { return 0; }
-        (nd_arg, bl as *mut MapSessionData)
+        if arg.is_null() { return 0; }
+        (arg as *mut NpcData, bl as *mut MapSessionData)
     };
 
     if (*nd).bl.m != (*sd).bl.m || (*nd).npctype != 1 {
@@ -816,29 +782,27 @@ pub unsafe extern "C" fn clif_cnpclook_sub(bl: *mut BlockList, mut ap: ...) -> c
 
 // ─── clif_cmoblook_sub ───────────────────────────────────────────────────────
 
+/// Typed inner function replacing the old variadic `clif_cmoblook_sub` callback.
+///
 /// Send full character-mob (charstate mob) appearance packet to a player.
 ///
-/// `map_foreachinarea` callback.  va_list args:
-///   1. `type: c_int`  — `LOOK_GET` or `LOOK_SEND`
-///   2. if `LOOK_GET`:  `sd: *mut MapSessionData` — the receiving player
-///      if `LOOK_SEND`: `mob: *mut MobSpawnData` — the mob to render
+/// Args:
+///   - `bl`:        the block-list entry being iterated
+///   - `look_type`: `LOOK_GET` or `LOOK_SEND`
+///   - `arg`:       if `LOOK_GET`, `bl` is the mob and `arg` is cast to `*mut MapSessionData`;
+///                  if `LOOK_SEND`, `bl` is the player and `arg` is cast to `*mut MobSpawnData`.
 ///
 /// Mirrors `clif_cmoblook_sub` (~line 3016).
-#[no_mangle]
-pub unsafe extern "C" fn clif_cmoblook_sub(bl: *mut BlockList, mut ap: ...) -> c_int {
-    let look_type = ap.arg::<c_int>();
-
+pub unsafe fn clif_cmoblook_inner(bl: *mut BlockList, look_type: i32, arg: *mut BlockList) -> i32 {
     let (mob, sd): (*mut MobSpawnData, *mut MapSessionData) = if look_type == LOOK_GET {
         if bl.is_null() { return 0; }
-        let sd_arg = ap.arg::<*mut MapSessionData>();
-        if sd_arg.is_null() { return 0; }
-        (bl as *mut MobSpawnData, sd_arg)
+        if arg.is_null() { return 0; }
+        (bl as *mut MobSpawnData, arg as *mut MapSessionData)
     } else {
         // LOOK_SEND
         if bl.is_null() { return 0; }
-        let mob_arg = ap.arg::<*mut MobSpawnData>();
-        if mob_arg.is_null() { return 0; }
-        (mob_arg, bl as *mut MapSessionData)
+        if arg.is_null() { return 0; }
+        (arg as *mut MobSpawnData, bl as *mut MapSessionData)
     };
 
     if (*mob).bl.m != (*sd).bl.m || (*(*mob).data).mobtype != 1 || (*mob).state == 1 {
@@ -1080,32 +1044,30 @@ pub unsafe extern "C" fn clif_cmoblook_sub(bl: *mut BlockList, mut ap: ...) -> c
 
 // ─── clif_charlook_sub ───────────────────────────────────────────────────────
 
+/// Typed inner function replacing the old variadic `clif_charlook_sub` callback.
+///
 /// Send full player appearance packet to another player.
 ///
-/// `map_foreachinarea` callback.  va_list args:
-///   1. `type: c_int`   — `LOOK_GET` or `LOOK_SEND`
-///   2. if `LOOK_GET`:  `src_sd: *mut MapSessionData` — viewer
-///      if `LOOK_SEND`: `sd: *mut MapSessionData`    — the player to render
+/// Args:
+///   - `bl`:        the block-list entry being iterated
+///   - `look_type`: `LOOK_GET` or `LOOK_SEND`
+///   - `arg`:       if `LOOK_GET`, `bl` is the player whose appearance we send and `arg` is the viewer;
+///                  if `LOOK_SEND`, `bl` is the viewer and `arg` is the player whose appearance we send.
 ///
 /// Mirrors `clif_charlook_sub` (~line 3285).
-#[no_mangle]
-pub unsafe extern "C" fn clif_charlook_sub(bl: *mut BlockList, mut ap: ...) -> c_int {
-    let look_type = ap.arg::<c_int>();
-
+pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut MapSessionData) -> i32 {
     // sd  = the player whose appearance we send
     // src_sd = the player receiving the packet
     let (sd, src_sd): (*mut MapSessionData, *mut MapSessionData) = if look_type == LOOK_GET {
         if bl.is_null() { return 0; }
-        let src_arg = ap.arg::<*mut MapSessionData>();
-        if src_arg.is_null() { return 0; }
+        if arg.is_null() { return 0; }
         // C: sd=(USER*)bl, src_sd=va_arg — if src_sd==sd return 0
-        if bl as *mut MapSessionData == src_arg { return 0; }
-        (bl as *mut MapSessionData, src_arg)
+        if bl as *mut MapSessionData == arg { return 0; }
+        (bl as *mut MapSessionData, arg)
     } else {
         if bl.is_null() { return 0; }
-        let sd_arg = ap.arg::<*mut MapSessionData>();
-        if sd_arg.is_null() { return 0; }
-        (sd_arg, bl as *mut MapSessionData)
+        if arg.is_null() { return 0; }
+        (arg, bl as *mut MapSessionData)
     };
 
     if (*sd).bl.m != (*src_sd).bl.m { return 0; }
@@ -1469,8 +1431,7 @@ pub unsafe extern "C" fn clif_charlook_sub(bl: *mut BlockList, mut ap: ...) -> c
 /// Add a player to the block grid and send their appearance to nearby clients.
 ///
 /// Thin wrapper — mirrors `clif_spawn` (~line 4075).
-#[no_mangle]
-pub unsafe extern "C" fn clif_spawn(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_spawn(sd: *mut MapSessionData) -> c_int {
     if map_addblock(&mut (*sd).bl) != 0 {
         // printf("Error Spawn\n") — silently ignore in Rust
     }

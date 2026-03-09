@@ -77,128 +77,87 @@ unsafe fn rptr(fd: c_int, pos: usize) -> *const c_char {
     rust_session_rdata_ptr(fd, pos) as *const c_char
 }
 
-// ─── C extern declarations ────────────────────────────────────────────────────
+// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
+// Dispatcher calls functions with sd: *mut c_void. Thin wrappers do the cast.
+// Full-path references in wrapper bodies avoid name conflicts.
 
-extern "C" {
-    // Crypto
-    fn decrypt(fd: c_int);
-    // Disconnect
-    fn clif_handle_disconnect(sd: *mut c_void);
-    fn clif_closeit(sd: *mut c_void);
-    // clif_print_disconnect — ported to Rust (src/game/client/visual.rs)
-    // AFK / state
-    // clif_cancelafk — ported to Rust (src/game/client/visual.rs)
-    fn clif_mystaytus(sd: *mut c_void);
-    fn clif_groupstatus(sd: *mut c_void);
-    fn clif_refresh(sd: *mut c_void);
-    fn clif_changestatus(sd: *mut c_void, status: u8);
-    // Pre-login accept
-    fn clif_accept2(fd: c_int, name: *const c_char, val: u8);
-    // Movement
-    fn clif_parsemap(sd: *mut c_void);
-    fn clif_parsewalk(sd: *mut c_void);
-    fn clif_parsewalkpong(sd: *mut c_void);
-    fn clif_handle_missingobject(sd: *mut c_void);
-    // Look / interact
-    fn clif_parselookat(sd: *mut c_void);
-    fn clif_parselookat_2(sd: *mut c_void);
-    fn clif_open_sub(sd: *mut c_void);
-    fn clif_handle_clickgetinfo(sd: *mut c_void);
-    fn clif_parseviewchange(sd: *mut c_void);
-    fn clif_parseside(sd: *mut c_void);
-    fn clif_parseemotion(sd: *mut c_void);
-    // Chat / social
-    fn clif_parsesay(sd: *mut c_void);
-    fn clif_parsewisp(sd: *mut c_void);
-    fn clif_parseignore(sd: *mut c_void);
-    fn clif_parsefriends(sd: *mut c_void, list: *const c_char, len: c_int);
-    fn clif_user_list(sd: *mut c_void);
-    fn clif_addgroup(sd: *mut c_void);
-    // Items
-    fn clif_parsegetitem(sd: *mut c_void);
-    fn clif_parsedropitem(sd: *mut c_void);
-    fn clif_parseeatitem(sd: *mut c_void);
-    fn clif_parseuseitem(sd: *mut c_void);
-    fn clif_parseunequip(sd: *mut c_void);
-    fn clif_parsewield(sd: *mut c_void);
-    fn clif_parsethrow(sd: *mut c_void);
-    fn clif_throwconfirm(sd: *mut c_void);
-    fn clif_dropgold(sd: *mut c_void, amount: u32);
-    fn clif_postitem(sd: *mut c_void);
-    fn clif_handitem(sd: *mut c_void);
-    fn clif_handgold(sd: *mut c_void);
-    // itemdb_thrownconfirm is a static inline → use the Rust backing fn
-    fn rust_itemdb_thrownconfirm(id: u32) -> c_int;
-    // Combat / magic
-    fn clif_parsemagic(sd: *mut c_void);
-    fn clif_parseattack(sd: *mut c_void);
-    fn clif_sendminitext(sd: *mut c_void, msg: *const c_char);
-    // NPC / menus
-    fn clif_parsenpcdialog(sd: *mut c_void);
-    fn clif_handle_menuinput(sd: *mut c_void);
-    fn clif_paperpopupwrite_save(sd: *mut c_void);
-    // Spells / position
-    fn clif_parsechangespell(sd: *mut c_void);
-    fn clif_parsechangepos(sd: *mut c_void);
-    // Warp (rust_pc_warp — pc_warp is a static inline in pc.h)
-    fn rust_pc_warp(sd: *mut c_void, m: c_int, x: c_int, y: c_int) -> c_int;
-    // Profile
-    fn clif_changeprofile(sd: *mut c_void);
-    // clif_sendprofile — ported to Rust (src/game/client/visual.rs)
-    // Boards / mail
-    fn clif_handle_boards(sd: *mut c_void);
-    fn clif_handle_powerboards(sd: *mut c_void);
-    fn clif_parseparcel(sd: *mut c_void);
-    // clif_sendboard — ported to Rust (src/game/client/visual.rs)
-    // Ranking / towns
-    fn clif_parseranking(sd: *mut c_void, fd: c_int);
-    fn clif_sendRewardInfo(sd: *mut c_void, fd: c_int);
-    fn clif_getReward(sd: *mut c_void, fd: c_int);
-    fn clif_sendtowns(sd: *mut c_void);
-    // Hunter / minimap
-    fn clif_huntertoggle(sd: *mut c_void);
-    fn clif_sendhunternote(sd: *mut c_void);
-    fn clif_sendminimap(sd: *mut c_void);
-    // Trade / meta / creation
-    fn clif_parse_exchange(sd: *mut c_void);
-    fn send_meta(sd: *mut c_void);
-    fn send_metalist(sd: *mut c_void);
-    fn createdb_start(sd: *mut c_void);
-    // pc_atkspeed is a static inline → use the Rust backing fn
-    fn rust_pc_atkspeed(id: c_int, v: c_int) -> c_int;
-    // Timer insertion (from c_deps/timer.c via ffi::timer)
-    fn timer_insert(
-        tick: u32, interval: u32,
-        func: Option<unsafe extern "C" fn(c_int, c_int) -> c_int>,
-        id: c_int, data: c_int,
-    ) -> c_int;
+use crate::network::crypt::{decrypt, encrypt};
+use crate::game::scripting::pc_accessors::{
+    sl_pc_time, sl_pc_set_time, sl_pc_chat_timer, sl_pc_set_chat_timer,
+    sl_pc_attacked, sl_pc_set_attacked, sl_pc_attack_speed, sl_pc_loaded,
+    sl_pc_paralyzed, sl_pc_sleep, sl_pc_status_id, sl_pc_status_gm_level,
+    sl_pc_status_mute, sl_pc_inventory_id, sl_pc_bl_m, sl_map_spell,
+};
+use crate::database::item_db::rust_itemdb_thrownconfirm;
+use crate::game::pc::rust_pc_atkspeed;
+use crate::timer::timer_insert;
 
-    // USER struct accessors (sl_compat.c)
-    fn sl_pc_time(sd: *mut c_void) -> c_int;
-    fn sl_pc_set_time(sd: *mut c_void, v: c_int);
-    fn sl_pc_chat_timer(sd: *mut c_void) -> c_int;
-    fn sl_pc_set_chat_timer(sd: *mut c_void, v: c_int);
-    fn sl_pc_attacked(sd: *mut c_void) -> c_int;
-    fn sl_pc_set_attacked(sd: *mut c_void, v: c_int);
-    fn sl_pc_attack_speed(sd: *mut c_void) -> c_int;
-    fn sl_pc_loaded(sd: *mut c_void) -> c_int;
-    fn sl_pc_paralyzed(sd: *mut c_void) -> c_int;
-    fn sl_pc_sleep(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_id(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_gm_level(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_mute(sd: *mut c_void) -> c_int;
-    fn sl_pc_inventory_id(sd: *mut c_void, pos: c_int) -> u32;
-    fn sl_map_spell(m: c_int) -> c_int;
-    fn sl_pc_bl_m(sd: *mut c_void) -> c_int;
-
-    // Packet encryption (net_crypt.c / Rust)
-    fn encrypt(fd: c_int) -> c_int;
-
-    // Declared in map_parse.h; implemented in Rust (src/game/map_parse/chat.rs).
-    // Returns 1 if communication is ALLOWED, 0 if blocked by ignore list.
-    fn clif_isignore(src: *mut c_void, dst: *mut c_void) -> c_int;
-    // clif_send_area — ported to Rust (send_to_area / clif_send_area below, Task 1.9).
+// Dispatcher wrappers — match dispatcher's *mut c_void calling convention.
+type SD = *mut crate::game::pc::MapSessionData;
+#[inline] unsafe fn clif_isignore(src: *mut c_void, dst: *mut c_void) -> c_int {
+    crate::game::map_parse::chat::clif_isignore(src as SD, dst as SD)
 }
+#[inline] unsafe fn decrypt_fd(fd: c_int) { decrypt(fd); }
+#[inline] unsafe fn clif_handle_disconnect(sd: *mut c_void) { crate::game::client::handlers::clif_handle_disconnect(sd as SD); }
+#[inline] unsafe fn clif_closeit(sd: *mut c_void) { crate::game::map_parse::dialogs::clif_closeit(sd as SD); }
+#[inline] unsafe fn clif_mystaytus(sd: *mut c_void) { crate::game::map_parse::player_state::clif_mystaytus(sd as SD); }
+#[inline] unsafe fn clif_groupstatus(sd: *mut c_void) { crate::game::map_parse::groups::clif_groupstatus(sd as SD); }
+#[inline] unsafe fn clif_refresh(sd: *mut c_void) { crate::game::map_parse::player_state::clif_refresh(sd as SD); }
+#[inline] unsafe fn clif_changestatus(sd: *mut c_void, status: u8) { crate::game::client::handlers::clif_changestatus(sd as SD, status as c_int); }
+#[inline] unsafe fn clif_accept2(fd: c_int, name: *const c_char, val: u8) { crate::game::client::handlers::clif_accept2(fd, name as *mut c_char, val as c_int); }
+#[inline] unsafe fn clif_parsemap(sd: *mut c_void) { crate::game::map_parse::movement::clif_parsemap(sd as SD); }
+#[inline] unsafe fn clif_parsewalk(sd: *mut c_void) { crate::game::map_parse::movement::clif_parsewalk(sd as SD); }
+#[inline] unsafe fn clif_parsewalkpong(sd: *mut c_void) { crate::game::map_parse::movement::clif_parsewalkpong(sd as SD); }
+#[inline] unsafe fn clif_handle_missingobject(sd: *mut c_void) { crate::game::client::handlers::clif_handle_missingobject(sd as SD); }
+#[inline] unsafe fn clif_parselookat(sd: *mut c_void) { crate::game::map_parse::movement::clif_parselookat(sd as SD); }
+#[inline] unsafe fn clif_parselookat_2(sd: *mut c_void) { crate::game::map_parse::movement::clif_parselookat_2(sd as SD); }
+#[inline] unsafe fn clif_open_sub(sd: *mut c_void) { crate::game::map_parse::items::clif_open_sub(sd as SD); }
+#[inline] unsafe fn clif_handle_clickgetinfo(sd: *mut c_void) { crate::game::map_parse::dialogs::clif_handle_clickgetinfo(sd as SD); }
+#[inline] unsafe fn clif_parseviewchange(sd: *mut c_void) { crate::game::map_parse::movement::clif_parseviewchange(sd as SD); }
+#[inline] unsafe fn clif_parseside(sd: *mut c_void) { crate::game::map_parse::movement::clif_parseside(sd as SD); }
+#[inline] unsafe fn clif_parseemotion(sd: *mut c_void) { crate::game::map_parse::chat::clif_parseemotion(sd as SD); }
+#[inline] unsafe fn clif_parsesay(sd: *mut c_void) { crate::game::map_parse::chat::clif_parsesay(sd as SD); }
+#[inline] unsafe fn clif_parsewisp(sd: *mut c_void) { crate::game::map_parse::chat::clif_parsewisp(sd as SD); }
+#[inline] unsafe fn clif_parseignore(sd: *mut c_void) { crate::game::map_parse::chat::clif_parseignore(sd as SD); }
+#[inline] unsafe fn clif_parsefriends(sd: *mut c_void, list: *const c_char, len: c_int) { crate::game::client::handlers::clif_parsefriends(sd as SD, list, len); }
+#[inline] unsafe fn clif_user_list(sd: *mut c_void) { crate::game::client::visual::clif_user_list(sd as SD); }
+#[inline] unsafe fn clif_addgroup(sd: *mut c_void) { crate::game::map_parse::groups::clif_addgroup(sd as SD); }
+#[inline] unsafe fn clif_parsegetitem(sd: *mut c_void) { crate::game::map_parse::items::clif_parsegetitem(sd as SD); }
+#[inline] unsafe fn clif_parsedropitem(sd: *mut c_void) { crate::game::client::handlers::clif_parsedropitem(sd as SD); }
+#[inline] unsafe fn clif_parseeatitem(sd: *mut c_void) { crate::game::map_parse::items::clif_parseeatitem(sd as SD); }
+#[inline] unsafe fn clif_parseuseitem(sd: *mut c_void) { crate::game::map_parse::items::clif_parseuseitem(sd as SD); }
+#[inline] unsafe fn clif_parseunequip(sd: *mut c_void) { crate::game::map_parse::items::clif_parseunequip(sd as SD); }
+#[inline] unsafe fn clif_parsewield(sd: *mut c_void) { crate::game::map_parse::items::clif_parsewield(sd as SD); }
+#[inline] unsafe fn clif_parsethrow(sd: *mut c_void) { crate::game::map_parse::items::clif_parsethrow(sd as SD); }
+#[inline] unsafe fn clif_throwconfirm(sd: *mut c_void) { crate::game::map_parse::items::clif_throwconfirm(sd as SD); }
+#[inline] unsafe fn clif_dropgold(sd: *mut c_void, amount: u32) { crate::game::map_parse::items::clif_dropgold(sd as SD, amount); }
+#[inline] unsafe fn clif_postitem(sd: *mut c_void) { crate::game::client::handlers::clif_postitem(sd as SD); }
+#[inline] unsafe fn clif_handitem(sd: *mut c_void) { crate::game::map_parse::trading::clif_handitem(sd as SD); }
+#[inline] unsafe fn clif_handgold(sd: *mut c_void) { crate::game::map_parse::trading::clif_handgold(sd as SD); }
+#[inline] unsafe fn clif_parsemagic(sd: *mut c_void) { crate::game::map_parse::combat::clif_parsemagic(sd as SD); }
+#[inline] unsafe fn clif_parseattack(sd: *mut c_void) { crate::game::map_parse::combat::clif_parseattack(sd as SD); }
+#[inline] unsafe fn clif_sendminitext(sd: *mut c_void, msg: *const c_char) { crate::game::map_parse::chat::clif_sendminitext(sd as SD, msg); }
+#[inline] unsafe fn clif_parsenpcdialog(sd: *mut c_void) { crate::game::map_parse::dialogs::clif_parsenpcdialog(sd as SD); }
+#[inline] unsafe fn clif_handle_menuinput(sd: *mut c_void) { crate::game::client::handlers::clif_handle_menuinput(sd as SD); }
+#[inline] unsafe fn clif_paperpopupwrite_save(sd: *mut c_void) { crate::game::client::visual::clif_paperpopupwrite_save(sd as SD); }
+#[inline] unsafe fn clif_parsechangespell(sd: *mut c_void) { crate::game::map_parse::items::clif_parsechangespell(sd as SD); }
+#[inline] unsafe fn clif_parsechangepos(sd: *mut c_void) { crate::game::client::handlers::clif_parsechangepos(sd as SD); }
+#[inline] unsafe fn rust_pc_warp(sd: *mut c_void, m: c_int, x: c_int, y: c_int) -> c_int { crate::game::pc::rust_pc_warp(sd as SD, m, x, y) }
+#[inline] unsafe fn clif_changeprofile(sd: *mut c_void) { crate::game::client::visual::clif_changeprofile(sd as SD); }
+#[inline] unsafe fn clif_handle_boards(sd: *mut c_void) { crate::game::client::handlers::clif_handle_boards(sd as SD); }
+#[inline] unsafe fn clif_handle_powerboards(sd: *mut c_void) { crate::game::client::handlers::clif_handle_powerboards(sd as SD); }
+#[inline] unsafe fn clif_parseparcel(sd: *mut c_void) { crate::game::map_parse::groups::clif_parseparcel(sd as SD); }
+#[inline] unsafe fn clif_parseranking(sd: *mut c_void, fd: c_int) { crate::game::map_parse::events::clif_parseranking(sd as SD, fd); }
+#[inline] unsafe fn clif_sendRewardInfo(sd: *mut c_void, fd: c_int) { crate::game::map_parse::events::clif_sendRewardInfo(sd as SD, fd); }
+#[inline] unsafe fn clif_getReward(sd: *mut c_void, fd: c_int) { crate::game::map_parse::events::clif_getReward(sd as SD, fd); }
+#[inline] unsafe fn clif_sendtowns(sd: *mut c_void) { crate::game::map_parse::dialogs::clif_sendtowns(sd as SD); }
+#[inline] unsafe fn clif_huntertoggle(sd: *mut c_void) { crate::game::map_parse::groups::clif_huntertoggle(sd as SD); }
+#[inline] unsafe fn clif_sendhunternote(sd: *mut c_void) { crate::game::map_parse::groups::clif_sendhunternote(sd as SD); }
+#[inline] unsafe fn clif_sendminimap(sd: *mut c_void) { crate::game::map_parse::player_state::clif_sendminimap(sd as SD); }
+#[inline] unsafe fn clif_parse_exchange(sd: *mut c_void) { crate::game::map_parse::trading::clif_parse_exchange(sd as SD); }
+#[inline] unsafe fn send_meta(sd: *mut c_void) { crate::network::crypt::send_meta(sd as SD); }
+#[inline] unsafe fn send_metalist(sd: *mut c_void) { crate::network::crypt::send_metalist(sd as SD); }
+#[inline] unsafe fn createdb_start(sd: *mut c_void) { crate::game::client::handlers::createdb_start(sd); }
 
 // ─── Send-type constants (from map_parse.h) ───────────────────────────────────
 
@@ -228,8 +187,7 @@ const BL_PC: c_uchar = 0x01;
 /// - `bl` must be a valid pointer to an initialized `BlockList`. When
 ///   `bl.bl_type == BL_PC`, it may be cast to `*mut MapSessionData`. When
 ///   `send_type == SELF`, `bl` must point to a `MapSessionData` (`bl_type == BL_PC`).
-#[no_mangle]
-pub unsafe extern "C" fn clif_send(
+pub unsafe fn clif_send(
     buf: *const c_uchar,
     len: c_int,
     bl: *mut BlockList,
@@ -357,8 +315,7 @@ pub unsafe extern "C" fn clif_send(
 /// - `bl` must be a valid pointer to an initialized `BlockList`. When
 ///   `bl.bl_type == BL_PC`, it may be cast to `*mut MapSessionData`. When
 ///   `send_type == SELF`, `bl` must point to a `MapSessionData` (`bl_type == BL_PC`).
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendtogm(
+pub unsafe fn clif_sendtogm(
     buf: *const c_uchar,
     len: c_int,
     bl: *mut BlockList,
@@ -596,7 +553,7 @@ unsafe fn send_to_area(
     src_bl: *mut BlockList,
     send_type: c_int,
 ) {
-    use crate::game::block::{foreach_in_area, AreaType};
+    use crate::game::block::foreach_in_area;
     use crate::game::mob::BL_PC as BL_PC_I32;
 
     if buf.is_null() || src_bl.is_null() || len <= 0 {
@@ -674,8 +631,7 @@ unsafe fn send_to_area(
 /// # Safety
 /// - `buf` must be a valid, writable pointer to at least `len` bytes.
 /// - `src_bl` must be a valid `BlockList` pointer.
-#[no_mangle]
-pub unsafe extern "C" fn clif_send_area(
+pub unsafe fn clif_send_area(
     m: c_int,
     x: c_int,
     y: c_int,
@@ -727,8 +683,7 @@ unsafe fn check_dual_login(fd: c_int, sd: *mut c_void) -> bool {
 
 /// Rust replacement for C `clif_parse(int fd)`.
 /// Registered via `rust_session_set_default_parse` at map_server startup.
-#[no_mangle]
-pub unsafe extern "C" fn rust_clif_parse(fd: c_int) -> c_int {
+pub unsafe fn rust_clif_parse(fd: c_int) -> c_int {
     if rust_session_exists(fd) == 0 {
         return 0;
     }

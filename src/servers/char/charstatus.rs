@@ -1,12 +1,12 @@
-/// Rust mirror of `struct mmo_charstatus` from c_src/mmo.h.
-///
-/// MUST match the C struct byte-for-byte (same field order, same types, same
-/// padding). Verified target size: 3,171,352 bytes (from gcc sizeof check).
-///
-/// Safety: All types are Plain Old Data. `unsafe impl Pod` is used because
-/// bytemuck derive doesn't handle arrays larger than 32 elements. All implicit
-/// repr(C) padding has been replaced with explicit `_pad` fields (e.g.
-/// `SkillInfo::_pad`) so no struct contains uninitialized padding bytes.
+//! Rust mirror of `struct mmo_charstatus` from c_src/mmo.h.
+//!
+//! MUST match the C struct byte-for-byte (same field order, same types, same
+//! padding). Verified target size: 3,171,352 bytes (from gcc sizeof check).
+//!
+//! Safety: All types are Plain Old Data. `unsafe impl Pod` is used because
+//! bytemuck derive doesn't handle arrays larger than 32 elements. All implicit
+//! repr(C) padding has been replaced with explicit `_pad` fields (e.g.
+//! `SkillInfo::_pad`) so no struct contains uninitialized padding bytes.
 
 // ── Sub-structs ───────────────────────────────────────────────────────────────
 

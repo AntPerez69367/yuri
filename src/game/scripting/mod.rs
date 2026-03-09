@@ -26,6 +26,8 @@ use types::registry::*;
 // Global Lua state — single instance, lives for the process lifetime.
 // Mirrors `lua_State *sl_gstate` in scripting.c.
 // ---------------------------------------------------------------------------
+// SAFETY: Option<mlua::Lua> is !Send + !Sync. Initialised once by rust_sl_init on the game thread.
+// All Lua calls happen on the same thread via the tokio LocalSet executor. No concurrent access.
 static mut SL_STATE: Option<Lua> = None;
 
 /// Returns a reference to the global Lua state.
@@ -38,7 +40,8 @@ pub unsafe fn sl_state() -> &'static Lua {
 
 /// Raw lua_State pointer — exported so C code using `sl_gstate` still compiles.
 /// Set after init. Leave null if mlua does not expose a stable raw accessor.
-#[no_mangle]
+// SAFETY: Raw pointer alias into SL_STATE's internal lua_State. Same safety invariant as SL_STATE:
+// initialised once on the game thread, only accessed from the tokio LocalSet executor.
 pub static mut sl_gstate: *mut c_void = std::ptr::null_mut();
 
 // ---------------------------------------------------------------------------
@@ -456,28 +459,23 @@ pub unsafe fn sl_updatepeople_impl(_bl: *mut c_void, _ap: *mut c_void) -> c_int 
 
 // ─── FFI bridge (moved from src/ffi/scripting.rs) ─────────────────────────
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_init() {
+pub unsafe fn rust_sl_init() {
     ffi_catch!((), sl_init())
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_fixmem() {
+pub unsafe fn rust_sl_fixmem() {
     ffi_catch!((), sl_fixmem())
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_reload() -> c_int {
+pub unsafe fn rust_sl_reload() -> c_int {
     ffi_catch!(-1, sl_reload())
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_luasize(_user: *mut c_void) -> c_int {
+pub unsafe fn rust_sl_luasize(_user: *mut c_void) -> c_int {
     ffi_catch!(0, sl_luasize())
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_doscript_blargs_vec(
+pub unsafe fn rust_sl_doscript_blargs_vec(
     root:   *const c_char,
     method: *const c_char,
     nargs:  c_int,
@@ -486,8 +484,7 @@ pub unsafe extern "C" fn rust_sl_doscript_blargs_vec(
     ffi_catch!(0, sl_doscript_blargs_vec(root, method, nargs, args))
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_doscript_strings_vec(
+pub unsafe fn rust_sl_doscript_strings_vec(
     root:   *const c_char,
     method: *const c_char,
     nargs:  c_int,
@@ -496,8 +493,7 @@ pub unsafe extern "C" fn rust_sl_doscript_strings_vec(
     ffi_catch!(0, sl_doscript_strings_vec(root, method, nargs, args))
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_doscript_stackargs(
+pub unsafe fn rust_sl_doscript_stackargs(
     root:   *const c_char,
     method: *const c_char,
     nargs:  c_int,
@@ -505,8 +501,7 @@ pub unsafe extern "C" fn rust_sl_doscript_stackargs(
     ffi_catch!(0, sl_doscript_stackargs(root, method, nargs))
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_updatepeople(
+pub unsafe fn rust_sl_updatepeople(
     bl: *mut c_void,
     ap: *mut c_void,
 ) -> c_int {
@@ -514,26 +509,22 @@ pub unsafe extern "C" fn rust_sl_updatepeople(
 }
 
 /// Direct symbol used as a function pointer callback in map_foreachinarea.
-#[no_mangle]
-pub unsafe extern "C" fn sl_updatepeople(
+pub unsafe fn sl_updatepeople(
     bl: *mut c_void,
     ap: *mut c_void,
 ) -> c_int {
     ffi_catch!(0, sl_updatepeople_impl(bl, ap))
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_resumemenu(selection: c_uint, sd: *mut c_void) {
+pub unsafe fn rust_sl_resumemenu(selection: c_uint, sd: *mut c_void) {
     ffi_catch!((), async_coro::resume_menu(selection, sd))
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_resumemenuseq(selection: c_uint, choice: c_int, sd: *mut c_void) {
+pub unsafe fn rust_sl_resumemenuseq(selection: c_uint, choice: c_int, sd: *mut c_void) {
     ffi_catch!((), async_coro::resume_menuseq(selection, choice, sd))
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_resumeinputseq(
+pub unsafe fn rust_sl_resumeinputseq(
     choice: c_uint,
     input:  *mut c_char,
     sd:     *mut c_void,
@@ -541,18 +532,15 @@ pub unsafe extern "C" fn rust_sl_resumeinputseq(
     ffi_catch!((), async_coro::resume_inputseq(choice, input, sd))
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_resumedialog(choice: c_uint, sd: *mut c_void) {
+pub unsafe fn rust_sl_resumedialog(choice: c_uint, sd: *mut c_void) {
     ffi_catch!((), async_coro::resume_dialog(choice, sd))
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_resumebuy(items: *mut c_char, sd: *mut c_void) {
+pub unsafe fn rust_sl_resumebuy(items: *mut c_char, sd: *mut c_void) {
     ffi_catch!((), async_coro::resume_buy(items, sd))
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_resumeinput(
+pub unsafe fn rust_sl_resumeinput(
     tag:   *mut c_char,
     input: *mut c_char,
     sd:    *mut c_void,
@@ -560,17 +548,14 @@ pub unsafe extern "C" fn rust_sl_resumeinput(
     ffi_catch!((), async_coro::resume_input(tag, input, sd))
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_resumesell(choice: c_uint, sd: *mut c_void) {
+pub unsafe fn rust_sl_resumesell(choice: c_uint, sd: *mut c_void) {
     ffi_catch!((), async_coro::resume_sell(choice, sd))
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_exec(user: *mut c_void, code: *mut c_char) {
+pub unsafe fn rust_sl_exec(user: *mut c_void, code: *mut c_char) {
     ffi_catch!((), sl_exec_str(user, code))
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_sl_async_freeco(user: *mut c_void) {
+pub unsafe fn rust_sl_async_freeco(user: *mut c_void) {
     ffi_catch!((), async_coro::free_coref(user))
 }

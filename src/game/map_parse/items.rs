@@ -1,6 +1,6 @@
 //! Port of item/equipment handling from `c_src/map_parse.c`.
 //!
-//! Functions declared `#[no_mangle] pub unsafe extern "C"` so they remain
+//! Functions declared `pub unsafe extern "C"` so they remain
 //! callable from any remaining C code that has not yet been ported.
 
 #![allow(non_snake_case, clippy::wildcard_imports)]
@@ -45,8 +45,8 @@ use super::packet::{
     encrypt,
     wfifob, wfifow, wfifol, wfifoset, wfifoheader,
     rfifob,
-    clif_send, map_foreachinarea, map_foreachincell,
-    AREA, SAMEAREA,
+    clif_send,
+    SAMEAREA,
 };
 
 // optFlag_stealth = 32 (from map_server.h)
@@ -55,45 +55,30 @@ const OPT_FLAG_STEALTH: c_int = 32;
 // SCRIPT subtype constant (enum { SCRIPT=0, FLOOR=1 } in map_server.h)
 const SCRIPT: u8 = 0;
 
-// ─── C FFI: functions remaining in C ─────────────────────────────────────────
+// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
 
-extern "C" {
-    fn clif_sendstatus(sd: *mut MapSessionData, flags: c_int) -> c_int;
-    fn clif_sendmsg(sd: *mut MapSessionData, t: c_int, msg: *const c_char) -> c_int;
-    fn clif_sendminitext(sd: *mut MapSessionData, msg: *const c_char) -> c_int;
-    fn clif_getequiptype(val: c_int) -> c_int;
-    fn broadcast_update_state(sd: *mut MapSessionData);
-    fn clif_sendaction(bl: *mut BlockList, action: c_int, unused: c_int, extra: c_int) -> c_int;
-    fn clif_object_look_sub2(bl: *mut BlockList, ...) -> c_int;
-    fn clif_object_canmove(m: c_int, x: c_int, y: c_int, dir: c_int) -> c_int;
-    fn clif_object_canmove_from(m: c_int, x: c_int, y: c_int, dir: c_int) -> c_int;
-    fn map_id2name(id: c_uint) -> *mut c_char;
-    fn map_additem(bl: *mut BlockList);
-    // read_pass — inlined below; no longer an extern "C" call
-    #[link_name = "rust_pc_readglobalreg"]
-    fn pc_readglobalreg(sd: *mut MapSessionData, reg: *const c_char) -> c_int;
+use crate::game::map_parse::player_state::clif_sendstatus;
+use crate::game::map_parse::chat::{clif_sendmsg, clif_sendminitext};
+use crate::game::client::visual::{clif_getequiptype, broadcast_update_state};
+use crate::game::map_parse::combat::clif_sendaction;
+use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from};
+use crate::game::map_server::{map_id2name, map_additem};
+use crate::game::pc::{
+    rust_pc_readglobalreg as pc_readglobalreg,
+    rust_pc_useitem, rust_pc_unequip, rust_pc_delitem, rust_pc_loadmagic, rust_pc_reload_aether,
+};
+use crate::database::item_db::{
+    rust_itemdb_name, rust_itemdb_yname, rust_itemdb_text, rust_itemdb_type,
+    rust_itemdb_icon, rust_itemdb_iconcolor, rust_itemdb_dura, rust_itemdb_protected,
+    rust_itemdb_breakondeath, rust_itemdb_stackamount, rust_itemdb_unequip, rust_itemdb_droppable,
+};
+use crate::database::magic_db::rust_magicdb_yname;
 
-    // rust_ variants for static-inline wrappers
-    fn rust_itemdb_name(id: c_uint) -> *mut c_char;
-    fn rust_itemdb_yname(id: c_uint) -> *mut c_char;
-    fn rust_itemdb_text(id: c_uint) -> *mut c_char;
-    fn rust_itemdb_type(id: c_uint) -> c_int;
-    fn rust_itemdb_icon(id: c_uint) -> c_int;
-    fn rust_itemdb_iconcolor(id: c_uint) -> c_int;
-    fn rust_itemdb_dura(id: c_uint) -> c_int;
-    fn rust_itemdb_protected(id: c_uint) -> c_int;
-    fn rust_itemdb_breakondeath(id: c_uint) -> c_int;
-    fn rust_itemdb_stackamount(id: c_uint) -> c_int;
-    fn rust_itemdb_unequip(id: c_uint) -> c_int;
-    fn rust_itemdb_droppable(id: c_uint) -> c_int;
-    fn rust_magicdb_yname(id: c_int) -> *mut c_char;
-    fn rust_pc_useitem(sd: *mut MapSessionData, id: c_int) -> c_int;
-    fn rust_pc_unequip(sd: *mut MapSessionData, t: c_int) -> c_int;
-    fn rust_pc_delitem(sd: *mut MapSessionData, id: c_int, amount: c_int, t: c_int) -> c_int;
-    fn rust_pc_loadmagic(sd: *mut MapSessionData) -> c_int;
-    fn rust_pc_reload_aether(sd: *mut MapSessionData) -> c_int;
-    fn rust_pc_addtocurrent(bl: *mut BlockList, ...) -> c_int;
-}
+
+// Direct imports from Rust — no extern "C" block needed since same crate.
+use crate::game::pc::rust_pc_addtocurrent_inner;
+use crate::game::block::{foreach_in_area, foreach_in_cell, AreaType};
+use crate::game::map_parse::visual::clif_object_look_sub2_inner;
 
 // ─── Lua dispatch helpers ─────────────────────────────────────────────────────
 
@@ -114,29 +99,21 @@ unsafe fn sl_doscript_2(root: *const std::ffi::c_char, method: *const std::ffi::
 // ─── libc helpers ─────────────────────────────────────────────────────────────
 
 unsafe fn strcasecmp_rs(a: *const c_char, b: *const u8) -> c_int {
-    extern "C" {
-        fn strcasecmp(a: *const c_char, b: *const c_char) -> c_int;
-    }
-    strcasecmp(a, b.cast())
+    libc::strcasecmp(a, b.cast())
 }
 
 unsafe fn strlen_cstr(p: *const c_char) -> usize {
-    extern "C" { fn strlen(s: *const c_char) -> usize; }
-    strlen(p)
+    libc::strlen(p)
 }
 
 unsafe fn strcpy_cstr(dst: *mut u8, src: *const c_char) {
-    extern "C" { fn strcpy(d: *mut c_char, s: *const c_char) -> *mut c_char; }
-    strcpy(dst.cast(), src);
+    libc::strcpy(dst.cast(), src);
 }
 
 unsafe fn sprintf_buf(dst: &mut [i8; 128], fmt: &[u8], arg: *const c_char) {
     // Used only for formatting name strings into fixed buffers.
     // We call libc snprintf for safety.
-    extern "C" {
-        fn snprintf(s: *mut c_char, n: usize, fmt: *const c_char, ...) -> c_int;
-    }
-    snprintf(dst.as_mut_ptr(), 128, fmt.as_ptr().cast(), arg);
+    libc::snprintf(dst.as_mut_ptr(), 128, fmt.as_ptr().cast(), arg);
 }
 
 // ─── clif_checkinvbod ─────────────────────────────────────────────────────────
@@ -144,8 +121,7 @@ unsafe fn sprintf_buf(dst: &mut [i8; 128], fmt: &[u8], arg: *const c_char) {
 /// Validate inventory on death: break or restore items as needed.
 ///
 /// Mirrors `clif_checkinvbod` from `c_src/map_parse.c` ~line 5632.
-#[no_mangle]
-pub unsafe extern "C" fn clif_checkinvbod(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_checkinvbod(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
 
     for x in 0..MAX_INVENTORY {
@@ -167,10 +143,7 @@ pub unsafe extern "C" fn clif_checkinvbod(sd: *mut MapSessionData) -> c_int {
 
                 let mut buf = [0i8; 256];
                 let name = rust_itemdb_name(id);
-                extern "C" {
-                    fn snprintf(s: *mut c_char, n: usize, fmt: *const c_char, ...) -> c_int;
-                }
-                snprintf(
+                libc::snprintf(
                     buf.as_mut_ptr(),
                     256,
                     b"Your %s has been restored!\0".as_ptr().cast(),
@@ -190,10 +163,7 @@ pub unsafe extern "C" fn clif_checkinvbod(sd: *mut MapSessionData) -> c_int {
             }
 
             let mut buf = [0i8; 256];
-            extern "C" {
-                fn snprintf(s: *mut c_char, n: usize, fmt: *const c_char, ...) -> c_int;
-            }
-            snprintf(
+            libc::snprintf(
                 buf.as_mut_ptr(),
                 256,
                 b"Your %s was destroyed!\0".as_ptr().cast(),
@@ -223,8 +193,7 @@ pub unsafe extern "C" fn clif_checkinvbod(sd: *mut MapSessionData) -> c_int {
 /// Remove an item from the client inventory view.
 ///
 /// Mirrors `clif_senddelitem` from `c_src/map_parse.c` ~line 5695.
-#[no_mangle]
-pub unsafe extern "C" fn clif_senddelitem(sd: *mut MapSessionData, num: c_int, r#type: c_int) -> c_int {
+pub unsafe fn clif_senddelitem(sd: *mut MapSessionData, num: c_int, r#type: c_int) -> c_int {
     let n = num as usize;
     (*sd).status.inventory[n].id = 0;
     (*sd).status.inventory[n].dura = 0;
@@ -264,8 +233,7 @@ pub unsafe extern "C" fn clif_senddelitem(sd: *mut MapSessionData, num: c_int, r
 /// Send an inventory item to the client.
 ///
 /// Mirrors `clif_sendadditem` from `c_src/map_parse.c` ~line 5738.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendadditem(sd: *mut MapSessionData, num: c_int) -> c_int {
+pub unsafe fn clif_sendadditem(sd: *mut MapSessionData, num: c_int) -> c_int {
     let n = num as usize;
     let id = (*sd).status.inventory[n].id;
 
@@ -302,50 +270,47 @@ pub unsafe extern "C" fn clif_sendadditem(sd: *mut MapSessionData, num: c_int) -
     // Build display name string into a fixed buffer
     let mut buf = [0i8; 128];
     {
-        extern "C" {
-            fn snprintf(s: *mut c_char, n: usize, fmt: *const c_char, ...) -> c_int;
-        }
         let item_type = rust_itemdb_type(id);
         let dura = (*sd).status.inventory[n].dura;
         let amount = (*sd).status.inventory[n].amount;
         // ITM_SMOKE=2, ITM_BAG=21, ITM_MAP=22, ITM_QUIVER=23 (from c_src/item_db.h enum)
         // These are handled via format string exactly as in C.
         if amount > 1 {
-            snprintf(
+            libc::snprintf(
                 buf.as_mut_ptr(), 128,
                 b"%s (%d)\0".as_ptr().cast(),
                 name_ptr, amount,
             );
         } else if item_type == 2 {
             // ITM_SMOKE
-            snprintf(
+            libc::snprintf(
                 buf.as_mut_ptr(), 128,
                 b"%s [%d %s]\0".as_ptr().cast(),
                 name_ptr, dura, rust_itemdb_text(id),
             );
         } else if item_type == 21 {
             // ITM_BAG
-            snprintf(
+            libc::snprintf(
                 buf.as_mut_ptr(), 128,
                 b"%s [%d]\0".as_ptr().cast(),
                 name_ptr, dura,
             );
         } else if item_type == 22 {
             // ITM_MAP
-            snprintf(
+            libc::snprintf(
                 buf.as_mut_ptr(), 128,
                 b"[T%d] %s\0".as_ptr().cast(),
                 dura, name_ptr,
             );
         } else if item_type == 23 {
             // ITM_QUIVER
-            snprintf(
+            libc::snprintf(
                 buf.as_mut_ptr(), 128,
                 b"%s [%d]\0".as_ptr().cast(),
                 name_ptr, dura,
             );
         } else {
-            snprintf(
+            libc::snprintf(
                 buf.as_mut_ptr(), 128,
                 b"%s\0".as_ptr().cast(),
                 name_ptr,
@@ -462,8 +427,7 @@ pub unsafe extern "C" fn clif_sendadditem(sd: *mut MapSessionData, num: c_int) -
 }
 
 unsafe fn libc_free(p: *mut c_void) {
-    extern "C" { fn free(p: *mut c_void); }
-    free(p);
+    libc::free(p);
 }
 
 // ─── clif_equipit ─────────────────────────────────────────────────────────────
@@ -471,8 +435,7 @@ unsafe fn libc_free(p: *mut c_void) {
 /// Send an equip slot item to the client.
 ///
 /// Mirrors `clif_equipit` from `c_src/map_parse.c` ~line 5870.
-#[no_mangle]
-pub unsafe extern "C" fn clif_equipit(sd: *mut MapSessionData, id: c_int) -> c_int {
+pub unsafe fn clif_equipit(sd: *mut MapSessionData, id: c_int) -> c_int {
     let slot = id as usize;
 
     let nameof: *const c_char = if (*sd).status.equip[slot].real_name[0] != 0 {
@@ -533,8 +496,7 @@ pub unsafe extern "C" fn clif_equipit(sd: *mut MapSessionData, id: c_int) -> c_i
 /// Equip an item and send a confirmation message to the client.
 ///
 /// Mirrors `clif_sendequip` from `c_src/map_parse.c` ~line 5912.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendequip(sd: *mut MapSessionData, id: c_int) -> c_int {
+pub unsafe fn clif_sendequip(sd: *mut MapSessionData, id: c_int) -> c_int {
     let slot = id as usize;
 
     let msgnum: usize = match id {
@@ -575,10 +537,7 @@ pub unsafe extern "C" fn clif_sendequip(sd: *mut MapSessionData, id: c_int) -> c
     };
 
     let mut buff = [0i8; 256];
-    extern "C" {
-        fn snprintf(s: *mut c_char, n: usize, fmt: *const c_char, ...) -> c_int;
-    }
-    snprintf(
+    libc::snprintf(
         buff.as_mut_ptr(), 256,
         map_msg[msgnum].message.as_ptr(),
         name,
@@ -594,8 +553,7 @@ pub unsafe extern "C" fn clif_sendequip(sd: *mut MapSessionData, id: c_int) -> c
 /// Handle a use-item packet from the client.
 ///
 /// Mirrors `clif_parseuseitem` from `c_src/map_parse.c` ~line 6452.
-#[no_mangle]
-pub unsafe extern "C" fn clif_parseuseitem(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parseuseitem(sd: *mut MapSessionData) -> c_int {
     rust_pc_useitem(sd, rfifob((*sd).fd, 5) as c_int - 1);
     0
 }
@@ -605,8 +563,7 @@ pub unsafe extern "C" fn clif_parseuseitem(sd: *mut MapSessionData) -> c_int {
 /// Handle an eat-item packet; only processes items of type ITM_EAT.
 ///
 /// Mirrors `clif_parseeatitem` from `c_src/map_parse.c` ~line 6457.
-#[no_mangle]
-pub unsafe extern "C" fn clif_parseeatitem(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parseeatitem(sd: *mut MapSessionData) -> c_int {
     let slot = rfifob((*sd).fd, 5) as usize - 1;
     let id = (*sd).status.inventory[slot].id;
     // ITM_EAT = 0 (first entry in item_db.h enum)
@@ -623,8 +580,7 @@ pub unsafe extern "C" fn clif_parseeatitem(sd: *mut MapSessionData) -> c_int {
 /// Handle a pick-up-item packet from the client.
 ///
 /// Mirrors `clif_parsegetitem` from `c_src/map_parse.c` ~line 6467.
-#[no_mangle]
-pub unsafe extern "C" fn clif_parsegetitem(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsegetitem(sd: *mut MapSessionData) -> c_int {
     if (*sd).status.state == 1 || (*sd).status.state == 3 {
         return 0; // dead can't pick up
     }
@@ -657,8 +613,7 @@ pub unsafe extern "C" fn clif_parsegetitem(sd: *mut MapSessionData) -> c_int {
 /// Send an unequip confirmation to the client.
 ///
 /// Mirrors `clif_unequipit` from `c_src/map_parse.c` ~line 6495.
-#[no_mangle]
-pub unsafe extern "C" fn clif_unequipit(sd: *mut MapSessionData, spot: c_int) -> c_int {
+pub unsafe fn clif_unequipit(sd: *mut MapSessionData, spot: c_int) -> c_int {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -681,8 +636,7 @@ pub unsafe extern "C" fn clif_unequipit(sd: *mut MapSessionData, spot: c_int) ->
 /// Handle an unequip packet from the client.
 ///
 /// Mirrors `clif_parseunequip` from `c_src/map_parse.c` ~line 6511.
-#[no_mangle]
-pub unsafe extern "C" fn clif_parseunequip(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parseunequip(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
 
     let slot_byte = rfifob((*sd).fd, 5) as c_int;
@@ -730,8 +684,7 @@ pub unsafe extern "C" fn clif_parseunequip(sd: *mut MapSessionData) -> c_int {
 /// Handle a wield (equip) packet from the client.
 ///
 /// Mirrors `clif_parsewield` from `c_src/map_parse.c` ~line 6796.
-#[no_mangle]
-pub unsafe extern "C" fn clif_parsewield(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsewield(sd: *mut MapSessionData) -> c_int {
     let pos = rfifob((*sd).fd, 5) as usize - 1;
     let id = (*sd).status.inventory[pos].id;
     let item_type = rust_itemdb_type(id);
@@ -747,17 +700,12 @@ pub unsafe extern "C" fn clif_parsewield(sd: *mut MapSessionData) -> c_int {
 
 // ─── clif_addtocurrent ────────────────────────────────────────────────────────
 
-/// foreachinarea callback: add gold to an existing floor item.
+/// foreach_in_cell callback: add gold to an existing floor item.
 ///
 /// Mirrors `clif_addtocurrent` from `c_src/map_parse.c` ~line 6808.
-#[no_mangle]
-pub unsafe extern "C" fn clif_addtocurrent(bl: *mut BlockList, mut ap: ...) -> c_int {
+pub unsafe fn clif_addtocurrent_inner(bl: *mut BlockList, def: *mut c_int, amount: c_uint, _sd: *mut MapSessionData) -> i32 {
     if bl.is_null() { return 0; }
     let fl = bl as *mut FloorItemData;
-
-    let def = ap.arg::<*mut c_int>();
-    let amount = ap.arg::<c_uint>();
-    let _sd = ap.arg::<*mut MapSessionData>();
 
     if !def.is_null() && *def != 0 { return 0; }
 
@@ -774,8 +722,7 @@ pub unsafe extern "C" fn clif_addtocurrent(bl: *mut BlockList, mut ap: ...) -> c
 /// Drop gold coins onto the current cell.
 ///
 /// Mirrors `clif_dropgold` from `c_src/map_parse.c` ~line 6828.
-#[no_mangle]
-pub unsafe extern "C" fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint) -> c_int {
+pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint) -> c_int {
     let reg_str = b"goldbardupe\0";
     let dupe_times = pc_readglobalreg(sd, reg_str.as_ptr().cast());
     if dupe_times != 0 {
@@ -847,11 +794,7 @@ pub unsafe extern "C" fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint)
     if (*sd).fakeDrop != 0 { return 0; }
 
     let mut mini = [0i8; 64];
-    extern "C" {
-        fn snprintf(s: *mut c_char, n: usize, fmt: *const c_char, ...) -> c_int;
-    }
-
-    snprintf(
+    libc::snprintf(
         mini.as_mut_ptr(), 64,
         b"You dropped %d coins\0".as_ptr().cast(),
         (*fl).data.amount,
@@ -859,11 +802,10 @@ pub unsafe extern "C" fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint)
     clif_sendminitext(sd, mini.as_ptr());
 
     let mut def = [0i32; 1];
-    map_foreachincell(
-        clif_addtocurrent,
-        (*sd).bl.m as c_int, (*sd).bl.x as c_int, (*sd).bl.y as c_int,
+    foreach_in_cell(
+        (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
         BL_ITEM,
-        def.as_mut_ptr(), amount,
+        |bl| clif_addtocurrent_inner(bl, def.as_mut_ptr(), amount, std::ptr::null_mut()),
     );
 
     if def[0] == 0 {
@@ -889,13 +831,11 @@ pub unsafe extern "C" fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint)
 
         sl_doscript_2(b"characterLog\0".as_ptr().cast(), b"dropWrite\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
 
-        map_foreachinarea(
-            clif_object_look_sub2,
-            (*sd).bl.m as c_int, (*sd).bl.x as c_int, (*sd).bl.y as c_int,
-            AREA,
-            BL_PC,
-            LOOK_SEND,
-            &raw mut (*fl).bl,
+        let fl_bl = &raw mut (*fl).bl;
+        foreach_in_area(
+            (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
+            AreaType::Area, BL_PC,
+            |bl| clif_object_look_sub2_inner(bl, LOOK_SEND, fl_bl),
         );
     } else {
         libc::free(fl.cast());
@@ -911,8 +851,7 @@ pub unsafe extern "C" fn clif_dropgold(sd: *mut MapSessionData, amounts: c_uint)
 /// Trigger the onOpen script hook.
 ///
 /// Mirrors `clif_open_sub` from `c_src/map_parse.c` ~line 6960.
-#[no_mangle]
-pub unsafe extern "C" fn clif_open_sub(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_open_sub(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
     sl_doscript_simple(b"onOpen\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl);
     0
@@ -923,8 +862,7 @@ pub unsafe extern "C" fn clif_open_sub(sd: *mut MapSessionData) -> c_int {
 /// Send a remove-spell packet to the client.
 ///
 /// Mirrors `clif_removespell` from `c_src/map_parse.c` ~line 6985.
-#[no_mangle]
-pub unsafe extern "C" fn clif_removespell(sd: *mut MapSessionData, pos: c_int) -> c_int {
+pub unsafe fn clif_removespell(sd: *mut MapSessionData, pos: c_int) -> c_int {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -946,8 +884,7 @@ pub unsafe extern "C" fn clif_removespell(sd: *mut MapSessionData, pos: c_int) -
 /// Handle a swap-spell-slots packet from the client.
 ///
 /// Mirrors `clif_parsechangespell` from `c_src/map_parse.c` ~line 6967.
-#[no_mangle]
-pub unsafe extern "C" fn clif_parsechangespell(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsechangespell(sd: *mut MapSessionData) -> c_int {
     let start_pos = rfifob((*sd).fd, 6) as usize - 1;
     let stop_pos  = rfifob((*sd).fd, 7) as usize - 1;
 
@@ -972,8 +909,7 @@ pub unsafe extern "C" fn clif_parsechangespell(sd: *mut MapSessionData) -> c_int
 ///
 /// Mirrors `clif_throwitem_sub` from `c_src/map_parse.c` ~line 7000.
 /// Note: this is NOT a foreachinarea callback; it is called directly.
-#[no_mangle]
-pub unsafe extern "C" fn clif_throwitem_sub(
+pub unsafe fn clif_throwitem_sub(
     sd: *mut MapSessionData,
     id: c_int,
     _type: c_int,
@@ -1013,8 +949,7 @@ pub unsafe extern "C" fn clif_throwitem_sub(
 /// Complete a throw action after script approval.
 ///
 /// Mirrors `clif_throwitem_script` from `c_src/map_parse.c` ~line 7023.
-#[no_mangle]
-pub unsafe extern "C" fn clif_throwitem_script(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> c_int {
     let id   = (*sd).invslot as usize;
     let x    = (*sd).throwx as c_int;
     let y    = (*sd).throwy as c_int;
@@ -1034,11 +969,10 @@ pub unsafe extern "C" fn clif_throwitem_script(sd: *mut MapSessionData) -> c_int
     let mut def = [0i32; 1];
 
     if (*fl).data.dura == rust_itemdb_dura((*fl).data.id) {
-        map_foreachincell(
-            rust_pc_addtocurrent,
-            (*sd).bl.m as c_int, x, y,
+        foreach_in_cell(
+            (*sd).bl.m as i32, x, y,
             BL_ITEM,
-            def.as_mut_ptr(), id as c_int, item_type, sd,
+            |bl| rust_pc_addtocurrent_inner(bl, def.as_mut_ptr(), id as c_int, item_type, sd),
         );
     }
 
@@ -1109,13 +1043,11 @@ pub unsafe extern "C" fn clif_throwitem_script(sd: *mut MapSessionData) -> c_int
 
     if def[0] == 0 {
         map_additem(&raw mut (*fl).bl);
-        map_foreachinarea(
-            clif_object_look_sub2,
-            (*sd).bl.m as c_int, (*sd).bl.x as c_int, (*sd).bl.y as c_int,
-            AREA,
-            BL_PC,
-            LOOK_SEND,
-            &raw mut (*fl).bl,
+        let fl_bl = &raw mut (*fl).bl;
+        foreach_in_area(
+            (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
+            AreaType::Area, BL_PC,
+            |bl| clif_object_look_sub2_inner(bl, LOOK_SEND, fl_bl),
         );
     } else {
         libc::free(fl.cast());
@@ -1126,14 +1058,12 @@ pub unsafe extern "C" fn clif_throwitem_script(sd: *mut MapSessionData) -> c_int
 
 // ─── clif_throw_check ─────────────────────────────────────────────────────────
 
-/// foreachinarea callback: check if a cell is blocked for throwing.
+/// foreach_in_cell callback: check if a cell is blocked for throwing.
 ///
 /// Mirrors `clif_throw_check` from `c_src/map_parse.c` ~line 7106.
-#[no_mangle]
-pub unsafe extern "C" fn clif_throw_check(bl: *mut BlockList, mut ap: ...) -> c_int {
+pub unsafe fn clif_throw_check_inner(bl: *mut BlockList, found: *mut c_int) -> i32 {
     if bl.is_null() { return 0; }
 
-    let found = ap.arg::<*mut c_int>();
     if !found.is_null() && *found != 0 { return 0; }
 
     if (*bl).bl_type == BL_NPC as u8 {
@@ -1160,8 +1090,7 @@ pub unsafe extern "C" fn clif_throw_check(bl: *mut BlockList, mut ap: ...) -> c_
 /// Send a throw-confirm packet to the client.
 ///
 /// Mirrors `clif_throwconfirm` from `c_src/map_parse.c` ~line 7129.
-#[no_mangle]
-pub unsafe extern "C" fn clif_throwconfirm(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_throwconfirm(sd: *mut MapSessionData) -> c_int {
     let fd = (*sd).fd;
     wfifob(fd, 0, 0xAA);
     wfifow(fd, 1, 7u16.swap_bytes());
@@ -1178,8 +1107,7 @@ pub unsafe extern "C" fn clif_throwconfirm(sd: *mut MapSessionData) -> c_int {
 /// Handle a throw-item packet from the client.
 ///
 /// Mirrors `clif_parsethrow` from `c_src/map_parse.c` ~line 7141.
-#[no_mangle]
-pub unsafe extern "C" fn clif_parsethrow(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsethrow(sd: *mut MapSessionData) -> c_int {
     let reg_str = b"goldbardupe\0";
     let dupe_times = pc_readglobalreg(sd, reg_str.as_ptr().cast());
     if dupe_times != 0 {
@@ -1233,9 +1161,9 @@ pub unsafe extern "C" fn clif_parsethrow(sd: *mut MapSessionData) -> c_int {
         if x1 >= map_data.xs as c_int { x1 = map_data.xs as c_int - 1; }
         if y1 >= map_data.ys as c_int { y1 = map_data.ys as c_int - 1; }
 
-        map_foreachincell(clif_throw_check, m, x1, y1, BL_NPC, found.as_mut_ptr());
-        map_foreachincell(clif_throw_check, m, x1, y1, BL_PC,  found.as_mut_ptr());
-        map_foreachincell(clif_throw_check, m, x1, y1, BL_MOB, found.as_mut_ptr());
+        foreach_in_cell(m, x1, y1, BL_NPC, |bl| clif_throw_check_inner(bl, found.as_mut_ptr()));
+        foreach_in_cell(m, x1, y1, BL_PC,  |bl| clif_throw_check_inner(bl, found.as_mut_ptr()));
+        foreach_in_cell(m, x1, y1, BL_MOB, |bl| clif_throw_check_inner(bl, found.as_mut_ptr()));
         // read_pass(m, x, y) — mirrors map[m].pass[x + y*xs]
         let pass_val = if map.is_null() { 0 } else {
             let md = &*map.add(m as usize);

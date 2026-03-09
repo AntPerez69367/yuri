@@ -2,7 +2,7 @@
 //!
 //! Covers close-dialog, town list, countdown timer, NPC dialog/menu/input
 //! display and parse, shop buy/sell dialogs, and the click-getinfo handler.
-//! Functions declared `#[no_mangle] pub unsafe extern "C"` so they remain
+//! Functions declared `pub unsafe extern "C"` so they remain
 //! callable from any remaining C code that has not yet been ported.
 
 #![allow(non_snake_case, clippy::wildcard_imports)]
@@ -29,47 +29,31 @@ use super::packet::{
 
 // ─── External C globals ───────────────────────────────────────────────────────
 
-extern "C" {
-    static login_ip: c_int;
-    static login_port: c_int;
-    static xor_key: [c_char; 10];
-    static town_n: c_int;
+use crate::config_globals::{login_ip, login_port, xor_key, town_n, towns as TOWNS};
 
-    #[link_name = "towns"]
-    static TOWNS: [TownData; 256];
+// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
+
+use crate::game::map_server::{map_id2npc, map_id2bl as map_id2bl_ms};
+use crate::game::map_parse::chat::clif_sendminitext;
+use crate::game::client::visual::clif_clickonplayer;
+use crate::game::scripting::{
+    rust_sl_resumedialog, rust_sl_resumemenuseq, rust_sl_resumeinputseq,
+    rust_sl_resumebuy, rust_sl_resumesell, rust_sl_resumeinput, rust_sl_async_freeco,
+};
+use crate::database::item_db::{
+    rust_itemdb_name, rust_itemdb_buytext, rust_itemdb_icon, rust_itemdb_iconcolor,
+    rust_itemdb_class, rust_itemdb_rank, rust_itemdb_level,
+};
+use crate::database::class_db::rust_classdb_name;
+
+// map_id2sd/map_id2bl return *mut c_void in map_server — wrap with casts.
+#[inline]
+unsafe fn map_id2sd(id: c_uint) -> *mut MapSessionData {
+    crate::game::map_server::map_id2sd(id) as *mut MapSessionData
 }
-
-// ─── C struct mirrors ─────────────────────────────────────────────────────────
-
-/// Mirrors `struct town_data` from `c_src/config.h`.
-#[repr(C)]
-struct TownData {
-    pub name: [c_char; 64],
-}
-
-// ─── External C functions not yet ported ─────────────────────────────────────
-
-extern "C" {
-    fn map_id2npc(id: c_uint) -> *mut c_void;  // returns *mut NpcData; matches pc.rs decl
-    fn map_id2sd(id: c_uint) -> *mut MapSessionData;
-    fn map_id2bl(id: c_uint) -> *mut BlockList;
-    fn clif_sendminitext(sd: *mut MapSessionData, msg: *const c_char) -> c_int;
-    fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) -> c_int;
-    fn rust_sl_resumedialog(choice: c_uint, sd: *mut c_void);
-    fn rust_sl_resumemenuseq(choice: c_uint, menu: c_int, sd: *mut c_void);
-    fn rust_sl_resumeinputseq(choice: c_uint, input: *const c_char, sd: *mut c_void);
-    fn rust_sl_resumebuy(items: *const c_char, sd: *mut c_void);
-    fn rust_sl_resumesell(choice: c_uint, sd: *mut c_void);
-    fn rust_sl_resumeinput(tag: *const c_char, input: *const c_char, sd: *mut c_void);
-    fn rust_sl_async_freeco(user: *mut c_void);
-    fn rust_itemdb_name(id: c_uint) -> *mut c_char;
-    fn rust_itemdb_buytext(id: c_uint) -> *mut c_char;
-    fn rust_itemdb_icon(id: c_uint) -> c_int;
-    fn rust_itemdb_iconcolor(id: c_uint) -> c_int;
-    fn rust_itemdb_class(id: c_uint) -> c_int;
-    fn rust_itemdb_rank(id: c_uint) -> c_int;
-    fn rust_itemdb_level(id: c_uint) -> c_int;
-    fn rust_classdb_name(id: c_int, rank: c_int) -> *mut c_char;
+#[inline]
+unsafe fn map_id2bl(id: c_uint) -> *mut BlockList {
+    map_id2bl_ms(id) as *mut BlockList
 }
 
 /// Dispatch a Lua event with a single block_list argument.
@@ -303,8 +287,7 @@ unsafe fn write_npc_gfx_look(fd: c_int, nd: *const NpcData, base_off: usize) {
 
 /// Send a close-dialog packet to the client.  Mirrors `clif_closeit` in
 /// `c_src/map_parse.c`.
-#[no_mangle]
-pub unsafe extern "C" fn clif_closeit(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_closeit(sd: *mut MapSessionData) -> c_int {
     let fd = (*sd).fd;
 
     if rust_session_exists(fd) == 0 {
@@ -344,8 +327,7 @@ pub unsafe extern "C" fn clif_closeit(sd: *mut MapSessionData) -> c_int {
 // ─── clif_sendtowns ───────────────────────────────────────────────────────────
 
 /// Send town list dialog.  Mirrors `clif_sendtowns` in `c_src/map_parse.c`.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendtowns(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendtowns(sd: *mut MapSessionData) -> c_int {
     let fd = (*sd).fd;
 
     if rust_session_exists(fd) == 0 {
@@ -385,8 +367,7 @@ pub unsafe extern "C" fn clif_sendtowns(sd: *mut MapSessionData) -> c_int {
 
 /// Send a countdown timer packet.  Mirrors `clif_send_timer` in
 /// `c_src/map_parse.c`.
-#[no_mangle]
-pub unsafe extern "C" fn clif_send_timer(
+pub unsafe fn clif_send_timer(
     sd: *mut MapSessionData,
     timer_type: c_char,
     length: c_uint,
@@ -411,8 +392,7 @@ pub unsafe extern "C" fn clif_send_timer(
 
 /// Parse an NPC dialog response packet.  Mirrors `clif_parsenpcdialog` in
 /// `c_src/map_parse.c`.
-#[no_mangle]
-pub unsafe extern "C" fn clif_parsenpcdialog(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsenpcdialog(sd: *mut MapSessionData) -> c_int {
     let fd = (*sd).fd;
     let npc_choice = rfifob(fd, 13) as c_uint;
 
@@ -437,7 +417,7 @@ pub unsafe extern "C" fn clif_parsenpcdialog(sd: *mut MapSessionData) -> c_int {
             copy_rfifo_bytes(&mut input, rfifop(fd, 16), input_len);
             rust_sl_resumeinputseq(
                 npc_choice,
-                input.as_ptr() as *const c_char,
+                input.as_mut_ptr() as *mut c_char,
                 sd as *mut c_void,
             );
         }
@@ -450,8 +430,7 @@ pub unsafe extern "C" fn clif_parsenpcdialog(sd: *mut MapSessionData) -> c_int {
 // ─── clif_scriptmes ───────────────────────────────────────────────────────────
 
 /// Send NPC dialog text.  Mirrors `clif_scriptmes` in `c_src/map_parse.c`.
-#[no_mangle]
-pub unsafe extern "C" fn clif_scriptmes(
+pub unsafe fn clif_scriptmes(
     sd: *mut MapSessionData,
     id: c_int,
     msg: *const c_char,
@@ -554,8 +533,7 @@ pub unsafe extern "C" fn clif_scriptmes(
 
 /// Send NPC dialog menu.  Mirrors `clif_scriptmenu` in `c_src/map_parse.c`.
 /// (Note: as of C source, this function appears not to be called anywhere.)
-#[no_mangle]
-pub unsafe extern "C" fn clif_scriptmenu(
+pub unsafe fn clif_scriptmenu(
     sd: *mut MapSessionData,
     id: c_int,
     dialog: *mut c_char,
@@ -686,8 +664,7 @@ pub unsafe extern "C" fn clif_scriptmenu(
 
 /// Send sequential NPC menu dialog.  Mirrors `clif_scriptmenuseq` in
 /// `c_src/map_parse.c`.
-#[no_mangle]
-pub unsafe extern "C" fn clif_scriptmenuseq(
+pub unsafe fn clif_scriptmenuseq(
     sd: *mut MapSessionData,
     id: c_int,
     dialog: *const c_char,
@@ -889,8 +866,7 @@ pub unsafe extern "C" fn clif_scriptmenuseq(
 
 /// Send sequential NPC input dialog.  Mirrors `clif_inputseq` in
 /// `c_src/map_parse.c`.
-#[no_mangle]
-pub unsafe extern "C" fn clif_inputseq(
+pub unsafe fn clif_inputseq(
     sd: *mut MapSessionData,
     id: c_int,
     dialog: *const c_char,
@@ -981,8 +957,7 @@ const FLOOR: c_int = 1;
 
 /// Handle a click/getinfo request from the client.  Mirrors
 /// `clif_handle_clickgetinfo` in `c_src/map_parse.c`.
-#[no_mangle]
-pub unsafe extern "C" fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> c_int {
     let fd = (*sd).fd;
 
     let bl: *mut BlockList = if rfifol(fd, 6) == 0 {
@@ -1084,8 +1059,7 @@ pub unsafe extern "C" fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> c_
 // ─── clif_buydialog ───────────────────────────────────────────────────────────
 
 /// Send NPC buy dialog.  Mirrors `clif_buydialog` in `c_src/map_parse.c`.
-#[no_mangle]
-pub unsafe extern "C" fn clif_buydialog(
+pub unsafe fn clif_buydialog(
     sd: *mut MapSessionData,
     id: c_uint,
     dialog: *const c_char,
@@ -1330,8 +1304,7 @@ pub unsafe extern "C" fn clif_buydialog(
 // ─── clif_parsebuy ────────────────────────────────────────────────────────────
 
 /// Parse a buy response packet.  Mirrors `clif_parsebuy` in `c_src/map_parse.c`.
-#[no_mangle]
-pub unsafe extern "C" fn clif_parsebuy(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsebuy(sd: *mut MapSessionData) -> c_int {
     let fd = (*sd).fd;
     let item_name_len = rfifob(fd, 12) as usize;
     let mut itemname = [0u8; 255];
@@ -1341,7 +1314,7 @@ pub unsafe extern "C" fn clif_parsebuy(sd: *mut MapSessionData) -> c_int {
         item_name_len,
     );
     if itemname[0] != 0 {
-        rust_sl_resumebuy(itemname.as_ptr() as *const c_char, sd as *mut c_void);
+        rust_sl_resumebuy(itemname.as_mut_ptr() as *mut c_char, sd as *mut c_void);
     }
     0
 }
@@ -1349,8 +1322,7 @@ pub unsafe extern "C" fn clif_parsebuy(sd: *mut MapSessionData) -> c_int {
 // ─── clif_selldialog ─────────────────────────────────────────────────────────
 
 /// Send NPC sell dialog.  Mirrors `clif_selldialog` in `c_src/map_parse.c`.
-#[no_mangle]
-pub unsafe extern "C" fn clif_selldialog(
+pub unsafe fn clif_selldialog(
     sd: *mut MapSessionData,
     id: c_uint,
     dialog: *const c_char,
@@ -1439,8 +1411,7 @@ pub unsafe extern "C" fn clif_selldialog(
 
 /// Parse a sell response packet.  Mirrors `clif_parsesell` in
 /// `c_src/map_parse.c`.
-#[no_mangle]
-pub unsafe extern "C" fn clif_parsesell(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsesell(sd: *mut MapSessionData) -> c_int {
     let fd = (*sd).fd;
     rust_sl_resumesell(rfifob(fd, 12) as c_uint, sd as *mut c_void);
     0
@@ -1449,8 +1420,7 @@ pub unsafe extern "C" fn clif_parsesell(sd: *mut MapSessionData) -> c_int {
 // ─── clif_input ───────────────────────────────────────────────────────────────
 
 /// Send NPC input dialog.  Mirrors `clif_input` in `c_src/map_parse.c`.
-#[no_mangle]
-pub unsafe extern "C" fn clif_input(
+pub unsafe fn clif_input(
     sd: *mut MapSessionData,
     id: c_int,
     dialog: *const c_char,
@@ -1576,8 +1546,7 @@ pub unsafe extern "C" fn clif_input(
 
 /// Parse an input response packet.  Mirrors `clif_parseinput` in
 /// `c_src/map_parse.c`.
-#[no_mangle]
-pub unsafe extern "C" fn clif_parseinput(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parseinput(sd: *mut MapSessionData) -> c_int {
     let fd = (*sd).fd;
     let mut output  = [0u8; 256];
     let mut output2 = [0u8; 256];
@@ -1597,8 +1566,8 @@ pub unsafe extern "C" fn clif_parseinput(sd: *mut MapSessionData) -> c_int {
     );
 
     rust_sl_resumeinput(
-        output.as_ptr() as *const c_char,
-        output2.as_ptr() as *const c_char,
+        output.as_mut_ptr() as *mut c_char,
+        output2.as_mut_ptr() as *mut c_char,
         sd as *mut c_void,
     );
     0

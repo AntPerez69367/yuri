@@ -1,8 +1,4 @@
 //! Rust implementations of sl_g_* global helpers previously in c_src/sl_compat.c.
-//!
-//! These functions are exported as `#[no_mangle] extern "C"` so existing
-//! `extern "C"` declarations in ffi.rs and scripting type modules resolve
-//! against the Rust symbols at link time.
 
 use std::ffi::{c_char, c_int, c_uchar, c_void};
 use std::os::raw::c_uint;
@@ -16,28 +12,14 @@ use crate::game::client::visual::clif_sendweather;
 use crate::game::map_server::{map_deliddb, map_id2sd, map_readglobalreg, map_setglobalreg};
 use crate::game::pc::MapSessionData;
 
-extern "C" {
-    // fd_max — defined in src/bin/map_server.rs as #[no_mangle] pub static mut fd_max.
-    static fd_max: c_int;
-    fn clif_sendmsg(sd: *mut MapSessionData, color: c_int, msg: *const c_char) -> c_int;
-    fn clif_lookgone(bl: *mut BlockList);
-    fn clif_object_canmove(m: c_int, x: c_int, y: c_int, dir: c_int) -> c_int;
-    fn clif_object_canmove_from(m: c_int, x: c_int, y: c_int, dir: c_int) -> c_int;
-    fn clif_sendside(bl: *mut BlockList);
-    fn clif_playsound(bl: *mut BlockList, sound: c_int);
-    fn clif_sendaction(bl: *mut BlockList, action: c_int, speed: c_int, sound: c_int) -> c_int;
-    fn clif_send(buf: *const u8, len: c_int, bl: *mut BlockList, area_type: c_int) -> c_int;
-    // Animation packet senders — still in C (map_parse.c / map_server_stubs.c).
-    // They accept va_list; we call them via variadic FFI from within closures.
-    fn clif_sendanimation(target_bl: *mut BlockList, ...) -> c_int;
-    fn clif_sendanimation_xy(target_bl: *mut BlockList, ...) -> c_int;
-    // Talk packet sender — still in C (map_parse.c).
-    fn clif_speak(target_bl: *mut BlockList, ...) -> c_int;
-    // Metadata sender — still in C (map_parse.c).
-    fn send_metalist(sd: *mut MapSessionData) -> c_int;
-    // NPC block-grid registration — Rust exports in ffi::block and game::map_server.
-    fn map_addblock(bl: *mut BlockList) -> c_int;
-}
+// Direct Rust imports replacing extern "C" declarations.
+use crate::game::map_parse::chat::{clif_sendmsg, clif_playsound, clif_speak_inner};
+use crate::game::map_parse::visual::clif_lookgone;
+use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from, clif_sendside};
+use crate::game::map_parse::combat::{clif_sendaction, clif_sendanimation_inner, clif_sendanimation_xy_inner};
+use crate::game::client::clif_send;
+use crate::network::crypt::send_metalist;
+use crate::game::block::map_addblock;
 
 // ---------------------------------------------------------------------------
 // Ported from c_src/sl_compat.c — thin helpers that avoided Rust knowing about
@@ -47,24 +29,21 @@ extern "C" {
 /// Thin wrapper around `map_is_loaded` for code that still holds a `c_int` map index.
 /// Replaces `int sl_map_isloaded(int m) { return map_isloaded(m); }` in sl_compat.c.
 /// Called from `src/game/map_char.rs`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_map_isloaded(m: c_int) -> c_int {
+pub unsafe fn sl_map_isloaded(m: c_int) -> c_int {
     map_is_loaded(m) as c_int
 }
 
 /// Extract `bl.m` from a `USER*` (= `MapSessionData*`) and call `map_readglobalreg`.
 /// Replaces the C `map_readglobalreg_sd` bridge in sl_compat.c that was needed
 /// before Rust knew the `MapSessionData` layout.
-#[no_mangle]
-pub unsafe extern "C" fn map_readglobalreg_sd(sd: *mut c_void, attrname: *const c_char) -> c_int {
+pub unsafe fn map_readglobalreg_sd(sd: *mut c_void, attrname: *const c_char) -> c_int {
     let sd = sd as *const MapSessionData;
     map_readglobalreg((*sd).bl.m as c_int, attrname)
 }
 
 /// Extract `bl.m` from a `USER*` (= `MapSessionData*`) and call `map_setglobalreg`.
 /// Replaces the C `map_setglobalreg_sd` bridge in sl_compat.c.
-#[no_mangle]
-pub unsafe extern "C" fn map_setglobalreg_sd(sd: *mut c_void, attrname: *const c_char, val: c_int) -> c_int {
+pub unsafe fn map_setglobalreg_sd(sd: *mut c_void, attrname: *const c_char, val: c_int) -> c_int {
     let sd = sd as *const MapSessionData;
     map_setglobalreg((*sd).bl.m as c_int, attrname, val)
 }
@@ -72,8 +51,7 @@ pub unsafe extern "C" fn map_setglobalreg_sd(sd: *mut c_void, attrname: *const c
 /// Set weather on all maps matching `region`/`indoor`, broadcasting to sessions on each map.
 ///
 /// Mirrors `sl_g_setweather` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_setweather(region: c_uchar, indoor: c_uchar, weather: c_uchar) {
+pub unsafe fn sl_g_setweather(region: c_uchar, indoor: c_uchar, weather: c_uchar) {
     let t = libc::time(std::ptr::null_mut()) as u32;
     for x in 0..65535u16 {
         let ptr = get_map_ptr(x);
@@ -85,7 +63,7 @@ pub unsafe extern "C" fn sl_g_setweather(region: c_uchar, indoor: c_uchar, weath
         }
         if (*ptr).region != region || (*ptr).indoor != indoor || timer != 0 { continue; }
         (*ptr).weather = weather;
-        for i in 1..fd_max {
+        for i in 1..crate::session::get_fd_max() {
             if rust_session_exists(i) == 0 { continue; }
             let tsd = rust_session_get_data(i) as *mut MapSessionData;
             if tsd.is_null() || rust_session_get_eof(i) != 0 { continue; }
@@ -97,8 +75,7 @@ pub unsafe extern "C" fn sl_g_setweather(region: c_uchar, indoor: c_uchar, weath
 /// Set weather on a single map, broadcasting to sessions on that map.
 ///
 /// Mirrors `sl_g_setweatherm` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_setweatherm(m: c_int, weather: c_uchar) {
+pub unsafe fn sl_g_setweatherm(m: c_int, weather: c_uchar) {
     let ptr = get_map_ptr(m as u16);
     if ptr.is_null() || (*ptr).xs == 0 { return; }
     let t = libc::time(std::ptr::null_mut()) as u32;
@@ -109,7 +86,7 @@ pub unsafe extern "C" fn sl_g_setweatherm(m: c_int, weather: c_uchar) {
     }
     if timer != 0 { return; }
     (*ptr).weather = weather;
-    for i in 1..fd_max {
+    for i in 1..crate::session::get_fd_max() {
         if rust_session_exists(i) == 0 { continue; }
         let tsd = rust_session_get_data(i) as *mut MapSessionData;
         if tsd.is_null() || rust_session_get_eof(i) != 0 { continue; }
@@ -120,10 +97,9 @@ pub unsafe extern "C" fn sl_g_setweatherm(m: c_int, weather: c_uchar) {
 /// Collect pointers to all online player block-lists into `out_ptrs`.
 ///
 /// Returns the count written. Mirrors `sl_g_getusers` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_getusers(out_ptrs: *mut *mut c_void, max_count: c_int) -> c_int {
+pub unsafe fn sl_g_getusers(out_ptrs: *mut *mut c_void, max_count: c_int) -> c_int {
     let mut count = 0i32;
-    for i in 0..fd_max {
+    for i in 0..crate::session::get_fd_max() {
         if count >= max_count { break; }
         if rust_session_exists(i) == 0 { continue; }
         if rust_session_get_eof(i) != 0 { continue; }
@@ -138,8 +114,7 @@ pub unsafe extern "C" fn sl_g_getusers(out_ptrs: *mut *mut c_void, max_count: c_
 /// Return `map[m].pvp`, or 0 if the map slot is not loaded.
 ///
 /// Mirrors `sl_g_getmappvp` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_getmappvp(m: c_int) -> c_int {
+pub unsafe fn sl_g_getmappvp(m: c_int) -> c_int {
     let ptr = get_map_ptr(m as u16);
     if ptr.is_null() || (*ptr).xs == 0 { return 0; }
     (*ptr).pvp as c_int
@@ -149,8 +124,7 @@ pub unsafe extern "C" fn sl_g_getmappvp(m: c_int) -> c_int {
 ///
 /// Returns 1 on success, 0 if the map is not loaded or args are invalid.
 /// Mirrors `sl_g_getmaptitle` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_getmaptitle(m: c_int, buf: *mut c_char, buflen: c_int) -> c_int {
+pub unsafe fn sl_g_getmaptitle(m: c_int, buf: *mut c_char, buflen: c_int) -> c_int {
     if buf.is_null() || buflen <= 0 { return 0; }
     let ptr = get_map_ptr(m as u16);
     if ptr.is_null() || (*ptr).xs == 0 { return 0; }
@@ -171,8 +145,7 @@ pub unsafe extern "C" fn sl_g_getmaptitle(m: c_int, buf: *mut c_char, buflen: c_
 ///
 /// `target == 0` is a no-op (area broadcast not implemented here).
 /// Mirrors `sl_g_msg` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_msg(bl: *mut c_void, color: c_int, msg: *const c_char, target: c_int) {
+pub unsafe fn sl_g_msg(bl: *mut c_void, color: c_int, msg: *const c_char, target: c_int) {
     if bl.is_null() || msg.is_null() || target == 0 { return; }
     let tsd = map_id2sd(target as c_uint) as *mut MapSessionData;
     if !tsd.is_null() { clif_sendmsg(tsd, color, msg); }
@@ -181,8 +154,7 @@ pub unsafe extern "C" fn sl_g_msg(bl: *mut c_void, color: c_int, msg: *const c_c
 /// Return 1 if cell (x, y) on bl's map is passable from `side`, else 0.
 ///
 /// Mirrors `sl_g_objectcanmove` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_objectcanmove(bl: *mut c_void, x: c_int, y: c_int, side: c_int) -> c_int {
+pub unsafe fn sl_g_objectcanmove(bl: *mut c_void, x: c_int, y: c_int, side: c_int) -> c_int {
     if bl.is_null() { return 0; }
     let m = (*(bl as *mut BlockList)).m as c_int;
     if clif_object_canmove(m, x, y, side) != 0 { 0 } else { 1 }
@@ -191,8 +163,7 @@ pub unsafe extern "C" fn sl_g_objectcanmove(bl: *mut c_void, x: c_int, y: c_int,
 /// Return 1 if the block at (x, y) can move from that cell toward `side`, else 0.
 ///
 /// Mirrors `sl_g_objectcanmovefrom` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_objectcanmovefrom(bl: *mut c_void, x: c_int, y: c_int, side: c_int) -> c_int {
+pub unsafe fn sl_g_objectcanmovefrom(bl: *mut c_void, x: c_int, y: c_int, side: c_int) -> c_int {
     if bl.is_null() { return 0; }
     let m = (*(bl as *mut BlockList)).m as c_int;
     if clif_object_canmove_from(m, x, y, side) != 0 { 0 } else { 1 }
@@ -202,8 +173,7 @@ pub unsafe extern "C" fn sl_g_objectcanmovefrom(bl: *mut c_void, x: c_int, y: c_
 ///
 /// Does NOT free memory — the Lua object may still hold references.
 /// Mirrors `sl_fl_delete` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_fl_delete(bl_ptr: *mut c_void) {
+pub unsafe fn sl_fl_delete(bl_ptr: *mut c_void) {
     use crate::game::pc::BL_PC;
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
@@ -216,8 +186,7 @@ pub unsafe extern "C" fn sl_fl_delete(bl_ptr: *mut c_void) {
 /// Remove block from the map ID database only (no grid, no broadcast, no free).
 ///
 /// Mirrors `sl_g_deliddb` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_deliddb(bl_ptr: *mut c_void) {
+pub unsafe fn sl_g_deliddb(bl_ptr: *mut c_void) {
     if bl_ptr.is_null() { return; }
     map_deliddb(bl_ptr as *mut BlockList);
 }
@@ -225,14 +194,12 @@ pub unsafe extern "C" fn sl_g_deliddb(bl_ptr: *mut c_void) {
 /// No-op — permanent spawn tracking is handled in Lua.
 ///
 /// Mirrors `sl_g_addpermanentspawn` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_addpermanentspawn(_bl_ptr: *mut c_void) {}
+pub unsafe fn sl_g_addpermanentspawn(_bl_ptr: *mut c_void) {}
 
 /// Broadcast block's look packet to surrounding players.
 ///
 /// Mirrors `sl_g_sendside` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_sendside(bl: *mut c_void) {
+pub unsafe fn sl_g_sendside(bl: *mut c_void) {
     if bl.is_null() { return; }
     clif_sendside(bl as *mut BlockList);
 }
@@ -240,8 +207,7 @@ pub unsafe extern "C" fn sl_g_sendside(bl: *mut c_void) {
 /// Play a sound effect at bl's position.
 ///
 /// Mirrors `sl_g_playsound` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_playsound(bl: *mut c_void, sound: c_int) {
+pub unsafe fn sl_g_playsound(bl: *mut c_void, sound: c_int) {
     if bl.is_null() { return; }
     clif_playsound(bl as *mut BlockList, sound);
 }
@@ -250,8 +216,7 @@ pub unsafe extern "C" fn sl_g_playsound(bl: *mut c_void, sound: c_int) {
 ///
 /// Unlike `sl_fl_delete`, this frees the block — callers guarantee no Lua reference remains.
 /// Mirrors `sl_g_delete_bl` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_delete_bl(bl_ptr: *mut c_void) {
+pub unsafe fn sl_g_delete_bl(bl_ptr: *mut c_void) {
     use crate::game::pc::BL_PC;
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
@@ -267,8 +232,7 @@ pub unsafe extern "C" fn sl_g_delete_bl(bl_ptr: *mut c_void) {
 /// Broadcast an action animation at bl's position.
 ///
 /// Mirrors `sl_g_sendaction` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_sendaction(bl_ptr: *mut c_void, action: c_int, speed: c_int) {
+pub unsafe fn sl_g_sendaction(bl_ptr: *mut c_void, action: c_int, speed: c_int) {
     if bl_ptr.is_null() { return; }
     clif_sendaction(bl_ptr as *mut BlockList, action, speed, 0);
 }
@@ -277,8 +241,7 @@ pub unsafe extern "C" fn sl_g_sendaction(bl_ptr: *mut c_void, action: c_int, spe
 ///
 /// Packet layout: opcode 0xAA, length 0x001B, type 0x16 subtype 0x03.
 /// Mirrors `sl_g_throwblock` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_throwblock(
+pub unsafe fn sl_g_throwblock(
     bl_ptr: *mut c_void,
     x: c_int, y: c_int,
     icon: c_int, color: c_int, action: c_int,
@@ -306,8 +269,7 @@ pub unsafe extern "C" fn sl_g_throwblock(
 /// Drop an item at bl's position.
 ///
 /// Mirrors `sl_g_dropitem` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_dropitem(bl_ptr: *mut c_void, item_id: c_int, amount: c_int, owner: c_int) {
+pub unsafe fn sl_g_dropitem(bl_ptr: *mut c_void, item_id: c_int, amount: c_int, owner: c_int) {
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
     let id = item_id as c_uint;
@@ -323,8 +285,7 @@ pub unsafe extern "C" fn sl_g_dropitem(bl_ptr: *mut c_void, item_id: c_int, amou
 /// Drop an item at a specific map coordinate, ignoring bl's position.
 ///
 /// Mirrors `sl_g_dropitemxy` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_dropitemxy(
+pub unsafe fn sl_g_dropitemxy(
     _bl_ptr: *mut c_void,
     item_id: c_int, amount: c_int,
     m: c_int, x: c_int, y: c_int,
@@ -340,8 +301,7 @@ pub unsafe extern "C" fn sl_g_dropitemxy(
 /// Insert a parcel into the Parcels table, assigning the next available slot.
 ///
 /// Mirrors `sl_g_sendparcel` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_sendparcel(
+pub unsafe fn sl_g_sendparcel(
     _bl_ptr: *mut c_void,
     receiver: c_int, sender: c_int,
     item: c_int, amount: c_int, owner: c_int,
@@ -392,30 +352,22 @@ const BL_PC_TYPE: c_int = 0x01;
 
 /// Broadcast a spell/skill animation to all PCs in AREA around bl.
 ///
-/// `clif_sendanimation(target_bl, anim, src_bl, times)` is still in C
-/// (va_list-based); called via FFI from inside the closure.
-///
 /// Mirrors `sl_g_sendanimation` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_sendanimation(bl_ptr: *mut c_void, anim: c_int, times: c_int) {
+pub unsafe fn sl_g_sendanimation(bl_ptr: *mut c_void, anim: c_int, times: c_int) {
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
     let m  = (*bl).m as i32;
     let x  = (*bl).x as i32;
     let y  = (*bl).y as i32;
     foreach_in_area(m, x, y, AreaType::Area, BL_PC_TYPE, |target_bl| {
-        clif_sendanimation(target_bl, anim, bl, times)
+        clif_sendanimation_inner(target_bl, anim, bl, times)
     });
 }
 
 /// Broadcast an animation at position (x, y) to all PCs in AREA around bl.
 ///
-/// `clif_sendanimation_xy(target_bl, anim, times, x, y)` is still in C
-/// (va_list-based); called via FFI from inside the closure.
-///
 /// Mirrors `sl_g_sendanimxy` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_sendanimxy(
+pub unsafe fn sl_g_sendanimxy(
     bl_ptr: *mut c_void,
     anim: c_int,
     x: c_int,
@@ -428,7 +380,7 @@ pub unsafe extern "C" fn sl_g_sendanimxy(
     let bx = (*bl).x as i32;
     let by = (*bl).y as i32;
     foreach_in_area(m, bx, by, AreaType::Area, BL_PC_TYPE, |target_bl| {
-        clif_sendanimation_xy(target_bl, anim, times, x, y)
+        clif_sendanimation_xy_inner(target_bl, anim, times, x, y)
     });
 }
 
@@ -436,8 +388,7 @@ pub unsafe extern "C" fn sl_g_sendanimxy(
 ///
 /// `duration` is in milliseconds; divided by 1000 before sending on the wire.
 /// Mirrors `sl_g_repeatanimation` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_repeatanimation(bl_ptr: *mut c_void, anim: c_int, duration: c_int) {
+pub unsafe fn sl_g_repeatanimation(bl_ptr: *mut c_void, anim: c_int, duration: c_int) {
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
     let m  = (*bl).m as i32;
@@ -447,7 +398,7 @@ pub unsafe extern "C" fn sl_g_repeatanimation(bl_ptr: *mut c_void, anim: c_int, 
     // same as the C original. Callers should pass multiples of 1000.
     let wire_dur = if duration > 0 { duration / 1000 } else { duration };
     foreach_in_area(m, x, y, AreaType::Area, BL_PC_TYPE, |target_bl| {
-        clif_sendanimation(target_bl, anim, bl, wire_dur)
+        clif_sendanimation_inner(target_bl, anim, bl, wire_dur)
     });
 }
 
@@ -455,8 +406,7 @@ pub unsafe extern "C" fn sl_g_repeatanimation(bl_ptr: *mut c_void, anim: c_int, 
 ///
 /// Resolves the target's map/cell via `map_id2sd`, then broadcasts to that
 /// exact cell only.  Mirrors `sl_g_selfanimation` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_selfanimation(
+pub unsafe fn sl_g_selfanimation(
     bl_ptr: *mut c_void,
     target_id: c_int,
     anim: c_int,
@@ -470,7 +420,7 @@ pub unsafe extern "C" fn sl_g_selfanimation(
     let x  = (*sd).bl.x as i32;
     let y  = (*sd).bl.y as i32;
     foreach_in_cell(m, x, y, BL_PC_TYPE, |target_bl| {
-        clif_sendanimation(target_bl, anim, bl, times)
+        clif_sendanimation_inner(target_bl, anim, bl, times)
     });
 }
 
@@ -478,8 +428,7 @@ pub unsafe extern "C" fn sl_g_selfanimation(
 ///
 /// Resolves the target's map/cell, then broadcasts the XY animation to that
 /// exact cell only.  Mirrors `sl_g_selfanimationxy` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_selfanimationxy(
+pub unsafe fn sl_g_selfanimationxy(
     _bl_ptr: *mut c_void,
     target_id: c_int,
     anim: c_int,
@@ -493,25 +442,21 @@ pub unsafe extern "C" fn sl_g_selfanimationxy(
     let sx = (*sd).bl.x as i32;
     let sy = (*sd).bl.y as i32;
     foreach_in_cell(m, sx, sy, BL_PC_TYPE, |target_bl| {
-        clif_sendanimation_xy(target_bl, anim, times, x, y)
+        clif_sendanimation_xy_inner(target_bl, anim, times, x, y)
     });
 }
 
 /// Send a talk/speech packet from `bl` to all PCs in AREA.
 ///
-/// `clif_speak(target_bl, msg, src_bl, type)` is still in C (va_list-based);
-/// called via FFI from inside the closure.
-///
 /// Mirrors `sl_g_talk` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_talk(bl_ptr: *mut c_void, talk_type: c_int, msg: *const c_char) {
+pub unsafe fn sl_g_talk(bl_ptr: *mut c_void, talk_type: c_int, msg: *const c_char) {
     if bl_ptr.is_null() || msg.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
     let m  = (*bl).m as i32;
     let x  = (*bl).x as i32;
     let y  = (*bl).y as i32;
     foreach_in_area(m, x, y, AreaType::Area, BL_PC_TYPE, |target_bl| {
-        clif_speak(target_bl, msg, bl, talk_type)
+        clif_speak_inner(target_bl, msg, bl, talk_type)
     });
 }
 
@@ -521,9 +466,8 @@ pub unsafe extern "C" fn sl_g_talk(bl_ptr: *mut c_void, talk_type: c_int, msg: *
 /// for each.  `send_metalist` is still in C (map_parse.c); called via FFI.
 ///
 /// Mirrors `sl_g_sendmeta` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_sendmeta() {
-    for i in 0..fd_max {
+pub unsafe fn sl_g_sendmeta() {
+    for i in 0..crate::session::get_fd_max() {
         if rust_session_exists(i) == 0 { continue; }
         if rust_session_get_eof(i) != 0 { continue; }
         let tsd = rust_session_get_data(i) as *mut MapSessionData;
@@ -558,8 +502,7 @@ pub unsafe extern "C" fn sl_g_sendmeta() {
 ///   [29]   0             padding
 ///
 /// Mirrors `sl_g_throw` in `c_src/sl_compat.c`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_throw(
+pub unsafe fn sl_g_throw(
     id: c_int,
     m: c_int,
     x: c_int,
@@ -603,8 +546,7 @@ pub unsafe extern "C" fn sl_g_throw(
 /// Lua event.  Mirrors `sl_g_addnpc` in `c_src/sl_compat.c`.
 ///
 /// `npc_yname` may be null; defaults to `"nothing"` in that case.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_addnpc(
+pub unsafe fn sl_g_addnpc(
     name:     *const c_char,
     m:        c_int,
     x:        c_int,
@@ -699,8 +641,7 @@ pub unsafe extern "C" fn sl_g_addnpc(
 /// The `map` global must have been initialised via `rust_map_init` +
 /// `map_initblock`. `m` must be a valid index in `0..MAP_SLOTS`.  `mapfile`
 /// must be a valid null-terminated C string pointing to a readable file.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_setmap(
+pub unsafe fn sl_g_setmap(
     m: c_int,
     mapfile: *const c_char,
     title: *const c_char,

@@ -1,6 +1,6 @@
 //! Port of trading/exchange handling from `c_src/map_parse.c`.
 //!
-//! Functions declared `#[no_mangle] pub unsafe extern "C"` so they remain
+//! Functions declared `pub unsafe extern "C"` so they remain
 //! callable from any remaining C code that has not yet been ported.
 //!
 //! Exchange field types in `MapSessionData` (verified from `src/game/pc.rs`):
@@ -19,7 +19,6 @@ use std::ffi::{c_char, c_int, c_uint, c_ulong};
 
 use crate::database::map_db::BlockList;
 use crate::session::{rust_session_exists, rust_session_set_eof};
-use crate::game::mob::MobSpawnData;
 use crate::game::pc::{
     MapSessionData,
     BL_MOB, BL_NPC, BL_PC,
@@ -40,52 +39,29 @@ use super::packet::{
 
 const OPT_FLAG_STEALTH: c_ulong = 32;
 
-// ─── C FFI: functions remaining in C ─────────────────────────────────────────
+// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
 
-extern "C" {
-    fn clif_sendminitext(sd: *mut MapSessionData, msg: *const c_char) -> c_int;
-    fn clif_sendstatus(sd: *mut MapSessionData, flags: c_int) -> c_int;
-    fn map_firstincell(m: c_int, x: c_int, y: c_int, bl_type: c_int) -> *mut BlockList;
-    fn map_id2sd(id: c_uint) -> *mut MapSessionData;
-    fn map_id2mob(id: c_uint) -> *mut MobSpawnData;
-    fn map_id2npc(id: c_uint) -> *mut std::ffi::c_void;
-    #[link_name = "rust_pc_additem"]
-    fn pc_additem(sd: *mut MapSessionData, it: *const crate::servers::char::charstatus::Item) -> c_int;
-    #[link_name = "rust_pc_additemnolog"]
-    fn pc_additemnolog(sd: *mut MapSessionData, it: *const crate::servers::char::charstatus::Item) -> c_int;
-    #[link_name = "rust_pc_delitem"]
-    fn pc_delitem(sd: *mut MapSessionData, id: c_int, amount: c_int, kind: c_int) -> c_int;
-    #[link_name = "rust_pc_isinvenspace"]
-    fn pc_isinvenspace(
-        sd: *mut MapSessionData,
-        id: c_int,
-        owner: c_int,
-        engrave: *const c_char,
-        custom_look: c_uint,
-        custom_look_color: c_uint,
-        custom_icon: c_uint,
-        custom_icon_color: c_uint,
-    ) -> c_int;
-    #[link_name = "rust_pc_readglobalreg"]
-    fn pc_readglobalreg(sd: *mut MapSessionData, reg: *const c_char) -> c_int;
-    #[link_name = "rust_itemdb_exchangeable"]
-    fn itemdb_exchangeable(id: c_uint) -> c_int;
-    #[link_name = "rust_itemdb_droppable"]
-    fn itemdb_droppable(id: c_uint) -> c_int;
-    #[link_name = "rust_itemdb_name"]
-    fn itemdb_name(id: c_uint) -> *mut c_char;
-    #[link_name = "rust_itemdb_text"]
-    fn itemdb_text(id: c_uint) -> *mut c_char;
-    #[link_name = "rust_itemdb_type"]
-    fn itemdb_type(id: c_uint) -> c_int;
-    #[link_name = "rust_itemdb_icon"]
-    fn itemdb_icon(id: c_uint) -> c_int;
-    #[link_name = "rust_itemdb_iconcolor"]
-    fn itemdb_iconcolor(id: c_uint) -> c_int;
-    #[link_name = "rust_itemdb_dura"]
-    fn itemdb_dura(id: c_uint) -> c_int;
-    #[link_name = "rust_classdb_name"]
-    fn classdb_name(id: c_int, rank: c_int) -> *mut c_char;
+use crate::game::map_parse::chat::clif_sendminitext;
+use crate::game::map_parse::player_state::clif_sendstatus;
+use crate::game::block::map_firstincell;
+use crate::game::map_server::{map_id2mob, map_id2npc};
+use crate::game::pc::{
+    rust_pc_additem as pc_additem, rust_pc_additemnolog as pc_additemnolog,
+    rust_pc_delitem as pc_delitem, rust_pc_isinvenspace as pc_isinvenspace,
+    rust_pc_readglobalreg as pc_readglobalreg,
+};
+use crate::database::item_db::{
+    rust_itemdb_exchangeable as itemdb_exchangeable, rust_itemdb_droppable as itemdb_droppable,
+    rust_itemdb_name as itemdb_name, rust_itemdb_text as itemdb_text,
+    rust_itemdb_type as itemdb_type, rust_itemdb_icon as itemdb_icon,
+    rust_itemdb_iconcolor as itemdb_iconcolor, rust_itemdb_dura as itemdb_dura,
+};
+use crate::database::class_db::rust_classdb_name as classdb_name;
+
+// map_id2sd in map_server returns *mut c_void — wrap with cast.
+#[inline]
+unsafe fn map_id2sd(id: c_uint) -> *mut MapSessionData {
+    crate::game::map_server::map_id2sd(id) as *mut MapSessionData
 }
 
 /// Dispatch a Lua event with two block_list arguments.
@@ -118,8 +94,7 @@ unsafe fn string_truncate(buf: &mut [i8], max_len: usize) {
 // ─── clif_exchange_cleanup ───────────────────────────────────────────────────
 
 /// Reset the exchange state on one side.  C lines 9316-9321.
-#[no_mangle]
-pub unsafe extern "C" fn clif_exchange_cleanup(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_exchange_cleanup(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
     let sd = &mut *sd;
     sd.exchange.exchange_done = 0;
@@ -131,8 +106,7 @@ pub unsafe extern "C" fn clif_exchange_cleanup(sd: *mut MapSessionData) -> c_int
 // ─── clif_exchange_message ───────────────────────────────────────────────────
 
 /// Send an exchange status message to one player.  C lines 9389-9412.
-#[no_mangle]
-pub unsafe extern "C" fn clif_exchange_message(
+pub unsafe fn clif_exchange_message(
     sd:      *mut MapSessionData,
     message: *const c_char,
     kind:    c_int,
@@ -172,8 +146,7 @@ pub unsafe extern "C" fn clif_exchange_message(
 // ─── clif_exchange_finalize ──────────────────────────────────────────────────
 
 /// Transfer items/gold between both sides and clean up.  C lines 9323-9387.
-#[no_mangle]
-pub unsafe extern "C" fn clif_exchange_finalize(
+pub unsafe fn clif_exchange_finalize(
     sd:  *mut MapSessionData,
     tsd: *mut MapSessionData,
 ) -> c_int {
@@ -189,7 +162,7 @@ pub unsafe extern "C" fn clif_exchange_finalize(
     let sd_item_count = (*sd).exchange.item_count as usize;
     for i in 0..sd_item_count {
         let it = (*sd).exchange.item[i];
-        pc_additem(tsd, &it);
+        pc_additem(tsd, &it as *const _ as *mut _);
     }
     (*tsd).status.money = (*tsd).status.money.saturating_add((*sd).exchange.gold);
     (*sd).status.money  = (*sd).status.money.saturating_sub((*sd).exchange.gold);
@@ -199,7 +172,7 @@ pub unsafe extern "C" fn clif_exchange_finalize(
     let tsd_item_count = (*tsd).exchange.item_count as usize;
     for i in 0..tsd_item_count {
         let it = (*tsd).exchange.item[i];
-        pc_additem(sd, &it);
+        pc_additem(sd, &it as *const _ as *mut _);
     }
     (*sd).status.money   = (*sd).status.money.saturating_add((*tsd).exchange.gold);
     (*tsd).status.money  = (*tsd).status.money.saturating_sub((*tsd).exchange.gold);
@@ -213,8 +186,7 @@ pub unsafe extern "C" fn clif_exchange_finalize(
 // ─── clif_exchange_sendok ────────────────────────────────────────────────────
 
 /// Handle one side confirming the exchange.  C lines 9414-9435.
-#[no_mangle]
-pub unsafe extern "C" fn clif_exchange_sendok(
+pub unsafe fn clif_exchange_sendok(
     sd:  *mut MapSessionData,
     tsd: *mut MapSessionData,
 ) -> c_int {
@@ -241,8 +213,7 @@ pub unsafe extern "C" fn clif_exchange_sendok(
 // ─── clif_startexchange ──────────────────────────────────────────────────────
 
 /// Initiate a trade window between two players.  C lines 9545-9634.
-#[no_mangle]
-pub unsafe extern "C" fn clif_startexchange(
+pub unsafe fn clif_startexchange(
     sd:     *mut MapSessionData,
     target: c_uint,
 ) -> c_int {
@@ -377,8 +348,7 @@ pub unsafe extern "C" fn clif_startexchange(
 // ─── clif_exchange_additem_else ──────────────────────────────────────────────
 
 /// Send a real_name (engrave) additem packet once per item.  C lines 9635-9694.
-#[no_mangle]
-pub unsafe extern "C" fn clif_exchange_additem_else(
+pub unsafe fn clif_exchange_additem_else(
     sd:  *mut MapSessionData,
     tsd: *mut MapSessionData,
     _id: c_int,
@@ -458,8 +428,7 @@ pub unsafe extern "C" fn clif_exchange_additem_else(
 // ─── clif_exchange_additem ───────────────────────────────────────────────────
 
 /// Add one inventory slot to the exchange offer.  C lines 9696-9851.
-#[no_mangle]
-pub unsafe extern "C" fn clif_exchange_additem(
+pub unsafe fn clif_exchange_additem(
     sd:     *mut MapSessionData,
     tsd:    *mut MapSessionData,
     id:     c_int,
@@ -718,8 +687,7 @@ pub unsafe extern "C" fn clif_exchange_additem(
 // ─── clif_exchange_money ─────────────────────────────────────────────────────
 
 /// Broadcast the current gold offer to both sides.  C lines 9853-9904.
-#[no_mangle]
-pub unsafe extern "C" fn clif_exchange_money(
+pub unsafe fn clif_exchange_money(
     sd:  *mut MapSessionData,
     tsd: *mut MapSessionData,
 ) -> c_int {
@@ -776,8 +744,7 @@ pub unsafe extern "C" fn clif_exchange_money(
 // ─── clif_exchange_close ─────────────────────────────────────────────────────
 
 /// Cancel the exchange and return all held items.  C lines 9906-9926.
-#[no_mangle]
-pub unsafe extern "C" fn clif_exchange_close(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_exchange_close(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
 
     (*sd).exchange.target = 0;
@@ -785,7 +752,7 @@ pub unsafe extern "C" fn clif_exchange_close(sd: *mut MapSessionData) -> c_int {
     let item_count = (*sd).exchange.item_count as usize;
     for i in 0..item_count {
         let it = (*sd).exchange.item[i];
-        pc_additemnolog(sd, &it);
+        pc_additemnolog(sd, &it as *const _ as *mut _);
     }
     clif_exchange_cleanup(sd);
     0
@@ -794,8 +761,7 @@ pub unsafe extern "C" fn clif_exchange_close(sd: *mut MapSessionData) -> c_int {
 // ─── clif_handgold ───────────────────────────────────────────────────────────
 
 /// Handle a "hand gold" packet — offer gold from adjacent cell.  C lines 9090-9155.
-#[no_mangle]
-pub unsafe extern "C" fn clif_handgold(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_handgold(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
 
     let gold = {
@@ -834,8 +800,7 @@ pub unsafe extern "C" fn clif_handgold(sd: *mut MapSessionData) -> c_int {
 // ─── clif_handitem ───────────────────────────────────────────────────────────
 
 /// Handle a "hand item" packet — offer/give item from adjacent cell.  C lines 9206-9314.
-#[no_mangle]
-pub unsafe extern "C" fn clif_handitem(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
 
     let slot      = rfifob((*sd).fd, 5).saturating_sub(1) as usize;
@@ -964,8 +929,7 @@ pub unsafe extern "C" fn clif_handitem(sd: *mut MapSessionData) -> c_int {
 // ─── clif_parse_exchange ─────────────────────────────────────────────────────
 
 /// Dispatch incoming exchange sub-packet by type byte.  C lines 9438-9543.
-#[no_mangle]
-pub unsafe extern "C" fn clif_parse_exchange(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
 
     let kind = rfifob((*sd).fd, 5) as c_int;

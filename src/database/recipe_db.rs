@@ -161,20 +161,15 @@ pub unsafe fn searchname(s: *const c_char) -> *mut RecipeData {
 
 // ─── FFI bridge (moved from src/ffi/recipe_db.rs) ─────────────────────────
 
-#[no_mangle]
-pub extern "C" fn rust_recipedb_init() -> c_int { ffi_catch!(-1, init()) }
+pub fn rust_recipedb_init() -> c_int { ffi_catch!(-1, init()) }
 
-#[no_mangle]
-pub extern "C" fn rust_recipedb_term() { ffi_catch!((), term()) }
+pub fn rust_recipedb_term() { ffi_catch!((), term()) }
 
-#[no_mangle]
-pub extern "C" fn rust_recipedb_search(id: c_uint) -> *mut RecipeData { ffi_catch!(null_mut(), search(id)) }
+pub fn rust_recipedb_search(id: c_uint) -> *mut RecipeData { ffi_catch!(null_mut(), search(id)) }
 
-#[no_mangle]
-pub extern "C" fn rust_recipedb_searchexist(id: c_uint) -> *mut RecipeData { ffi_catch!(null_mut(), searchexist(id)) }
+pub fn rust_recipedb_searchexist(id: c_uint) -> *mut RecipeData { ffi_catch!(null_mut(), searchexist(id)) }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_recipedb_searchname(s: *const c_char) -> *mut RecipeData {
+pub unsafe fn rust_recipedb_searchname(s: *const c_char) -> *mut RecipeData {
     if s.is_null() { return null_mut(); }
     ffi_catch!(null_mut(), unsafe { searchname(s) })
 }

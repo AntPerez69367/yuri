@@ -319,40 +319,32 @@ mod layout_tests {
 
 // ─── FFI bridge (moved from src/ffi/mob_db.rs) ────────────────────────────
 
-#[no_mangle]
-pub extern "C" fn rust_mobdb_init() -> c_int { ffi_catch!(-1, init()) }
+pub fn rust_mobdb_init() -> c_int { ffi_catch!(-1, init()) }
 
-#[no_mangle]
-pub extern "C" fn rust_mobdb_term() { ffi_catch!((), term()) }
+pub fn rust_mobdb_term() { ffi_catch!((), term()) }
 
-#[no_mangle]
-pub extern "C" fn rust_mobdb_search(id: c_uint) -> *mut MobDbData {
+pub fn rust_mobdb_search(id: c_uint) -> *mut MobDbData {
     ffi_catch!(null_mut(), search(id))
 }
 
-#[no_mangle]
-pub extern "C" fn rust_mobdb_searchexist(id: c_uint) -> *mut MobDbData {
+pub fn rust_mobdb_searchexist(id: c_uint) -> *mut MobDbData {
     ffi_catch!(null_mut(), searchexist(id))
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_mobdb_searchname(s: *const c_char) -> *mut MobDbData {
+pub unsafe fn rust_mobdb_searchname(s: *const c_char) -> *mut MobDbData {
     if s.is_null() { return null_mut(); }
     ffi_catch!(null_mut(), unsafe { searchname(s) })
 }
 
-#[no_mangle]
-pub extern "C" fn rust_mobdb_level(id: c_uint) -> c_int {
+pub fn rust_mobdb_level(id: c_uint) -> c_int {
     ffi_catch!(0, level(id))
 }
 
-#[no_mangle]
-pub extern "C" fn rust_mobdb_experience(id: c_uint) -> c_uint {
+pub fn rust_mobdb_experience(id: c_uint) -> c_uint {
     ffi_catch!(0, experience(id))
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_mobdb_id(s: *const c_char) -> c_int {
+pub unsafe fn rust_mobdb_id(s: *const c_char) -> c_int {
     if s.is_null() { return 0; }
     ffi_catch!(0, unsafe { find_id(s) })
 }

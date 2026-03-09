@@ -1,4 +1,3 @@
-#![feature(c_variadic)]
 //! Yuri - MMORPG Server
 //!
 //! A Rust reimplementation of a legacy C MMORPG server.
@@ -42,8 +41,4 @@ pub mod timer;
 // ============================================
 
 /// Game logic: NPC, mob, and player data types (replaces map_server C game layer).
-/// Gated behind `map-game` feature to avoid pulling in libmap_game.a C symbols
-/// into binaries that don't need them (decrypt_cli, metan_cli, etc.).
-/// Run game tests with: `cargo test --features map-game`
-#[cfg(feature = "map-game")]
 pub mod game;

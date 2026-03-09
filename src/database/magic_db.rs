@@ -199,85 +199,65 @@ pub unsafe fn level_by_name(s: *const c_char) -> c_int {
 
 static EMPTY: &[u8] = b"\0";
 
-#[no_mangle]
-pub extern "C" fn rust_magicdb_init() -> c_int { ffi_catch!(-1, init()) }
+pub fn rust_magicdb_init() -> c_int { ffi_catch!(-1, init()) }
 
-#[no_mangle]
-pub extern "C" fn rust_magicdb_term() { ffi_catch!((), term()) }
+pub fn rust_magicdb_term() { ffi_catch!((), term()) }
 
-#[no_mangle]
-pub extern "C" fn rust_magicdb_search(id: c_int) -> *mut MagicData { ffi_catch!(null_mut(), search(id)) }
+pub fn rust_magicdb_search(id: c_int) -> *mut MagicData { ffi_catch!(null_mut(), search(id)) }
 
-#[no_mangle]
-pub extern "C" fn rust_magicdb_searchexist(id: c_int) -> *mut MagicData { ffi_catch!(null_mut(), searchexist(id)) }
+pub fn rust_magicdb_searchexist(id: c_int) -> *mut MagicData { ffi_catch!(null_mut(), searchexist(id)) }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_magicdb_searchname(s: *const c_char) -> *mut MagicData { ffi_catch!(null_mut(), unsafe { searchname(s) }) }
+pub unsafe fn rust_magicdb_searchname(s: *const c_char) -> *mut MagicData { ffi_catch!(null_mut(), unsafe { searchname(s) }) }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_magicdb_id(s: *const c_char) -> c_int { ffi_catch!(0, unsafe { id(s) }) }
+pub unsafe fn rust_magicdb_id(s: *const c_char) -> c_int { ffi_catch!(0, unsafe { id(s) }) }
 
-#[no_mangle]
-pub extern "C" fn rust_magicdb_name(id: c_int) -> *mut c_char {
+pub fn rust_magicdb_name(id: c_int) -> *mut c_char {
     ffi_catch!(null_mut(), {
         let p = search(id);
         if p.is_null() { null_mut() } else { unsafe { (*p).name.as_mut_ptr() } }
     })
 }
-#[no_mangle]
-pub extern "C" fn rust_magicdb_yname(id: c_int) -> *mut c_char {
+pub fn rust_magicdb_yname(id: c_int) -> *mut c_char {
     ffi_catch!(null_mut(), {
         let p = search(id);
         if p.is_null() { null_mut() } else { unsafe { (*p).yname.as_mut_ptr() } }
     })
 }
-#[no_mangle]
-pub extern "C" fn rust_magicdb_question(id: c_int) -> *mut c_char {
+pub fn rust_magicdb_question(id: c_int) -> *mut c_char {
     ffi_catch!(null_mut(), {
         let p = search(id);
         if p.is_null() { null_mut() } else { unsafe { (*p).question.as_mut_ptr() } }
     })
 }
-#[no_mangle]
-pub extern "C" fn rust_magicdb_type(id: c_int) -> c_int {
+pub fn rust_magicdb_type(id: c_int) -> c_int {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).typ } } })
 }
-#[no_mangle]
-pub extern "C" fn rust_magicdb_dispel(id: c_int) -> c_int {
+pub fn rust_magicdb_dispel(id: c_int) -> c_int {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).dispell as c_int } } })
 }
-#[no_mangle]
-pub extern "C" fn rust_magicdb_aether(id: c_int) -> c_int {
+pub fn rust_magicdb_aether(id: c_int) -> c_int {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).aether as c_int } } })
 }
-#[no_mangle]
-pub extern "C" fn rust_magicdb_mute(id: c_int) -> c_int {
+pub fn rust_magicdb_mute(id: c_int) -> c_int {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).mute as c_int } } })
 }
-#[no_mangle]
-pub extern "C" fn rust_magicdb_canfail(id: c_int) -> c_int {
+pub fn rust_magicdb_canfail(id: c_int) -> c_int {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).canfail as c_int } } })
 }
-#[no_mangle]
-pub extern "C" fn rust_magicdb_alignment(id: c_int) -> c_int {
+pub fn rust_magicdb_alignment(id: c_int) -> c_int {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).alignment as c_int } } })
 }
-#[no_mangle]
-pub extern "C" fn rust_magicdb_ticker(id: c_int) -> c_int {
+pub fn rust_magicdb_ticker(id: c_int) -> c_int {
     ffi_catch!(0, { let p = search(id); if p.is_null() { 0 } else { unsafe { (*p).ticker as c_int } } })
 }
-#[no_mangle]
-pub unsafe extern "C" fn rust_magicdb_level(s: *const c_char) -> c_int { ffi_catch!(0, unsafe { level_by_name(s) }) }
+pub unsafe fn rust_magicdb_level(s: *const c_char) -> c_int { ffi_catch!(0, unsafe { level_by_name(s) }) }
 
-#[no_mangle]
-pub extern "C" fn rust_magicdb_script(_id: c_int) -> *const c_char {
+pub fn rust_magicdb_script(_id: c_int) -> *const c_char {
     EMPTY.as_ptr() as *const c_char
 }
-#[no_mangle]
-pub extern "C" fn rust_magicdb_script2(_id: c_int) -> *const c_char {
+pub fn rust_magicdb_script2(_id: c_int) -> *const c_char {
     EMPTY.as_ptr() as *const c_char
 }
-#[no_mangle]
-pub extern "C" fn rust_magicdb_script3(_id: c_int) -> *const c_char {
+pub fn rust_magicdb_script3(_id: c_int) -> *const c_char {
     EMPTY.as_ptr() as *const c_char
 }

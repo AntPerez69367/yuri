@@ -3,12 +3,10 @@
 
 use std::os::raw::c_int;
 
-use crate::database::map_db::BlockList;
 use crate::session::{
     rust_session_available, rust_session_commit, rust_session_increment,
     rust_session_rdata_ptr, rust_session_skip, rust_session_wdata_ptr,
     rust_session_wfifohead, rust_session_exists,
-    rust_session_get_data, rust_session_get_eof, rust_session_set_eof,
 };
 
 // ─── Send-target constants (enum in map_parse.h) ─────────────────────────────
@@ -131,62 +129,8 @@ pub unsafe fn wfifoheader(fd: c_int, packet_id: u8, packet_size: u16) {
     wfifob(fd, 4, rust_session_increment(fd));
 }
 
-// ─── C FFI: crypto ───────────────────────────────────────────────────────────
+// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
 
-extern "C" {
-    pub fn decrypt(fd: c_int) -> c_int;
-    pub fn encrypt(fd: c_int) -> c_int;
-}
+pub use crate::network::crypt::{decrypt, encrypt};
+pub use crate::game::client::{clif_send, clif_sendtogm};
 
-// ─── C FFI: clif send routing (remain in C) ──────────────────────────────────
-
-extern "C" {
-    /// Broadcast a packet buffer to all sessions matching a send-target type.
-    /// Signature from `c_src/map_parse.h`:
-    ///   int clif_send(const unsigned char *, int, struct block_list *, int)
-    pub fn clif_send(
-        buf: *const u8,
-        len: c_int,
-        bl: *mut BlockList,
-        target: c_int,
-    ) -> c_int;
-
-    /// Same as `clif_send` but restricted to GM sessions.
-    /// Signature from `c_src/map_parse.h`:
-    ///   int clif_sendtogm(unsigned char *, int, struct block_list *, int)
-    pub fn clif_sendtogm(
-        buf: *mut u8,
-        len: c_int,
-        bl: *mut BlockList,
-        target: c_int,
-    ) -> c_int;
-}
-
-// ─── C FFI: area iteration (remain in C) ─────────────────────────────────────
-
-extern "C" {
-    /// Call `f` for every block_list entry in a radius around (x,y) on map m.
-    /// Signature from `c_src/map_server.h`:
-    ///   int map_foreachinarea(int (*)(struct block_list *, va_list), int, int, int, int, int, ...)
-    pub fn map_foreachinarea(
-        f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
-        m: c_int,
-        x: c_int,
-        y: c_int,
-        range: c_int,
-        bl_type: c_int,
-        ...
-    ) -> c_int;
-
-    /// Call `f` for every block_list entry in a single cell (x,y) on map m.
-    /// Signature from `c_src/map_server.h`:
-    ///   int map_foreachincell(int (*)(struct block_list *, va_list), int, int, int, int, ...)
-    pub fn map_foreachincell(
-        f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
-        m: c_int,
-        x: c_int,
-        y: c_int,
-        bl_type: c_int,
-        ...
-    ) -> c_int;
-}

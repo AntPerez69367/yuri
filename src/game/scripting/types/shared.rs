@@ -12,9 +12,6 @@ use crate::game::types::GfxViewer;
 use crate::database::map_db::get_map_ptr;
 use crate::game::scripting::ffi as sffi;
 use crate::game::scripting::types::item::fixed_str;
-use crate::game::scripting::types::mob::MobObject;
-use crate::game::scripting::types::npc::NpcObject;
-use crate::game::scripting::types::pc::PcObject;
 
 // ── Object collection methods ─────────────────────────────────────────────────
 

@@ -188,9 +188,8 @@ pub fn tk_crypt_static(buff: &mut [u8], xor_key: &[u8]) {
 ///
 /// # Safety
 /// `fd` must be a valid session fd with pending write data staged by `rust_session_wfifohead`.
-#[cfg(all(feature = "map-game", not(test)))]
-#[no_mangle]
-pub unsafe extern "C" fn encrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int {
+#[cfg(not(test))]
+pub unsafe fn encrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int {
     use crate::config::config;
     use crate::session::{rust_session_get_data, rust_session_wdata_ptr};
     use crate::game::pc::MapSessionData;
@@ -244,9 +243,8 @@ pub unsafe extern "C" fn encrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int
 /// The read buffer is C-allocated session memory; the `*const u8 → *mut u8` cast for
 /// in-place XOR mirrors the C `RFIFOP(fd, 0)` usage and is safe here because
 /// packet dispatch is single-threaded and no other thread aliases this buffer.
-#[cfg(all(feature = "map-game", not(test)))]
-#[no_mangle]
-pub unsafe extern "C" fn decrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int {
+#[cfg(not(test))]
+pub unsafe fn decrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int {
     use crate::config::config;
     use crate::session::{rust_session_available, rust_session_get_data, rust_session_rdata_ptr};
     use crate::game::pc::MapSessionData;
@@ -288,7 +286,7 @@ pub unsafe extern "C" fn decrypt(fd: std::os::raw::c_int) -> std::os::raw::c_int
 // `send_metalist` are exported C symbols called from map_parse.c dispatch and
 // sl_g_sendmeta() respectively.
 
-#[cfg(all(feature = "map-game", not(test)))]
+#[cfg(not(test))]
 unsafe fn metacrc_path(path: &str) -> u32 {
     use flate2::Crc;
     let data = std::fs::read(path).unwrap_or_default();
@@ -297,7 +295,7 @@ unsafe fn metacrc_path(path: &str) -> u32 {
     crc.sum()
 }
 
-#[cfg(all(feature = "map-game", not(test)))]
+#[cfg(not(test))]
 unsafe fn send_metafile_impl(fd: std::os::raw::c_int, file: &str) {
     use flate2::write::ZlibEncoder;
     use flate2::Compression;
@@ -366,9 +364,8 @@ unsafe fn send_metafile_impl(fd: std::os::raw::c_int, file: &str) {
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`crate::game::pc::MapSessionData`].
-#[cfg(all(feature = "map-game", not(test)))]
-#[no_mangle]
-pub unsafe extern "C" fn send_meta(sd: *mut crate::game::pc::MapSessionData) -> std::os::raw::c_int {
+#[cfg(not(test))]
+pub unsafe fn send_meta(sd: *mut crate::game::pc::MapSessionData) -> std::os::raw::c_int {
     use crate::session::rust_session_rdata_ptr;
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
@@ -387,9 +384,8 @@ pub unsafe extern "C" fn send_meta(sd: *mut crate::game::pc::MapSessionData) -> 
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`crate::game::pc::MapSessionData`].
-#[cfg(all(feature = "map-game", not(test)))]
-#[no_mangle]
-pub unsafe extern "C" fn send_metalist(sd: *mut crate::game::pc::MapSessionData) -> std::os::raw::c_int {
+#[cfg(not(test))]
+pub unsafe fn send_metalist(sd: *mut crate::game::pc::MapSessionData) -> std::os::raw::c_int {
     use flate2::Crc;
     use crate::config::config;
     use crate::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
@@ -507,20 +503,17 @@ use std::slice;
 use crate::session::{RFIFO_SIZE, WFIFO_SIZE};
 
 /// Whether the opcode uses dynamic encryption (client-side check).
-#[no_mangle]
-pub extern "C" fn rust_crypt_is_key_client(opcode: c_int) -> bool {
+pub fn rust_crypt_is_key_client(opcode: c_int) -> bool {
     is_key_client(opcode as u8)
 }
 
 /// Whether the opcode uses dynamic encryption (server-side check).
-#[no_mangle]
-pub extern "C" fn rust_crypt_is_key_server(opcode: c_int) -> bool {
+pub fn rust_crypt_is_key_server(opcode: c_int) -> bool {
     is_key_server(opcode as u8)
 }
 
 /// Generates an MD5 hex digest of `name` into `buffer` (must be ≥33 bytes).
-#[no_mangle]
-pub unsafe extern "C" fn rust_crypt_generate_hashvalues(
+pub unsafe fn rust_crypt_generate_hashvalues(
     name: *const c_char,
     buffer: *mut c_char,
     buflen: c_int,
@@ -534,8 +527,7 @@ pub unsafe extern "C" fn rust_crypt_generate_hashvalues(
 }
 
 /// Builds the 1025-byte encryption lookup table from `name`.
-#[no_mangle]
-pub unsafe extern "C" fn rust_crypt_populate_table(
+pub unsafe fn rust_crypt_populate_table(
     name: *const c_char,
     table: *mut c_char,
     tablelen: c_int,
@@ -549,8 +541,7 @@ pub unsafe extern "C" fn rust_crypt_populate_table(
 }
 
 /// Appends 3 index bytes to `packet` and updates its length field.
-#[no_mangle]
-pub unsafe extern "C" fn rust_crypt_set_packet_indexes(packet: *mut c_uchar) -> c_int {
+pub unsafe fn rust_crypt_set_packet_indexes(packet: *mut c_uchar) -> c_int {
     if packet.is_null() { return 0; }
     let psize = ((*packet.add(1) as usize) << 8) | (*packet.add(2) as usize);
     if psize == 0 || psize + 6 > WFIFO_SIZE { return 0; }
@@ -560,8 +551,7 @@ pub unsafe extern "C" fn rust_crypt_set_packet_indexes(packet: *mut c_uchar) -> 
 }
 
 /// Derives a 9-byte session key into `keyout[0..10]` (NUL at [9]).
-#[no_mangle]
-pub unsafe extern "C" fn rust_crypt_generate_key2(
+pub unsafe fn rust_crypt_generate_key2(
     packet: *mut c_uchar,
     table: *const c_char,
     keyout: *mut c_char,
@@ -582,8 +572,7 @@ pub unsafe extern "C" fn rust_crypt_generate_key2(
 }
 
 /// XOR-encrypts/decrypts `buff` in-place using a 9-byte `key`.
-#[no_mangle]
-pub unsafe extern "C" fn rust_crypt_dynamic(buff: *mut c_uchar, key: *const c_char) {
+pub unsafe fn rust_crypt_dynamic(buff: *mut c_uchar, key: *const c_char) {
     if buff.is_null() || key.is_null() { return; }
     let total = ((*buff.add(1) as usize) << 8) | (*buff.add(2) as usize);
     if total < 5 || total > RFIFO_SIZE { return; }
@@ -593,7 +582,6 @@ pub unsafe extern "C" fn rust_crypt_dynamic(buff: *mut c_uchar, key: *const c_ch
 }
 
 /// XOR-encrypts/decrypts `buff` using the static xor_key (passed from C config global).
-#[no_mangle]
-pub unsafe extern "C" fn rust_crypt_static(buff: *mut c_uchar, xor_key: *const c_char) {
+pub unsafe fn rust_crypt_static(buff: *mut c_uchar, xor_key: *const c_char) {
     rust_crypt_dynamic(buff, xor_key);
 }

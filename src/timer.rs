@@ -1,9 +1,6 @@
 //! Rust replacement for c_deps/timer.c
 //!
-//! Provides the same ABI as the C timer system so all existing callers
-//! (C code in c_deps, and Rust code via `extern "C"` / `#[link_name]`) work
-//! without changes.  timer.c is removed from build.rs once this module is
-//! compiled in.
+//! Pure Rust timer system — no C dependencies.
 //!
 //! # Safety model
 //! The map server is single-threaded on its event-loop thread.  All timer
@@ -11,7 +8,6 @@
 //! The global `TIMER_STATE` is accessed only from that thread; no locking is
 //! needed.
 
-use std::os::raw::c_int;
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -27,15 +23,13 @@ pub fn get_tick_ms() -> u32 {
     START.get_or_init(Instant::now).elapsed().as_millis() as u32
 }
 
-/// `unsigned int gettick_nocache(void)` — C ABI export (no caching on Linux anyway).
-#[no_mangle]
-pub extern "C" fn gettick_nocache() -> u32 {
+/// `unsigned int gettick_nocache(void)` — no caching on Linux anyway.
+pub fn gettick_nocache() -> u32 {
     get_tick_ms()
 }
 
-/// `unsigned int gettick(void)` — C ABI export.
-#[no_mangle]
-pub extern "C" fn gettick() -> u32 {
+/// `unsigned int gettick(void)`.
+pub fn gettick() -> u32 {
     get_tick_ms()
 }
 
@@ -43,10 +37,9 @@ pub extern "C" fn gettick() -> u32 {
 // Date/time helpers (also defined in timer.c, used from Lua via yuri.h)
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// `int getDay(void)` — returns day-of-week adjusted for the original server's
+/// Returns day-of-week adjusted for the original server's
 /// timezone offset (UTC-5, mapped so Monday=4 … Sunday=3).
-#[no_mangle]
-pub extern "C" fn getDay() -> c_int {
+pub fn get_day() -> i32 {
     // Mirror the C formula: ((t - 18000) % 604800) / 86400
     // where 18000 = 5*3600 (UTC-5 offset) and 604800 = 7*86400.
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -56,15 +49,14 @@ pub extern "C" fn getDay() -> c_int {
         .unwrap_or(0);
     let day = ((t - 18000).rem_euclid(604800)) / 86400;
     if day < 4 {
-        (day + 4) as c_int
+        (day + 4) as i32
     } else {
-        (day - 3) as c_int
+        (day - 3) as i32
     }
 }
 
-/// `int getHour(void)` — local hour (0-23).
-#[no_mangle]
-pub extern "C" fn getHour() -> c_int {
+/// Returns the local hour (0-23).
+pub fn get_hour() -> i32 {
     use std::time::{SystemTime, UNIX_EPOCH};
     // Use local time via libc localtime_r.
     let t = SystemTime::now()
@@ -74,13 +66,12 @@ pub extern "C" fn getHour() -> c_int {
     unsafe {
         let mut tm: libc::tm = std::mem::zeroed();
         libc::localtime_r(&t, &mut tm);
-        tm.tm_hour as c_int
+        tm.tm_hour as i32
     }
 }
 
-/// `int getMinute(void)` — local minute (0-59).
-#[no_mangle]
-pub extern "C" fn getMinute() -> c_int {
+/// Returns the local minute (0-59).
+pub fn get_minute() -> i32 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let t = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -89,13 +80,12 @@ pub extern "C" fn getMinute() -> c_int {
     unsafe {
         let mut tm: libc::tm = std::mem::zeroed();
         libc::localtime_r(&t, &mut tm);
-        tm.tm_min as c_int
+        tm.tm_min as i32
     }
 }
 
-/// `int getSecond(void)` — local second (0-59).
-#[no_mangle]
-pub extern "C" fn getSecond() -> c_int {
+/// Returns the local second (0-59).
+pub fn get_second() -> i32 {
     use std::time::{SystemTime, UNIX_EPOCH};
     let t = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -104,7 +94,7 @@ pub extern "C" fn getSecond() -> c_int {
     unsafe {
         let mut tm: libc::tm = std::mem::zeroed();
         libc::localtime_r(&t, &mut tm);
-        tm.tm_sec as c_int
+        tm.tm_sec as i32
     }
 }
 
@@ -116,8 +106,8 @@ const TIMER_ONCE_AUTODEL: u8 = 0x01;
 const TIMER_INTERVAL: u8 = 0x02;
 const TIMER_REMOVE_HEAP: u8 = 0x10;
 
-/// Callback signature matching `int (*func)(int, int)` in C.
-type TimerFn = unsafe extern "C" fn(c_int, c_int) -> c_int;
+/// Callback signature matching `int (*func)(int, int)`.
+type TimerFn = unsafe fn(i32, i32) -> i32;
 
 struct TimerData {
     tick: u32,
@@ -125,9 +115,9 @@ struct TimerData {
     /// Combination of TIMER_* flags.
     typ: u8,
     interval: u32,
-    id: c_int,
-    data1: c_int,
-    data2: c_int,
+    id: i32,
+    data1: i32,
+    data2: i32,
 }
 
 impl TimerData {
@@ -197,7 +187,8 @@ impl TimerState {
     }
 }
 
-/// Global timer state — accessed only from the single event-loop thread.
+// SAFETY: Option<TimerState> initialised once by timer_init, then mutated only from within timer
+// callbacks, which all run on the game thread. Single-threaded game loop — no concurrent access.
 static mut TIMER_STATE: Option<TimerState> = None;
 
 unsafe fn state() -> &'static mut TimerState {
@@ -211,29 +202,25 @@ unsafe fn state() -> &'static mut TimerState {
 // Public C-ABI exports
 // ──────────────────────────────────────────────────────────────────────────────
 
-/// `void timer_init(void)` — no-op (matches C).
-#[no_mangle]
-pub extern "C" fn timer_init() {}
+/// `void timer_init(void)` — no-op.
+pub fn timer_init() {}
 
 /// `int timer_clear(void)` — free all timer memory.
-#[no_mangle]
-pub unsafe extern "C" fn timer_clear() -> c_int {
+pub unsafe fn timer_clear() -> i32 {
     TIMER_STATE = None;
     0
 }
 
 /// `int timer_insert(uint32_t initial_delay_ms, uint32_t interval_ms, fn, id, data) -> timer_id`
 ///
-/// Matches the C signature: first arg is the initial delay (added to gettick()),
-/// second is the repeat interval.
-#[no_mangle]
-pub unsafe extern "C" fn timer_insert(
+/// First arg is the initial delay (added to gettick()), second is the repeat interval.
+pub unsafe fn timer_insert(
     tick_delay: u32,
     interval: u32,
     func: Option<TimerFn>,
-    id: c_int,
-    data: c_int,
-) -> c_int {
+    id: i32,
+    data: i32,
+) -> i32 {
     let s = state();
     let tid = s.acquire();
     s.data[tid] = TimerData {
@@ -246,12 +233,11 @@ pub unsafe extern "C" fn timer_insert(
         data2: 0,
     };
     s.heap_push(tid);
-    tid as c_int
+    tid as i32
 }
 
 /// `int timer_remove(int tid)` — mark a timer for deletion.
-#[no_mangle]
-pub unsafe extern "C" fn timer_remove(tid: c_int) -> c_int {
+pub unsafe fn timer_remove(tid: i32) -> i32 {
     let s = state();
     let tid = tid as usize;
     if tid >= s.data.len() {
@@ -262,19 +248,15 @@ pub unsafe extern "C" fn timer_remove(tid: c_int) -> c_int {
     0
 }
 
-/// `const struct TimerData* get_timer(int tid)` — not needed from Rust, but
-/// exported so C code that calls it still links.  We return NULL always
-/// (the C code only uses it for debug checks).
-#[no_mangle]
-pub unsafe extern "C" fn get_timer(_tid: c_int) -> *const () {
+/// `const struct TimerData* get_timer(int tid)` — returns NULL (only used for debug checks).
+pub unsafe fn get_timer(_tid: i32) -> *const () {
     std::ptr::null()
 }
 
 /// `int timer_do(uint32_t tick)` — fire all expired timers, return ms to next.
 ///
 /// Must be called from the event loop every ~10 ms.
-#[no_mangle]
-pub unsafe extern "C" fn timer_do(tick: u32) -> c_int {
+pub unsafe fn timer_do(tick: u32) -> i32 {
     const TIMER_MIN_INTERVAL: i32 = 50;
     const TIMER_MAX_INTERVAL: i32 = 1000;
 

@@ -1,5 +1,5 @@
-/// Pure utility functions ported from c_src/sl_compat.c.
-/// No C dependencies — safe to use anywhere in the Rust codebase.
+//! Pure utility functions ported from c_src/sl_compat.c.
+//! No C dependencies — safe to use anywhere in the Rust codebase.
 
 use std::os::raw::c_int;
 
@@ -90,8 +90,7 @@ pub struct CPoint {
 /// C-callable wrapper around [`check_proximity`].
 ///
 /// Called from `src/game/map_parse/combat.rs` via `extern "C"`.
-#[no_mangle]
-pub extern "C" fn CheckProximity(one: CPoint, two: CPoint, radius: c_int) -> c_int {
+pub fn CheckProximity(one: CPoint, two: CPoint, radius: c_int) -> c_int {
     let result = check_proximity(
         (one.m, one.x, one.y),
         (two.m, two.x, two.y),

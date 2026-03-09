@@ -4,65 +4,33 @@ use std::ffi::CString;
 use std::sync::Arc;
 use yuri::config::ServerConfig;
 use yuri::game::client::rust_clif_parse;
+use yuri::game::block::map_initblock;
+use yuri::game::map_server::map_initiddb;
+use yuri::game::npc::{npc_init, npc_runtimers, warp_init};
+use yuri::game::scripting::rust_sl_init;
+use yuri::game::map_server::{lang_read, map_do_term, map_loadgameregistry};
+use yuri::game::client::visual::clif_timeout;
+use yuri::database::board_db::rust_boarddb_init;
+use yuri::database::clan_db::rust_clandb_init;
+use yuri::database::class_db::rust_classdb_init;
+use yuri::database::item_db::rust_itemdb_init;
+use yuri::database::recipe_db::rust_recipedb_init;
+use yuri::database::magic_db::rust_magicdb_init;
+use yuri::database::mob_db::rust_mobdb_init;
+use yuri::game::mob::{rust_mob_timer_spawns, rust_mobspawn_read};
+use yuri::session::{
+    rust_session_set_default_parse, rust_session_set_default_timeout,
+    rust_make_listen_port,
+};
+use yuri::core::{rust_core_init, rust_set_termfunc};
+use yuri::timer::timer_init;
 use yuri::servers::map::MapState;
 
-/// C game-logic functions from libmap_game.a (pure C, not static inline).
-extern "C" {
-    fn map_initblock();
-    fn map_initiddb();
-    fn npc_init();
-    fn warp_init() -> i32;
-    fn rust_sl_init();
-    // (rust_sl_doscript_blargs_vec removed; use yuri::game::scripting::doscript_blargs)
-    fn map_loadgameregistry() -> i32;
-    fn clif_timeout(fd: i32) -> i32;
-    fn map_do_term(); // impl in src/game/map_server.rs
-    fn intif_mmo_tosd(fd: i32, status: *mut u8) -> i32;
-    fn lang_read(file: *const i8);
-    fn rust_mob_timer_spawns(id: i32, n: i32) -> i32;
-    fn npc_runtimers(id: i32, n: i32) -> i32;
-}
-
-// Rust FFI functions from libyuri.a (these replace the static-inline C shims).
-// boarddb_init() → rust_boarddb_init(), etc.
-extern "C" {
-    fn rust_boarddb_init() -> i32;
-    fn rust_clandb_init() -> i32;
-    fn rust_classdb_init(data_dir: *const i8) -> i32;
-    fn rust_itemdb_init() -> i32;
-    fn rust_recipedb_init() -> i32;
-    fn rust_magicdb_init() -> i32;
-    fn rust_mobdb_init() -> i32;
-    fn rust_mobspawn_read() -> i32;
-    // Session functions (from libyuri.a ffi/session.rs)
-    fn rust_session_set_default_parse(f: unsafe extern "C" fn(i32) -> i32);
-    fn rust_session_set_default_timeout(f: unsafe extern "C" fn(i32) -> i32);
-    fn rust_make_listen_port(port: i32) -> i32;
-    fn rust_set_termfunc(f: Option<unsafe extern "C" fn()>);
-}
-
-// fd_max is normally defined in core.c (which we exclude to avoid duplicate main()).
-// The Rust session layer updates this via the c_update_fd_max callback.
-#[no_mangle]
-pub static mut fd_max: std::ffi::c_int = 0;
-
-// Called by Rust session layer to update C's fd_max global.
-#[no_mangle]
-pub unsafe extern "C" fn c_update_fd_max(new_max: std::ffi::c_int) {
-    fd_max = new_max;
-}
-
-extern "C" {
-    fn rust_core_init();
-    fn rust_register_fd_max_updater(cb: unsafe extern "C" fn(std::ffi::c_int));
-    fn timer_init();
-}
 
 /// Stub replacing `db_init()` from `c_deps/db.c`.
 /// The original function only increments a statistics counter; it has no
 /// side-effects on any game state, so removing it is safe.
-#[no_mangle]
-pub extern "C" fn db_init() {}
+pub fn db_init() {}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -74,7 +42,7 @@ async fn main() -> Result<()> {
     // Initialize C core state (mirrors core.c main() preamble).
     unsafe {
         rust_core_init();
-        rust_register_fd_max_updater(c_update_fd_max);
+        // fd_max is now owned by session.rs (get_fd_max()); no external callback needed.
         // db_init() is now a no-op stub defined above
         timer_init();
     }
@@ -113,7 +81,7 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Load lang strings (C)
+    // Load lang strings
     {
         let clang = CString::new(lang_file.as_str()).unwrap();
         unsafe { lang_read(clang.as_ptr()); }
@@ -164,9 +132,7 @@ async fn main() -> Result<()> {
                 anyhow::bail!("rust_map_init failed");
             }
 
-            // C game-logic init — order matches do_init exactly.
-            // Static-inline C shims (boarddb_init, etc.) can't be linked from Rust;
-            // we call the rust_* functions they wrap directly.
+            // Game-logic init — order matches do_init exactly.
             unsafe {
                 map_initblock();
                 map_initiddb();
@@ -206,8 +172,8 @@ async fn main() -> Result<()> {
 
     // Register state with FFI bridge so C game logic can send packets to char_server.
     yuri::game::map_char::set_map_state(Arc::clone(&state));
-    // Register intif_mmo_tosd so packet.rs can call it without linking map_game into libyuri.
-    yuri::game::map_char::set_mmo_tosd_fn(intif_mmo_tosd);
+    // intif_mmo_tosd is now called directly from call_intif_mmo_tosd in map_char.rs.
+    // set_mmo_tosd_fn is kept as a no-op for source compatibility.
 
     // Spawn auth DB expiry timer (replaces auth_timer — every 30s).
     // Does not touch Lua, safe on any thread.

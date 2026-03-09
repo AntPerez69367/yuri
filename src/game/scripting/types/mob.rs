@@ -1,19 +1,16 @@
 use mlua::{MetaMethod, UserData, UserDataMethods};
-use std::ffi::{c_char, c_float, c_int, c_uint, CString};
+use std::ffi::{c_float, c_int, c_uint, CString};
 use std::os::raw::c_void;
 use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use crate::database::map_db::{BlockList, MapData};
 use crate::database::map_db::get_map_ptr;
-use crate::database::mob_db::MobDbData;
 use crate::game::mob::{
     mob_calcstat, mob_warp, move_mob, move_mob_ignore_object, move_mob_intent, moveghost_mob,
-    MobSpawnData, BL_MOB, BL_PC, MAX_MAGIC_TIMERS, MAX_THREATCOUNT,
+    MobSpawnData, MAX_MAGIC_TIMERS, MAX_THREATCOUNT,
 };
 use crate::game::scripting::ffi as sffi;
 use crate::game::scripting::types::item::fixed_str;
-use crate::game::scripting::types::npc::NpcObject;
-use crate::game::scripting::types::pc::PcObject;
 use crate::game::scripting::types::registry::{GameRegObject, MapRegObject, MobRegObject};
 use crate::game::scripting::types::shared;
 
@@ -31,33 +28,17 @@ pub struct MobObject {
 // MobObject values are created or used.
 unsafe impl Send for MobObject {}
 
-// ---------------------------------------------------------------------------
-// C functions not yet in game/mob.rs extern block
-// ---------------------------------------------------------------------------
-extern "C" {
-    fn rust_mob_attack(mob: *mut MobSpawnData, id: c_int) -> c_int;
-    fn clif_send_mob_healthscript(mob: *mut c_void, damage: c_int, critical: c_int);
-    fn rust_magicdb_id(s: *const c_char) -> c_int;
+use crate::game::mob::{
+    rust_mob_attack, sl_mob_addhealth, sl_mob_callbase, sl_mob_checkmove, sl_mob_checkthreat,
+    sl_mob_flushduration, sl_mob_flushdurationnouncast, sl_mob_removehealth, sl_mob_setduration,
+    sl_mob_setgrpdmg, sl_mob_setinddmg,
+};
+use crate::game::map_parse::combat::clif_send_mob_healthscript;
+use crate::database::magic_db::rust_magicdb_id;
+use crate::game::map_server::map_id2bl;
 
-    // Mob scripting helpers defined in sl_compat.c
-    fn sl_mob_addhealth(mob: *mut c_void, damage: c_int);
-    fn sl_mob_removehealth(mob: *mut c_void, damage: c_int, caster_id: c_uint);
-    fn sl_mob_checkthreat(mob: *mut c_void, player_id: c_uint) -> c_int;
-    fn sl_mob_setinddmg(mob: *mut c_void, player_id: c_uint, dmg: c_float) -> c_int;
-    fn sl_mob_setgrpdmg(mob: *mut c_void, player_id: c_uint, dmg: c_float) -> c_int;
-    fn sl_mob_checkmove(mob: *mut c_void) -> c_int;
-    fn sl_mob_setduration(
-        mob: *mut c_void,
-        name: *const c_char,
-        time: c_int,
-        caster_id: c_uint,
-        recast: c_int,
-    );
-    fn sl_mob_flushduration(mob: *mut c_void, dis: c_int, minid: c_int, maxid: c_int);
-    fn sl_mob_flushdurationnouncast(mob: *mut c_void, dis: c_int, minid: c_int, maxid: c_int);
-    fn sl_mob_callbase(mob: *mut c_void, script: *const c_char) -> c_int;
-    #[link_name = "map_id2bl"]
-    fn map_id2bl_mob(id: c_uint) -> *mut BlockList;
+unsafe fn map_id2bl_mob(id: c_uint) -> *mut BlockList {
+    map_id2bl(id) as *mut BlockList
 }
 
 // ---------------------------------------------------------------------------
@@ -170,7 +151,7 @@ impl UserData for MobObject {
                                 return Ok(());
                             }
                             unsafe {
-                                sl_mob_addhealth(ptr, damage);
+                                sl_mob_addhealth(ptr as *mut MobSpawnData, damage);
                             }
                             Ok(())
                         },
@@ -184,7 +165,7 @@ impl UserData for MobObject {
                                 return Ok(());
                             }
                             unsafe {
-                                sl_mob_removehealth(ptr, damage, caster_id);
+                                sl_mob_removehealth(ptr as *mut MobSpawnData, damage, caster_id);
                             }
                             Ok(())
                         },
@@ -272,7 +253,7 @@ impl UserData for MobObject {
                                 c => c,
                             };
                             unsafe {
-                                clif_send_mob_healthscript(ptr, damage, crit);
+                                clif_send_mob_healthscript(ptr as *mut MobSpawnData, damage, crit);
                             }
                             Ok(())
                         },
@@ -296,7 +277,7 @@ impl UserData for MobObject {
                                 let cs =
                                     CString::new(name.as_bytes()).map_err(mlua::Error::external)?;
                                 unsafe {
-                                    sl_mob_setduration(ptr, cs.as_ptr(), time, caster_id, recast);
+                                    sl_mob_setduration(ptr as *mut MobSpawnData, cs.as_ptr(), time, caster_id, recast);
                                 }
                                 Ok(())
                             },
@@ -311,7 +292,7 @@ impl UserData for MobObject {
                                 return Ok(());
                             }
                             unsafe {
-                                sl_mob_flushduration(ptr, dis, minid, maxid);
+                                sl_mob_flushduration(ptr as *mut MobSpawnData, dis, minid, maxid);
                             }
                             Ok(())
                         },
@@ -325,7 +306,7 @@ impl UserData for MobObject {
                                 return Ok(());
                             }
                             unsafe {
-                                sl_mob_flushdurationnouncast(ptr, dis, minid, maxid);
+                                sl_mob_flushdurationnouncast(ptr as *mut MobSpawnData, dis, minid, maxid);
                             }
                             Ok(())
                         },
@@ -416,7 +397,7 @@ impl UserData for MobObject {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(0i32);
                             }
-                            Ok(unsafe { sl_mob_checkthreat(ptr, player_id) })
+                            Ok(unsafe { sl_mob_checkthreat(ptr as *mut MobSpawnData, player_id) })
                         },
                     )?))
                 }
@@ -429,7 +410,7 @@ impl UserData for MobObject {
                             }
                             let cs =
                                 CString::new(script.as_bytes()).map_err(mlua::Error::external)?;
-                            Ok(unsafe { sl_mob_callbase(ptr, cs.as_ptr()) } != 0)
+                            Ok(unsafe { sl_mob_callbase(ptr as *mut MobSpawnData, cs.as_ptr()) } != 0)
                         },
                     )?))
                 }
@@ -440,7 +421,7 @@ impl UserData for MobObject {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(false);
                             }
-                            Ok(unsafe { sl_mob_checkmove(ptr) } != 0)
+                            Ok(unsafe { sl_mob_checkmove(ptr as *mut MobSpawnData) } != 0)
                         },
                     )?))
                 }
@@ -451,7 +432,7 @@ impl UserData for MobObject {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(false);
                             }
-                            Ok(unsafe { sl_mob_setinddmg(ptr, player_id, dmg) } != 0)
+                            Ok(unsafe { sl_mob_setinddmg(ptr as *mut MobSpawnData, player_id, dmg) } != 0)
                         },
                     )?))
                 }
@@ -462,7 +443,7 @@ impl UserData for MobObject {
                             if ptr.is_null() || df.load(Ordering::Acquire) {
                                 return Ok(false);
                             }
-                            Ok(unsafe { sl_mob_setgrpdmg(ptr, player_id, dmg) } != 0)
+                            Ok(unsafe { sl_mob_setgrpdmg(ptr as *mut MobSpawnData, player_id, dmg) } != 0)
                         },
                     )?))
                 }

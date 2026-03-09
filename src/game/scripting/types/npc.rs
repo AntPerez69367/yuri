@@ -3,12 +3,11 @@ use std::os::raw::c_void;
 use std::sync::{Arc, atomic::AtomicBool};
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
-use crate::database::map_db::{BlockList, MapData};
+use crate::database::map_db::MapData;
 use crate::database::map_db::get_map_ptr;
 use crate::game::npc::{NpcData, npc_move, npc_warp};
 use crate::game::scripting::ffi as sffi;
 use crate::game::scripting::types::mob::MobObject;
-use crate::game::scripting::types::pc::PcObject;
 use crate::game::scripting::types::registry::{GameRegObject, MapRegObject, NpcRegObject};
 use crate::game::scripting::types::shared;
 use crate::servers::char::charstatus::MAX_EQUIP;

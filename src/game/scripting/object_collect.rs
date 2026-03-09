@@ -32,8 +32,7 @@ unsafe fn push_ptr(out_ptrs: *mut *mut c_void, count: &mut c_int, max_count: c_i
 /// # Safety
 /// `out_ptrs` must point to a caller-allocated array of at least `max_count`
 /// `*mut c_void` slots. `m`, `x`, `y` must identify a valid, loaded map cell.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_getobjectscell(
+pub unsafe fn sl_g_getobjectscell(
     m: c_int,
     x: c_int,
     y: c_int,
@@ -57,8 +56,7 @@ pub unsafe extern "C" fn sl_g_getobjectscell(
 /// # Safety
 /// Same as `sl_g_getobjectscell`.
 // TODO: port map_foreachincellwithtraps
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_getobjectscellwithtraps(
+pub unsafe fn sl_g_getobjectscellwithtraps(
     m: c_int,
     x: c_int,
     y: c_int,
@@ -81,9 +79,8 @@ pub unsafe extern "C" fn sl_g_getobjectscellwithtraps(
 ///
 /// # Safety
 /// Same as `sl_g_getobjectscell`.
-#[cfg(all(feature = "map-game", not(test)))]
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_getaliveobjectscell(
+#[cfg(not(test))]
+pub unsafe fn sl_g_getaliveobjectscell(
     m: c_int,
     x: c_int,
     y: c_int,
@@ -110,8 +107,7 @@ pub unsafe extern "C" fn sl_g_getaliveobjectscell(
 ///
 /// # Safety
 /// `out_ptrs` must point to a caller-allocated array of at least `max_count` slots.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_getobjectsinmap(
+pub unsafe fn sl_g_getobjectsinmap(
     m: c_int,
     bl_type: c_int,
     out_ptrs: *mut *mut c_void,
@@ -136,8 +132,7 @@ pub unsafe extern "C" fn sl_g_getobjectsinmap(
 /// # Safety
 /// `bl_ptr` must be a valid, non-null `*mut BlockList`. `out_ptrs` must point
 /// to a caller-allocated array of at least `max_count` slots.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_getobjectsarea(
+pub unsafe fn sl_g_getobjectsarea(
     bl_ptr: *mut c_void,
     bl_type: c_int,
     out_ptrs: *mut *mut c_void,
@@ -160,9 +155,8 @@ pub unsafe extern "C" fn sl_g_getobjectsarea(
 ///
 /// # Safety
 /// Same as `sl_g_getobjectsarea`.
-#[cfg(all(feature = "map-game", not(test)))]
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_getaliveobjectsarea(
+#[cfg(not(test))]
+pub unsafe fn sl_g_getaliveobjectsarea(
     bl_ptr: *mut c_void,
     bl_type: c_int,
     out_ptrs: *mut *mut c_void,
@@ -190,8 +184,7 @@ pub unsafe extern "C" fn sl_g_getaliveobjectsarea(
 ///
 /// # Safety
 /// Same as `sl_g_getobjectsarea`.
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_getobjectssamemap(
+pub unsafe fn sl_g_getobjectssamemap(
     bl_ptr: *mut c_void,
     bl_type: c_int,
     out_ptrs: *mut *mut c_void,
@@ -214,9 +207,8 @@ pub unsafe extern "C" fn sl_g_getobjectssamemap(
 ///
 /// # Safety
 /// Same as `sl_g_getobjectsarea`.
-#[cfg(all(feature = "map-game", not(test)))]
-#[no_mangle]
-pub unsafe extern "C" fn sl_g_getaliveobjectssamemap(
+#[cfg(not(test))]
+pub unsafe fn sl_g_getaliveobjectssamemap(
     bl_ptr: *mut c_void,
     bl_type: c_int,
     out_ptrs: *mut *mut c_void,

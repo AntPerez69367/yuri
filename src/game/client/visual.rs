@@ -20,10 +20,7 @@ use crate::session::{
 use crate::game::pc::MapSessionData;
 use crate::servers::char::charstatus::MAX_INVENTORY;
 
-// Re-declared per-module (Rust requires per-module extern declarations; this is not a duplicate of mod.rs).
-extern "C" {
-    fn encrypt(fd: c_int) -> c_int;
-}
+use crate::network::crypt::encrypt;
 
 // ─── Buffer write helpers ─────────────────────────────────────────────────────
 
@@ -80,8 +77,7 @@ unsafe fn ww_be(p: *mut u8, pos: usize, val: u16) {
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-#[no_mangle]
-pub unsafe extern "C" fn clif_getLevelTNL(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_getLevelTNL(sd: *mut MapSessionData) -> c_int {
     let sd = &*sd;
     let mut path = sd.status.class as c_int;
     let level = sd.status.level as c_int;
@@ -105,8 +101,7 @@ pub unsafe extern "C" fn clif_getLevelTNL(sd: *mut MapSessionData) -> c_int {
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-#[no_mangle]
-pub unsafe extern "C" fn clif_getXPBarPercent(sd: *mut MapSessionData) -> c_float {
+pub unsafe fn clif_getXPBarPercent(sd: *mut MapSessionData) -> c_float {
     let sd = &mut *sd;
 
     // C normalises path twice — the first assignment is overwritten immediately;
@@ -157,8 +152,7 @@ pub unsafe extern "C" fn clif_getXPBarPercent(sd: *mut MapSessionData) -> c_floa
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendupdatestatus(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendupdatestatus(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() {
         return 0;
     }
@@ -206,8 +200,7 @@ pub unsafe extern "C" fn clif_sendupdatestatus(sd: *mut MapSessionData) -> c_int
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendupdatestatus2(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendupdatestatus2(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() {
         return 0;
     }
@@ -258,8 +251,7 @@ pub unsafe extern "C" fn clif_sendupdatestatus2(sd: *mut MapSessionData) -> c_in
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendupdatestatus_onkill(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendupdatestatus_onkill(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() {
         return 0;
     }
@@ -316,8 +308,7 @@ pub unsafe extern "C" fn clif_sendupdatestatus_onkill(sd: *mut MapSessionData) -
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendupdatestatus_onequip(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendupdatestatus_onequip(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() {
         return 0;
     }
@@ -399,8 +390,7 @@ pub unsafe extern "C" fn clif_sendupdatestatus_onequip(sd: *mut MapSessionData) 
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendupdatestatus_onunequip(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendupdatestatus_onunequip(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() {
         return 0;
     }
@@ -481,8 +471,7 @@ pub unsafe extern "C" fn clif_sendupdatestatus_onunequip(sd: *mut MapSessionData
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-#[no_mangle]
-pub unsafe extern "C" fn clif_cancelafk(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_cancelafk(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() {
         return 0;
     }
@@ -501,8 +490,7 @@ pub unsafe extern "C" fn clif_cancelafk(sd: *mut MapSessionData) -> c_int {
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-#[no_mangle]
-pub unsafe extern "C" fn clif_destroyold(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_destroyold(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() {
         return 0;
     }
@@ -552,8 +540,7 @@ pub unsafe extern "C" fn clif_destroyold(sd: *mut MapSessionData) -> c_int {
 ///
 /// # Safety
 /// `_sd` is unused but present for ABI compatibility with C callers.
-#[no_mangle]
-pub unsafe extern "C" fn clif_mapmsgnum(_sd: *mut MapSessionData, id: c_int) -> c_int {
+pub unsafe fn clif_mapmsgnum(_sd: *mut MapSessionData, id: c_int) -> c_int {
     match id {
         3  => 13, // EQ_HELM=3     → MAP_EQHELM=13
         0  => 14, // EQ_WEAP=0     → MAP_EQWEAP=14
@@ -588,8 +575,7 @@ pub unsafe extern "C" fn clif_mapmsgnum(_sd: *mut MapSessionData, id: c_int) -> 
 /// # Safety
 /// - `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 /// - `buf` must be a valid, null-terminated C string.
-#[no_mangle]
-pub unsafe extern "C" fn clif_popup(sd: *mut MapSessionData, buf: *const c_char) -> c_int {
+pub unsafe fn clif_popup(sd: *mut MapSessionData, buf: *const c_char) -> c_int {
     if sd.is_null() {
         return 0;
     }
@@ -642,8 +628,7 @@ pub unsafe extern "C" fn clif_popup(sd: *mut MapSessionData, buf: *const c_char)
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendprofile(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendprofile(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() {
         return 0;
     }
@@ -692,8 +677,7 @@ pub unsafe extern "C" fn clif_sendprofile(sd: *mut MapSessionData) -> c_int {
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendboard(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendboard(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() {
         return 0;
     }
@@ -749,8 +733,7 @@ pub unsafe extern "C" fn clif_sendboard(sd: *mut MapSessionData) -> c_int {
 ///
 /// # Safety
 /// No pointer dereferences — this function is pure.
-#[no_mangle]
-pub unsafe extern "C" fn clif_getequiptype(val: c_int) -> c_int {
+pub unsafe fn clif_getequiptype(val: c_int) -> c_int {
     match val {
         0  => 1,  // EQ_WEAP=0      → type 1
         1  => 2,  // EQ_ARMOR=1     → type 2
@@ -777,8 +760,7 @@ pub unsafe extern "C" fn clif_getequiptype(val: c_int) -> c_int {
 ///
 /// # Safety
 /// `_sd` is unused; safe to call with any pointer (including null).
-#[no_mangle]
-pub unsafe extern "C" fn clif_getitemarea(
+pub unsafe fn clif_getitemarea(
     _sd: *mut crate::game::pc::MapSessionData,
 ) -> c_int {
     0
@@ -793,8 +775,7 @@ pub unsafe extern "C" fn clif_getitemarea(
 ///
 /// # Safety
 /// Pure math function — no pointer dereferences.
-#[no_mangle]
-pub unsafe extern "C" fn clif_getlvlxp(level: c_int) -> c_uint {
+pub unsafe fn clif_getlvlxp(level: c_int) -> c_uint {
     let xp = (level as f64 / 0.2_f64).powi(2);
     (xp + 0.5) as c_uint
 }
@@ -818,8 +799,7 @@ pub unsafe extern "C" fn clif_getlvlxp(level: c_int) -> c_uint {
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 /// `crate::database::map_db::map` must be initialised before calling this function.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendweather(
+pub unsafe fn clif_sendweather(
     sd: *mut crate::game::pc::MapSessionData,
 ) -> c_int {
     if sd.is_null() {
@@ -886,8 +866,7 @@ pub unsafe extern "C" fn clif_sendweather(
 /// # Safety
 /// Both `sd` and `tsd` must be valid, non-null pointers to initialised [`MapSessionData`].
 /// `crate::database::map_db::map` must be initialised before calling this function.
-#[no_mangle]
-pub unsafe extern "C" fn clif_show_ghost(
+pub unsafe fn clif_show_ghost(
     sd: *mut crate::game::pc::MapSessionData,
     tsd: *mut crate::game::pc::MapSessionData,
 ) -> c_int {
@@ -938,8 +917,7 @@ pub unsafe extern "C" fn clif_show_ghost(
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-#[no_mangle]
-pub unsafe extern "C" fn clif_user_list(
+pub unsafe fn clif_user_list(
     sd: *mut crate::game::pc::MapSessionData,
 ) -> c_int {
     if sd.is_null() {
@@ -952,7 +930,7 @@ pub unsafe extern "C" fn clif_user_list(
         return 0;
     }
 
-    let cfd = crate::game::map_server::char_fd;
+    let cfd = crate::game::map_server::char_fd.load(std::sync::atomic::Ordering::Relaxed);
     if cfd == 0 {
         return 0;
     }
@@ -981,8 +959,7 @@ pub unsafe extern "C" fn clif_user_list(
 /// # Safety
 /// `data` must be a valid pointer to at least `len` readable bytes, or null.
 /// If `data` is null or `len <= 0`, this function is a no-op.
-#[no_mangle]
-pub unsafe extern "C" fn clif_debug(data: *const u8, len: c_int) -> c_int {
+pub unsafe fn clif_debug(data: *const u8, len: c_int) -> c_int {
     if data.is_null() || len <= 0 {
         return 0;
     }
@@ -1009,8 +986,7 @@ pub unsafe extern "C" fn clif_debug(data: *const u8, len: c_int) -> c_int {
 /// # Safety
 /// - `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 /// - `url` must be a valid, null-terminated C string.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendurl(
+pub unsafe fn clif_sendurl(
     sd: *mut MapSessionData,
     ty: c_int,
     url: *const c_char,
@@ -1071,9 +1047,8 @@ pub unsafe extern "C" fn clif_sendurl(
 /// # Safety
 /// Safe to call with any fd value. No struct dereferences occur before `sd_ptr` is
 /// verified non-null. All pointer dereferences follow their respective null checks.
-#[no_mangle]
-pub unsafe extern "C" fn clif_timeout(fd: c_int) -> c_int {
-    if fd == crate::game::map_server::char_fd {
+pub unsafe fn clif_timeout(fd: c_int) -> c_int {
+    if fd == crate::game::map_server::char_fd.load(std::sync::atomic::Ordering::Relaxed) {
         return 0;
     }
     if fd <= 1 {
@@ -1128,8 +1103,7 @@ pub unsafe extern "C" fn clif_timeout(fd: c_int) -> c_int {
 /// # Safety
 /// - `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 /// - `buf` must be a valid, null-terminated C string.
-#[no_mangle]
-pub unsafe extern "C" fn clif_paperpopup(
+pub unsafe fn clif_paperpopup(
     sd: *mut MapSessionData,
     buf: *const c_char,
     width: c_int,
@@ -1187,8 +1161,7 @@ pub unsafe extern "C" fn clif_paperpopup(
 /// # Safety
 /// - `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 /// - `buf` must be a valid, null-terminated C string.
-#[no_mangle]
-pub unsafe extern "C" fn clif_paperpopupwrite(
+pub unsafe fn clif_paperpopupwrite(
     sd: *mut MapSessionData,
     buf: *const c_char,
     width: c_int,
@@ -1250,8 +1223,7 @@ pub unsafe extern "C" fn clif_paperpopupwrite(
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendtest(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendtest(sd: *mut MapSessionData) -> c_int {
     static mut SENDTEST_NUMBER: u8 = 0;
 
     if sd.is_null() {
@@ -1297,8 +1269,7 @@ pub unsafe extern "C" fn clif_sendtest(sd: *mut MapSessionData) -> c_int {
 ///
 /// # Safety
 /// No pointer dereferences — reads only the eof flag via `rust_session_get_eof`.
-#[no_mangle]
-pub unsafe extern "C" fn clif_print_disconnect(fd: c_int) -> c_int {
+pub unsafe fn clif_print_disconnect(fd: c_int) -> c_int {
     let eof = rust_session_get_eof(fd);
     if eof == 4 {
         return 0;
@@ -1347,8 +1318,7 @@ pub unsafe extern "C" fn clif_print_disconnect(fd: c_int) -> c_int {
 /// - `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 /// - The caller must have validated that `RFIFOREST(fd) >= 8 + copy_len` before calling,
 ///   matching the C original's requirement.
-#[no_mangle]
-pub unsafe extern "C" fn clif_paperpopupwrite_save(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_paperpopupwrite_save(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() {
         return 0;
     }
@@ -1412,8 +1382,7 @@ pub unsafe extern "C" fn clif_paperpopupwrite_save(sd: *mut MapSessionData) -> c
 /// - `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 /// - The caller must have validated that `RFIFOREST(fd) >= 5 + profilepic_size + 1 + profile_size`
 ///   before calling, matching the C original's requirement.
-#[no_mangle]
-pub unsafe extern "C" fn clif_changeprofile(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_changeprofile(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() {
         return 0;
     }
@@ -1474,8 +1443,7 @@ pub unsafe extern "C" fn clif_changeprofile(sd: *mut MapSessionData) -> c_int {
 ///
 /// # Safety
 /// Pure fd-based — no struct dereferences.
-#[no_mangle]
-pub unsafe extern "C" fn check_packet_size(fd: c_int, len: c_int) -> c_int {
+pub unsafe fn check_packet_size(fd: c_int, len: c_int) -> c_int {
     if len < 0 {
         return 0;
     }
@@ -1512,8 +1480,7 @@ pub unsafe extern "C" fn check_packet_size(fd: c_int, len: c_int) -> c_int {
 ///
 /// # Safety
 /// `mob` must be a valid, non-null pointer to an initialised [`MobSpawnData`].
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendmob_side(mob: *mut crate::game::mob::MobSpawnData) -> c_int {
+pub unsafe fn clif_sendmob_side(mob: *mut crate::game::mob::MobSpawnData) -> c_int {
     if mob.is_null() {
         return 0;
     }
@@ -1551,19 +1518,11 @@ use crate::game::block::{foreach_in_area, AreaType};
 // optFlag_ghosts = 256 (c_src/map_server.h line 34). optFlags is c_ulong (64-bit on Linux).
 const OPT_FLAG_GHOSTS: u64 = 256;
 
-extern "C" {
-    // Use link_name to avoid conflicting with other per-module extern declarations.
-    #[link_name = "clif_isingroup"]
-    fn clif_isingroup_us(sd: *mut MapSessionData, tsd: *mut MapSessionData) -> c_int;
-    #[link_name = "clif_charspecific"]
-    fn clif_charspecific_us(sender: c_int, id: c_int) -> c_int;
-    #[link_name = "rust_itemdb_look"]
-    fn itemdb_look_us(id: c_uint) -> c_int;
-    #[link_name = "rust_itemdb_lookcolor"]
-    fn itemdb_lookcolor_us(id: c_uint) -> c_int;
-    #[link_name = "rust_pc_isequip"]
-    fn pc_isequip_us(sd: *mut MapSessionData, slot: c_int) -> c_int;
-}
+// Direct Rust imports (with _us suffix aliases to avoid name conflicts)
+use crate::game::map_parse::groups::clif_isingroup as clif_isingroup_us;
+use crate::game::map_parse::movement::clif_charspecific as clif_charspecific_us;
+use crate::database::item_db::{rust_itemdb_look as itemdb_look_us, rust_itemdb_lookcolor as itemdb_lookcolor_us};
+use crate::game::pc::rust_pc_isequip as pc_isequip_us;
 
 /// Write the state packet for `sd` (the player being viewed) into `src_sd`'s
 /// (the viewer's) write buffer.
@@ -1953,12 +1912,11 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
 /// Broadcast `src`'s appearance state to all PCs in the area.
 ///
 /// Replaces `sl_pc_updatestate` / `clif_updatestate` from `c_src/sl_compat.c`
-/// (lines 450–460 and 648–960). Called from Lua via the `#[no_mangle]` export.
+/// (lines 450–460 and 648–960). Called from Lua via the `` export.
 ///
 /// # Safety
 /// `src` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-#[no_mangle]
-pub unsafe extern "C" fn broadcast_update_state(src: *mut MapSessionData) {
+pub unsafe fn broadcast_update_state(src: *mut MapSessionData) {
     if src.is_null() {
         return;
     }
@@ -1978,25 +1936,19 @@ use crate::database::map_db::BlockList;
 use crate::game::pc::{map_msg, FLAG_EXCHANGE, FLAG_GROUP};
 use crate::servers::char::charstatus::MAX_LEGENDS;
 
-extern "C" {
-    #[link_name = "map_id2sd"]
-    fn map_id2sd_cop(id: c_uint) -> *mut MapSessionData;
-    #[link_name = "rust_clandb_name"]
-    fn rust_clandb_name_cop(id: c_int) -> *const c_char;
-    #[link_name = "rust_classdb_name"]
-    fn rust_classdb_name_cop(id: c_int, rank: c_int) -> *mut c_char;
-    #[link_name = "rust_itemdb_name"]
-    fn rust_itemdb_name_cop(id: c_uint) -> *mut c_char;
-    #[link_name = "rust_itemdb_icon"]
-    fn rust_itemdb_icon_cop(id: c_uint) -> c_int;
-    #[link_name = "rust_itemdb_iconcolor"]
-    fn rust_itemdb_iconcolor_cop(id: c_uint) -> c_int;
-    #[link_name = "rust_itemdb_type"]
-    fn rust_itemdb_type_cop(id: c_uint) -> c_int;
-    #[link_name = "clif_isregistered"]
-    fn clif_isregistered_cop(id: c_uint) -> c_int;
-    #[link_name = "clif_getName"]
-    fn clif_getName_cop(id: c_uint) -> *mut c_char;
+// Direct Rust imports (with _cop suffix aliases to avoid name conflicts)
+use crate::database::clan_db::rust_clandb_name as rust_clandb_name_cop;
+use crate::database::class_db::rust_classdb_name as rust_classdb_name_cop;
+use crate::database::item_db::{
+    rust_itemdb_name as rust_itemdb_name_cop, rust_itemdb_icon as rust_itemdb_icon_cop,
+    rust_itemdb_iconcolor as rust_itemdb_iconcolor_cop, rust_itemdb_type as rust_itemdb_type_cop,
+};
+use crate::game::client::handlers::{clif_getName as clif_getName_cop, clif_isregistered as clif_isregistered_cop};
+
+// map_id2sd in map_server returns *mut c_void — wrap with cast.
+#[inline]
+unsafe fn map_id2sd_cop(id: c_uint) -> *mut MapSessionData {
+    crate::game::map_server::map_id2sd(id) as *mut MapSessionData
 }
 
 /// Replace first occurrence of `orig` in `src` with `rep`. Returns a pointer into
@@ -2045,8 +1997,7 @@ unsafe fn replace_str_rust(src: *const c_char, orig: &[u8], rep: *const c_char) 
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 /// `bl` must be a valid, non-null pointer to a [`BlockList`] that belongs to a
 /// [`MapSessionData`] (i.e. `bl_type == BL_PC`), retrievable via `map_id2sd`.
-#[no_mangle]
-pub unsafe extern "C" fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) -> c_int {
+pub unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) -> c_int {
     if sd.is_null() || bl.is_null() {
         return 0;
     }
@@ -2545,8 +2496,7 @@ pub unsafe extern "C" fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut Bl
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-#[no_mangle]
-pub unsafe extern "C" fn clif_showboards(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_showboards(sd: *mut MapSessionData) -> c_int {
     let sd_ref = &*sd;
     let fd = sd_ref.fd;
 

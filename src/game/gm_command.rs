@@ -2,7 +2,8 @@
 
 #![allow(non_snake_case, dead_code, unused_variables, unused_mut)]
 
-use std::ffi::{c_char, c_int, c_long, c_uint, c_ulong};
+use std::ffi::{c_char, c_int, c_uint, c_ulong};
+use std::sync::atomic::{AtomicI32, AtomicI8};
 use std::os::raw::c_void;
 
 use crate::database::map_db::BlockList;
@@ -10,11 +11,11 @@ use crate::game::mob::{MobSpawnData, BL_MOB, BL_PC, MOB_DEAD};
 use crate::game::pc::{MapSessionData, PC_DIE, SFLAG_FULLSTATS, SFLAG_HPMP};
 
 // Module globals (mirrors C file-scope vars)
-static mut SPELLGFX:     c_int = 0;
-static mut MUSICFX:      c_int = 0;
-static mut SOUNDFX:      c_int = 0;
-static mut DOWNTIMER:    c_int = 0;
-static mut COMMAND_CODE: c_char = b'/' as c_char;
+static SPELLGFX:     AtomicI32 = AtomicI32::new(0);
+static MUSICFX:      AtomicI32 = AtomicI32::new(0);
+static SOUNDFX:      AtomicI32 = AtomicI32::new(0);
+static DOWNTIMER:    AtomicI32 = AtomicI32::new(0);
+static COMMAND_CODE: AtomicI8  = AtomicI8::new(b'/' as i8);
 
 // Flag constants (from map_server.h enums) — imported from pc.rs where possible,
 // redefined here for local clarity.
@@ -33,126 +34,75 @@ const MAX_MAP_PER_SERVER: c_int = 65535;
 // MAX_KILLREG (from mmo.h)
 const MAX_KILLREG: usize = 5000;
 
-// External globals (from map_parse.c / core.c)
-extern "C" {
-    static fd_max:      c_int;
-    static mut xp_rate: c_int;
-    static mut d_rate:  c_int;
-    static map_n:           c_int;
-    static MOB_SPAWN_START:   c_uint;
-    static MOB_SPAWN_MAX:     c_uint;
-    static MOB_ONETIME_START: c_uint;
-    static MOB_ONETIME_MAX:   c_uint;
-}
+// All other formerly-C globals are now Rust statics accessible via direct paths.
+use crate::config_globals::{xp_rate, d_rate};
+use crate::database::map_db::map_n;
+use crate::game::mob::{MOB_SPAWN_START, MOB_SPAWN_MAX, MOB_ONETIME_START, MOB_ONETIME_MAX};
+use std::sync::atomic::Ordering;
 
-// char_fd, sql_handle, and userlist are now Rust #[no_mangle] statics in src/game/map_server.rs.
+// char_fd, sql_handle, and userlist are now Rust statics in src/game/map_server.rs.
 use crate::game::map_server::{char_fd, userlist};
 
 use crate::database::{blocking_run, get_pool};
 
 type LuaState = c_void; // opaque
 
-extern "C" {
-    fn printf(fmt: *const c_char, ...) -> c_int;
+// ── map functions ──────────────────────────────────────────────────────────────
+use crate::game::map_server::{map_name2sd, map_reload, map_reset_timer};
+use crate::game::block::{map_respawnmobs, foreach_in_area, AreaType};
 
-    // map
-    fn map_name2sd(name: *const c_char) -> *mut MapSessionData;
-    fn map_respawn(f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int, m: c_int, bl_type: c_int);
-    fn map_reload();
-    fn map_foreachinarea(
-        f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
-        m: c_int, x: c_int, y: c_int, range: c_int, bl_type: c_int, ...
-    ) -> c_int;
+// ── clif functions ─────────────────────────────────────────────────────────────
+use crate::game::map_parse::chat::{clif_sendminitext, clif_sendmsg, clif_broadcast, clif_playsound};
+use crate::game::map_parse::movement::clif_sendchararea;
+use crate::game::map_parse::player_state::{clif_getchararea, clif_sendstatus, clif_mystaytus, clif_refresh};
+use crate::game::client::visual::{broadcast_update_state, clif_sendweather, clif_sendurl};
+use crate::game::map_parse::combat::clif_sendanimation_inner;
+use crate::game::map_parse::visual::clif_lookgone;
+use crate::game::client::handlers::clif_transfer_test;
 
-    // clif
-    fn clif_sendminitext(sd: *mut MapSessionData, msg: *const c_char);
-    fn clif_sendmsg(sd: *mut MapSessionData, msg_type: c_int, msg: *const c_char);
-    fn clif_broadcast(msg: *const c_char, color: c_int);
-    fn clif_sendchararea(sd: *mut MapSessionData);
-    fn clif_getchararea(sd: *mut MapSessionData);
-    fn clif_sendstatus(sd: *mut MapSessionData, flags: c_int);
-    fn clif_mystaytus(sd: *mut MapSessionData);
-    fn broadcast_update_state(sd: *mut MapSessionData);
-    fn clif_sendanimation(bl: *mut BlockList, ...) -> c_int;
-    fn clif_lookgone(bl: *mut BlockList);
-    fn clif_playsound(bl: *mut BlockList, sound: c_int);
-    fn clif_refresh(sd: *mut MapSessionData);
-    fn clif_sendweather(sd: *mut MapSessionData);
-    fn clif_sendurl(sd: *mut MapSessionData, url_type: c_int, url: *const c_char);
-    fn clif_transfer_test(sd: *mut MapSessionData, a: c_int, b: c_int, c: c_int);
+// ── pc functions (rust_pc_* names) ────────────────────────────────────────────
+use crate::game::pc::{
+    rust_pc_warp as pc_warp,
+    rust_pc_additem as pc_additem,
+    rust_pc_delitem as pc_delitem,
+    rust_pc_res as pc_res,
+    rust_pc_loadmagic as pc_loadmagic,
+    rust_pc_readglobalreg as pc_readglobalreg,
+};
 
-    // pc — all ported to Rust (src/game/pc.rs), real symbols are rust_pc_*
-    #[link_name = "rust_pc_warp"]
-    fn pc_warp(sd: *mut MapSessionData, m: c_int, x: c_int, y: c_int) -> c_int;
-    #[link_name = "rust_pc_additem"]
-    fn pc_additem(sd: *mut MapSessionData, it: *mut c_void) -> c_int;
-    #[link_name = "rust_pc_delitem"]
-    fn pc_delitem(sd: *mut MapSessionData, idx: c_int, amount: c_int, flag: c_int) -> c_int;
-    #[link_name = "rust_pc_res"]
-    fn pc_res(sd: *mut MapSessionData) -> c_int;
-    #[link_name = "rust_pc_loadmagic"]
-    fn pc_loadmagic(sd: *mut MapSessionData) -> c_int;
-    #[link_name = "rust_pc_readglobalreg"]
-    fn pc_readglobalreg(sd: *mut MapSessionData, reg: *const c_char) -> c_int;
+// ── mob functions ──────────────────────────────────────────────────────────────
+use crate::game::mob::rust_mob_respawn as mob_respawn;
 
-    // mob — now Rust-implemented (rust_mob_respawn in libyuri.a)
-    #[link_name = "rust_mob_respawn"]
-    fn mob_respawn(mob: *mut c_void) -> c_int;
+// ── scripting functions ────────────────────────────────────────────────────────
+use crate::game::scripting::{
+    rust_sl_reload as sl_reload,
+    rust_sl_exec as sl_exec,
+    rust_sl_fixmem as sl_fixmem,
+    rust_sl_luasize as sl_luasize,
+};
 
-    // scripting — all ported to Rust (ffi/scripting.rs), real symbols are rust_sl_*
-    #[link_name = "rust_sl_reload"]
-    fn sl_reload() -> c_int;
-    #[link_name = "rust_sl_exec"]
-    fn sl_exec(sd: *mut c_void, line: *mut c_char);
-    #[link_name = "rust_sl_fixmem"]
-    fn sl_fixmem();
-    #[link_name = "rust_sl_luasize"]
-    fn sl_luasize(sd: *mut c_void) -> c_int;
+// ── database init functions ────────────────────────────────────────────────────
+use crate::database::item_db::{rust_itemdb_init as itemdb_read, rust_itemdb_id as itemdb_id, rust_itemdb_dura as itemdb_dura};
+use crate::database::magic_db::rust_magicdb_id as magicdb_id;
+use crate::database::board_db::{rust_boarddb_term as boarddb_term, rust_boarddb_init as boarddb_init};
+use crate::database::clan_db::rust_clandb_init as clandb_init;
+use crate::game::npc::{npc_init, warp_init};
+use crate::database::mob_db::{rust_mobdb_term, rust_mobdb_init};
+use crate::game::mob::rust_mobspawn_read as mobspawn_read;
 
-    // db reloads — Rust implementations under rust_* names
-    #[link_name = "rust_itemdb_init"]
-    fn itemdb_read() -> c_int;
-    #[link_name = "rust_itemdb_id"]
-    fn itemdb_id(name: *const c_char) -> c_uint;
-    #[link_name = "rust_itemdb_dura"]
-    fn itemdb_dura(id: c_uint) -> c_int;
-    #[link_name = "rust_magicdb_id"]
-    fn magicdb_id(name: *const c_char) -> c_int;
-    #[link_name = "rust_boarddb_term"]
-    fn boarddb_term();
-    #[link_name = "rust_boarddb_init"]
-    fn boarddb_init() -> c_int;
-    #[link_name = "rust_clandb_init"]
-    fn clandb_init() -> c_int;
-    fn npc_init();
-    fn warp_init();
-    fn rust_mobdb_term();
-    fn rust_mobdb_init();
-    // mobspawn_read is an inline in mob.h wrapping rust_mobspawn_read
-    #[link_name = "rust_mobspawn_read"]
-    fn mobspawn_read() -> c_int;
+// ── session helpers ────────────────────────────────────────────────────────────
+use crate::session::{
+    rust_session_exists, rust_session_get_data, rust_session_get_eof, rust_session_set_eof,
+};
 
-    // session helpers
-    fn rust_session_exists(fd: c_int) -> c_int;
-    fn rust_session_get_data(fd: c_int) -> *mut MapSessionData;
-    fn rust_session_get_eof(fd: c_int) -> c_int;
-    fn rust_session_set_eof(fd: c_int, val: c_int);
+// ── encrypt ────────────────────────────────────────────────────────────────────
+use crate::network::crypt::encrypt as encrypt_fd;
 
-    // encrypt (for command_debug raw packet) — C symbol is `encrypt` in net_crypt.c
-    #[link_name = "encrypt"]
-    fn encrypt_fd(fd: c_int) -> c_int;
+// ── timer ──────────────────────────────────────────────────────────────────────
+use crate::timer::{timer_insert, timer_remove};
 
-    // timer (for command_shutdown)
-    fn timer_insert(
-        delay: c_int, interval: c_int,
-        f: unsafe extern "C" fn(c_int, c_int) -> c_int,
-        id: c_uint, extra: c_int,
-    ) -> c_int;
-    fn timer_remove(tid: c_int);
-
-    // shutdown timer callback (from map_server.c)
-    fn map_reset_timer(v1: c_int, v2: c_int) -> c_int;
-}
+// ── libc printf (used for debug logging) ──────────────────────────────────────
+use libc::printf;
 
 /// Dispatch a Lua event with a single block_list argument.
 #[cfg(not(test))]
@@ -333,7 +283,7 @@ unsafe fn command_item(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaS
     it.dura = itemdb_dura(itemid);
     it.amount = itemnum as i32;
     it.owner = 0;
-    pc_additem(sd, &mut it as *mut Item as *mut c_void);
+    pc_additem(sd, &mut it);
     0
 }
 unsafe fn command_res(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
@@ -352,9 +302,9 @@ unsafe fn command_hair(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaS
 }
 unsafe fn command_checkdupes(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
-    for x in 1..fd_max {
+    for x in 1..crate::session::get_fd_max() {
         if rust_session_exists(x) != 0 {
-            let tsd = rust_session_get_data(x);
+            let tsd = rust_session_get_data(x) as *mut MapSessionData;
             if !tsd.is_null() && rust_session_get_eof(x) == 0 {
                 let n = pc_readglobalreg(tsd, b"goldbardupe\0".as_ptr() as *const c_char);
                 if n != 0 {
@@ -371,9 +321,9 @@ unsafe fn command_checkdupes(sd: *mut MapSessionData, _line: *mut c_char, _s: *m
 }
 unsafe fn command_checkwpe(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
-    for x in 1..fd_max {
+    for x in 1..crate::session::get_fd_max() {
         if rust_session_exists(x) != 0 {
-            let tsd = rust_session_get_data(x);
+            let tsd = rust_session_get_data(x) as *mut MapSessionData;
             if !tsd.is_null() && rust_session_get_eof(x) == 0 {
                 let n = pc_readglobalreg(tsd, b"WPEtimes\0".as_ptr() as *const c_char);
                 if n != 0 {
@@ -401,9 +351,9 @@ unsafe fn command_kill(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaS
 }
 unsafe fn command_killall(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
-    for x in 1..fd_max {
+    for x in 1..crate::session::get_fd_max() {
         if rust_session_exists(x) != 0 {
-            let tsd = rust_session_get_data(x);
+            let tsd = rust_session_get_data(x) as *mut MapSessionData;
             if !tsd.is_null() && rust_session_get_eof(x) == 0 && (*tsd).status.gm_level == 0 {
                 rust_session_set_eof(x, 1);
             }
@@ -465,17 +415,24 @@ unsafe fn command_drate(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lua
 unsafe fn command_spell(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
     if let Some((spell, sound)) = parse_two_ints(line) {
-        SPELLGFX = spell;
-        SOUNDFX = sound;
+        SPELLGFX.store(spell, Ordering::Relaxed);
+        SOUNDFX.store(sound, Ordering::Relaxed);
         clif_playsound(&mut (*sd).bl, sound);
     }
-    map_foreachinarea(clif_sendanimation, (*sd).bl.m as c_int, (*sd).bl.x as c_int,
-                      (*sd).bl.y as c_int, AREA, BL_PC, SPELLGFX, &mut (*sd).bl, SOUNDFX);
+    let sd_bl = &mut (*sd).bl as *mut BlockList;
+    let anim = SPELLGFX.load(Ordering::Relaxed);
+    let times = SOUNDFX.load(Ordering::Relaxed);
+    foreach_in_area(
+        (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
+        AreaType::Area, BL_PC,
+        |target_bl| clif_sendanimation_inner(target_bl, anim, sd_bl, times),
+    );
     0
 }
 unsafe fn command_val(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
-    let count = (MOB_SPAWN_MAX - MOB_SPAWN_START) + (MOB_ONETIME_MAX - MOB_ONETIME_START);
+    let count = (MOB_SPAWN_MAX.load(Ordering::Relaxed) - MOB_SPAWN_START.load(Ordering::Relaxed))
+              + (MOB_ONETIME_MAX.load(Ordering::Relaxed) - MOB_ONETIME_START.load(Ordering::Relaxed));
     let mut buf = [0i8; 255];
     let msg = format!("Mob spawn count: {}\0", count);
     for (i, b) in msg.bytes().take(254).enumerate() { buf[i] = b as i8; }
@@ -651,18 +608,16 @@ unsafe fn command_luafix(_sd: *mut MapSessionData, _line: *mut c_char, _s: *mut 
     sl_fixmem();
     0
 }
-// FFI-compatible callback for map_respawn: respawn dead non-onetime mobs.
-unsafe extern "C" fn command_handle_mob_ffi(bl: *mut BlockList, _ap: ...) -> c_int {
-    if bl.is_null() { return 0; }
-    let mob = bl as *mut MobSpawnData;
-    if (*mob).state == MOB_DEAD && (*mob).onetime == 0 {
-        mob_respawn(mob as *mut c_void);
-    }
-    0
-}
 unsafe fn command_respawn(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
-    map_respawn(command_handle_mob_ffi, (*sd).bl.m as c_int, BL_MOB);
+    map_respawnmobs(|bl| {
+        if bl.is_null() { return 0; }
+        let mob = bl as *mut MobSpawnData;
+        if (*mob).state == MOB_DEAD && (*mob).onetime == 0 {
+            mob_respawn(mob);
+        }
+        0
+    }, (*sd).bl.m as i32, BL_MOB);
     0
 }
 unsafe fn command_ban(_sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
@@ -774,12 +729,13 @@ unsafe fn command_silence(sd: *mut MapSessionData, line: *mut c_char, _s: *mut L
     0
 }
 unsafe fn command_shutdowncancel(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
-    if DOWNTIMER != 0 {
+    let dt = DOWNTIMER.load(Ordering::Relaxed);
+    if dt != 0 {
         clif_broadcast(b"---------------------------------------------------\0".as_ptr() as *const c_char, -1);
         clif_broadcast(b"Server shutdown cancelled.\0".as_ptr() as *const c_char, -1);
         clif_broadcast(b"---------------------------------------------------\0".as_ptr() as *const c_char, -1);
-        timer_remove(DOWNTIMER);
-        DOWNTIMER = 0;
+        timer_remove(dt);
+        DOWNTIMER.store(0, Ordering::Relaxed);
     } else if !sd.is_null() {
         clif_sendminitext(sd, b"Server is not shutting down.\0".as_ptr() as *const c_char);
     }
@@ -787,7 +743,7 @@ unsafe fn command_shutdowncancel(sd: *mut MapSessionData, _line: *mut c_char, _s
 }
 unsafe fn command_shutdown(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() || line.is_null() { return 0; }
-    if DOWNTIMER != 0 {
+    if DOWNTIMER.load(Ordering::Relaxed) != 0 {
         clif_sendminitext(sd, b"Server is already shutting down.\0".as_ptr() as *const c_char);
         return 0;
     }
@@ -821,7 +777,7 @@ unsafe fn command_shutdown(sd: *mut MapSessionData, line: *mut c_char, _s: *mut 
     clif_broadcast(b"---------------------------------------------------\0".as_ptr() as *const c_char, -1);
     clif_broadcast(msg_buf.as_ptr(), -1);
     clif_broadcast(b"---------------------------------------------------\0".as_ptr() as *const c_char, -1);
-    DOWNTIMER = timer_insert(250, 250, map_reset_timer, t_time as c_uint, 250);
+    DOWNTIMER.store(timer_insert(250, 250, Some(map_reset_timer), t_time as c_int, 250), Ordering::Relaxed);
     0
 }
 unsafe fn command_weap(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
@@ -915,7 +871,7 @@ unsafe fn command_weather(sd: *mut MapSessionData, line: *mut c_char, _s: *mut L
     let weather = parse_int(line).unwrap_or(5);
     let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
     if !mp.is_null() { (*mp).weather = weather as u8; }
-    for x in 1..fd_max {
+    for x in 1..crate::session::get_fd_max() {
         if rust_session_exists(x) != 0 {
             let tmpsd = rust_session_get_data(x) as *mut MapSessionData;
             if !tmpsd.is_null() && rust_session_get_eof(x) == 0 && (*tmpsd).bl.m == (*sd).bl.m {
@@ -930,7 +886,7 @@ unsafe fn command_light(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lua
     let light = parse_int(line).unwrap_or(232);
     let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
     if !mp.is_null() { (*mp).light = light as u8; }
-    for x in 0..fd_max {
+    for x in 0..crate::session::get_fd_max() {
         if rust_session_exists(x) != 0 {
             let tmpsd = rust_session_get_data(x) as *mut MapSessionData;
             if !tmpsd.is_null() && rust_session_get_eof(x) == 0 && (*tmpsd).bl.m == (*sd).bl.m {
@@ -948,9 +904,9 @@ unsafe fn command_gm(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaSta
     let mut buf = [0i8; 65535];
     let msg = format!("<GM>{}: {}\0", name_str, line_str);
     for (i, b) in msg.bytes().take(65534).enumerate() { buf[i] = b as i8; }
-    for x in 1..fd_max {
+    for x in 1..crate::session::get_fd_max() {
         if rust_session_exists(x) != 0 {
-            let tsd = rust_session_get_data(x);
+            let tsd = rust_session_get_data(x) as *mut MapSessionData;
             if !tsd.is_null() && rust_session_get_eof(x) == 0 && (*tsd).status.gm_level != 0 {
                 clif_sendmsg(tsd, 11, buf.as_ptr());
             }
@@ -966,9 +922,9 @@ unsafe fn command_report(sd: *mut MapSessionData, line: *mut c_char, _s: *mut Lu
     let mut buf = [0i8; 65535];
     let msg = format!("<REPORT>{}: {}\0", name_str, line_str);
     for (i, b) in msg.bytes().take(65534).enumerate() { buf[i] = b as i8; }
-    for x in 1..fd_max {
+    for x in 1..crate::session::get_fd_max() {
         if rust_session_exists(x) != 0 {
-            let tsd = rust_session_get_data(x);
+            let tsd = rust_session_get_data(x) as *mut MapSessionData;
             if !tsd.is_null() && rust_session_get_eof(x) == 0 && (*tsd).status.gm_level > 0 {
                 clif_sendmsg(tsd, 12, buf.as_ptr());
             }
@@ -1050,36 +1006,36 @@ unsafe fn command_job(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaSt
 }
 unsafe fn command_music(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
-    if let Some(music) = parse_int(line) { MUSICFX = music; }
+    if let Some(music) = parse_int(line) { MUSICFX.store(music, Ordering::Relaxed); }
     let oldm = (*sd).bl.m as c_int;
     let oldx = (*sd).bl.x as c_int;
     let oldy = (*sd).bl.y as c_int;
     let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
-    if !mp.is_null() { (*mp).bgm = MUSICFX as u16; }
+    if !mp.is_null() { (*mp).bgm = MUSICFX.load(Ordering::Relaxed) as u16; }
     pc_warp(sd, 10002, 0, 0);
     pc_warp(sd, oldm, oldx, oldy);
     0
 }
 unsafe fn command_musicn(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
-    MUSICFX += 1;
+    MUSICFX.fetch_add(1, Ordering::Relaxed);
     let oldm = (*sd).bl.m as c_int;
     let oldx = (*sd).bl.x as c_int;
     let oldy = (*sd).bl.y as c_int;
     let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
-    if !mp.is_null() { (*mp).bgm = MUSICFX as u16; }
+    if !mp.is_null() { (*mp).bgm = MUSICFX.load(Ordering::Relaxed) as u16; }
     pc_warp(sd, 10002, 0, 0);
     pc_warp(sd, oldm, oldx, oldy);
     0
 }
 unsafe fn command_musicp(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
-    MUSICFX -= 1;
+    MUSICFX.fetch_sub(1, Ordering::Relaxed);
     let oldm = (*sd).bl.m as c_int;
     let oldx = (*sd).bl.x as c_int;
     let oldy = (*sd).bl.y as c_int;
     let mp = crate::database::map_db::get_map_ptr((*sd).bl.m);
-    if !mp.is_null() { (*mp).bgm = MUSICFX as u16; }
+    if !mp.is_null() { (*mp).bgm = MUSICFX.load(Ordering::Relaxed) as u16; }
     pc_warp(sd, 10002, 0, 0);
     pc_warp(sd, oldm, oldx, oldy);
     0
@@ -1087,59 +1043,71 @@ unsafe fn command_musicp(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut L
 unsafe fn command_musicq(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
     let mut buf = [0i8; 25];
-    let msg = format!("Current music is: {}\0", MUSICFX);
+    let msg = format!("Current music is: {}\0", MUSICFX.load(Ordering::Relaxed));
     for (i, b) in msg.bytes().take(24).enumerate() { buf[i] = b as i8; }
     clif_sendminitext(sd, buf.as_ptr());
     0
 }
 unsafe fn command_sound(sd: *mut MapSessionData, line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
-    if let Some(sound) = parse_int(line) { SOUNDFX = sound; }
-    clif_playsound(&mut (*sd).bl, SOUNDFX);
+    if let Some(sound) = parse_int(line) { SOUNDFX.store(sound, Ordering::Relaxed); }
+    clif_playsound(&mut (*sd).bl, SOUNDFX.load(Ordering::Relaxed));
     0
 }
 unsafe fn command_nsound(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
-    SOUNDFX += 1;
-    if SOUNDFX > 125 { SOUNDFX = 125; }
-    clif_playsound(&mut (*sd).bl, SOUNDFX);
+    let s = (SOUNDFX.fetch_add(1, Ordering::Relaxed) + 1).min(125);
+    SOUNDFX.store(s, Ordering::Relaxed);
+    clif_playsound(&mut (*sd).bl, s);
     0
 }
 unsafe fn command_psound(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
-    SOUNDFX -= 1;
-    if SOUNDFX < 0 { SOUNDFX = 0; }
-    clif_playsound(&mut (*sd).bl, SOUNDFX);
+    let s = (SOUNDFX.fetch_sub(1, Ordering::Relaxed) - 1).max(0);
+    SOUNDFX.store(s, Ordering::Relaxed);
+    clif_playsound(&mut (*sd).bl, s);
     0
 }
 unsafe fn command_soundq(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
     let mut buf = [0i8; 25];
-    let msg = format!("Current sound is: {}\0", SOUNDFX);
+    let msg = format!("Current sound is: {}\0", SOUNDFX.load(Ordering::Relaxed));
     for (i, b) in msg.bytes().take(24).enumerate() { buf[i] = b as i8; }
     clif_sendminitext(sd, buf.as_ptr());
     0
 }
 unsafe fn command_nspell(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
-    SPELLGFX += 1;
-    if SPELLGFX > 427 { SPELLGFX = 427; }
-    map_foreachinarea(clif_sendanimation, (*sd).bl.m as c_int, (*sd).bl.x as c_int,
-                      (*sd).bl.y as c_int, AREA, BL_PC, SPELLGFX, &mut (*sd).bl, SOUNDFX);
+    let g = (SPELLGFX.fetch_add(1, Ordering::Relaxed) + 1).min(427);
+    SPELLGFX.store(g, Ordering::Relaxed);
+    let sd_bl = &mut (*sd).bl as *mut BlockList;
+    let anim = g;
+    let times = SOUNDFX.load(Ordering::Relaxed);
+    foreach_in_area(
+        (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
+        AreaType::Area, BL_PC,
+        |target_bl| clif_sendanimation_inner(target_bl, anim, sd_bl, times),
+    );
     0
 }
 unsafe fn command_pspell(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
-    SPELLGFX -= 1;
-    if SPELLGFX < 0 { SPELLGFX = 0; }
-    map_foreachinarea(clif_sendanimation, (*sd).bl.m as c_int, (*sd).bl.x as c_int,
-                      (*sd).bl.y as c_int, AREA, BL_PC, SPELLGFX, &mut (*sd).bl, SOUNDFX);
+    let g = (SPELLGFX.fetch_sub(1, Ordering::Relaxed) - 1).max(0);
+    SPELLGFX.store(g, Ordering::Relaxed);
+    let sd_bl = &mut (*sd).bl as *mut BlockList;
+    let anim = g;
+    let times = SOUNDFX.load(Ordering::Relaxed);
+    foreach_in_area(
+        (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
+        AreaType::Area, BL_PC,
+        |target_bl| clif_sendanimation_inner(target_bl, anim, sd_bl, times),
+    );
     0
 }
 unsafe fn command_spellq(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     if sd.is_null() { return 0; }
     let mut buf = [0i8; 25];
-    let msg = format!("Current Spell is: {}\0", SPELLGFX);
+    let msg = format!("Current Spell is: {}\0", SPELLGFX.load(Ordering::Relaxed));
     for (i, b) in msg.bytes().take(24).enumerate() { buf[i] = b as i8; }
     clif_sendminitext(sd, buf.as_ptr());
     0
@@ -1165,23 +1133,25 @@ unsafe fn command_reloadnpc(sd: *mut MapSessionData, _line: *mut c_char, _s: *mu
 }
 unsafe fn command_reloadmaps(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut LuaState) -> c_int {
     map_reload();
-    if char_fd > 0 && rust_session_exists(char_fd) != 0 {
+    let cfd = char_fd.load(Ordering::Relaxed);
+    if cfd > 0 && rust_session_exists(cfd) != 0 {
         use crate::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
-        let pkt_len = (map_n * 2 + 8) as usize;
-        rust_session_wfifohead(char_fd, pkt_len);
-        (rust_session_wdata_ptr(char_fd, 0) as *mut u16).write_unaligned(0x3001u16.to_le());
-        (rust_session_wdata_ptr(char_fd, 2) as *mut u32).write_unaligned(pkt_len as u32);
-        (rust_session_wdata_ptr(char_fd, 6) as *mut u16).write_unaligned(map_n as u16);
+        let map_n_val = map_n.load(Ordering::Relaxed);
+        let pkt_len = (map_n_val * 2 + 8) as usize;
+        rust_session_wfifohead(cfd, pkt_len);
+        (rust_session_wdata_ptr(cfd, 0) as *mut u16).write_unaligned(0x3001u16.to_le());
+        (rust_session_wdata_ptr(cfd, 2) as *mut u32).write_unaligned(pkt_len as u32);
+        (rust_session_wdata_ptr(cfd, 6) as *mut u16).write_unaligned(map_n_val as u16);
         let mut j: usize = 0;
         for i in 0..MAX_MAP_PER_SERVER {
             let mp = crate::database::map_db::get_map_ptr(i as u16);
             if !mp.is_null() && !(*mp).tile.is_null() {
-                (rust_session_wdata_ptr(char_fd, j * 2 + 8) as *mut u16).write_unaligned(i as u16);
+                (rust_session_wdata_ptr(cfd, j * 2 + 8) as *mut u16).write_unaligned(i as u16);
                 j += 1;
             }
-            if j >= map_n as usize { break; }
+            if j >= map_n_val as usize { break; }
         }
-        rust_session_commit(char_fd, pkt_len);
+        rust_session_commit(cfd, pkt_len);
     }
     if sd.is_null() { return 0; }
     clif_sendminitext(sd, b"Maps reloaded!\0".as_ptr() as *const c_char);
@@ -1213,8 +1183,7 @@ unsafe fn command_transfer(sd: *mut MapSessionData, _line: *mut c_char, _s: *mut
 
 // ─── rust_command_reload: exported entry point for full mini-reset ────────────
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_command_reload(
+pub unsafe fn rust_command_reload(
     sd: *mut MapSessionData, line: *mut c_char, state: *mut LuaState,
 ) -> c_int {
     let errors = command_luareload(sd, line, state);
@@ -1269,7 +1238,7 @@ unsafe fn parse_str32(line: *mut c_char) -> Option<[c_char; 32]> {
 // ─── Command dispatcher ───────────────────────────────────────────────────────
 
 unsafe fn dispatch(sd: *mut MapSessionData, p: *const c_char, len: c_int, log: bool) -> c_int {
-    if *p != COMMAND_CODE { return 0; }
+    if *p != COMMAND_CODE.load(Ordering::Relaxed) { return 0; }
     let p = p.add(1);
 
     let mut cmd_line = [0u8; 257];
@@ -1312,12 +1281,10 @@ unsafe fn dispatch(sd: *mut MapSessionData, p: *const c_char, len: c_int, log: b
     1 // command matched and executed — caller checks bool, not handler result
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_is_command(sd: *mut MapSessionData, p: *const c_char, len: c_int) -> c_int {
+pub unsafe fn rust_is_command(sd: *mut MapSessionData, p: *const c_char, len: c_int) -> c_int {
     dispatch(sd, p, len, true)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_at_command(sd: *mut MapSessionData, p: *const c_char, len: c_int) -> c_int {
+pub unsafe fn rust_at_command(sd: *mut MapSessionData, p: *const c_char, len: c_int) -> c_int {
     dispatch(sd, p, len, false)
 }

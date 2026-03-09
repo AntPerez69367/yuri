@@ -1,7 +1,6 @@
 pub mod char;
 pub mod packet;
 
-use std::sync::Arc;
 use tokio::sync::Mutex;
 use sqlx::MySqlPool;
 use crate::config::ServerConfig;

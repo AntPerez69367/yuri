@@ -29,10 +29,6 @@ const BL_PC:  c_int = 0x01;
 // enum { LOOK_GET, LOOK_SEND } from map_parse.h
 const LOOK_GET: c_int = 0;
 
-// enum { ..., SAMEAREA = 6, AREA = 4, ... } from map_parse.h
-const SAMEAREA: c_int = 6;
-const AREA: c_int     = 4;
-
 // optFlag_walkthrough = 128 (from map_server.h)
 const OPT_WALKTHROUGH: c_ulong = 128;
 
@@ -42,44 +38,19 @@ const OPT_WALKTHROUGH: c_ulong = 128;
 
 use crate::game::map_server::map_fd;
 
-extern "C" {
-    fn rust_session_set_eof(fd: c_int, val: c_int);
-    fn rust_session_set_data(fd: c_int, data: *mut c_void);
+// Direct Rust imports replacing extern "C" declarations.
+use crate::session::{rust_session_set_eof, rust_session_set_data};
+use crate::network::crypt::rust_crypt_populate_table;
+use crate::game::pc::{
+    rust_pc_setpos, rust_pc_loadmagic, rust_pc_starttimer, rust_pc_requestmp,
+    rust_pc_loaditem, rust_pc_loadequip, rust_pc_magic_startup,
+    rust_pc_calcstat, rust_pc_checklevel,
+};
+use crate::game::map_parse::visual::{clif_spawn, clif_mob_look_start, clif_mob_look_close};
+use crate::game::client::visual::broadcast_update_state;
 
-    // net_crypt.h: `static inline char *populate_table(const char*, char*, int)`
-    // forwards to this symbol.
-    fn rust_crypt_populate_table(name: *const c_char, table: *mut i8, len: c_int) -> *mut i8;
-
-    // PC game functions — remain in C until pc.c is further ported.
-    fn rust_pc_setpos(sd: *mut MapSessionData, m: c_int, x: c_int, y: c_int) -> c_int;
-    fn rust_pc_loadmagic(sd: *mut MapSessionData) -> c_int;
-    fn rust_pc_starttimer(sd: *mut MapSessionData) -> c_int;
-    fn rust_pc_requestmp(sd: *mut MapSessionData) -> c_int;
-
-    // clif_spawn — still in C (map_parse.c): calls map_addblock + clif_sendchararea.
-    fn clif_spawn(sd: *mut MapSessionData) -> c_int;
-
-    fn clif_mob_look_start(sd: *mut MapSessionData) -> c_int;
-    fn clif_mob_look_close(sd: *mut MapSessionData) -> c_int;
-
-    // map_foreachinarea(fn*, m, x, y, range, bl_type, ...)
-    fn map_foreachinarea(
-        f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
-        m: c_int, x: c_int, y: c_int, range: c_int, bl_type: c_int,
-        ...
-    ) -> c_int;
-
-    // Callbacks passed to map_foreachinarea — remain in C (map_parse.c).
-    fn clif_object_look_sub(bl: *mut BlockList, ...) -> c_int;
-    fn broadcast_update_state(sd: *mut MapSessionData);
-
-    fn rust_pc_loaditem(sd: *mut MapSessionData) -> c_int;
-    fn rust_pc_loadequip(sd: *mut MapSessionData) -> c_int;
-    fn rust_pc_magic_startup(sd: *mut MapSessionData) -> c_int;
-
-    fn rust_pc_calcstat(sd: *mut MapSessionData) -> c_int;
-    fn rust_pc_checklevel(sd: *mut MapSessionData) -> c_int;
-}
+use crate::game::block::{foreach_in_area, AreaType};
+use crate::game::map_parse::visual::clif_object_look_sub_inner;
 
 // ---------------------------------------------------------------------------
 // intif_mmo_tosd
@@ -89,10 +60,9 @@ extern "C" {
 /// map-server session and fires the full player-login sequence.
 ///
 /// Replaces `intif_mmo_tosd` in `c_src/map_char.c`.
-#[no_mangle]
-pub unsafe extern "C" fn intif_mmo_tosd(fd: c_int, p: *const MmoCharStatus) -> c_int {
+pub unsafe fn intif_mmo_tosd(fd: c_int, p: *const MmoCharStatus) -> c_int {
     // Ignore packets arriving on the inter-server socket itself.
-    if fd == map_fd {
+    if fd == map_fd.load(std::sync::atomic::Ordering::Relaxed) {
         return 0;
     }
 
@@ -225,15 +195,13 @@ pub unsafe extern "C" fn intif_mmo_tosd(fd: c_int, p: *const MmoCharStatus) -> c
     // Broadcast visible entities to the new player.
     tracing::info!("[map] [login] fd={} step=mob_look_start", fd);
     clif_mob_look_start(sd);
-    map_foreachinarea(
-        clif_object_look_sub,
-        (*sd).bl.m as c_int,
-        (*sd).bl.x as c_int,
-        (*sd).bl.y as c_int,
-        SAMEAREA,
+    foreach_in_area(
+        (*sd).bl.m as i32,
+        (*sd).bl.x as i32,
+        (*sd).bl.y as i32,
+        AreaType::SameArea,
         BL_ALL,
-        LOOK_GET,
-        sd,
+        |bl| clif_object_look_sub_inner(bl, LOOK_GET, sd as *mut BlockList),
     );
     clif_mob_look_close(sd);
 
@@ -278,21 +246,16 @@ use crate::servers::map::{MapState, packet};
 
 static MAP_STATE: OnceLock<Arc<MapState>> = OnceLock::new();
 
-static MMO_TOSD_FN: OnceLock<unsafe extern "C" fn(i32, *mut u8) -> i32> = OnceLock::new();
-
-/// Called by map_server.rs main() to register the intif_mmo_tosd C function.
-pub fn set_mmo_tosd_fn(f: unsafe extern "C" fn(i32, *mut u8) -> i32) {
-    let _ = MMO_TOSD_FN.set(f);
-}
-
-/// Call C intif_mmo_tosd with a raw mmo_charstatus buffer.
+/// Call intif_mmo_tosd with a raw mmo_charstatus buffer.
+/// The buffer is reinterpreted as *const MmoCharStatus (same ABI, same layout).
 pub fn call_intif_mmo_tosd(fd: i32, raw: &mut Vec<u8>) -> i32 {
-    if let Some(f) = MMO_TOSD_FN.get() {
-        unsafe { f(fd, raw.as_mut_ptr()) }
-    } else {
-        0
-    }
+    let p = raw.as_ptr() as *const crate::servers::char::charstatus::MmoCharStatus;
+    unsafe { intif_mmo_tosd(fd, p) }
 }
+
+/// Kept for binary compatibility: called by map_server.rs main(), now a no-op
+/// since intif_mmo_tosd is called directly.
+pub fn set_mmo_tosd_fn(_f: unsafe fn(i32, *mut u8) -> i32) {}
 
 /// Called by map_server.rs main() after MapState is constructed.
 pub fn set_map_state(state: Arc<MapState>) {
@@ -309,8 +272,7 @@ fn send(data: Vec<u8>) {
 }
 
 /// 0x3003 — Request char data (map→char, 24 bytes).
-#[no_mangle]
-pub unsafe extern "C" fn rust_intif_load(fd: i32, char_id: u32, name: *const c_char) {
+pub unsafe fn rust_intif_load(fd: i32, char_id: u32, name: *const c_char) {
     if name.is_null() { return; }
     let nb = std::ffi::CStr::from_ptr(name).to_bytes();
     let mut pkt = vec![0u8; 24];
@@ -322,8 +284,7 @@ pub unsafe extern "C" fn rust_intif_load(fd: i32, char_id: u32, name: *const c_c
 }
 
 /// 0x3005 — Logout notification (map→char, 6 bytes).
-#[no_mangle]
-pub unsafe extern "C" fn rust_intif_quit(char_id: u32) {
+pub unsafe fn rust_intif_quit(char_id: u32) {
     let mut pkt = vec![0u8; 6];
     pkt[0] = 0x05; pkt[1] = 0x30;
     pkt[2..6].copy_from_slice(&char_id.to_le_bytes());
@@ -331,23 +292,20 @@ pub unsafe extern "C" fn rust_intif_quit(char_id: u32) {
 }
 
 /// 0x3004 — Save char (map→char, variable).
-#[no_mangle]
-pub unsafe extern "C" fn rust_intif_save(data: *const u8, len: u32) {
+pub unsafe fn rust_intif_save(data: *const u8, len: u32) {
     if data.is_null() || len < 6 { return; }
     let pkt = std::slice::from_raw_parts(data, len as usize).to_vec();
     send(pkt);
 }
 
 /// 0x3007 — Save-and-quit (map→char, variable).
-#[no_mangle]
-pub unsafe extern "C" fn rust_intif_savequit(data: *const u8, len: u32) {
+pub unsafe fn rust_intif_savequit(data: *const u8, len: u32) {
     if data.is_null() || len < 6 { return; }
     let pkt = std::slice::from_raw_parts(data, len as usize).to_vec();
     send(pkt);
 }
 
-#[cfg(feature = "map-game")]
-mod intif_save_impl {
+pub mod intif_save_impl {
     use super::*;
     use flate2::Compression;
     use flate2::write::ZlibEncoder;
@@ -372,8 +330,7 @@ mod intif_save_impl {
         Some(pkt)
     }
 
-    #[no_mangle]
-    pub unsafe extern "C" fn rust_sl_intif_save(sd: *mut std::ffi::c_void) -> c_int {
+    pub unsafe fn rust_sl_intif_save(sd: *mut std::ffi::c_void) -> c_int {
         let sd = sd as *mut MapSessionData;
         if sd.is_null() { return -1; }
         (*sd).status.last_pos.m = (*sd).bl.m;
@@ -387,8 +344,7 @@ mod intif_save_impl {
         }
     }
 
-    #[no_mangle]
-    pub unsafe extern "C" fn rust_sl_intif_savequit(sd: *mut std::ffi::c_void) -> c_int {
+    pub unsafe fn rust_sl_intif_savequit(sd: *mut std::ffi::c_void) -> c_int {
         let sd = sd as *mut MapSessionData;
         if sd.is_null() { return -1; }
         if !map_is_loaded((*sd).status.dest_pos.m as i32) {

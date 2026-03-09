@@ -205,26 +205,23 @@ pub fn icon(id: i32) -> c_int {
 // ─── FFI bridge (moved from src/ffi/class_db.rs) ──────────────────────────
 
 /// Exposed for C code that declares `extern struct class_data* cdata[20]`.
-#[no_mangle]
+// SAFETY: Array of raw pointers populated once in rust_classdb_init, read-only thereafter.
+// Single-threaded game loop — no concurrent access.
 pub static mut cdata: [*mut ClassData; 20] = [null_mut(); 20];
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_classdb_init(data_dir: *const c_char) -> c_int {
+pub unsafe fn rust_classdb_init(data_dir: *const c_char) -> c_int {
     ffi_catch!(-1, unsafe { init(data_dir) })
 }
 
-#[no_mangle]
-pub extern "C" fn rust_classdb_term() {
+pub fn rust_classdb_term() {
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(term));
 }
 
-#[no_mangle]
-pub extern "C" fn rust_classdb_search(id: c_int) -> *mut ClassData {
+pub fn rust_classdb_search(id: c_int) -> *mut ClassData {
     ffi_catch!(null_mut(), Arc::into_raw(search(id)) as *mut ClassData)
 }
 
-#[no_mangle]
-pub extern "C" fn rust_classdb_searchexist(id: c_int) -> *mut ClassData {
+pub fn rust_classdb_searchexist(id: c_int) -> *mut ClassData {
     ffi_catch!(null_mut(), match searchexist(id) {
         Some(arc) => Arc::into_raw(arc) as *mut ClassData,
         None => null_mut(),
@@ -233,8 +230,7 @@ pub extern "C" fn rust_classdb_searchexist(id: c_int) -> *mut ClassData {
 
 /// Decrements the Arc reference count for a pointer returned by
 /// rust_classdb_search or rust_classdb_searchexist.
-#[no_mangle]
-pub extern "C" fn rust_classdb_free(ptr: *mut ClassData) {
+pub fn rust_classdb_free(ptr: *mut ClassData) {
     if !ptr.is_null() {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             unsafe { drop(Arc::from_raw(ptr as *const ClassData)); }
@@ -242,18 +238,15 @@ pub extern "C" fn rust_classdb_free(ptr: *mut ClassData) {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn rust_classdb_level(path: c_int, lvl: c_int) -> c_uint {
+pub fn rust_classdb_level(path: c_int, lvl: c_int) -> c_uint {
     ffi_catch!(0, level(path, lvl))
 }
 
-#[no_mangle]
-pub extern "C" fn rust_classdb_name(id: c_int, rank: c_int) -> *mut c_char {
+pub fn rust_classdb_name(id: c_int, rank: c_int) -> *mut c_char {
     ffi_catch!(null_mut(), name(id, rank))
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_classdb_free_name(ptr: *mut c_char) {
+pub unsafe fn rust_classdb_free_name(ptr: *mut c_char) {
     if !ptr.is_null() {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             unsafe { drop(std::ffi::CString::from_raw(ptr)); }
@@ -261,17 +254,14 @@ pub unsafe extern "C" fn rust_classdb_free_name(ptr: *mut c_char) {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn rust_classdb_path(id: c_int) -> c_int {
+pub fn rust_classdb_path(id: c_int) -> c_int {
     ffi_catch!(0, path(id))
 }
 
-#[no_mangle]
-pub extern "C" fn rust_classdb_chat(id: c_int) -> c_int {
+pub fn rust_classdb_chat(id: c_int) -> c_int {
     ffi_catch!(0, chat(id))
 }
 
-#[no_mangle]
-pub extern "C" fn rust_classdb_icon(id: c_int) -> c_int {
+pub fn rust_classdb_icon(id: c_int) -> c_int {
     ffi_catch!(0, icon(id))
 }

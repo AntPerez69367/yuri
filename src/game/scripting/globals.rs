@@ -74,19 +74,19 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("curYear", lua.create_function(|_, ()| {
-        Ok(unsafe { sffi::cur_year } as i64)
+        Ok(sffi::cur_year.load(std::sync::atomic::Ordering::Relaxed) as i64)
     })?)?;
 
     g.set("curSeason", lua.create_function(|_, ()| {
-        Ok(unsafe { sffi::cur_season } as i64)
+        Ok(sffi::cur_season.load(std::sync::atomic::Ordering::Relaxed) as i64)
     })?)?;
 
     g.set("curDay", lua.create_function(|_, ()| {
-        Ok(unsafe { sffi::cur_day } as i64)
+        Ok(sffi::cur_day.load(std::sync::atomic::Ordering::Relaxed) as i64)
     })?)?;
 
     g.set("curTime", lua.create_function(|_, ()| {
-        Ok(unsafe { sffi::cur_time } as i64)
+        Ok(sffi::cur_time.load(std::sync::atomic::Ordering::Relaxed) as i64)
     })?)?;
 
     g.set("realDay",    lua.create_function(|_, ()| Ok(realtime().0 as i64))?)?;

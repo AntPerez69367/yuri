@@ -705,8 +705,7 @@ pub fn config() -> &'static ServerConfig {
     CONFIG.get().expect("config not loaded — rust_config_read must be called first")
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_config_read(cfg_file: *const c_char) -> c_int {
+pub unsafe fn rust_config_read(cfg_file: *const c_char) -> c_int {
     if cfg_file.is_null() {
         eprintln!("[rust_config_read] Error: cfg_file is null");
         return -1;
@@ -730,6 +729,7 @@ pub unsafe extern "C" fn rust_config_read(cfg_file: *const c_char) -> c_int {
                 return -1;
             }
 
+            #[cfg(not(test))]
             unsafe { rust_config_populate_c_globals(); }
             0
         }
@@ -740,8 +740,7 @@ pub unsafe extern "C" fn rust_config_read(cfg_file: *const c_char) -> c_int {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_sql_ip() -> *const c_char {
+pub fn rust_config_get_sql_ip() -> *const c_char {
     match get_config() {
         Some(cfg) => match CString::new(cfg.sql_ip.clone()) {
             Ok(s) => s.into_raw(),
@@ -751,13 +750,11 @@ pub extern "C" fn rust_config_get_sql_ip() -> *const c_char {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_sql_port() -> u16 {
+pub fn rust_config_get_sql_port() -> u16 {
     get_config().map(|c| c.sql_port).unwrap_or(3306)
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_sql_id() -> *const c_char {
+pub fn rust_config_get_sql_id() -> *const c_char {
     match get_config() {
         Some(cfg) => match CString::new(cfg.sql_id.clone()) {
             Ok(s) => s.into_raw(),
@@ -767,8 +764,7 @@ pub extern "C" fn rust_config_get_sql_id() -> *const c_char {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_sql_pw() -> *const c_char {
+pub fn rust_config_get_sql_pw() -> *const c_char {
     match get_config() {
         Some(cfg) => match CString::new(cfg.sql_pw.clone()) {
             Ok(s) => s.into_raw(),
@@ -778,8 +774,7 @@ pub extern "C" fn rust_config_get_sql_pw() -> *const c_char {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_sql_db() -> *const c_char {
+pub fn rust_config_get_sql_db() -> *const c_char {
     match get_config() {
         Some(cfg) => match CString::new(cfg.sql_db.clone()) {
             Ok(s) => s.into_raw(),
@@ -789,8 +784,7 @@ pub extern "C" fn rust_config_get_sql_db() -> *const c_char {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_map_ip() -> u32 {
+pub fn rust_config_get_map_ip() -> u32 {
     match get_config() {
         Some(cfg) => {
             if let Ok(addr) = cfg.map_ip.parse::<std::net::Ipv4Addr>() {
@@ -801,13 +795,11 @@ pub extern "C" fn rust_config_get_map_ip() -> u32 {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_map_port() -> u16 {
+pub fn rust_config_get_map_port() -> u16 {
     get_config().map(|c| c.map_port).unwrap_or(2001)
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_char_ip() -> u32 {
+pub fn rust_config_get_char_ip() -> u32 {
     match get_config() {
         Some(cfg) => {
             if let Ok(addr) = cfg.char_ip.parse::<std::net::Ipv4Addr>() {
@@ -818,13 +810,11 @@ pub extern "C" fn rust_config_get_char_ip() -> u32 {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_char_port() -> u16 {
+pub fn rust_config_get_char_port() -> u16 {
     get_config().map(|c| c.char_port).unwrap_or(2005)
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_login_ip() -> u32 {
+pub fn rust_config_get_login_ip() -> u32 {
     match get_config() {
         Some(cfg) => {
             if let Ok(addr) = cfg.login_ip.parse::<std::net::Ipv4Addr>() {
@@ -835,13 +825,11 @@ pub extern "C" fn rust_config_get_login_ip() -> u32 {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_login_port() -> u16 {
+pub fn rust_config_get_login_port() -> u16 {
     get_config().map(|c| c.login_port).unwrap_or(2000)
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_xor_key() -> *const c_char {
+pub fn rust_config_get_xor_key() -> *const c_char {
     match get_config() {
         Some(cfg) => match CString::new(cfg.xor_key.clone()) {
             Ok(s) => s.into_raw(),
@@ -851,23 +839,19 @@ pub extern "C" fn rust_config_get_xor_key() -> *const c_char {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_start_point() -> Point {
+pub fn rust_config_get_start_point() -> Point {
     get_config().map(|c| c.start_point).unwrap_or(Point::new(0, 0, 0))
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_server_id() -> c_int {
+pub fn rust_config_get_server_id() -> c_int {
     get_config().map(|c| c.server_id).unwrap_or(0)
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_meta_count() -> c_int {
+pub fn rust_config_get_meta_count() -> c_int {
     get_config().map(|c| c.meta.len() as c_int).unwrap_or(0)
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_meta_file(index: c_int) -> *const c_char {
+pub fn rust_config_get_meta_file(index: c_int) -> *const c_char {
     match get_config() {
         Some(cfg) => {
             if index >= 0 && (index as usize) < cfg.meta.len() {
@@ -881,13 +865,11 @@ pub extern "C" fn rust_config_get_meta_file(index: c_int) -> *const c_char {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_town_count() -> c_int {
+pub fn rust_config_get_town_count() -> c_int {
     get_config().map(|c| c.town.len() as c_int).unwrap_or(0)
 }
 
-#[no_mangle]
-pub extern "C" fn rust_config_get_town_name(index: c_int) -> *const c_char {
+pub fn rust_config_get_town_name(index: c_int) -> *const c_char {
     match get_config() {
         Some(cfg) => {
             if index >= 0 && (index as usize) < cfg.town.len() {
@@ -901,51 +883,34 @@ pub extern "C" fn rust_config_get_town_name(index: c_int) -> *const c_char {
     }
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_config_free_string(ptr: *mut c_char) {
+pub unsafe fn rust_config_free_string(ptr: *mut c_char) {
     if !ptr.is_null() {
         unsafe { let _ = CString::from_raw(ptr); }
     }
 }
 
 /// C town_data struct (matches the C definition)
+#[cfg(not(test))]
 #[repr(C)]
 struct TownDataFfi {
     name: [c_char; 32],
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_config_populate_c_globals() {
-    extern "C" {
-        static mut sql_id: [c_char; 32];
-        static mut sql_pw: [c_char; 32];
-        static mut sql_ip: [c_char; 32];
-        static mut sql_db: [c_char; 32];
-        static mut sql_port: c_int;
-        static mut login_id: [c_char; 33];
-        static mut login_pw: [c_char; 33];
-        static mut char_id: [c_char; 33];
-        static mut char_pw: [c_char; 33];
-        static mut login_ip: c_int;
-        static mut login_port: c_int;
-        static mut char_ip: c_int;
-        static mut char_port: c_int;
-        static mut map_ip: u32;
-        static mut map_port: u32;
-        static mut xor_key: [c_char; 10];
-        static mut start_pos: Point;
-        static mut serverid: c_int;
-        static mut require_reg: c_int;
-        static mut nex_version: c_int;
-        static mut nex_deep: c_int;
-        static mut save_time: c_int;
-        static mut xp_rate: c_int;
-        static mut d_rate: c_int;
-        static mut meta_file: [[c_char; 256]; 20];
-        static mut metamax: c_int;
-        static mut towns: [TownDataFfi; 255];
-        static mut town_n: c_int;
-    }
+#[cfg(not(test))]
+pub unsafe fn rust_config_populate_c_globals() {
+    use crate::config_globals::{
+        sql_id, sql_pw, sql_ip, sql_db, sql_port,
+        login_id, login_pw, login_ip, login_port,
+        char_id, char_pw, char_ip, char_port,
+        map_ip, map_port,
+        xor_key, start_pos,
+        serverid, require_reg, nex_version, nex_deep,
+        save_time, xp_rate, d_rate,
+        meta_file, metamax, town_n,
+    };
+    // towns in config_globals uses TownData {name:[c_char;32]} — same layout as TownDataFfi.
+    // Use a raw pointer cast to avoid shadowing the static.
+    let towns_ptr = std::ptr::addr_of_mut!(crate::config_globals::towns) as *mut [TownDataFfi; 255];
 
     unsafe fn copy_string_to_buffer<const N: usize>(ptr: *const c_char, buffer_ptr: *mut [c_char; N]) {
         if !ptr.is_null() {
@@ -1022,9 +987,9 @@ pub unsafe extern "C" fn rust_config_populate_c_globals() {
                 if let Ok(s) = CString::new(town.clone()) {
                     let bytes = s.as_bytes();
                     let len = bytes.len().min(31);
-                    let dest = ptr::addr_of_mut!(towns[i].name) as *mut u8;
+                    let dest = ptr::addr_of_mut!((*towns_ptr)[i].name) as *mut u8;
                     ptr::copy_nonoverlapping(bytes.as_ptr(), dest, len);
-                    let name_ptr = ptr::addr_of_mut!(towns[i].name) as *mut c_char;
+                    let name_ptr = ptr::addr_of_mut!((*towns_ptr)[i].name) as *mut c_char;
                     *name_ptr.add(len) = 0;
                 }
             }

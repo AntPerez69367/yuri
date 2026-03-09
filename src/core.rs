@@ -193,15 +193,13 @@ static GLOBAL_SERVER_STATE: Mutex<Option<SharedServerState>> = Mutex::new(None);
 static SHUTDOWN_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// Initialize the global server state
-#[no_mangle]
-pub extern "C" fn rust_core_init() {
+pub fn rust_core_init() {
     let state = crate::core::create_server_state();
     *GLOBAL_SERVER_STATE.lock().unwrap() = Some(state);
 }
 
 /// Clean up the global server state
-#[no_mangle]
-pub extern "C" fn rust_core_cleanup() {
+pub fn rust_core_cleanup() {
     *GLOBAL_SERVER_STATE.lock().unwrap() = None;
 }
 
@@ -209,12 +207,11 @@ pub extern "C" fn rust_core_cleanup() {
 ///
 /// # Safety
 /// The callback function pointer must be valid for the lifetime of the server
-#[no_mangle]
-pub unsafe extern "C" fn rust_set_termfunc(func: Option<extern "C" fn()>) {
+pub unsafe fn rust_set_termfunc(func: Option<unsafe fn()>) {
     if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
         let mut state = state_lock.lock().unwrap();
         if let Some(f) = func {
-            state.set_term_func(move || { f(); });
+            state.set_term_func(move || unsafe { f(); });
         } else {
             state.term_func = None;
         }
@@ -225,8 +222,7 @@ pub unsafe extern "C" fn rust_set_termfunc(func: Option<extern "C" fn()>) {
 ///
 /// # Safety
 /// Should only be called from signal handlers
-#[no_mangle]
-pub unsafe extern "C" fn rust_handle_signal(signum: std::os::raw::c_int) {
+pub unsafe fn rust_handle_signal(signum: std::os::raw::c_int) {
     if let Some(signal) = Signal::from_signal_num(signum) {
         if signal.should_shutdown() {
             SHUTDOWN_PENDING.store(true, Ordering::SeqCst);
@@ -235,8 +231,7 @@ pub unsafe extern "C" fn rust_handle_signal(signum: std::os::raw::c_int) {
 }
 
 /// Request server shutdown
-#[no_mangle]
-pub extern "C" fn rust_request_shutdown() {
+pub fn rust_request_shutdown() {
     if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
         let mut state = state_lock.lock().unwrap();
         state.request_shutdown();
@@ -245,8 +240,7 @@ pub extern "C" fn rust_request_shutdown() {
 
 /// Check if server shutdown has been requested
 /// Returns 1 if shutdown requested, 0 otherwise
-#[no_mangle]
-pub extern "C" fn rust_should_shutdown() -> std::os::raw::c_int {
+pub fn rust_should_shutdown() -> std::os::raw::c_int {
     if SHUTDOWN_PENDING.load(Ordering::SeqCst) {
         eprintln!("[core] [signal] Processing shutdown signal");
         if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
@@ -264,7 +258,6 @@ pub extern "C" fn rust_should_shutdown() -> std::os::raw::c_int {
 }
 
 /// Get the server tick rate in nanoseconds
-#[no_mangle]
-pub extern "C" fn rust_get_tick_rate_ns() -> u64 {
+pub fn rust_get_tick_rate_ns() -> u64 {
     SERVER_TICK_RATE_NS
 }

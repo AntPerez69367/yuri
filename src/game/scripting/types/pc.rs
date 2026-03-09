@@ -4,13 +4,11 @@
 
 use mlua::{MetaMethod, UserData, UserDataMethods};
 use std::ffi::{c_char, CStr, CString};
-use std::os::raw::{c_float, c_int, c_uint, c_void};
+use std::os::raw::{c_int, c_uint, c_void};
 use std::sync::atomic::Ordering;
 
-use crate::database::map_db::BlockList;
 use crate::game::scripting::ffi as sffi;
 use crate::game::scripting::types::mob::MobObject;
-use crate::game::scripting::types::npc::NpcObject;
 use crate::game::scripting::types::registry::{
     GameRegObject, MapRegObject, NpcRegObject, QuestRegObject, RegObject, RegStringObject,
 };
@@ -54,533 +52,12 @@ unsafe fn cstr_to_lua(lua: &mlua::Lua, p: *const c_char) -> mlua::Result<mlua::V
     Ok(mlua::Value::String(lua.create_string(s)?))
 }
 
-// ─── C accessor externs (declared in sl_compat.c) ────────────────────────────
-extern "C" {
-    // vitals
-    fn sl_pc_status_id(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_hp(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_mp(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_level(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_exp(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_expsoldmagic(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_expsoldhealth(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_expsoldstats(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_class(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_totem(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_tier(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_mark(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_country(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_clan(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_gm_level(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_sex(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_side(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_state(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_face(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_hair(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_hair_color(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_face_color(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_armor_color(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_skin_color(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_basehp(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_basemp(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_money(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_bankmoney(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_maxslots(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_maxinv(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_partner(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_pk(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_killedby(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_killspk(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_pkduration(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_basegrace(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_basemight(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_basewill(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_basearmor(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_tutor(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_karma(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_alignment(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_classRank(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_clanRank(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_novice_chat(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_subpath_chat(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_clan_chat(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_miniMapToggle(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_heroes(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_mute(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_settingFlags(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_killspvp(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_profile_vitastats(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_profile_equiplist(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_profile_legends(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_profile_spells(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_profile_inventory(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_profile_bankitems(sd: *mut c_void) -> c_int;
-    fn sl_pc_status_name(sd: *mut c_void) -> *const c_char;
-    fn sl_pc_status_title(sd: *mut c_void) -> *const c_char;
-    fn sl_pc_status_clan_title(sd: *mut c_void) -> *const c_char;
-    fn sl_pc_status_afkmessage(sd: *mut c_void) -> *const c_char;
-    fn sl_pc_status_f1name(sd: *mut c_void) -> *const c_char;
-    // direct fields
-    fn sl_pc_bl_id(sd: *mut c_void) -> c_int;
-    fn sl_pc_bl_m(sd: *mut c_void) -> c_int;
-    fn sl_pc_bl_x(sd: *mut c_void) -> c_int;
-    fn sl_pc_bl_y(sd: *mut c_void) -> c_int;
-    fn sl_pc_bl_type(sd: *mut c_void) -> c_int;
-    fn sl_pc_groupid(sd: *mut c_void) -> c_int;
-    fn sl_pc_npc_g(sd: *mut c_void) -> c_int;
-    fn sl_pc_npc_gc(sd: *mut c_void) -> c_int;
-    fn sl_pc_time(sd: *mut c_void) -> c_int;
-    fn sl_pc_fakeDrop(sd: *mut c_void) -> c_int;
-    fn sl_pc_max_hp(sd: *mut c_void) -> c_int;
-    fn sl_pc_max_mp(sd: *mut c_void) -> c_int;
-    fn sl_pc_lastvita(sd: *mut c_void) -> c_int;
-    fn sl_pc_rage(sd: *mut c_void) -> c_int;
-    fn sl_pc_polearm(sd: *mut c_void) -> c_int;
-    fn sl_pc_last_click(sd: *mut c_void) -> c_int;
-    fn sl_pc_grace(sd: *mut c_void) -> c_int;
-    fn sl_pc_might(sd: *mut c_void) -> c_int;
-    fn sl_pc_will(sd: *mut c_void) -> c_int;
-    fn sl_pc_armor(sd: *mut c_void) -> c_int;
-    fn sl_pc_dam(sd: *mut c_void) -> c_int;
-    fn sl_pc_hit(sd: *mut c_void) -> c_int;
-    fn sl_pc_miss(sd: *mut c_void) -> c_int;
-    fn sl_pc_sleep(sd: *mut c_void) -> c_int;
-    fn sl_pc_attack_speed(sd: *mut c_void) -> c_int;
-    fn sl_pc_enchanted(sd: *mut c_void) -> c_int;
-    fn sl_pc_confused(sd: *mut c_void) -> c_int;
-    fn sl_pc_target(sd: *mut c_void) -> c_int;
-    fn sl_pc_set_target(sd: *mut c_void, v: c_int);
-    fn sl_pc_deduction(sd: *mut c_void) -> c_int;
-    fn sl_pc_speed(sd: *mut c_void) -> c_int;
-    fn sl_pc_disguise(sd: *mut c_void) -> c_int;
-    fn sl_pc_disguise_color(sd: *mut c_void) -> c_int;
-    fn sl_pc_attacker(sd: *mut c_void) -> c_int;
-    fn sl_pc_invis(sd: *mut c_void) -> c_int;
-    fn sl_pc_damage(sd: *mut c_void) -> c_int;
-    fn sl_pc_crit(sd: *mut c_void) -> c_int;
-    fn sl_pc_critchance(sd: *mut c_void) -> c_int;
-    fn sl_pc_critmult(sd: *mut c_void) -> c_int;
-    fn sl_pc_rangeTarget(sd: *mut c_void) -> c_int;
-    fn sl_pc_exchange_gold(sd: *mut c_void) -> c_int;
-    fn sl_pc_exchange_count(sd: *mut c_void) -> c_int;
-    fn sl_pc_bod_count(sd: *mut c_void) -> c_int;
-    fn sl_pc_paralyzed(sd: *mut c_void) -> c_int;
-    fn sl_pc_blind(sd: *mut c_void) -> c_int;
-    fn sl_pc_drunk(sd: *mut c_void) -> c_int;
-    fn sl_pc_board(sd: *mut c_void) -> c_int;
-    fn sl_pc_board_candel(sd: *mut c_void) -> c_int;
-    fn sl_pc_board_canwrite(sd: *mut c_void) -> c_int;
-    fn sl_pc_boardshow(sd: *mut c_void) -> c_int;
-    fn sl_pc_boardnameval(sd: *mut c_void) -> c_int;
-    fn sl_pc_msPing(sd: *mut c_void) -> c_int;
-    fn sl_pc_pbColor(sd: *mut c_void) -> c_int;
-    fn sl_pc_coref(sd: *mut c_void) -> c_int;
-    fn sl_pc_optFlags(sd: *mut c_void) -> c_int;
-    fn sl_pc_snare(sd: *mut c_void) -> c_int;
-    fn sl_pc_silence(sd: *mut c_void) -> c_int;
-    fn sl_pc_extendhit(sd: *mut c_void) -> c_int;
-    fn sl_pc_afk(sd: *mut c_void) -> c_int;
-    fn sl_pc_afktime(sd: *mut c_void) -> c_int;
-    fn sl_pc_totalafktime(sd: *mut c_void) -> c_int;
-    fn sl_pc_backstab(sd: *mut c_void) -> c_int;
-    fn sl_pc_flank(sd: *mut c_void) -> c_int;
-    fn sl_pc_healing(sd: *mut c_void) -> c_int;
-    fn sl_pc_minSdam(sd: *mut c_void) -> c_int;
-    fn sl_pc_maxSdam(sd: *mut c_void) -> c_int;
-    fn sl_pc_minLdam(sd: *mut c_void) -> c_int;
-    fn sl_pc_maxLdam(sd: *mut c_void) -> c_int;
-    fn sl_pc_talktype(sd: *mut c_void) -> c_int;
-    fn sl_pc_equipid(sd: *mut c_void) -> c_int;
-    fn sl_pc_takeoffid(sd: *mut c_void) -> c_int;
-    fn sl_pc_breakid(sd: *mut c_void) -> c_int;
-    fn sl_pc_equipslot(sd: *mut c_void) -> c_int;
-    fn sl_pc_invslot(sd: *mut c_void) -> c_int;
-    fn sl_pc_pickuptype(sd: *mut c_void) -> c_int;
-    fn sl_pc_spottraps(sd: *mut c_void) -> c_int;
-    fn sl_pc_fury(sd: *mut c_void) -> c_int;
-    fn sl_pc_faceacctwo_id(sd: *mut c_void) -> c_int;
-    fn sl_pc_faceacctwo_custom(sd: *mut c_void) -> c_int;
-    fn sl_pc_protection(sd: *mut c_void) -> c_int;
-    fn sl_pc_clone(sd: *mut c_void) -> c_int;
-    fn sl_pc_wisdom(sd: *mut c_void) -> c_int;
-    fn sl_pc_con(sd: *mut c_void) -> c_int;
-    fn sl_pc_deathflag(sd: *mut c_void) -> c_int;
-    fn sl_pc_selfbar(sd: *mut c_void) -> c_int;
-    fn sl_pc_groupbars(sd: *mut c_void) -> c_int;
-    fn sl_pc_mobbars(sd: *mut c_void) -> c_int;
-    fn sl_pc_disptimertick(sd: *mut c_void) -> c_int;
-    fn sl_pc_bindmap(sd: *mut c_void) -> c_int;
-    fn sl_pc_bindx(sd: *mut c_void) -> c_int;
-    fn sl_pc_bindy(sd: *mut c_void) -> c_int;
-    fn sl_pc_ambushtimer(sd: *mut c_void) -> c_int;
-    fn sl_pc_dialogtype(sd: *mut c_void) -> c_int;
-    fn sl_pc_cursed(sd: *mut c_void) -> c_int;
-    fn sl_pc_action(sd: *mut c_void) -> c_int;
-    fn sl_pc_scripttick(sd: *mut c_void) -> c_int;
-    fn sl_pc_dmgshield(sd: *mut c_void) -> c_int;
-    fn sl_pc_dmgdealt(sd: *mut c_void) -> c_int;
-    fn sl_pc_dmgtaken(sd: *mut c_void) -> c_int;
-    fn sl_pc_ipaddress(sd: *mut c_void) -> *const c_char;
-    fn sl_pc_speech(sd: *mut c_void) -> *const c_char;
-    fn sl_pc_question(sd: *mut c_void) -> *const c_char;
-    fn sl_pc_mail(sd: *mut c_void) -> *const c_char;
-    // gfx
-    fn sl_pc_gfx_face(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_hair(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_chair(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_cface(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_cskin(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_dye(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_weapon(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_cweapon(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_armor(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_carmor(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_shield(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_cshield(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_helm(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_chelm(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_mantle(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_cmantle(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_crown(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_ccrown(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_faceAcc(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_cfaceAcc(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_faceAccT(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_cfaceAccT(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_boots(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_cboots(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_necklace(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_cnecklace(sd: *mut c_void) -> c_int;
-    fn sl_pc_gfx_name(sd: *mut c_void) -> *const c_char;
-    // computed
-    fn sl_pc_actid(sd: *mut c_void) -> c_int;
-    fn sl_pc_email(sd: *mut c_void) -> *const c_char;
-    fn sl_pc_clanname(sd: *mut c_void) -> *const c_char;
-    fn sl_pc_baseclass(sd: *mut c_void) -> c_int;
-    fn sl_pc_baseClassName(sd: *mut c_void) -> *const c_char;
-    fn sl_pc_className(sd: *mut c_void) -> *const c_char;
-    fn sl_pc_classNameMark(sd: *mut c_void) -> *const c_char;
-    // setters — integers
-    fn sl_pc_set_hp(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_mp(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_max_hp(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_max_mp(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_exp(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_level(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_class(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_totem(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_tier(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_mark(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_country(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_clan(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gm_level(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_side(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_state(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_hair(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_hair_color(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_face_color(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_armor_color(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_skin_color(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_face(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_money(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_bankmoney(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_maxslots(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_maxinv(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_partner(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_pk(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_basehp(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_basemp(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_karma(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_alignment(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_basegrace(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_basemight(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_basewill(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_basearmor(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_novice_chat(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_sleep(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_dialogtype(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_subpath_chat(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_clan_chat(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_tutor(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_profile_vitastats(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_profile_equiplist(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_profile_legends(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_profile_spells(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_profile_inventory(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_profile_bankitems(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_npc_g(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_npc_gc(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_last_click(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_time(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_rage(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_polearm(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_deduction(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_speed(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_attacker(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_invis(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_damage(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_crit(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_critchance(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_critmult(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_rangeTarget(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_disguise(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_disguise_color(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_paralyzed(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_blind(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_drunk(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_board_candel(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_board_canwrite(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_boardshow(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_boardnameval(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_snare(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_silence(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_extendhit(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_afk(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_confused(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_spottraps(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_selfbar(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_groupbars(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_mobbars(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_mute(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_settingFlags(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_optFlags_xor(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_uflags_xor(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_talktype(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_cursed(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_deathflag(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_bindmap(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_bindx(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_bindy(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_protection(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_dmgshield(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_dmgdealt(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_dmgtaken(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_heroshow(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_fakeDrop(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_sex(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_clone(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_classRank(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_clanRank(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_fury(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_coref_container(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_wisdom(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_con(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_backstab(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_flank(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_healing(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_pbColor(sd: *mut c_void, v: c_int);
-    // setters — gfx
-    fn sl_pc_set_gfx_face(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_hair(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_chair(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_cface(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_cskin(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_dye(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_weapon(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_cweapon(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_armor(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_carmor(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_shield(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_cshield(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_helm(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_chelm(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_mantle(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_cmantle(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_crown(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_ccrown(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_faceAcc(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_cfaceAcc(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_faceAccT(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_cfaceAccT(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_boots(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_cboots(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_necklace(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_cnecklace(sd: *mut c_void, v: c_int);
-    fn sl_pc_set_gfx_name(sd: *mut c_void, v: *const c_char);
-    // setters — strings
-    fn sl_pc_set_name(sd: *mut c_void, v: *const c_char);
-    fn sl_pc_set_title(sd: *mut c_void, v: *const c_char);
-    fn sl_pc_set_clan_title(sd: *mut c_void, v: *const c_char);
-    fn sl_pc_set_afkmessage(sd: *mut c_void, v: *const c_char);
-    fn sl_pc_set_speech(sd: *mut c_void, v: *const c_char);
-    // methods — group 1 (task 12)
-    fn sl_pc_freeasync(sd: *mut c_void);
-    fn sl_pc_forcesave(sd: *mut c_void) -> c_int;
-    fn sl_pc_addhealth(sd: *mut c_void, damage: c_int);
-    fn sl_pc_removehealth(sd: *mut c_void, damage: c_int, caster: c_int);
-    fn sl_pc_die(sd: *mut c_void);
-    fn sl_pc_resurrect(sd: *mut c_void);
-    fn sl_pc_showhealth(sd: *mut c_void, damage: c_int, typ: c_int);
-    fn sl_pc_calcstat(sd: *mut c_void);
-    fn sl_pc_sendstatus(sd: *mut c_void);
-    fn sl_pc_status(sd: *mut c_void) -> c_int;
-    fn sl_pc_warp(sd: *mut c_void, m: c_int, x: c_int, y: c_int);
-    fn sl_pc_refresh(sd: *mut c_void);
-    fn sl_pc_pickup(sd: *mut c_void, id: c_uint);
-    fn sl_pc_throwitem(sd: *mut c_void);
-    fn sl_pc_forcedrop(sd: *mut c_void, id: c_int);
-    fn sl_pc_lock(sd: *mut c_void);
-    fn sl_pc_unlock(sd: *mut c_void);
-    fn sl_pc_swing(sd: *mut c_void);
-    fn sl_pc_respawn(sd: *mut c_void);
-    fn sl_pc_sendhealth(sd: *mut c_void, dmg: c_float, critical: c_int) -> c_int;
-    // methods — group 2 (task 13)
-    fn sl_pc_move(sd: *mut c_void, speed: c_int);
-    fn sl_pc_lookat(sd: *mut c_void, id: c_int);
-    fn sl_pc_minirefresh(sd: *mut c_void);
-    fn sl_pc_refreshinventory(sd: *mut c_void);
-    fn sl_pc_updateinv(sd: *mut c_void);
-    fn sl_pc_checkinvbod(sd: *mut c_void);
-    fn sl_pc_equip(sd: *mut c_void);
-    fn sl_pc_takeoff(sd: *mut c_void);
-    fn sl_pc_deductarmor(sd: *mut c_void, v: c_int);
-    fn sl_pc_deductweapon(sd: *mut c_void, v: c_int);
-    fn sl_pc_deductdura(sd: *mut c_void, eq: c_int, v: c_int);
-    fn sl_pc_deductduraequip(sd: *mut c_void);
-    fn sl_pc_deductdurainv(sd: *mut c_void, slot: c_int, v: c_int);
-    fn sl_pc_hasequipped(sd: *mut c_void, item_id: c_uint) -> c_int;
-    fn sl_pc_removeitemslot(sd: *mut c_void, slot: c_int, amount: c_int, typ: c_int);
-    fn sl_pc_hasitem(sd: *mut c_void, item_id: c_uint, amount: c_int) -> c_int;
-    fn sl_pc_hasspace(sd: *mut c_void, item_id: c_uint) -> c_int;
-    fn sl_pc_checklevel(sd: *mut c_void);
-    fn sl_pc_sendminimap(sd: *mut c_void);
-    fn sl_pc_setminimaptoggle(sd: *mut c_void, flag: c_int);
-    fn sl_pc_popup(sd: *mut c_void, msg: *const c_char);
-    fn sl_pc_guitext(sd: *mut c_void, msg: *const c_char);
-    fn sl_pc_sendminitext(sd: *mut c_void, msg: *const c_char);
-    fn sl_pc_powerboard(sd: *mut c_void);
-    fn sl_pc_showboard(sd: *mut c_void, id: c_int);
-    fn sl_pc_showpost(sd: *mut c_void, id: c_int, post: c_int);
-    fn sl_pc_changeview(sd: *mut c_void, x: c_int, y: c_int);
-    fn sl_pc_speak(sd: *mut c_void, msg: *const c_char, len: c_int, typ: c_int);
-    fn sl_pc_sendmail(
-        sd: *mut c_void,
-        to: *const c_char,
-        topic: *const c_char,
-        msg: *const c_char,
-    ) -> c_int;
-    fn sl_pc_sendurl(sd: *mut c_void, typ: c_int, url: *const c_char);
-    fn sl_pc_swingtarget(sd: *mut c_void, id: c_int);
-    fn sl_pc_killcount(sd: *mut c_void, mob_id: c_int) -> c_int;
-    fn sl_pc_setkillcount(sd: *mut c_void, mob_id: c_int, amount: c_int);
-    fn sl_pc_flushkills(sd: *mut c_void, mob_id: c_int);
-    fn sl_pc_flushallkills(sd: *mut c_void);
-    fn sl_pc_addthreat(sd: *mut c_void, mob_id: c_uint, amount: c_uint);
-    fn sl_pc_setthreat(sd: *mut c_void, mob_id: c_uint, amount: c_uint);
-    fn sl_pc_addthreatgeneral(sd: *mut c_void, amount: c_uint);
-    fn sl_pc_hasspell(sd: *mut c_void, name: *const c_char) -> c_int;
-    fn sl_pc_addspell(sd: *mut c_void, spell_id: c_int);
-    fn sl_pc_removespell(sd: *mut c_void, spell_id: c_int);
-    fn sl_pc_hasduration(sd: *mut c_void, name: *const c_char) -> c_int;
-    fn sl_pc_hasdurationid(sd: *mut c_void, name: *const c_char, caster_id: c_int) -> c_int;
-    fn sl_pc_getduration(sd: *mut c_void, name: *const c_char) -> c_int;
-    fn sl_pc_getdurationid(sd: *mut c_void, name: *const c_char, caster_id: c_int) -> c_int;
-    fn sl_pc_durationamount(sd: *mut c_void, name: *const c_char) -> c_int;
-    fn sl_pc_setduration(
-        sd: *mut c_void,
-        name: *const c_char,
-        time_ms: c_int,
-        caster_id: c_int,
-        recast: c_int,
-    );
-    fn sl_pc_flushduration(sd: *mut c_void, dispel_level: c_int, min_id: c_int, max_id: c_int);
-    fn sl_pc_flushdurationnouncast(
-        sd: *mut c_void,
-        dispel_level: c_int,
-        min_id: c_int,
-        max_id: c_int,
-    );
-    fn sl_pc_refreshdurations(sd: *mut c_void);
-    fn sl_pc_setaether(sd: *mut c_void, name: *const c_char, time_ms: c_int);
-    fn sl_pc_hasaether(sd: *mut c_void, name: *const c_char) -> c_int;
-    fn sl_pc_getaether(sd: *mut c_void, name: *const c_char) -> c_int;
-    fn sl_pc_flushaether(sd: *mut c_void);
-    fn sl_pc_addclan(sd: *mut c_void, name: *const c_char);
-    fn sl_pc_updatepath(sd: *mut c_void, path: c_int, mark: c_int);
-    fn sl_pc_updatecountry(sd: *mut c_void, country: c_int);
-    fn sl_pc_getcasterid(sd: *mut c_void, name: *const c_char) -> c_int;
-    fn sl_pc_settimer(sd: *mut c_void, typ: c_int, length: c_int);
-    fn sl_pc_addtime(sd: *mut c_void, v: c_int);
-    fn sl_pc_removetime(sd: *mut c_void, v: c_int);
-    fn sl_pc_setheroshow(sd: *mut c_void, flag: c_int);
-    // legends
-    fn sl_pc_addlegend(
-        sd: *mut c_void,
-        text: *const c_char,
-        name: *const c_char,
-        icon: c_int,
-        color: c_int,
-        tchaid: c_uint,
-    );
-    fn sl_pc_haslegend(sd: *mut c_void, name: *const c_char) -> c_int;
-    fn sl_pc_removelegendbyname(sd: *mut c_void, name: *const c_char);
-    fn sl_pc_removelegendbycolor(sd: *mut c_void, color: c_int);
-    // Task 4: new attribute getters/setters
-    fn sl_pc_vregenoverflow(sd: *mut c_void) -> c_int;
-    fn sl_pc_set_vregenoverflow(sd: *mut c_void, v: c_int);
-    fn sl_pc_mregenoverflow(sd: *mut c_void) -> c_int;
-    fn sl_pc_set_mregenoverflow(sd: *mut c_void, v: c_int);
-    fn sl_pc_group_count(sd: *mut c_void) -> c_int;
-    fn sl_pc_set_group_count(sd: *mut c_void, v: c_int);
-    fn sl_pc_group_on(sd: *mut c_void) -> c_int;
-    fn sl_pc_set_group_on(sd: *mut c_void, v: c_int);
-    fn sl_pc_group_leader(sd: *mut c_void) -> c_int;
-    fn sl_pc_set_group_leader(sd: *mut c_void, v: c_int);
-    // Non-dialog method helpers — Task 8
-    fn sl_pc_additem(sd: *mut c_void, id: c_uint, amount: c_uint, dura: c_int, owner: c_uint, engrave: *const c_char);
-    fn sl_pc_getinventoryitem(sd: *mut c_void, slot: c_int) -> *mut c_void;
-    fn sl_pc_getequippeditem_sd(sd: *mut c_void, slot: c_int) -> *mut c_void;
-    fn sl_pc_removeitem(sd: *mut c_void, id: c_uint, amount: c_uint, typ: c_int, owner: c_uint, engrave: *const c_char);
-    fn sl_pc_removeitemdura(sd: *mut c_void, id: c_uint, amount: c_uint, typ: c_int);
-    fn sl_pc_hasitemdura(sd: *mut c_void, id: c_uint, amount: c_uint) -> c_int;
-    fn sl_pc_checkbankitems(sd: *mut c_void, slot: c_int) -> c_int;
-    fn sl_pc_checkbankamounts(sd: *mut c_void, slot: c_int) -> c_int;
-    fn sl_pc_checkbankowners(sd: *mut c_void, slot: c_int) -> c_int;
-    fn sl_pc_checkbankengraves(sd: *mut c_void, slot: c_int) -> *const c_char;
-    fn sl_pc_bankdeposit(sd: *mut c_void, item: c_uint, amount: c_uint, owner: c_uint, engrave: *const c_char);
-    fn sl_pc_bankwithdraw(sd: *mut c_void, item: c_uint, amount: c_uint, owner: c_uint, engrave: *const c_char);
-    fn sl_pc_bankcheckamount(sd: *mut c_void, item: c_uint, amount: c_uint, owner: c_uint, engrave: *const c_char) -> c_int;
-    fn sl_pc_getclanitems(sd: *mut c_void, slot: c_int) -> c_int;
-    fn sl_pc_getclanamounts(sd: *mut c_void, slot: c_int) -> c_int;
-    fn sl_pc_clanbankdeposit(sd: *mut c_void, item: c_int, amount: c_int);
-    fn sl_pc_clanbankwithdraw(sd: *mut c_void, item: c_int, amount: c_int);
-    fn sl_pc_checkclankitemamounts(sd: *mut c_void, item: c_int, amount: c_int) -> c_int;
-    fn sl_pc_getalldurations(sd: *mut c_void, out: *mut *mut c_char, max: c_int) -> c_int;
-    fn sl_pc_getspells(sd: *mut c_void, out: *mut c_int, max: c_int) -> c_int;
-    fn sl_pc_getspellnames(sd: *mut c_void, out: *mut *mut c_char, max: c_int) -> c_int;
-    fn sl_pc_getunknownspells(sd: *mut c_void, out: *mut c_int, max: c_int) -> c_int;
-    fn sl_pc_getlegend(sd: *mut c_void, name: *const c_char) -> *const c_char;
-    fn sl_pc_givexp(sd: *mut c_void, amount: c_int);
-    fn broadcast_update_state(sd: *mut crate::game::pc::MapSessionData);
-    fn sl_pc_addmagic(sd: *mut c_void, amount: c_int);
-    fn sl_pc_addmanaextend(sd: *mut c_void, amount: c_int);
-    fn sl_pc_settimevalues(sd: *mut c_void);
-    fn sl_pc_setpk(sd: *mut c_void, id: c_int);
-    fn sl_pc_activespells(sd: *mut c_void, name: *const c_char) -> c_int;
-    fn sl_pc_getequippeddura(sd: *mut c_void, id: c_int, slot: c_int) -> c_int;
-    fn sl_pc_addhealth_extend(sd: *mut c_void, dmg: c_int, sleep: c_int, deduct: c_int, ac: c_int, ds: c_int, print: c_int);
-    fn sl_pc_removehealth_extend(sd: *mut c_void, dmg: c_int, sleep: c_int, deduct: c_int, ac: c_int, ds: c_int, print: c_int);
-    fn sl_pc_addhealth2(sd: *mut c_void, amount: c_int, typ: c_int);
-    fn sl_pc_removehealth_nodmgnum(sd: *mut c_void, dmg: c_int, typ: c_int);
-    fn sl_pc_addgold(sd: *mut c_void, amount: c_int);
-    fn sl_pc_removegold(sd: *mut c_void, amount: c_int);
-    fn sl_pc_logbuysell(sd: *mut c_void, item: c_int, amount: c_int, gold: c_int, flag: c_int);
-    fn sl_pc_calcthrow(sd: *mut c_void);
-    fn sl_pc_calcrangeddamage(sd: *mut c_void, bl: *mut c_void) -> c_int;
-    fn sl_pc_calcrangedhit(sd: *mut c_void, bl: *mut c_void) -> c_int;
-    fn sl_pc_gmmsg(sd: *mut c_void, msg: *const c_char);
-    fn sl_pc_talkself(sd: *mut c_void, color: c_int, msg: *const c_char);
-    fn sl_pc_broadcast_sd(sd: *mut c_void, msg: *const c_char, m: c_int);
-    fn sl_pc_killrank(sd: *mut c_void, mob_id: c_int) -> c_int;
-    fn sl_pc_getparcel(sd: *mut c_void) -> *mut c_void;
-    fn sl_pc_getparcellist(sd: *mut c_void, out: *mut *mut c_void, max: c_int) -> c_int;
-    fn sl_pc_removeparcel(sd: *mut c_void, sender: c_int, item: c_int, amount: c_int, pos: c_int, owner: c_int, engrave: *const c_char, npcflag: c_int);
-    fn sl_pc_expireitem(sd: *mut c_void);
-    fn sl_pc_addguide(sd: *mut c_void, guide: *const c_char);
-    fn sl_pc_delguide(sd: *mut c_void, guide: *const c_char);
-    fn sl_pc_getcreationitems(sd: *mut c_void, len: c_int, out: *mut c_int) -> c_int;
-    fn sl_pc_getcreationamounts(sd: *mut c_void, len: c_int, item_id: c_int) -> c_int;
-}
+// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
+// All sl_pc_* functions are defined in pc_accessors.rs as pub unsafe extern "C" fn.
+#[allow(unused_imports)]
+use crate::game::scripting::pc_accessors::*;
+use crate::game::client::visual::broadcast_update_state;
+
 
 // ─── Task 10: async yield helpers ────────────────────────────────────────────
 
@@ -1601,7 +1078,7 @@ impl UserData for PcObject {
             Ok(cs.map_or(0, |c| unsafe { sl_pc_getcasterid(this.ptr, c.as_ptr()) }))
         });
         methods.add_method("setTimer", |_, this, (typ, length): (c_int, c_int)| {
-            unsafe { sl_pc_settimer(this.ptr, typ, length) };
+            unsafe { sl_pc_settimer(this.ptr, typ, length as c_uint) };
             Ok(())
         });
         methods.add_method("addTime", |_, this, v: c_int| {
@@ -1726,14 +1203,14 @@ impl UserData for PcObject {
         // ── Clan bank ────────────────────────────────────────────────────────────
         methods.add_method("getClanItems",         |_, this, slot: c_int| Ok(unsafe { sl_pc_getclanitems(this.ptr, slot) }));
         methods.add_method("getClanAmounts",       |_, this, slot: c_int| Ok(unsafe { sl_pc_getclanamounts(this.ptr, slot) }));
-        methods.add_method("clanBankDeposit",      |_, this, (item, amount): (c_int, c_int)| { unsafe { sl_pc_clanbankdeposit(this.ptr, item, amount) }; Ok(()) });
-        methods.add_method("clanBankWithdraw",     |_, this, (item, amount): (c_int, c_int)| { unsafe { sl_pc_clanbankwithdraw(this.ptr, item, amount) }; Ok(()) });
+        methods.add_method("clanBankDeposit",      |_, this, (item, amount): (c_int, c_int)| { unsafe { sl_pc_clanbankdeposit(this.ptr, item as c_uint, amount as c_uint, 0, std::ptr::null()) }; Ok(()) });
+        methods.add_method("clanBankWithdraw",     |_, this, (item, amount): (c_int, c_int)| { unsafe { sl_pc_clanbankwithdraw(this.ptr, item as c_uint, amount as c_uint, 0, std::ptr::null()) }; Ok(()) });
         methods.add_method("checkClanItemAmounts", |_, this, (item, amount): (c_int, c_int)| Ok(unsafe { sl_pc_checkclankitemamounts(this.ptr, item, amount) }));
 
         // ── Spell lists ──────────────────────────────────────────────────────────
         methods.add_method("getAllDurations", |lua, this, ()| {
             const MAX: usize = 200;
-            let mut ptrs: Vec<*mut c_char> = vec![std::ptr::null_mut(); MAX];
+            let mut ptrs: Vec<*const c_char> = vec![std::ptr::null(); MAX];
             let count = unsafe { sl_pc_getalldurations(this.ptr, ptrs.as_mut_ptr(), MAX as c_int) } as usize;
             let tbl = lua.create_table()?;
             for (i, &p) in ptrs[..count].iter().enumerate() {
@@ -1754,7 +1231,7 @@ impl UserData for PcObject {
         });
         methods.add_method("getSpellName", |lua, this, ()| {
             const MAX: usize = 52;
-            let mut ptrs: Vec<*mut c_char> = vec![std::ptr::null_mut(); MAX];
+            let mut ptrs: Vec<*const c_char> = vec![std::ptr::null(); MAX];
             let count = unsafe { sl_pc_getspellnames(this.ptr, ptrs.as_mut_ptr(), MAX as c_int) } as usize;
             let tbl = lua.create_table()?;
             for (i, &p) in ptrs[..count].iter().enumerate() {
@@ -1782,24 +1259,24 @@ impl UserData for PcObject {
         });
 
         // ── Combat ───────────────────────────────────────────────────────────────
-        methods.add_method("giveXP",        |_, this, amount: c_int| { unsafe { sl_pc_givexp(this.ptr, amount) }; Ok(()) });
+        methods.add_method("giveXP",        |_, this, amount: c_int| { unsafe { sl_pc_givexp(this.ptr, amount as c_uint) }; Ok(()) });
         methods.add_method("updateState",   |_, this, ()| { unsafe { broadcast_update_state(this.ptr as *mut crate::game::pc::MapSessionData) }; Ok(()) });
         methods.add_method("addMagic",      |_, this, amount: c_int| { unsafe { sl_pc_addmagic(this.ptr, amount) }; Ok(()) });
         methods.add_method("addManaExtend", |_, this, amount: c_int| { unsafe { sl_pc_addmanaextend(this.ptr, amount) }; Ok(()) });
-        methods.add_method("setTimeValues", |_, this, ()| { unsafe { sl_pc_settimevalues(this.ptr) }; Ok(()) });
+        methods.add_method("setTimeValues", |_, this, newval: c_int| { unsafe { sl_pc_settimevalues(this.ptr, newval as c_uint) }; Ok(()) });
         methods.add_method("setPK",         |_, this, id: c_int| { unsafe { sl_pc_setpk(this.ptr, id) }; Ok(()) });
         methods.add_method("activeSpells",  |_, this, name: String| {
             let cs = CString::new(name.as_bytes()).ok();
             Ok(cs.map_or(0, |c| unsafe { sl_pc_activespells(this.ptr, c.as_ptr()) }) != 0)
         });
         methods.add_method("getEquippedDura", |_, this, (id, slot): (c_int, c_int)| {
-            Ok(unsafe { sl_pc_getequippeddura(this.ptr, id, slot) })
+            Ok(unsafe { sl_pc_getequippeddura(this.ptr, id as c_uint, slot) })
         });
-        methods.add_method("addHealthExtend", |_, this, (dmg, sleep, deduct, ac, ds, print): (c_int, c_int, c_int, c_int, c_int, c_int)| {
-            unsafe { sl_pc_addhealth_extend(this.ptr, dmg, sleep, deduct, ac, ds, print) }; Ok(())
+        methods.add_method("addHealthExtend", |_, this, (dmg, _sleep, _deduct, _ac, _ds, _print): (c_int, c_int, c_int, c_int, c_int, c_int)| {
+            unsafe { sl_pc_addhealth_extend(this.ptr, dmg) }; Ok(())
         });
-        methods.add_method("removeHealthExtend", |_, this, (dmg, sleep, deduct, ac, ds, print): (c_int, c_int, c_int, c_int, c_int, c_int)| {
-            unsafe { sl_pc_removehealth_extend(this.ptr, dmg, sleep, deduct, ac, ds, print) }; Ok(())
+        methods.add_method("removeHealthExtend", |_, this, (dmg, _sleep, _deduct, _ac, _ds, _print): (c_int, c_int, c_int, c_int, c_int, c_int)| {
+            unsafe { sl_pc_removehealth_extend(this.ptr, dmg) }; Ok(())
         });
         methods.add_method("addHealth2", |_, this, (amount, typ): (c_int, c_int)| {
             unsafe { sl_pc_addhealth2(this.ptr, amount, typ) }; Ok(())
@@ -1812,7 +1289,7 @@ impl UserData for PcObject {
         methods.add_method("addGold",    |_, this, amount: c_int| { unsafe { sl_pc_addgold(this.ptr, amount) }; Ok(()) });
         methods.add_method("removeGold", |_, this, amount: c_int| { unsafe { sl_pc_removegold(this.ptr, amount) }; Ok(()) });
         methods.add_method("logBuySell", |_, this, (item, amount, gold, flag): (c_int, c_int, c_int, c_int)| {
-            unsafe { sl_pc_logbuysell(this.ptr, item, amount, gold, flag) }; Ok(())
+            unsafe { sl_pc_logbuysell(this.ptr, item as c_uint, amount as c_uint, gold as c_uint, flag) }; Ok(())
         });
 
         // ── Ranged ───────────────────────────────────────────────────────────────
@@ -1875,30 +1352,30 @@ impl UserData for PcObject {
         });
         methods.add_method("removeParcel", |_, this, (sender, item, amount, pos, owner, engrave, npcflag): (c_int, c_int, c_int, c_int, c_int, String, c_int)| {
             if let Ok(cs) = CString::new(engrave.as_bytes()) {
-                unsafe { sl_pc_removeparcel(this.ptr, sender, item, amount, pos, owner, cs.as_ptr(), npcflag) };
+                unsafe { sl_pc_removeparcel(this.ptr, sender, item as c_uint, amount as c_uint, pos, owner as c_uint, cs.as_ptr(), npcflag) };
             }
             Ok(())
         });
         methods.add_method("expireItem", |_, this, ()| { unsafe { sl_pc_expireitem(this.ptr) }; Ok(()) });
-        methods.add_method("addGuide", |_, this, guide: String| {
-            if let Ok(cs) = CString::new(guide.as_bytes()) { unsafe { sl_pc_addguide(this.ptr, cs.as_ptr()) }; }
+        methods.add_method("addGuide", |_, this, _guide: String| {
+            unsafe { sl_pc_addguide(this.ptr, 0) };
             Ok(())
         });
-        methods.add_method("delGuide", |_, this, guide: String| {
-            if let Ok(cs) = CString::new(guide.as_bytes()) { unsafe { sl_pc_delguide(this.ptr, cs.as_ptr()) }; }
+        methods.add_method("delGuide", |_, this, _guide: String| {
+            unsafe { sl_pc_delguide(this.ptr, 0) };
             Ok(())
         });
         methods.add_method("mapSelection", |_, _this, _: mlua::MultiValue| Ok(mlua::Value::Nil));
         methods.add_method("getCreationItems", |lua, this, len: c_int| {
             let max = (len.max(0) as usize).min(52);
-            let mut out: Vec<c_int> = vec![0; max.max(1)];
+            let mut out: Vec<c_uint> = vec![0; max.max(1)];
             let count = unsafe { sl_pc_getcreationitems(this.ptr, len, out.as_mut_ptr()) } as usize;
             let tbl = lua.create_table()?;
             for (i, &v) in out[..count.min(max)].iter().enumerate() { tbl.raw_set(i + 1, v as i64)?; }
             Ok(tbl)
         });
         methods.add_method("getCreationAmounts", |_, this, (len, item_id): (c_int, c_int)| {
-            Ok(unsafe { sl_pc_getcreationamounts(this.ptr, len, item_id) })
+            Ok(unsafe { sl_pc_getcreationamounts(this.ptr, len, item_id as c_uint) })
         });
 
         // ── Async dialog methods — Task 10 ───────────────────────────────────

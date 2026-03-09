@@ -3,6 +3,7 @@
 #![allow(non_snake_case, dead_code)]
 
 use std::ffi::{c_char, c_int, c_uint, c_uchar, c_ushort, c_void};
+use std::sync::atomic::{AtomicU32, Ordering};
 use crate::database::map_db::{BlockList, GlobalReg};
 use crate::servers::char::charstatus::{Item, MAX_EQUIP};
 use crate::game::types::GfxViewer;
@@ -106,48 +107,44 @@ pub struct NpcData {
 // NPC ID counters — match C globals npc_id and npctemp_id.
 // #[export_name] exports as "npc_id" so map_server.c can read it directly
 // while keeping the Rust-idiomatic SCREAMING_SNAKE_CASE name internally.
+// AtomicU32 has the same ABI as u32 on x86-64.
 #[export_name = "npc_id"]
-pub static mut NPC_ID: c_uint = NPC_START_NUM as c_uint;
-pub static mut NPCTEMP_ID: c_uint = NPCT_START_NUM as c_uint;
+pub static NPC_ID: AtomicU32 = AtomicU32::new(NPC_START_NUM);
+pub static NPCTEMP_ID: AtomicU32 = AtomicU32::new(NPCT_START_NUM);
 
-// C map functions needed by npc_get_new_npcid / npc_get_new_npctempid
-extern "C" {
-    pub fn map_id2bl(id: c_uint) -> *mut c_void;
-    pub fn map_id2npc(id: c_uint) -> *mut NpcData;
-    pub fn map_addiddb(bl: *mut BlockList);
-    pub fn map_deliddb(bl: *mut BlockList);
-    pub fn map_addblock(bl: *mut BlockList) -> c_int;
-    pub fn map_delblock(bl: *mut BlockList) -> c_int;
-    pub fn map_foreachinarea(
-        f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
-        m: c_int, x: c_int, y: c_int, range: c_int, t: c_int,
-        ...
-    ) -> c_int;
-    pub fn clif_lookgone(bl: *mut BlockList);
-    pub fn clif_cnpclook_sub(bl: *mut BlockList, ...) -> c_int;
-    pub fn clif_object_look_sub2(bl: *mut BlockList, ...) -> c_int;
-    pub fn map_foreachincell(
-        f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
-        m: c_int, x: c_int, y: c_int, t: c_int,
-        ...
-    ) -> c_int;
-    pub fn map_foreachinblock(
-        f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
-        m: c_int, x0: c_int, y0: c_int, x1: c_int, y1: c_int, t: c_int,
-        ...
-    ) -> c_int;
-    pub fn map_canmove(m: c_int, x: c_int, y: c_int) -> c_int;
-    pub fn map_moveblock(bl: *mut BlockList, x: c_int, y: c_int) -> c_int;
-    pub fn clif_object_canmove(m: c_int, x: c_int, y: c_int, dir: c_int) -> c_int;
-    pub fn clif_object_canmove_from(m: c_int, x: c_int, y: c_int, dir: c_int) -> c_int;
-    pub fn clif_mob_look_start_func(bl: *mut BlockList, ...) -> c_int;
-    pub fn clif_mob_look_close_func(bl: *mut BlockList, ...) -> c_int;
-    pub fn clif_object_look_sub(bl: *mut BlockList, ...) -> c_int;
-    pub fn clif_npc_move(bl: *mut BlockList, ...) -> c_int;
-    /// Returns USER* (opaque — the USER struct has BlockList as its first field).
-    pub fn map_id2sd(id: c_uint) -> *mut std::ffi::c_void;
-    // (sl_doscript_blargs variadic shim removed; use helpers below)
+// Direct Rust imports replacing extern "C" declarations.
+#[cfg(not(test))]
+use crate::game::map_server::{
+    map_addiddb, map_deliddb, map_canmove, map_id2npc,
+};
+#[cfg(not(test))]
+use crate::game::block::{map_addblock, map_delblock, map_moveblock};
+#[cfg(not(test))]
+use crate::game::map_parse::visual::clif_lookgone;
+#[cfg(not(test))]
+use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from};
+
+// map_id2bl returns *mut c_void; wrap for c_void usage (npc uses it as void pointer)
+#[cfg(not(test))]
+unsafe fn map_id2bl(id: c_uint) -> *mut c_void {
+    crate::game::map_server::map_id2bl(id)
 }
+
+// map_id2sd returns *mut c_void — pass through
+#[cfg(not(test))]
+unsafe fn map_id2sd(id: c_uint) -> *mut c_void {
+    crate::game::map_server::map_id2sd(id)
+}
+
+// Variadic extern "C" (must keep for fn pointer type compatibility)
+#[cfg(not(test))]
+// Replacing extern "C" variadic block with typed Rust imports.
+use crate::game::block::{foreach_in_area, foreach_in_cell, foreach_in_rect, AreaType};
+use crate::game::map_parse::visual::{
+    clif_cnpclook_inner, clif_mob_look_start_func_inner, clif_mob_look_close_func_inner,
+    clif_object_look_sub_inner, clif_object_look_sub2_inner,
+};
+use crate::game::map_parse::movement::clif_npc_move_inner;
 
 /// Dispatch a Lua event with a single block_list argument.
 unsafe fn sl_doscript_simple(root: *const c_char, method: *const c_char, bl: *mut BlockList) -> c_int {
@@ -179,17 +176,19 @@ const LOOK_SEND: c_int = 1;
 /// calls `map_id2bl` which reads the C-managed entity table.
 pub unsafe fn npc_get_new_npcid() -> c_uint {
     let mut x = NPC_START_NUM;
-    while x <= NPC_ID {
-        if x == NPC_ID {
-            NPC_ID += 1;
+    loop {
+        let cur = NPC_ID.load(Ordering::Relaxed);
+        if x > cur { break; }
+        if x == cur {
+            NPC_ID.store(cur + 1, Ordering::Relaxed);
         }
         if map_id2bl(x).is_null() {
             return x;
         }
         x += 1;
     }
-    NPC_ID += 1;
-    NPC_ID
+    NPC_ID.fetch_add(1, Ordering::Relaxed);
+    NPC_ID.load(Ordering::Relaxed)
 }
 
 /// Returns an available temp NPC ID.
@@ -203,17 +202,19 @@ pub unsafe fn npc_get_new_npcid() -> c_uint {
 /// Same requirements as [`npc_get_new_npcid`].
 pub unsafe fn npc_get_new_npctempid() -> c_uint {
     let mut x = NPCT_START_NUM;
-    while x <= NPCTEMP_ID {
-        if x == NPCTEMP_ID {
-            NPCTEMP_ID += 1;
+    loop {
+        let cur = NPCTEMP_ID.load(Ordering::Relaxed);
+        if x > cur { break; }
+        if x == cur {
+            NPCTEMP_ID.store(cur + 1, Ordering::Relaxed);
         }
         if map_id2bl(x).is_null() {
             return x;
         }
         x += 1;
     }
-    NPCTEMP_ID += 1;
-    NPCTEMP_ID
+    NPCTEMP_ID.fetch_add(1, Ordering::Relaxed);
+    NPCTEMP_ID.load(Ordering::Relaxed)
 }
 
 /// Decrements the temp NPC ID counter when a temp NPC is removed.
@@ -228,7 +229,8 @@ pub unsafe fn npc_get_new_npctempid() -> c_uint {
 pub unsafe fn npc_idlower(id: c_int) -> c_int {
     let id_u = id as c_uint;
     if id_u >= NPCT_START_NUM && id_u != F1_NPC {
-        NPCTEMP_ID = NPCTEMP_ID.saturating_sub(1);
+        let cur = NPCTEMP_ID.load(Ordering::Relaxed);
+        NPCTEMP_ID.store(cur.saturating_sub(1), Ordering::Relaxed);
     }
     0
 }
@@ -344,17 +346,13 @@ pub unsafe fn npc_warp(nd: *mut NpcData, m: c_int, x: c_int, y: c_int) -> c_int 
     }
 
     if nd.npctype == 1 {
-        map_foreachinarea(
-            clif_cnpclook_sub,
-            m, x, y, AREA, BL_PC,
-            LOOK_SEND, nd as *mut NpcData,
-        );
+        let nd_bl = nd as *mut NpcData as *mut BlockList;
+        foreach_in_area(m, x, y, AreaType::Area, BL_PC,
+            |bl| clif_cnpclook_inner(bl, LOOK_SEND, nd_bl));
     } else {
-        map_foreachinarea(
-            clif_object_look_sub2,
-            m, x, y, AREA, BL_PC,
-            LOOK_SEND, nd as *mut NpcData,
-        );
+        let nd_bl = nd as *mut NpcData as *mut BlockList;
+        foreach_in_area(m, x, y, AreaType::Area, BL_PC,
+            |bl| clif_object_look_sub2_inner(bl, LOOK_SEND, nd_bl));
     }
     0
 }
@@ -479,11 +477,11 @@ pub unsafe fn npc_duration(nd: *mut NpcData) -> c_int {
 ///
 /// Caller must hold the server-wide lock.  `map_id2npc` must be safe to call
 /// for any ID in the scanned ranges.
-#[no_mangle]
-pub unsafe extern "C" fn npc_runtimers(_id: c_int, _n: c_int) -> c_int {
+pub unsafe fn npc_runtimers(_id: c_int, _n: c_int) -> c_int {
     // regular NPCs
     let mut x = NPC_START_NUM;
-    while x <= NPC_ID {
+    let npc_hi = NPC_ID.load(Ordering::Relaxed);
+    while x <= npc_hi {
         let nd = map_id2npc(x);
         if !nd.is_null() {
             if (*nd).actiontime > 0 {
@@ -501,7 +499,8 @@ pub unsafe extern "C" fn npc_runtimers(_id: c_int, _n: c_int) -> c_int {
 
     // temp NPCs
     let mut x = NPCT_START_NUM;
-    while x <= NPCTEMP_ID {
+    let npct_hi = NPCTEMP_ID.load(Ordering::Relaxed);
+    while x <= npct_hi {
         let nd = map_id2npc(x);
         if !nd.is_null() {
             if (*nd).actiontime > 0 {
@@ -625,8 +624,7 @@ pub async unsafe fn warp_init_async() -> c_int {
 
 /// Blocking wrapper. Must be called after the sqlx pool is initialized.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn warp_init() -> c_int {
+pub unsafe fn warp_init() -> c_int {
     blocking_run(async { unsafe { warp_init_async().await } })
 }
 
@@ -636,8 +634,7 @@ pub unsafe extern "C" fn warp_init() -> c_int {
 
 #[cfg(not(test))]
 fn server_id() -> u32 {
-    extern "C" { static serverid: c_int; }
-    unsafe { serverid as u32 }
+    unsafe { crate::config_globals::serverid as u32 }
 }
 
 #[cfg(not(test))]
@@ -783,7 +780,7 @@ pub async unsafe fn npc_init_async() -> c_int {
                 (*nd).bl.id = F1_NPC;
             } else if row.row_npc_id >= 2 {
                 (*nd).bl.id = NPC_START_NUM + row.row_npc_id - 2;
-                NPC_ID = NPC_START_NUM + row.row_npc_id - 2;
+                NPC_ID.store(NPC_START_NUM + row.row_npc_id - 2, Ordering::Relaxed);
             } else {
                 tracing::error!("[npc] row_npc_id={} < 2, cannot compute NPC ID", row.row_npc_id);
             }
@@ -801,7 +798,8 @@ pub async unsafe fn npc_init_async() -> c_int {
     // Equipment loading: loop from NPC_START_NUM to NPC_ID
     // For each NPC with npctype == 1, load equipment from NPCEquipment table
     let mut x = NPC_START_NUM;
-    while x <= NPC_ID {
+    let npc_hi = NPC_ID.load(Ordering::Relaxed);
+    while x <= npc_hi {
         let nd: *mut NpcData = map_id2npc(x);
         if !nd.is_null() && (*nd).npctype == 1 {
             let nd_id = (*nd).id;
@@ -854,8 +852,7 @@ pub async unsafe fn npc_init_async() -> c_int {
 
 /// Blocking wrapper. Must be called after the sqlx pool is initialized.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn npc_init() -> c_int {
+pub unsafe fn npc_init() -> c_int {
     blocking_run(async { unsafe { npc_init_async().await } })
 }
 
@@ -868,8 +865,7 @@ pub unsafe extern "C" fn npc_init() -> c_int {
 ///
 /// # Safety
 /// `bl` must point to a valid `MobSpawnData` (i.e. `bl.bl_type == BL_MOB`).
-#[no_mangle]
-pub unsafe extern "C" fn npc_helper_mob_is_dead(bl: *mut BlockList) -> c_int {
+pub unsafe fn npc_helper_mob_is_dead(bl: *mut BlockList) -> c_int {
     if bl.is_null() { return 0; }
     let mob = bl as *const crate::game::mob::MobSpawnData;
     if (*mob).state == crate::game::mob::MOB_DEAD { 1 } else { 0 }
@@ -883,8 +879,7 @@ pub unsafe extern "C" fn npc_helper_mob_is_dead(bl: *mut BlockList) -> c_int {
 /// `bl` must point to a valid `MapSessionData` and `npc_bl` to a valid `BlockList`
 /// whose `.m` field is a loaded map ID.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn npc_helper_pc_is_skip(bl: *mut BlockList, npc_bl: *mut BlockList) -> c_int {
+pub unsafe fn npc_helper_pc_is_skip(bl: *mut BlockList, npc_bl: *mut BlockList) -> c_int {
     use crate::game::pc::{MapSessionData, PC_DIE};
     if bl.is_null() || npc_bl.is_null() { return 0; }
     let sd = bl as *const MapSessionData;
@@ -907,7 +902,7 @@ pub unsafe extern "C" fn npc_helper_pc_is_skip(bl: *mut BlockList, npc_bl: *mut 
 
 /// Test stub — map access is not available in unit tests.
 #[cfg(test)]
-pub unsafe extern "C" fn npc_helper_pc_is_skip(_bl: *mut BlockList, _npc_bl: *mut BlockList) -> c_int {
+pub unsafe fn npc_helper_pc_is_skip(_bl: *mut BlockList, _npc_bl: *mut BlockList) -> c_int {
     0
 }
 
@@ -930,9 +925,7 @@ pub unsafe extern "C" fn npc_helper_pc_is_skip(_bl: *mut BlockList, _npc_bl: *mu
 ///
 /// Must only be called by `map_foreachincell`. `ap` must contain exactly one
 /// argument: a `*mut NpcData`.
-#[no_mangle]
-pub unsafe extern "C" fn npc_move_sub(bl: *mut BlockList, mut ap: ...) -> c_int {
-    let nd = ap.arg::<*mut NpcData>();
+pub unsafe fn npc_move_sub_inner(bl: *mut BlockList, nd: *mut NpcData) -> i32 {
     if nd.is_null() || bl.is_null() { return 0; }
     if (*nd).canmove == 1 { return 0; }
 
@@ -1074,9 +1067,9 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> c_int {
 
     // Check for blockers in destination cell
     nd.canmove = 0;
-    map_foreachincell(npc_move_sub, m, dx, dy, BL_MOB, nd as *mut NpcData);
-    map_foreachincell(npc_move_sub, m, dx, dy, BL_PC,  nd as *mut NpcData);
-    map_foreachincell(npc_move_sub, m, dx, dy, BL_NPC, nd as *mut NpcData);
+    foreach_in_cell(m, dx, dy, BL_MOB, |bl| npc_move_sub_inner(bl, nd as *mut NpcData));
+    foreach_in_cell(m, dx, dy, BL_PC,  |bl| npc_move_sub_inner(bl, nd as *mut NpcData));
+    foreach_in_cell(m, dx, dy, BL_NPC, |bl| npc_move_sub_inner(bl, nd as *mut NpcData));
 
     if clif_object_canmove(m, dx, dy, direction) != 0 {
         nd.canmove = 0;
@@ -1106,40 +1099,27 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> c_int {
         map_moveblock(&raw mut nd.bl, dx, dy);
 
         if nothingnew == 0 {
+            let nm = nd.bl.m as i32;
             if nd.npctype == 1 {
-                map_foreachinblock(
-                    clif_cnpclook_sub,
-                    nd.bl.m as c_int, x0, y0, x0 + x1 - 1, y0 + y1 - 1,
-                    BL_PC,
-                    LOOK_SEND as c_int, nd as *mut NpcData,
-                );
+                let nd_bl = nd as *mut NpcData as *mut BlockList;
+                foreach_in_rect(nm, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC,
+                    |bl| clif_cnpclook_inner(bl, LOOK_SEND, nd_bl));
             } else {
-                map_foreachinblock(
-                    clif_mob_look_start_func,
-                    nd.bl.m as c_int, x0, y0, x0 + x1 - 1, y0 + y1 - 1,
-                    BL_PC,
-                    nd as *mut NpcData,
-                );
-                map_foreachinblock(
-                    clif_object_look_sub,
-                    nd.bl.m as c_int, x0, y0, x0 + x1 - 1, y0 + y1 - 1,
-                    BL_PC,
-                    LOOK_SEND as c_int, &raw mut nd.bl,
-                );
-                map_foreachinblock(
-                    clif_mob_look_close_func,
-                    nd.bl.m as c_int, x0, y0, x0 + x1 - 1, y0 + y1 - 1,
-                    BL_PC,
-                    nd as *mut NpcData,
-                );
+                let nd_ptr = nd as *mut NpcData;
+                foreach_in_rect(nm, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC,
+                    |bl| clif_mob_look_start_func_inner(bl));
+                let nd_bl = &raw mut nd.bl;
+                foreach_in_rect(nm, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC,
+                    |bl| clif_object_look_sub_inner(bl, LOOK_SEND, nd_bl));
+                foreach_in_rect(nm, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC,
+                    |bl| clif_mob_look_close_func_inner(bl));
+                let _ = nd_ptr;
             }
         }
 
-        map_foreachinarea(
-            clif_npc_move,
-            m, nd.bl.x as c_int, nd.bl.y as c_int, AREA, BL_PC,
-            LOOK_SEND as c_int, nd as *mut NpcData,
-        );
+        let nd_ptr = nd as *mut NpcData;
+        foreach_in_area(m, nd.bl.x as i32, nd.bl.y as i32, AreaType::Area, BL_PC,
+            |bl| clif_npc_move_inner(bl, nd_ptr));
         return 1;
     }
     0
@@ -1209,88 +1189,78 @@ mod tests {
 
     #[test]
     fn npc_idlower_decrements_temp() {
+        use std::sync::atomic::Ordering;
         unsafe {
-            let orig = NPCTEMP_ID;
-            NPCTEMP_ID = NPCT_START_NUM + 5;
+            let orig = NPCTEMP_ID.load(Ordering::Relaxed);
+            NPCTEMP_ID.store(NPCT_START_NUM + 5, Ordering::Relaxed);
             npc_idlower((NPCT_START_NUM + 1) as c_int);
-            assert_eq!(NPCTEMP_ID, NPCT_START_NUM + 4);
-            NPCTEMP_ID = orig;
+            assert_eq!(NPCTEMP_ID.load(Ordering::Relaxed), NPCT_START_NUM + 4);
+            NPCTEMP_ID.store(orig, Ordering::Relaxed);
         }
     }
 
     #[test]
     fn npc_idlower_ignores_regular_npc() {
+        use std::sync::atomic::Ordering;
         unsafe {
-            let orig = NPCTEMP_ID;
-            NPCTEMP_ID = NPCT_START_NUM + 5;
+            let orig = NPCTEMP_ID.load(Ordering::Relaxed);
+            NPCTEMP_ID.store(NPCT_START_NUM + 5, Ordering::Relaxed);
             // NPC_START_NUM is not a temp NPC — counter should not change
             npc_idlower(NPC_START_NUM as c_int);
-            assert_eq!(NPCTEMP_ID, NPCT_START_NUM + 5);
-            NPCTEMP_ID = orig;
+            assert_eq!(NPCTEMP_ID.load(Ordering::Relaxed), NPCT_START_NUM + 5);
+            NPCTEMP_ID.store(orig, Ordering::Relaxed);
         }
     }
 }
 
 // ─── FFI bridge (moved from src/ffi/npc.rs) ───────────────────────────────
 
-// npc_init, warp_init, and npc_runtimers are #[no_mangle] on the original function definitions above.
+// npc_init, warp_init, and npc_runtimers are on the original function definitions above.
 
-#[no_mangle]
-pub unsafe extern "C" fn npc_action_ffi(nd: *mut NpcData) -> c_int {
+pub unsafe fn npc_action_ffi(nd: *mut NpcData) -> c_int {
     npc_action(nd)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn npc_movetime_ffi(nd: *mut NpcData) -> c_int {
+pub unsafe fn npc_movetime_ffi(nd: *mut NpcData) -> c_int {
     npc_movetime(nd)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn npc_duration_ffi(nd: *mut NpcData) -> c_int {
+pub unsafe fn npc_duration_ffi(nd: *mut NpcData) -> c_int {
     npc_duration(nd)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn npc_warp_ffi(nd: *mut NpcData, m: c_int, x: c_int, y: c_int) -> c_int {
+pub unsafe fn npc_warp_ffi(nd: *mut NpcData, m: c_int, x: c_int, y: c_int) -> c_int {
     npc_warp(nd, m, x, y)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn npc_move_ffi(nd: *mut NpcData) -> c_int {
+pub unsafe fn npc_move_ffi(nd: *mut NpcData) -> c_int {
     npc_move(nd)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn npc_readglobalreg_ffi(nd: *mut NpcData, reg: *const c_char) -> c_int {
+pub unsafe fn npc_readglobalreg_ffi(nd: *mut NpcData, reg: *const c_char) -> c_int {
     npc_readglobalreg(nd, reg)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn npc_setglobalreg_ffi(nd: *mut NpcData, reg: *const c_char, val: c_int) -> c_int {
+pub unsafe fn npc_setglobalreg_ffi(nd: *mut NpcData, reg: *const c_char, val: c_int) -> c_int {
     npc_setglobalreg(nd, reg, val)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn npc_idlower_ffi(id: c_int) -> c_int {
+pub unsafe fn npc_idlower_ffi(id: c_int) -> c_int {
     npc_idlower(id)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn npc_src_clear_ffi() -> c_int {
+pub unsafe fn npc_src_clear_ffi() -> c_int {
     npc_src_clear()
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn npc_src_add_ffi(f: *const c_char) -> c_int {
+pub unsafe fn npc_src_add_ffi(f: *const c_char) -> c_int {
     npc_src_add(f)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn npc_warp_add_ffi(f: *const c_char) -> c_int {
+pub unsafe fn npc_warp_add_ffi(f: *const c_char) -> c_int {
     npc_warp_add(f)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn npc_get_new_npctempid_ffi() -> c_uint {
+pub unsafe fn npc_get_new_npctempid_ffi() -> c_uint {
     npc_get_new_npctempid()
 }

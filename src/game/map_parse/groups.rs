@@ -1,6 +1,6 @@
 //! Port of group/party and related UI functions from `c_src/map_parse.c`.
 //!
-//! Functions declared `#[no_mangle] pub unsafe extern "C"` so they remain
+//! Functions declared `pub unsafe extern "C"` so they remain
 //! callable from any remaining C code that has not yet been ported.
 //!
 //! Group state is stored in the global flat array
@@ -30,9 +30,8 @@ use super::packet::{
     encrypt,
     rfifob, rfifop,
     wfifob, wfifoset, wfifohead,
-    map_foreachinarea, map_foreachincell,
-    SAMEMAP,
 };
+use crate::game::block::{foreach_in_area, foreach_in_cell, AreaType};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -41,36 +40,27 @@ const MAX_GROUPS: usize = 256;
 // BL_ALL: all block-list types (from map_server.h enum)
 const BL_ALL: c_int = 0x0F;
 
-// ─── C FFI declarations ───────────────────────────────────────────────────────
+// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
 
-extern "C" {
-    fn clif_sendminitext(sd: *mut MapSessionData, msg: *const c_char) -> c_int;
-    fn clif_sendstatus(sd: *mut MapSessionData, flags: c_int) -> c_int;
-    fn map_id2sd(id: c_uint) -> *mut MapSessionData;
-    fn map_name2sd(name: *const c_char) -> *mut MapSessionData;
-    fn map_firstincell(m: c_int, x: c_int, y: c_int, bl_type: c_int) -> *mut BlockList;
-    fn clif_object_canmove(m: c_int, x: c_int, y: c_int, side: c_int) -> c_int;
+use crate::game::map_parse::chat::clif_sendminitext;
+use crate::game::map_server::{map_name2sd, groups as groups_raw};
+use crate::game::block::map_firstincell;
+use crate::game::map_parse::movement::clif_object_canmove;
+use crate::database::class_db::{rust_classdb_path as classdb_path, rust_classdb_level as classdb_level};
+use crate::database::item_db::{
+    rust_itemdb_look as itemdb_look, rust_itemdb_lookcolor as itemdb_lookcolor,
+};
 
-    #[link_name = "rust_classdb_path"]
-    fn classdb_path(id: c_int) -> c_int;
+// map_id2sd in map_server returns *mut c_void — wrap with cast.
+#[inline]
+unsafe fn map_id2sd(id: c_uint) -> *mut MapSessionData {
+    crate::game::map_server::map_id2sd(id) as *mut MapSessionData
+}
 
-    #[link_name = "rust_classdb_level"]
-    fn classdb_level(path: c_int, lvl: c_int) -> c_uint;
-
-    #[link_name = "rust_itemdb_look"]
-    fn itemdb_look(id: c_uint) -> c_int;
-
-    #[link_name = "rust_itemdb_lookcolor"]
-    fn itemdb_lookcolor(id: c_uint) -> c_int;
-
-    #[link_name = "rust_pc_isequip"]
-    fn pc_isequip(sd: *mut MapSessionData, slot: c_int) -> c_uint;
-
-
-    // groups global: extern unsigned int groups[MAX_GROUPS][MAX_GROUP_MEMBERS]
-    // Declared in pc.rs but re-accessed here via a raw link
-    #[link_name = "groups"]
-    static mut groups_raw: [c_uint; 65536]; // 256 * 256
+// pc_isequip returns c_int; usage here expects c_uint — wrap with cast.
+#[inline]
+unsafe fn pc_isequip(sd: *mut MapSessionData, slot: c_int) -> c_uint {
+    crate::game::pc::rust_pc_isequip(sd, slot) as c_uint
 }
 
 /// Dispatch a Lua event with two block_list arguments.
@@ -88,6 +78,7 @@ unsafe fn groups_get(groupid: usize, slot: usize) -> c_uint {
     groups_raw[groupid.min(MAX_GROUPS - 1) * MAX_GROUP_MEMBERS + slot.min(MAX_GROUP_MEMBERS - 1)]
 }
 
+#[allow(dead_code)]
 #[inline]
 unsafe fn groups_set(groupid: usize, slot: usize, val: c_uint) {
     groups_raw[groupid.min(MAX_GROUPS - 1) * MAX_GROUP_MEMBERS + slot.min(MAX_GROUP_MEMBERS - 1)] = val;
@@ -121,8 +112,7 @@ unsafe fn wfifol_be(fd: c_int, pos: usize, val: u32) {
 // ─── clif_groupstatus ─────────────────────────────────────────────────────────
 
 /// Send full group status packet to `sd`.  C line 8343.
-#[no_mangle]
-pub unsafe extern "C" fn clif_groupstatus(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
 
     let mut rogue:   [c_uint; 256] = [0; 256];
@@ -314,8 +304,7 @@ pub unsafe extern "C" fn clif_groupstatus(sd: *mut MapSessionData) -> c_int {
 // ─── clif_grouphealth_update ──────────────────────────────────────────────────
 
 /// Send per-member HP/MP update and re-send full group status.  C line 8565.
-#[no_mangle]
-pub unsafe extern "C" fn clif_grouphealth_update(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_grouphealth_update(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
 
     let group_count = (*sd).group_count as usize;
@@ -361,8 +350,7 @@ pub unsafe extern "C" fn clif_grouphealth_update(sd: *mut MapSessionData) -> c_i
 // ─── clif_addgroup ────────────────────────────────────────────────────────────
 
 /// Add a player by name to the caller's group.  C line 8638.
-#[no_mangle]
-pub unsafe extern "C" fn clif_addgroup(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_addgroup(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
 
     let name_len = rfifob((*sd).fd, 5) as usize;
@@ -471,8 +459,7 @@ pub unsafe extern "C" fn clif_addgroup(sd: *mut MapSessionData) -> c_int {
 // ─── clif_updategroup ─────────────────────────────────────────────────────────
 
 /// Broadcast a group message to all members and refresh their status.  C line 8727.
-#[no_mangle]
-pub unsafe extern "C" fn clif_updategroup(
+pub unsafe fn clif_updategroup(
     sd:      *mut MapSessionData,
     message: *mut c_char,
 ) -> c_int {
@@ -504,8 +491,7 @@ pub unsafe extern "C" fn clif_updategroup(
 // ─── clif_leavegroup ──────────────────────────────────────────────────────────
 
 /// Remove the caller from their current group.  C line 8756.
-#[no_mangle]
-pub unsafe extern "C" fn clif_leavegroup(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_leavegroup(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
 
     let group_count = (*sd).group_count as usize;
@@ -550,8 +536,7 @@ pub unsafe extern "C" fn clif_leavegroup(sd: *mut MapSessionData) -> c_int {
 // ─── clif_findmount ───────────────────────────────────────────────────────────
 
 /// Find a mountable mob adjacent to `sd` and fire the onMount script.  C line 8794.
-#[no_mangle]
-pub unsafe extern "C" fn clif_findmount(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_findmount(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
 
     let (mut x, mut y) = ((*sd).bl.x as c_int, (*sd).bl.y as c_int);
@@ -585,8 +570,7 @@ pub unsafe extern "C" fn clif_findmount(sd: *mut MapSessionData) -> c_int {
 // ─── clif_isingroup ───────────────────────────────────────────────────────────
 
 /// Return 1 if `tsd` is in `sd`'s group, 0 otherwise.  C line 9139.
-#[no_mangle]
-pub unsafe extern "C" fn clif_isingroup(
+pub unsafe fn clif_isingroup(
     sd:  *mut MapSessionData,
     tsd: *mut MapSessionData,
 ) -> c_int {
@@ -603,23 +587,17 @@ pub unsafe extern "C" fn clif_isingroup(
     0
 }
 
-// ─── clif_canmove_sub ─────────────────────────────────────────────────────────
+// ─── clif_canmove_sub_inner ───────────────────────────────────────────────────
 
-/// `map_foreachincell` callback: sets `sd->canmove = 1` if `bl` blocks movement.
+/// Typed inner function replacing the old variadic `clif_canmove_sub` callback.
 ///
-/// va_list argument order (matches C):
-///   1. `USER *sd`  — the moving player (input)
-///
-/// The function writes `sd->canmove = 1` directly on the struct; it does NOT
-/// write through a pointer output parameter.  C line 9148.
-#[no_mangle]
-pub unsafe extern "C" fn clif_canmove_sub(
+/// Sets `sd->canmove = 1` if `bl` blocks movement.
+/// C line 9148.
+pub unsafe fn clif_canmove_sub_inner(
     bl: *mut BlockList,
-    mut ap: ...
-) -> c_int {
+    sd: *mut MapSessionData,
+) -> i32 {
     if bl.is_null() { return 0; }
-
-    let sd: *mut MapSessionData = ap.arg();
     if sd.is_null() { return 0; }
 
     if (*sd).canmove == 1 { return 0; }
@@ -666,8 +644,7 @@ pub unsafe extern "C" fn clif_canmove_sub(
 /// Check whether `sd` can move in direction `direct`.  C line 9189.
 ///
 /// Returns `sd->canmove` (0 = blocked by nothing, 1 = something is blocking).
-#[no_mangle]
-pub unsafe extern "C" fn clif_canmove(
+pub unsafe fn clif_canmove(
     sd:     *mut MapSessionData,
     direct: c_int,
 ) -> c_int {
@@ -684,9 +661,9 @@ pub unsafe extern "C" fn clif_canmove(
         _ => {}
     }
 
-    map_foreachincell(clif_canmove_sub, (*sd).bl.m as c_int, (*sd).bl.x as c_int, (*sd).bl.y as c_int, BL_MOB, sd);
-    map_foreachincell(clif_canmove_sub, (*sd).bl.m as c_int, (*sd).bl.x as c_int, (*sd).bl.y as c_int, BL_PC,  sd);
-    map_foreachincell(clif_canmove_sub, (*sd).bl.m as c_int, nx, ny, BL_PC, sd);
+    foreach_in_cell((*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32, BL_MOB, |bl| clif_canmove_sub_inner(bl, sd));
+    foreach_in_cell((*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32, BL_PC,  |bl| clif_canmove_sub_inner(bl, sd));
+    foreach_in_cell((*sd).bl.m as i32, nx, ny, BL_PC, |bl| clif_canmove_sub_inner(bl, sd));
 
     if clif_object_canmove((*sd).bl.m as c_int, nx, ny, direct) != 0 {
         (*sd).canmove = 1;
@@ -700,8 +677,7 @@ pub unsafe extern "C" fn clif_canmove(
 ///
 /// # Safety
 /// `x0`, `y0`, `mname`, `id`, `x1`, `y1` must each point to at least `i` valid elements.
-#[no_mangle]
-pub unsafe extern "C" fn clif_mapselect(
+pub unsafe fn clif_mapselect(
     sd:    *mut MapSessionData,
     wm:    *const c_char,
     x0:    *const c_int,
@@ -765,27 +741,22 @@ pub unsafe extern "C" fn clif_mapselect(
 
 // ─── clif_pb_sub ──────────────────────────────────────────────────────────────
 
-/// `map_foreachinarea` callback for powerboard: writes one player entry.
+/// Typed inner function replacing the old variadic `clif_pb_sub` callback.
 ///
-/// va_list argument order (matches C):
-///   1. `USER *sd`   — the player whose WFIFO buffer is being written (input)
-///   2. `int *len`   — pointer to `int[2]`: len[0] = byte offset, len[1] = count (input+output)
-///
-/// The callback reads and mutates both `len[0]` and `len[1]` in-place.  C line 9352.
-#[no_mangle]
-pub unsafe extern "C" fn clif_pb_sub(
+/// Powerboard callback: writes one player entry.
+/// `bl` is the player being rendered, `sd` is the player whose WFIFO buffer is being written,
+/// `len_ptr` points to `int[2]`: len[0] = byte offset, len[1] = count (mutated in-place).
+/// C line 9352.
+pub unsafe fn clif_pb_sub_inner(
     bl: *mut BlockList,
-    mut ap: ...
-) -> c_int {
+    sd: *mut MapSessionData,
+    len_ptr: *mut c_int,
+) -> i32 {
     if bl.is_null() { return 0; }
 
     let tsd = bl as *mut MapSessionData;
     if tsd.is_null() { return 0; }
-
-    let sd:  *mut MapSessionData = ap.arg();
     if sd.is_null() { return 0; }
-
-    let len_ptr: *mut c_int = ap.arg();
     if len_ptr.is_null() { return 0; }
 
     let mut path = classdb_path((*tsd).status.class as c_int);
@@ -816,8 +787,7 @@ pub unsafe extern "C" fn clif_pb_sub(
 // ─── clif_sendpowerboard ──────────────────────────────────────────────────────
 
 /// Send the powerboard (class ranking) to `sd`.  C line 9389.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendpowerboard(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendpowerboard(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
 
     if rust_session_exists((*sd).fd) == 0 {
@@ -833,15 +803,14 @@ pub unsafe extern "C" fn clif_sendpowerboard(sd: *mut MapSessionData) -> c_int {
     wfifob((*sd).fd, 4, 0x03);
     wfifob((*sd).fd, 5, 1);
 
-    map_foreachinarea(
-        clif_pb_sub,
-        (*sd).bl.m as c_int,
-        (*sd).bl.x as c_int,
-        (*sd).bl.y as c_int,
-        SAMEMAP,
+    let len_ptr = len.as_mut_ptr();
+    foreach_in_area(
+        (*sd).bl.m as i32,
+        (*sd).bl.x as i32,
+        (*sd).bl.y as i32,
+        AreaType::SameMap,
         BL_PC,
-        sd,
-        len.as_mut_ptr(),
+        |bl| clif_pb_sub_inner(bl, sd, len_ptr),
     );
 
     wfifow_be((*sd).fd, 6, len[1] as u16);
@@ -853,8 +822,7 @@ pub unsafe extern "C" fn clif_sendpowerboard(sd: *mut MapSessionData) -> c_int {
 // ─── clif_parseparcel ─────────────────────────────────────────────────────────
 
 /// Handle an incoming parcel packet — inform player to see the kingdom messenger.  C line 9412.
-#[no_mangle]
-pub unsafe extern "C" fn clif_parseparcel(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parseparcel(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
     clif_sendminitext(
         sd,
@@ -867,8 +835,7 @@ pub unsafe extern "C" fn clif_parseparcel(sd: *mut MapSessionData) -> c_int {
 // ─── clif_huntertoggle ────────────────────────────────────────────────────────
 
 /// Toggle hunter mode on/off for `sd` and persist to database.  C line 9419.
-#[no_mangle]
-pub unsafe extern "C" fn clif_huntertoggle(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_huntertoggle(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
 
     (*sd).hunter = rfifob((*sd).fd, 5) as c_int;
@@ -915,8 +882,7 @@ pub unsafe extern "C" fn clif_huntertoggle(sd: *mut MapSessionData) -> c_int {
 // ─── clif_sendhunternote ──────────────────────────────────────────────────────
 
 /// Fetch and send the hunter note for a named player.  C line 9468.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendhunternote(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendhunternote(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
 
     let hname_len = rfifob((*sd).fd, 5) as usize;

@@ -22,6 +22,8 @@ use crate::game::mob::{BL_MOB, MOB_DEAD, MobSpawnData};
 //   - a module-level `map` static (same name as the production global)
 //   - BL_LIST_MAX constant matching ffi::block::BL_LIST_MAX
 //   - a sentinel BlockList node standing in for ffi::block::bl_head
+// SAFETY: Test-only mirror of database::map_db::map for block grid lookups.
+// Set once in map_initblock. Single-threaded game loop — no concurrent access.
 #[cfg(test)]
 static mut map: *mut crate::database::map_db::MapData = std::ptr::null_mut();
 
@@ -37,6 +39,7 @@ fn bl_list_max() -> usize { 32768 }
 
 /// Sentinel node used in tests as a substitute for `ffi::block::bl_head`.
 /// An entity whose `prev` points here is considered live by the traversal.
+// SAFETY: Test-only sentinel block list node. Only accessed from the single test thread.
 #[cfg(test)]
 static mut TEST_BL_HEAD: crate::database::map_db::BlockList = crate::database::map_db::BlockList {
     next:          std::ptr::null_mut(),
@@ -394,14 +397,13 @@ pub unsafe fn collect_entities(
 /// - PCs: not dead (`status.state != 1`) and not stealthed (`optFlags & OPT_FLAG_STEALTH == 0`).
 /// - All other entity types: always `true`.
 ///
-/// Requires the `map-game` feature because it imports `MapSessionData` and
-/// `OPT_FLAG_STEALTH` from the PC module.
+/// Reads `MapSessionData` and `OPT_FLAG_STEALTH` from the PC module.
 ///
 /// # Safety
 /// `bl` must be a valid, aligned pointer to a live `BlockList` (or a struct
 /// that begins with `BlockList` as its first field, such as `MapSessionData`
 /// or `MobSpawnData`).
-#[cfg(all(feature = "map-game", not(test)))]
+#[cfg(not(test))]
 pub unsafe fn is_alive(bl: *mut BlockList) -> bool {
     use crate::game::mob::BL_PC;
     use crate::game::pc::{MapSessionData, OPT_FLAG_STEALTH, PC_DIE};
@@ -430,11 +432,11 @@ pub unsafe fn is_alive(bl: *mut BlockList) -> bool {
 /// Collect up to `max` *alive* entity pointers.  Combines `collect_entities` with
 /// `is_alive` filtering.
 ///
-/// Requires the `map-game` feature (same as `is_alive`).
+/// Uses `is_alive` filtering.
 ///
 /// # Safety
 /// Same as `foreach_in_area`.
-#[cfg(all(feature = "map-game", not(test)))]
+#[cfg(not(test))]
 pub unsafe fn collect_alive(
     m: i32,
     x: i32,
@@ -585,7 +587,7 @@ mod tests {
     use std::ptr;
 
     // SAFETY NOTE: These tests mutate the `map` global pointer and must run sequentially.
-    // Run with: cargo test --features map-game -- block 2>&1 (tests are safe individually)
+    // Run with: cargo test -- block 2>&1 (tests are safe individually)
     // For parallel test runs use: -- --test-threads=1
 
     /// Allocate a zeroed MapData on the heap and set up minimum fields for a
@@ -985,21 +987,24 @@ mod tests {
 // ─── FFI exports ─────────────────────────────────────────────────────────────
 // Content moved from src/ffi/block.rs
 
-use std::os::raw::{c_int, c_uchar, c_uint, c_ushort, c_void};
+#[cfg(not(test))]
+use std::os::raw::{c_int, c_uchar, c_uint, c_ushort};
+#[cfg(not(test))]
 use crate::game::scripting::types::floor::FloorItemData;
 
 /// `ITM_TRAPS` from `item_db.h` — floor items of this type are skipped by `map_firstincell`.
+#[cfg(not(test))]
 const ITM_TRAPS: c_int = 20;
 
-extern "C" {
-    #[link_name = "rust_itemdb_type"]
-    fn itemdb_type(id: c_uint) -> c_int;
-}
+#[cfg(not(test))]
+use crate::database::item_db::rust_itemdb_type as itemdb_type;
 
 pub const BL_LIST_MAX: usize = 32768;
 
 /// Sentinel node — previously defined in map_server.c; now owned by Rust.
-#[no_mangle]
+// SAFETY: Sentinel head node for the block entity linked list.
+// Single-threaded game loop — no concurrent access.
+#[cfg(not(test))]
 pub static mut bl_head: crate::database::map_db::BlockList = crate::database::map_db::BlockList {
     next:          std::ptr::null_mut(),
     prev:          std::ptr::null_mut(),
@@ -1016,9 +1021,12 @@ pub static mut bl_head: crate::database::map_db::BlockList = crate::database::ma
 };
 
 /// Scratch buffer used by block query functions.
-#[no_mangle]
+// SAFETY: Populated and consumed within a single function call, never concurrently.
+// Single-threaded game loop — no concurrent access.
+#[cfg(not(test))]
 pub static mut bl_list: [*mut crate::database::map_db::BlockList; BL_LIST_MAX] = [std::ptr::null_mut(); BL_LIST_MAX];
 
+#[cfg(not(test))]
 fn alloc_ptr_array<T>(len: usize) -> *mut *mut T {
     let mut v: Vec<*mut T> = vec![std::ptr::null_mut(); len];
     let p = v.as_mut_ptr();
@@ -1027,8 +1035,8 @@ fn alloc_ptr_array<T>(len: usize) -> *mut *mut T {
 }
 
 /// Allocate block/block_mob/warp arrays for every loaded map slot.
-#[no_mangle]
-pub unsafe extern "C" fn map_initblock() {
+#[cfg(not(test))]
+pub unsafe fn map_initblock() {
     if crate::database::map_db::map.is_null() { return; }
     let slots = std::slice::from_raw_parts_mut(crate::database::map_db::map, crate::database::map_db::MAP_SLOTS);
     for slot in slots.iter_mut() {
@@ -1041,14 +1049,12 @@ pub unsafe extern "C" fn map_initblock() {
 }
 
 /// Free block grid arrays for all map slots (no-op, matches C).
-#[no_mangle]
-pub unsafe extern "C" fn map_termblock() {}
-
-type BlockCallback = unsafe extern "C" fn(*mut crate::database::map_db::BlockList, *mut c_void) -> c_int;
+#[cfg(not(test))]
+pub unsafe fn map_termblock() {}
 
 /// Insert `bl` into the appropriate block grid chain.
-#[no_mangle]
-pub unsafe extern "C" fn map_addblock(bl: *mut crate::database::map_db::BlockList) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn map_addblock(bl: *mut crate::database::map_db::BlockList) -> c_int {
     if bl.is_null() { return 1; }
     let bl = unsafe { &mut *bl };
 
@@ -1097,8 +1103,8 @@ pub unsafe extern "C" fn map_addblock(bl: *mut crate::database::map_db::BlockLis
 }
 
 /// Remove `bl` from the block grid.
-#[no_mangle]
-pub unsafe extern "C" fn map_delblock(bl: *mut crate::database::map_db::BlockList) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn map_delblock(bl: *mut crate::database::map_db::BlockList) -> c_int {
     if bl.is_null() { return 0; }
     let bl = unsafe { &mut *bl };
 
@@ -1137,8 +1143,8 @@ pub unsafe extern "C" fn map_delblock(bl: *mut crate::database::map_db::BlockLis
 }
 
 /// Remove `bl` from current cell, update coords, re-insert.
-#[no_mangle]
-pub unsafe extern "C" fn map_moveblock(bl: *mut crate::database::map_db::BlockList, x1: c_int, y1: c_int) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn map_moveblock(bl: *mut crate::database::map_db::BlockList, x1: c_int, y1: c_int) -> c_int {
     map_delblock(bl);
     if !bl.is_null() {
         (*bl).x = x1 as c_ushort;
@@ -1148,25 +1154,7 @@ pub unsafe extern "C" fn map_moveblock(bl: *mut crate::database::map_db::BlockLi
     0
 }
 
-/// Thin shim: call `func(bl, ap)` for each live entity of `bl_type` in rect.
-#[no_mangle]
-pub unsafe extern "C" fn map_foreachinblockva(
-    func: Option<BlockCallback>,
-    m: c_int,
-    x0: c_int,
-    y0: c_int,
-    x1: c_int,
-    y1: c_int,
-    bl_type: c_int,
-    ap: *mut c_void,
-) -> c_int {
-    let func = match func { Some(f) => f, None => return 0 };
-    foreach_in_rect(
-        m, x0 as i32, y0 as i32, x1 as i32, y1 as i32, bl_type as i32,
-        |bl| func(bl, ap),
-    ) as c_int
-}
-
+#[cfg(not(test))]
 #[inline]
 unsafe fn first_mob_in_cell(
     slot: &crate::database::map_db::MapData,
@@ -1187,8 +1175,8 @@ unsafe fn first_mob_in_cell(
 }
 
 /// Return the first live entity at cell (x, y) on map `m`.
-#[no_mangle]
-pub unsafe extern "C" fn map_firstincell(
+#[cfg(not(test))]
+pub unsafe fn map_firstincell(
     m: c_int, x: c_int, y: c_int, bl_type: c_int,
 ) -> *mut crate::database::map_db::BlockList {
     if m < 0 || crate::database::map_db::map.is_null() { return std::ptr::null_mut(); }
@@ -1224,12 +1212,11 @@ pub unsafe extern "C" fn map_firstincell(
     std::ptr::null_mut()
 }
 
-/// Iterate mobs across entire map `m`.
-#[no_mangle]
-pub unsafe extern "C" fn map_respawnmobs(
-    func: Option<BlockCallback>, m: c_int, bl_type: c_int, ap: *mut c_void,
-) -> c_int {
-    let func = match func { Some(f) => f, None => return 0 };
+/// Iterate mobs across entire map `m`, calling `func` for each live entity.
+#[cfg(not(test))]
+pub unsafe fn map_respawnmobs<F: FnMut(*mut crate::database::map_db::BlockList) -> i32>(
+    mut func: F, m: i32, bl_type: i32,
+) -> i32 {
     if m < 0 || crate::database::map_db::map.is_null() { return 0; }
     let m_idx = m as usize;
     if m_idx >= crate::database::map_db::MAP_SLOTS { return 0; }
@@ -1259,228 +1246,17 @@ pub unsafe extern "C" fn map_respawnmobs(
 
     if blockcount >= BL_LIST_MAX { tracing::warn!("map_respawnmobs: bl_list overflow"); }
 
-    let mut return_count: c_int = 0;
+    let mut return_count: i32 = 0;
     for i in 0..blockcount {
         let bl = bl_list[i];
-        if !(*bl).prev.is_null() { return_count += func(bl, ap); }
+        if !(*bl).prev.is_null() { return_count += func(bl); }
     }
     return_count
-}
-
-const SAMEMAP:  c_int = 2;
-const AREA:     c_int = 4;
-const SAMEAREA: c_int = 6;
-const CORNER:   c_int = 8;
-
-/// Iterate all live entities in the area around (x, y) on map `m`.
-#[no_mangle]
-pub unsafe extern "C" fn map_foreachinarea(
-    func: Option<BlockCallback>,
-    m: c_int, x: c_int, y: c_int,
-    area: c_int, bl_type: c_int,
-    mut args: ...
-) -> c_int {
-    const NX: c_int = 18;
-    const NY: c_int = 16;
-
-    let m_idx = m as usize;
-    if m < 0 || crate::database::map_db::map.is_null() || m_idx >= crate::database::map_db::MAP_SLOTS { return 0; }
-    let slot = &*crate::database::map_db::map.add(m_idx);
-    if slot.registry.is_null() { return 0; }
-    let xs = slot.xs as c_int;
-    let ys = slot.ys as c_int;
-
-    let ap = std::ptr::addr_of_mut!(args) as *mut c_void;
-
-    match area {
-        AREA => { map_foreachinblockva(func, m, x - (NX + 1), y - (NY + 1), x + (NX + 1), y + (NY + 1), bl_type, ap); }
-        CORNER => {
-            if xs > (NX * 2 + 1) && ys > (NY * 2 + 1) {
-                if x < (NX * 2 + 2) && x > NX {
-                    map_foreachinblockva(func, m, 0, y - (NY + 1), x - (NX + 2), y + (NY + 1), bl_type, ap);
-                }
-                if y < (NY * 2 + 2) && y > NY {
-                    map_foreachinblockva(func, m, x - (NX + 1), 0, x + (NX + 1), y - (NY + 2), bl_type, ap);
-                    if x < (NX * 2 + 2) && x > NX {
-                        map_foreachinblockva(func, m, 0, 0, x - (NX + 2), y - (NY + 2), bl_type, ap);
-                    } else if x > xs - (NX * 2 + 3) && x < xs - (NX + 1) {
-                        map_foreachinblockva(func, m, x + (NX + 2), 0, xs - 1, y + (NY + 2), bl_type, ap);
-                    }
-                }
-                if x > xs - (NX * 2 + 3) && x < xs - (NX + 1) {
-                    map_foreachinblockva(func, m, x + (NX + 2), y - (NY + 1), xs - 1, y + (NY + 1), bl_type, ap);
-                }
-                if y > ys - (NY * 2 + 3) && y < ys - (NY + 1) {
-                    map_foreachinblockva(func, m, x - (NX + 1), y + (NY + 2), x + (NX + 1), ys - 1, bl_type, ap);
-                    if x < (NX * 2 + 2) && x > NX {
-                        map_foreachinblockva(func, m, 0, y + (NY + 2), x - (NX + 2), ys - 1, bl_type, ap);
-                    } else if x > xs - (NX * 2 + 3) && x < xs - (NX + 1) {
-                        map_foreachinblockva(func, m, x + (NX + 2), y + (NY + 2), xs - 1, ys - 1, bl_type, ap);
-                    }
-                }
-            }
-        }
-        SAMEAREA => {
-            let mut x0 = x - 9; let mut y0 = y - 8; let mut x1 = x + 9; let mut y1 = y + 8;
-            if x0 < 0 { x1 += -x0; x0 = 0; if x1 >= xs { x1 = xs - 1; } }
-            if y0 < 0 { y1 += -y0; y0 = 0; if y1 >= ys { y1 = ys - 1; } }
-            if x1 >= xs { x0 -= x1 - xs + 1; x1 = xs - 1; if x0 < 0 { x0 = 0; } }
-            if y1 >= ys { y0 -= y1 - ys + 1; y1 = ys - 1; if y0 < 0 { y0 = 0; } }
-            map_foreachinblockva(func, m, x0, y0, x1, y1, bl_type, ap);
-        }
-        SAMEMAP => { map_foreachinblockva(func, m, 0, 0, xs - 1, ys - 1, bl_type, ap); }
-        _ => {}
-    }
-    0
-}
-
-/// Iterate all live entities in rect [x0..x1]×[y0..y1] on map `m`.
-#[no_mangle]
-pub unsafe extern "C" fn map_foreachinblock(
-    func: Option<BlockCallback>,
-    m: c_int, mut x0: c_int, mut y0: c_int, mut x1: c_int, mut y1: c_int,
-    bl_type: c_int, mut args: ...
-) -> c_int {
-    let m_idx = m as usize;
-    if m < 0 || crate::database::map_db::map.is_null() || m_idx >= crate::database::map_db::MAP_SLOTS { return 0; }
-    let slot = &*crate::database::map_db::map.add(m_idx);
-    if slot.registry.is_null() { return 0; }
-    if x0 < 0 { x0 = 0; }
-    if y0 < 0 { y0 = 0; }
-    if x1 >= slot.xs as c_int { x1 = slot.xs as c_int - 1; }
-    if y1 >= slot.ys as c_int { y1 = slot.ys as c_int - 1; }
-
-    let ap = std::ptr::addr_of_mut!(args) as *mut c_void;
-    map_foreachinblockva(func, m, x0, y0, x1, y1, bl_type, ap);
-    0
-}
-
-/// Iterate all live entities at exact cell (x, y) on map `m`.
-#[no_mangle]
-pub unsafe extern "C" fn map_foreachincell(
-    func: Option<BlockCallback>,
-    m: c_int, x: c_int, y: c_int, bl_type: c_int, mut args: ...
-) -> c_int {
-    let func = match func { Some(f) => f, None => return 0 };
-    let m_idx = m as usize;
-    if m < 0 || crate::database::map_db::map.is_null() || m_idx >= crate::database::map_db::MAP_SLOTS { return 0; }
-    let slot = &*crate::database::map_db::map.add(m_idx);
-    if slot.registry.is_null() { return 0; }
-    if x < 0 || y < 0 || x >= slot.xs as c_int || y >= slot.ys as c_int { return 0; }
-
-    let bx = x as usize / crate::database::map_db::BLOCK_SIZE;
-    let by = y as usize / crate::database::map_db::BLOCK_SIZE;
-    let pos = bx + by * slot.bxs as usize;
-    let mut blockcount: usize = 0;
-
-    if (bl_type & !(crate::game::mob::BL_MOB)) != 0 {
-        let mut bl = *slot.block.add(pos);
-        while !bl.is_null() && blockcount < BL_LIST_MAX {
-            let b = &*bl;
-            if (b.bl_type as c_int & bl_type) != 0 && b.x as c_int == x && b.y as c_int == y {
-                if b.bl_type as c_int != crate::game::mob::BL_ITEM {
-                    bl_list[blockcount] = bl; blockcount += 1;
-                } else {
-                    let fl = bl as *mut FloorItemData;
-                    if itemdb_type((*fl).data.id) != ITM_TRAPS { bl_list[blockcount] = bl; blockcount += 1; }
-                }
-            }
-            bl = b.next;
-        }
-    }
-
-    if (bl_type & crate::game::mob::BL_MOB) != 0 {
-        let mut bl = *slot.block_mob.add(pos);
-        while !bl.is_null() && blockcount < BL_LIST_MAX {
-            let b = &*bl;
-            let mob = bl as *mut crate::game::mob::MobSpawnData;
-            if (*mob).state != crate::game::mob::MOB_DEAD && b.x as c_int == x && b.y as c_int == y {
-                bl_list[blockcount] = bl; blockcount += 1;
-            }
-            bl = b.next;
-        }
-    }
-
-    if blockcount >= BL_LIST_MAX { tracing::warn!("map_foreachincell: bl_list overflow"); }
-
-    let mut return_count: c_int = 0;
-    for i in 0..blockcount {
-        let bl = bl_list[i];
-        if !(*bl).prev.is_null() {
-            let ap = std::ptr::addr_of_mut!(args) as *mut c_void;
-            return_count += func(bl, ap);
-        }
-    }
-    return_count
-}
-
-/// Same as `map_foreachincell` but includes trap floor items.
-#[no_mangle]
-pub unsafe extern "C" fn map_foreachincellwithtraps(
-    func: Option<BlockCallback>,
-    m: c_int, x: c_int, y: c_int, bl_type: c_int, mut args: ...
-) -> c_int {
-    let func = match func { Some(f) => f, None => return 0 };
-    let m_idx = m as usize;
-    if m < 0 || crate::database::map_db::map.is_null() || m_idx >= crate::database::map_db::MAP_SLOTS { return 0; }
-    let slot = &*crate::database::map_db::map.add(m_idx);
-    if slot.registry.is_null() { return 0; }
-    if x < 0 || y < 0 || x >= slot.xs as c_int || y >= slot.ys as c_int { return 0; }
-
-    let bx = x as usize / crate::database::map_db::BLOCK_SIZE;
-    let by = y as usize / crate::database::map_db::BLOCK_SIZE;
-    let pos = bx + by * slot.bxs as usize;
-    let mut blockcount: usize = 0;
-
-    if (bl_type & !(crate::game::mob::BL_MOB)) != 0 {
-        let mut bl = *slot.block.add(pos);
-        while !bl.is_null() && blockcount < BL_LIST_MAX {
-            let b = &*bl;
-            if (b.bl_type as c_int & bl_type) != 0 && b.x as c_int == x && b.y as c_int == y {
-                bl_list[blockcount] = bl; blockcount += 1;
-            }
-            bl = b.next;
-        }
-    }
-
-    if (bl_type & crate::game::mob::BL_MOB) != 0 {
-        let mut bl = *slot.block_mob.add(pos);
-        while !bl.is_null() && blockcount < BL_LIST_MAX {
-            let b = &*bl;
-            let mob = bl as *mut crate::game::mob::MobSpawnData;
-            if (*mob).state != crate::game::mob::MOB_DEAD && b.x as c_int == x && b.y as c_int == y {
-                bl_list[blockcount] = bl; blockcount += 1;
-            }
-            bl = b.next;
-        }
-    }
-
-    if blockcount >= BL_LIST_MAX { tracing::warn!("map_foreachincellwithtraps: bl_list overflow"); }
-
-    let mut return_count: c_int = 0;
-    for i in 0..blockcount {
-        let bl = bl_list[i];
-        if !(*bl).prev.is_null() {
-            let ap = std::ptr::addr_of_mut!(args) as *mut c_void;
-            return_count += func(bl, ap);
-        }
-    }
-    return_count
-}
-
-/// Variadic shim: call `map_respawnmobs` after extracting the va_list.
-#[no_mangle]
-pub unsafe extern "C" fn map_respawn(
-    func: Option<BlockCallback>, m: c_int, bl_type: c_int, mut args: ...
-) -> c_int {
-    let ap = std::ptr::addr_of_mut!(args) as *mut c_void;
-    map_respawnmobs(func, m, bl_type, ap);
-    0
 }
 
 /// Same as `map_firstincell` but includes trap floor items.
-#[no_mangle]
-pub unsafe extern "C" fn map_firstincellwithtraps(
+#[cfg(not(test))]
+pub unsafe fn map_firstincellwithtraps(
     m: c_int, x: c_int, y: c_int, bl_type: c_int,
 ) -> *mut crate::database::map_db::BlockList {
     if m < 0 || crate::database::map_db::map.is_null() { return std::ptr::null_mut(); }

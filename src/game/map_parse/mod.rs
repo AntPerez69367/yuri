@@ -39,7 +39,7 @@ use crate::game::map_parse::packet::{
     rfifob, rfifow, rfifol, rfifop, rfiforest, rfifoskip, swap16, swap32, decrypt,
 };
 
-// Rust-native functions (all #[no_mangle] pub unsafe extern "C")
+// Rust-native functions (all pub unsafe extern "C")
 use crate::game::map_parse::movement::{clif_parsewalk, clif_parsemap};
 use crate::game::map_parse::combat::{clif_parseattack, clif_parsemagic};
 use crate::game::map_parse::chat::{clif_parsesay, clif_parsewisp, clif_parseignore, clif_sendminitext};
@@ -54,65 +54,48 @@ use crate::game::map_parse::events::{clif_sendRewardInfo, clif_getReward, clif_p
 use crate::game::map_parse::player_state::{clif_mystaytus, clif_refresh};
 use crate::game::map_parse::dialogs::{clif_parsenpcdialog, clif_handle_clickgetinfo, clif_closeit};
 
-extern "C" {
-    // fd_max — defined in bin/map_server.rs as #[no_mangle] pub static mut fd_max
-    static fd_max: c_int;
+// crate::session::get_fd_max() is defined in the binary — cannot import from library, must keep extern "C".
+// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
 
-    // AFK / state management
-    fn clif_cancelafk(sd: *mut MapSessionData);
-    fn clif_handle_disconnect(sd: *mut MapSessionData);
-    fn clif_print_disconnect(fd: c_int);
+use crate::game::client::visual::{
+    clif_cancelafk, clif_print_disconnect, clif_user_list, clif_debug,
+    clif_paperpopupwrite_save, clif_changeprofile, clif_sendboard,
+};
+use crate::game::client::handlers::{
+    clif_handle_disconnect, clif_handle_missingobject, clif_handle_powerboards,
+    clif_parsedropitem, clif_postitem, clif_handle_boards, clif_handle_menuinput,
+    clif_parsechangepos, clif_parsefriends, clif_changestatus, clif_accept2,
+};
+use crate::game::map_parse::movement::{
+    clif_parseside, clif_parselookat, clif_parselookat_2, clif_parseviewchange,
+};
+use crate::game::map_parse::chat::clif_parseemotion;
+use crate::game::map_parse::dialogs::clif_sendtowns;
+use crate::game::client::visual::clif_sendprofile;
+use crate::game::map_parse::player_state::clif_sendminimap;
+use crate::network::crypt::{send_meta, send_metalist};
+use crate::database::item_db::rust_itemdb_thrownconfirm as itemdb_thrownconfirm;
+use crate::game::pc::rust_pc_atkspeed;
 
-    // Look / side
-    fn clif_parseside(sd: *mut MapSessionData);
-    fn clif_parselookat(sd: *mut MapSessionData);
-    fn clif_parselookat_2(sd: *mut MapSessionData);
-
-    // Misc still-in-C handlers
-    fn clif_handle_missingobject(sd: *mut MapSessionData);
-    fn clif_parseemotion(sd: *mut MapSessionData);
-    fn clif_paperpopupwrite_save(sd: *mut MapSessionData);
-    fn clif_changestatus(sd: *mut MapSessionData, status: c_int);
-    fn clif_parsechangepos(sd: *mut MapSessionData);
-    fn clif_user_list(sd: *mut MapSessionData);
-    fn clif_handle_powerboards(sd: *mut MapSessionData);
-    fn clif_changeprofile(sd: *mut MapSessionData);
-    fn clif_sendtowns(sd: *mut MapSessionData);
-    fn clif_sendprofile(sd: *mut MapSessionData);
-    fn clif_sendboard(sd: *mut MapSessionData);
-    fn clif_parsefriends(sd: *mut MapSessionData, name: *const c_char, len: c_int);
-    fn clif_parseviewchange(sd: *mut MapSessionData);
-    fn clif_accept2(fd: c_int, name: *const c_char, r#type: u8);
-    fn clif_debug(buf: *const u8, len: u16);
-    fn itemdb_thrownconfirm(id: c_uint) -> c_int;
-    fn pc_warp(sd: *mut MapSessionData, map_id: u16, x: u16, y: u16);
-
-    // Drop/post items (still in C)
-    fn clif_parsedropitem(sd: *mut MapSessionData);
-    fn clif_postitem(sd: *mut MapSessionData);
-
-    // Handle boards / menus (still in C)
-    fn clif_handle_boards(sd: *mut MapSessionData);
-    fn clif_handle_menuinput(sd: *mut MapSessionData);
-
-    // sendminimap (still in C)
-    fn clif_sendminimap(sd: *mut MapSessionData);
-
-    // meta
-    fn send_meta(sd: *mut MapSessionData);
-    fn send_metalist(sd: *mut MapSessionData);
-
-    // creation
-    fn createdb_start(sd: *mut MapSessionData);
-
-    // attack speed timer callback
-    fn rust_pc_atkspeed(id: c_int, data: c_int) -> c_int;
+// pc_warp: actual fn takes c_int, old extern had u16 — wrap with cast.
+#[inline]
+unsafe fn pc_warp(sd: *mut MapSessionData, map_id: u16, x: u16, y: u16) {
+    crate::game::pc::rust_pc_warp(sd, map_id as c_int, x as c_int, y as c_int);
+}
+// clif_debug: actual fn takes c_int for len, old extern had u16 — wrap with cast.
+#[inline]
+unsafe fn clif_debug_u16(buf: *const u8, len: u16) {
+    clif_debug(buf, len as c_int);
+}
+// createdb_start takes *mut c_void in handlers.rs.
+#[inline]
+unsafe fn createdb_start(sd: *mut MapSessionData) {
+    crate::game::client::handlers::createdb_start(sd as *mut std::ffi::c_void);
 }
 
 /// Main packet dispatcher. Mirrors `int clif_parse(int fd)` from `c_src/map_parse.c`.
 // clif_parse — ported to rust (src/game/map_parse/mod.rs)
-#[no_mangle]
-pub unsafe extern "C" fn clif_parse(fd: c_int) -> c_int {
+pub unsafe fn clif_parse(fd: c_int) -> c_int {
     if fd < 0 { return 0; }
     if rust_session_exists(fd) == 0 { return 0; }
 
@@ -145,7 +128,7 @@ pub unsafe extern "C" fn clif_parse(fd: c_int) -> c_int {
     if sd.is_null() {
         match rfifob(fd, 3) {
             0x10 => {
-                clif_accept2(fd, rfifop(fd, 16) as *const c_char, rfifob(fd, 15));
+                clif_accept2(fd, rfifop(fd, 16) as *mut c_char, rfifob(fd, 15) as c_int);
             }
             _ => {}
         }
@@ -160,7 +143,7 @@ pub unsafe extern "C" fn clif_parse(fd: c_int) -> c_int {
 
     // Dual login check
     let mut logincount = 0i32;
-    for i in 0..fd_max {
+    for i in 0..crate::session::get_fd_max() {
         if rust_session_exists(i) != 0 {
             let tsd = rust_session_get_data(i) as *mut MapSessionData;
             if !tsd.is_null() {
@@ -262,7 +245,7 @@ pub unsafe extern "C" fn clif_parse(fd: c_int) -> c_int {
                 timer_insert(
                     delay,
                     delay,
-                    Some(rust_pc_atkspeed as unsafe extern "C" fn(c_int, c_int) -> c_int),
+                    Some(rust_pc_atkspeed as unsafe fn(i32, i32) -> i32),
                     (*sd).status.id as c_int,
                     0,
                 );
@@ -503,7 +486,7 @@ pub unsafe extern "C" fn clif_parse(fd: c_int) -> c_int {
                 b"[Map] Unknown Packet ID: %02X\nPacket content:\n\0".as_ptr() as *const c_char,
                 rfifob((*sd).fd, 3) as c_uint,
             );
-            clif_debug(rfifop((*sd).fd, 0), swap16(rfifow((*sd).fd, 1)));
+            clif_debug_u16(rfifop((*sd).fd, 0), swap16(rfifow((*sd).fd, 1)));
         }
     }
 

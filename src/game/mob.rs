@@ -13,6 +13,7 @@ use crate::game::pc::MapSessionData;
 use crate::game::types::GfxViewer;
 use crate::servers::char::charstatus::{Item, SkillInfo};
 use std::ffi::{c_char, c_double, c_float, c_int, c_schar, c_short, c_uchar, c_uint, c_ushort};
+use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 pub const MOB_START_NUM: u32 = 1073741823;
@@ -59,7 +60,7 @@ pub struct ThreatTable {
 /// Mirrors `struct mobspawn_data` from `map_server.h`. (`MOB` typedef in C.)
 ///
 /// Field order and types MUST exactly match C. Verify size with:
-/// `cargo test --features map-game mob_spawn_data_size -- --nocapture`
+/// `cargo test mob_spawn_data_size -- --nocapture`
 ///
 /// Layout:
 /// ```text
@@ -167,116 +168,94 @@ pub struct MobSpawnData {
 unsafe impl Send for MobSpawnData {}
 unsafe impl Sync for MobSpawnData {}
 
-// ─── Mutable globals (unsafe statics, C-compatible) ──────────────────────────
+// ─── Mutable globals (atomic, C-compatible) ───────────────────────────────────
 // Use #[export_name] for uppercase globals to avoid sqlx #[derive(FromRow)]
 // let-binding conflicts (see MEMORY.md: "npc_id #[export_name]").
+// AtomicU32 has the same ABI as u32 on x86-64: a plain 4-byte aligned integer.
+// C code that reads these via extern symbol gets the raw value directly.
 #[export_name = "mob_id"]
-pub static mut MOB_ID: c_uint = MOB_START_NUM;
+pub static MOB_ID: AtomicU32 = AtomicU32::new(MOB_START_NUM);
 #[export_name = "max_normal_id"]
-pub static mut MAX_NORMAL_ID: c_uint = MOB_START_NUM;
+pub static MAX_NORMAL_ID: AtomicU32 = AtomicU32::new(MOB_START_NUM);
 #[export_name = "cmob_id"]
-pub static mut CMOB_ID: c_uint = 0;
+pub static CMOB_ID: AtomicU32 = AtomicU32::new(0);
 #[export_name = "MOB_SPAWN_MAX"]
-pub static mut MOB_SPAWN_MAX: c_uint = MOB_START_NUM;
+pub static MOB_SPAWN_MAX: AtomicU32 = AtomicU32::new(MOB_START_NUM);
 #[export_name = "MOB_SPAWN_START"]
-pub static mut MOB_SPAWN_START: c_uint = MOB_START_NUM;
+pub static MOB_SPAWN_START: AtomicU32 = AtomicU32::new(MOB_START_NUM);
 #[export_name = "MOB_ONETIME_MAX"]
-pub static mut MOB_ONETIME_MAX: c_uint = MOBOT_START_NUM;
+pub static MOB_ONETIME_MAX: AtomicU32 = AtomicU32::new(MOBOT_START_NUM);
 #[export_name = "MOB_ONETIME_START"]
-pub static mut MOB_ONETIME_START: c_uint = MOBOT_START_NUM;
+pub static MOB_ONETIME_START: AtomicU32 = AtomicU32::new(MOBOT_START_NUM);
 #[export_name = "MIN_TIMER"]
-pub static mut MIN_TIMER: c_uint = 1000;
-pub static mut TIMERCHECK: c_uchar = 0; // internal only
+pub static MIN_TIMER: AtomicU32 = AtomicU32::new(1000);
+pub static TIMERCHECK: AtomicU8 = AtomicU8::new(0); // internal only
 
-// ─── Extern C declarations ────────────────────────────────────────────────────
+// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
 
 #[cfg(not(test))]
-extern "C" {
-    // map entity lookup
-    pub fn map_id2bl(id: c_uint) -> *mut BlockList;
-    pub fn map_id2mob(id: c_uint) -> *mut MobSpawnData;
-    #[link_name = "map_id2sd"]
-    pub fn map_id2sd_mob(id: c_uint) -> *mut MapSessionData;
-    pub fn map_addiddb(bl: *mut BlockList);
-    pub fn map_deliddb(bl: *mut BlockList);
-    pub fn map_addblock(bl: *mut BlockList) -> c_int;
-    pub fn map_delblock(bl: *mut BlockList) -> c_int;
-    pub fn map_moveblock(bl: *mut BlockList, x: c_int, y: c_int);
-    pub fn map_additem(bl: *mut BlockList);
-    pub fn map_canmove(m: c_int, x: c_int, y: c_int) -> c_int;
-    pub fn map_foreachinarea(
-        f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
-        m: c_int,
-        x: c_int,
-        y: c_int,
-        range: c_int,
-        bl_type: c_int,
-        ...
-    ) -> c_int;
-    pub fn map_foreachincell(
-        f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
-        m: c_int,
-        x: c_int,
-        y: c_int,
-        bl_type: c_int,
-        ...
-    ) -> c_int;
-    pub fn map_foreachinblock(
-        f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
-        m: c_int,
-        x0: c_int,
-        y0: c_int,
-        x1: c_int,
-        y1: c_int,
-        bl_type: c_int,
-        ...
-    ) -> c_int;
+use crate::game::map_server::{
+    map_addiddb, map_deliddb, map_additem, map_canmove, map_id2mob,
+};
+#[cfg(not(test))]
+use crate::game::block::{map_addblock, map_delblock, map_moveblock};
+#[cfg(not(test))]
+use crate::game::map_parse::combat::{
+    clif_send_pc_health, clif_send_mob_health,
+};
+#[cfg(not(test))]
+use crate::game::map_parse::visual::clif_lookgone;
+#[cfg(not(test))]
+use crate::game::map_parse::combat::clif_mob_kill;
+#[cfg(not(test))]
+use crate::game::map_parse::player_state::clif_sendstatus as clif_sendstatus_mob;
+#[cfg(not(test))]
+use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from};
+#[cfg(not(test))]
+use crate::game::client::visual::clif_sendmob_side;
+#[cfg(not(test))]
+use crate::database::magic_db::{
+    rust_magicdb_yname as magicdb_yname, rust_magicdb_name as magicdb_name,
+    rust_magicdb_id as magicdb_id, rust_magicdb_dispel as magicdb_dispel,
+};
+#[cfg(not(test))]
+use crate::database::mob_db::{rust_mobdb_experience as mobdb_experience, rust_mobdb_search as mobdb_search};
+#[cfg(not(test))]
+use crate::timer::gettick;
+#[cfg(not(test))]
+use crate::game::map_server::cur_time;
+#[cfg(not(test))]
+use crate::config_globals::serverid;
 
-    // clif_* network helpers
-    pub fn clif_mob_kill(mob: *mut MobSpawnData);
-    pub fn clif_lookgone(bl: *mut BlockList);
-    pub fn clif_mob_move(bl: *mut BlockList, ...) -> c_int;
-    pub fn clif_cmoblook_sub(bl: *mut BlockList, ...) -> c_int;
-    pub fn clif_mob_look_start_func(bl: *mut BlockList, ...) -> c_int;
-    pub fn clif_mob_look_close_func(bl: *mut BlockList, ...) -> c_int;
-    pub fn clif_object_look_sub(bl: *mut BlockList, ...) -> c_int;
-    pub fn clif_object_look_sub2(bl: *mut BlockList, ...) -> c_int;
-    pub fn clif_sendanimation(bl: *mut BlockList, ...) -> c_int;
-    pub fn clif_sendmob_side(mob: *mut MobSpawnData);
-    pub fn clif_object_canmove(m: c_int, x: c_int, y: c_int, dir: c_int) -> c_int;
-    pub fn clif_object_canmove_from(m: c_int, x: c_int, y: c_int, dir: c_int) -> c_int;
-    pub fn clif_send_pc_health(sd: *mut MapSessionData, damage: c_int, critical: c_int) -> c_int;
-    pub fn clif_send_mob_health(mob: *mut MobSpawnData, damage: c_int, critical: c_int) -> c_int;
-    #[link_name = "clif_sendstatus"]
-    pub fn clif_sendstatus_mob(sd: *mut MapSessionData, flags: c_int) -> c_int;
+// groups[256][256] flat array — defined in map_server.rs as 
+#[cfg(not(test))]
+use crate::game::map_server::groups as groups_mob;
 
-    // groups[][MAX_GROUP_MEMBERS] global array (from map_parse.c)
-    // Flat 2-D: groups[256][256]. Access as groups[groupid * 256 + slot].
-    #[link_name = "groups"]
-    pub static groups_mob: [c_uint; 65536];
-
-    // (sl_doscript_blargs variadic shim removed; use doscript_blargs() below)
-
-    // magic db lookup — static inline in C, redirect to actual Rust symbols
-    #[link_name = "rust_magicdb_yname"]
-    pub fn magicdb_yname(id: c_int) -> *mut c_char;
-    #[link_name = "rust_magicdb_name"]
-    pub fn magicdb_name(id: c_int) -> *mut c_char;
-    #[link_name = "rust_magicdb_id"]
-    pub fn magicdb_id(s: *const c_char) -> c_int;
-    #[link_name = "rust_magicdb_dispel"]
-    pub fn magicdb_dispel(id: c_int) -> c_int;
-
-    // mob_db lookups — static inline in C, redirect to actual Rust symbols
-    #[link_name = "rust_mobdb_experience"]
-    pub fn mobdb_experience(mobid: c_uint) -> c_uint;
-    #[link_name = "rust_mobdb_search"]
-    pub fn mobdb_search(id: c_uint) -> *mut MobDbData;
-
-    pub fn gettick() -> c_uint;
-    static cur_time: c_int;
-    static serverid: c_int;
+// map_id2bl returns *mut c_void; wrap for BlockList usage
+#[cfg(not(test))]
+pub unsafe fn map_id2bl(id: c_uint) -> *mut BlockList {
+    crate::game::map_server::map_id2bl(id) as *mut BlockList
 }
+
+// map_id2sd returns *mut c_void; wrap for MapSessionData usage
+#[cfg(not(test))]
+unsafe fn map_id2sd_mob(id: c_uint) -> *mut MapSessionData {
+    crate::game::map_server::map_id2sd(id) as *mut MapSessionData
+}
+
+// Import Rust closure-based block grid traversal API.
+#[cfg(not(test))]
+use crate::game::block::{foreach_in_area, foreach_in_cell, foreach_in_rect, AreaType};
+#[cfg(not(test))]
+use crate::game::map_parse::visual::{
+    clif_mob_look_start_func_inner, clif_mob_look_close_func_inner,
+    clif_object_look_sub_inner, clif_object_look_sub2_inner,
+    clif_cmoblook_inner,
+};
+#[cfg(not(test))]
+use crate::game::map_parse::movement::clif_mob_move_inner;
+#[cfg(not(test))]
+use crate::game::map_parse::combat::clif_sendanimation_inner;
 
 /// Dispatch a Lua event with a single block_list argument.
 /// Wraps `crate::game::scripting::doscript_blargs` for the common 1-arg case.
@@ -302,26 +281,25 @@ unsafe fn sl_doscript_2(
 
 // ─── Mob ID management ────────────────────────────────────────────────────────
 
-pub unsafe fn mob_get_new_id() -> c_uint {
-    let id = MOB_ID;
-    MOB_ID += 1;
-    id
+pub fn mob_get_new_id() -> c_uint {
+    MOB_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 #[cfg(not(test))]
 pub unsafe fn mob_get_free_id() -> c_uint {
-    let mut x = MOB_ONETIME_START;
+    let mut x = MOB_ONETIME_START.load(Ordering::Relaxed);
     loop {
         if x >= NPC_START_NUM {
             eprintln!("[mob] mob_get_free_id: onetime range exhausted");
             return 0;
         }
-        if x == MOB_ONETIME_MAX {
-            if MOB_ONETIME_MAX >= NPC_START_NUM {
+        let omax = MOB_ONETIME_MAX.load(Ordering::Relaxed);
+        if x == omax {
+            if omax >= NPC_START_NUM {
                 eprintln!("[mob] mob_get_free_id: onetime range full");
                 return 0;
             }
-            MOB_ONETIME_MAX += 1;
+            MOB_ONETIME_MAX.store(omax + 1, Ordering::Relaxed);
         }
         if map_id2bl(x).is_null() {
             return x;
@@ -343,15 +321,17 @@ pub unsafe fn free_onetime(mob: *mut MobSpawnData) -> c_int {
     (*mob).data = std::ptr::null_mut();
     libc::free(mob as *mut libc::c_void);
     // compact onetime range downward
-    let mut x = MOB_ONETIME_START;
-    while x <= MOB_ONETIME_MAX {
+    let mut x = MOB_ONETIME_START.load(Ordering::Relaxed);
+    loop {
+        let omax = MOB_ONETIME_MAX.load(Ordering::Relaxed);
+        if x > omax { break; }
         let bl = map_id2bl(x);
         if bl.is_null() {
             return 0;
         }
-        if x == MOB_ONETIME_MAX {
+        if x == omax {
             map_deliddb(bl);
-            MOB_ONETIME_MAX -= 1;
+            MOB_ONETIME_MAX.store(omax - 1, Ordering::Relaxed);
         }
         x += 1;
     }
@@ -364,7 +344,7 @@ pub unsafe fn free_onetime(mob: *mut MobSpawnData) -> c_int {
 unsafe fn in_spawn_window(mob: *const MobSpawnData) -> bool {
     let s = (*mob).start as c_int;
     let e = (*mob).end as c_int;
-    let ct = cur_time;
+    let ct = cur_time.load(Ordering::Relaxed);
     (s < e && ct >= s && ct <= e)
         || (s > e && (ct >= s || ct <= e))
         || (s == e && ct == s && ct == e)
@@ -509,7 +489,7 @@ pub unsafe fn mobspawn_read() -> c_int {
 
         if (*db).bl.id < MOB_START_NUM {
             let new_id = mob_get_new_id();
-            MAX_NORMAL_ID = new_id;
+            MAX_NORMAL_ID.store(new_id, Ordering::Relaxed);
             (*db).bl.m = startm;
             (*db).bl.x = startx;
             (*db).bl.y = starty;
@@ -538,19 +518,17 @@ pub unsafe fn mobspawn_read() -> c_int {
         mstr += 1;
     }
 
-    MOB_SPAWN_MAX = MOB_ID;
+    MOB_SPAWN_MAX.store(MOB_ID.load(Ordering::Relaxed), Ordering::Relaxed);
     libc::srand(gettick());
     println!("[mob] [spawn] read done count={}", mstr);
     0
 }
 
 // Stubs — unused in this server but keep C callers happy
-#[no_mangle]
-pub unsafe extern "C" fn mobspawn2_read() -> c_int {
+pub unsafe fn mobspawn2_read() -> c_int {
     0
 }
-#[no_mangle]
-pub unsafe extern "C" fn mobspeech_read() -> c_int {
+pub unsafe fn mobspeech_read() -> c_int {
     0
 }
 
@@ -594,17 +572,7 @@ pub unsafe fn mob_duratimer(mob: *mut MobSpawnData) -> c_int {
                 (*mob).da[x].duration = 0;
                 (*mob).da[x].id = 0;
                 (*mob).da[x].caster_id = 0;
-                map_foreachinarea(
-                    clif_sendanimation,
-                    (*mob).bl.m as c_int,
-                    (*mob).bl.x as c_int,
-                    (*mob).bl.y as c_int,
-                    AREA,
-                    BL_PC,
-                    (*mob).da[x].animation as c_int,
-                    &raw mut (*mob).bl,
-                    -1i32,
-                );
+                { let t = &raw mut (*mob).bl; let anim = (*mob).da[x].animation as i32; foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC, |bl| clif_sendanimation_inner(bl, anim, t, -1)); }
                 (*mob).da[x].animation = 0;
                 if !tbl.is_null() {
                     sl_doscript_2(magicdb_yname(id), c"uncast".as_ptr(), &raw mut (*mob).bl, tbl);
@@ -685,17 +653,7 @@ pub unsafe fn mob_flushmagic(mob: *mut MobSpawnData) -> c_int {
         (*mob).da[x].duration = 0;
         (*mob).da[x].id = 0;
         (*mob).da[x].caster_id = 0;
-        map_foreachinarea(
-            clif_sendanimation,
-            (*mob).bl.m as c_int,
-            (*mob).bl.x as c_int,
-            (*mob).bl.y as c_int,
-            AREA,
-            BL_PC,
-            (*mob).da[x].animation as c_int,
-            &raw mut (*mob).bl,
-            -1i32,
-        );
+        { let t = &raw mut (*mob).bl; let anim = (*mob).da[x].animation as i32; foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC, |bl| clif_sendanimation_inner(bl, anim, t, -1)); }
         (*mob).da[x].animation = 0;
         // Note: caster_id is already 0 here; map_id2bl(0) returns NULL.
         // Porting C behavior faithfully (C bug: checks stale zeroed field).
@@ -816,43 +774,17 @@ pub unsafe fn mob_respawn(mob: *mut MobSpawnData) -> c_int {
     if !(*mob).data.is_null() {
         let d = &*(*mob).data;
         if d.mobtype == 1 {
-            map_foreachinarea(
-                clif_cmoblook_sub,
-                (*mob).bl.m as c_int,
-                (*mob).bl.x as c_int,
-                (*mob).bl.y as c_int,
-                AREA,
-                BL_PC,
-                LOOK_SEND,
-                mob as *mut _,
-            );
+            let mob_ptr = mob;
+            foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
+                |bl| clif_cmoblook_inner(bl, LOOK_SEND, mob_ptr as *mut _));
         } else {
-            map_foreachinarea(
-                clif_mob_look_start_func,
-                (*mob).bl.m as c_int,
-                (*mob).bl.x as c_int,
-                (*mob).bl.y as c_int,
-                AREA,
-                BL_PC,
-            );
-            map_foreachinarea(
-                clif_object_look_sub,
-                (*mob).bl.m as c_int,
-                (*mob).bl.x as c_int,
-                (*mob).bl.y as c_int,
-                AREA,
-                BL_PC,
-                LOOK_SEND,
-                &raw mut (*mob).bl,
-            );
-            map_foreachinarea(
-                clif_mob_look_close_func,
-                (*mob).bl.m as c_int,
-                (*mob).bl.x as c_int,
-                (*mob).bl.y as c_int,
-                AREA,
-                BL_PC,
-            );
+            foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
+                |bl| clif_mob_look_start_func_inner(bl));
+            let mob_bl = &raw mut (*mob).bl;
+            foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
+                |bl| clif_object_look_sub_inner(bl, LOOK_SEND, mob_bl));
+            foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
+                |bl| clif_mob_look_close_func_inner(bl));
         }
     }
     sl_doscript_simple(c"on_spawn".as_ptr(), std::ptr::null(), &raw mut (*mob).bl);
@@ -881,27 +813,13 @@ pub unsafe fn mob_warp(mob: *mut MobSpawnData, m: c_int, x: c_int, y: c_int) -> 
         eprintln!("Error warping mob.");
     }
     if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
-        map_foreachinarea(
-            clif_cmoblook_sub,
-            (*mob).bl.m as c_int,
-            (*mob).bl.x as c_int,
-            (*mob).bl.y as c_int,
-            AREA,
-            BL_PC,
-            LOOK_SEND,
-            mob as *mut _,
-        );
+        let mob_ptr = mob;
+        foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
+            |bl| clif_cmoblook_inner(bl, LOOK_SEND, mob_ptr as *mut _));
     } else {
-        map_foreachinarea(
-            clif_object_look_sub2,
-            (*mob).bl.m as c_int,
-            (*mob).bl.x as c_int,
-            (*mob).bl.y as c_int,
-            AREA,
-            BL_PC,
-            LOOK_SEND,
-            mob as *mut _,
-        );
+        let mob_bl = &raw mut (*mob).bl;
+        foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
+            |bl| clif_object_look_sub2_inner(bl, LOOK_SEND, mob_bl));
     }
     0
 }
@@ -984,15 +902,9 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
                     return;
                 }
                 if data.r#type == 1 && (*mob).target == 0 {
-                    map_foreachinarea(
-                        rust_mob_find_target,
-                        (*mob).bl.m as c_int,
-                        (*mob).bl.x as c_int,
-                        (*mob).bl.y as c_int,
-                        AREA,
-                        BL_PC,
-                        mob as *mut _,
-                    );
+                    let mob_ptr = mob;
+                    foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
+                        |bl| rust_mob_find_target_inner(bl, mob_ptr));
                 }
                 let bl = mob_resolve_target(mob);
                 let pre_x = (*mob).bl.x;
@@ -1052,15 +964,9 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
                     return;
                 }
                 if data.r#type == 1 && (*mob).target == 0 {
-                    map_foreachinarea(
-                        rust_mob_find_target,
-                        (*mob).bl.m as c_int,
-                        (*mob).bl.x as c_int,
-                        (*mob).bl.y as c_int,
-                        AREA,
-                        BL_PC,
-                        mob as *mut _,
-                    );
+                    let mob_ptr = mob;
+                    foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
+                        |bl| rust_mob_find_target_inner(bl, mob_ptr));
                 }
                 let bl = mob_resolve_target(mob);
                 (*mob).time_ = 0;
@@ -1124,12 +1030,11 @@ unsafe fn dispatch_ai(mob: *mut MobSpawnData, bl: *mut BlockList, event: *const 
     sl_doscript_2(script, event, &raw mut (*mob).bl, bl);
 }
 
-// ─── mob_trap_look (va_list callback) ────────────────────────────────────────
+// ─── mob_trap_look (typed inner callback) ────────────────────────────────────
 
-/// va_list callback: activates NPC trap if mob steps on its cell.
-/// Stays as Rust FFI export so C `map_foreachincell` can call it.
+/// Typed inner: activates NPC trap if mob steps on its cell.
 #[cfg(not(test))]
-pub unsafe extern "C" fn mob_trap_look_ffi(bl: *mut BlockList, mut ap: ...) -> c_int {
+pub unsafe fn mob_trap_look_inner(bl: *mut BlockList, mob: *mut MobSpawnData, type_: i32, def: *mut i32) -> i32 {
     use crate::game::npc::NpcData;
     if bl.is_null() {
         return 0;
@@ -1139,9 +1044,6 @@ pub unsafe extern "C" fn mob_trap_look_ffi(bl: *mut BlockList, mut ap: ...) -> c
         return 0;
     }
     let nd = bl as *mut NpcData;
-    let mob = ap.arg::<*mut MobSpawnData>();
-    let type_ = ap.arg::<c_int>();
-    let def = ap.arg::<*mut c_int>();
     if !def.is_null() && *def != 0 {
         return 0;
     }
@@ -1159,11 +1061,13 @@ pub unsafe extern "C" fn mob_trap_look_ffi(bl: *mut BlockList, mut ap: ...) -> c
 /// Called every 50ms by the timer system.
 #[cfg(not(test))]
 pub unsafe fn mob_timer_spawns(_id: c_int, _n: c_int) -> c_int {
-    TIMERCHECK = TIMERCHECK.wrapping_add(1);
+    TIMERCHECK.fetch_add(1, Ordering::Relaxed);
 
-    if MOB_SPAWN_START != MOB_SPAWN_MAX {
-        let mut x = MOB_SPAWN_START;
-        while x < MOB_SPAWN_MAX {
+    let spawn_start = MOB_SPAWN_START.load(Ordering::Relaxed);
+    let spawn_max   = MOB_SPAWN_MAX.load(Ordering::Relaxed);
+    if spawn_start != spawn_max {
+        let mut x = spawn_start;
+        while x < spawn_max {
             let mob = map_id2mob(x);
             if !mob.is_null() {
                 tick_mob(mob);
@@ -1172,9 +1076,11 @@ pub unsafe fn mob_timer_spawns(_id: c_int, _n: c_int) -> c_int {
         }
     }
 
-    if MOB_ONETIME_START != MOB_ONETIME_MAX {
-        let mut x = MOB_ONETIME_START;
-        while x < MOB_ONETIME_MAX {
+    let onetime_start = MOB_ONETIME_START.load(Ordering::Relaxed);
+    let onetime_max   = MOB_ONETIME_MAX.load(Ordering::Relaxed);
+    if onetime_start != onetime_max {
+        let mut x = onetime_start;
+        while x < onetime_max {
             let mob = map_id2mob(x);
             if !mob.is_null() {
                 tick_mob(mob);
@@ -1183,15 +1089,15 @@ pub unsafe fn mob_timer_spawns(_id: c_int, _n: c_int) -> c_int {
         }
     }
 
-    if TIMERCHECK >= 30 {
-        TIMERCHECK = 0;
+    if TIMERCHECK.load(Ordering::Relaxed) >= 30 {
+        TIMERCHECK.store(0, Ordering::Relaxed);
     }
     0
 }
 
 #[cfg(not(test))]
 unsafe fn tick_mob(mob: *mut MobSpawnData) {
-    let tc = TIMERCHECK;
+    let tc = TIMERCHECK.load(Ordering::Relaxed);
     if tc % 5 == 0 {
         mob_secondduratimer(mob);
     }
@@ -1375,71 +1281,30 @@ unsafe fn broadcast_move(
     let mut subt = [0i32; 1];
     if !nothingnew {
         if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
-            map_foreachinblock(
-                clif_cmoblook_sub,
-                m,
-                x0,
-                y0,
-                x0 + x1 - 1,
-                y0 + y1 - 1,
-                BL_PC,
-                LOOK_SEND,
-                mob as *mut _,
-            );
+            let mob_ptr = mob;
+            foreach_in_rect(m, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC,
+                |bl| clif_cmoblook_inner(bl, LOOK_SEND, mob_ptr as *mut _));
         } else {
-            map_foreachinblock(
-                clif_mob_look_start_func,
-                m,
-                x0,
-                y0,
-                x0 + x1 - 1,
-                y0 + y1 - 1,
-                BL_PC,
-                mob as *mut _,
-            );
-            map_foreachinblock(
-                clif_object_look_sub,
-                m,
-                x0,
-                y0,
-                x0 + x1 - 1,
-                y0 + y1 - 1,
-                BL_PC,
-                LOOK_SEND,
-                &raw mut (*mob).bl,
-            );
-            map_foreachinblock(
-                clif_mob_look_close_func,
-                m,
-                x0,
-                y0,
-                x0 + x1 - 1,
-                y0 + y1 - 1,
-                BL_PC,
-                mob as *mut _,
-            );
+            foreach_in_rect(m, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC,
+                |bl| clif_mob_look_start_func_inner(bl));
+            let mob_bl = &raw mut (*mob).bl;
+            foreach_in_rect(m, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC,
+                |bl| clif_object_look_sub_inner(bl, LOOK_SEND, mob_bl));
+            foreach_in_rect(m, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC,
+                |bl| clif_mob_look_close_func_inner(bl));
         }
     }
-    map_foreachincell(
-        mob_trap_look_ffi,
-        m,
-        (*mob).bl.x as c_int,
-        (*mob).bl.y as c_int,
-        BL_NPC,
-        mob as *mut _,
-        0i32,
-        subt.as_mut_ptr(),
-    );
-    map_foreachinarea(
-        clif_mob_move,
-        m,
-        (*mob).bl.x as c_int,
-        (*mob).bl.y as c_int,
-        AREA,
-        BL_PC,
-        LOOK_SEND,
-        mob as *mut _,
-    );
+    {
+        let mob_ptr = mob;
+        let def_ptr = subt.as_mut_ptr();
+        foreach_in_cell(m, (*mob).bl.x as i32, (*mob).bl.y as i32, BL_NPC,
+            |bl| mob_trap_look_inner(bl, mob_ptr, 0, def_ptr));
+    }
+    {
+        let mob_ptr = mob;
+        foreach_in_area(m, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
+            |bl| clif_mob_move_inner(bl, mob_ptr));
+    }
 }
 
 #[cfg(not(test))]
@@ -1529,7 +1394,7 @@ pub unsafe fn move_mob(mob: *mut MobSpawnData) -> c_int {
 
     check_mob_collision(mob, m, dx, dy);
     check_pc_collision(mob, m, dx, dy);
-    map_foreachincell(rust_mob_move, m, dx, dy, BL_NPC, mob as *mut _);
+    { let mob_ptr = mob; foreach_in_cell(m, dx, dy, BL_NPC, |bl| rust_mob_move_inner(bl, mob_ptr)); }
 
     if clif_object_canmove(m, dx, dy, (*mob).side) != 0 {
         (*mob).canmove = 0;
@@ -1653,7 +1518,7 @@ pub unsafe fn moveghost_mob(mob: *mut MobSpawnData) -> c_int {
 
     check_mob_collision(mob, m, dx, dy);
     check_pc_collision(mob, m, dx, dy);
-    map_foreachincell(rust_mob_move, m, dx, dy, BL_NPC, mob as *mut _);
+    { let mob_ptr = mob; foreach_in_cell(m, dx, dy, BL_NPC, |bl| rust_mob_move_inner(bl, mob_ptr)); }
 
     // Collision checks only apply when mob has no target
     if (*mob).target == 0 {
@@ -1713,16 +1578,7 @@ pub unsafe fn mob_move2(mob: *mut MobSpawnData, x: c_int, y: c_int, side: c_int)
         (*mob).bx = (*mob).bl.x;
         (*mob).by_ = (*mob).bl.y;
         map_moveblock(&mut (*mob).bl, x, y);
-        map_foreachinarea(
-            clif_mob_move,
-            m,
-            (*mob).bl.x as c_int,
-            (*mob).bl.y as c_int,
-            AREA,
-            BL_PC,
-            LOOK_SEND,
-            mob as *mut _,
-        );
+        { let mob_ptr = mob; foreach_in_area(m, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC, |bl| clif_mob_move_inner(bl, mob_ptr)); }
         (*mob).canmove = 1;
     } else {
         (*mob).canmove = 0;
@@ -1813,30 +1669,24 @@ pub unsafe fn mob_setglobalreg(mob: *mut MobSpawnData, reg: *const c_char, val: 
 
 // ─── Item / drop helpers ──────────────────────────────────────────────────────
 
-/// va_list callback: sets def[0]=1 on first hit (used as a foreachincell "any-present" test).
-pub unsafe extern "C" fn mob_thing_yeah(_bl: *mut BlockList, mut ap: ...) -> c_int {
-    let def = ap.arg::<*mut c_int>();
+/// Typed inner: sets def[0]=1 on first hit (used as a foreachincell "any-present" test).
+pub unsafe fn mob_thing_yeah_inner(_bl: *mut BlockList, def: *mut i32) -> i32 {
     if !def.is_null() {
         *def = 1;
     }
     0
 }
 
-/// va_list callback: merge item `fl2` into an existing floor-item `fl` if IDs match.
+/// Typed inner: merge item `fl2` into an existing floor-item `fl` if IDs match.
 /// Args: `int* def`, `int id` (unused), `FLOORITEM* fl2`, `USER* sd` (unused).
 /// Mirrors `mob_addtocurrent` from `c_src/mob.c`.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_addtocurrent(bl: *mut BlockList, mut ap: ...) -> c_int {
+pub unsafe fn rust_mob_addtocurrent_inner(bl: *mut BlockList, def: *mut i32, _id: i32, fl2: *mut crate::game::scripting::types::floor::FloorItemData, _sd: *mut MapSessionData) -> i32 {
     use crate::game::scripting::types::floor::FloorItemData;
     if bl.is_null() {
         return 0;
     }
     let fl = bl as *mut FloorItemData;
-    let def = ap.arg::<*mut c_int>();
-    let _id = ap.arg::<c_int>();
-    let fl2 = ap.arg::<*mut FloorItemData>();
-    let _sd = ap.arg::<*mut MapSessionData>();
     if def.is_null() || fl2.is_null() {
         return 0;
     }
@@ -1854,8 +1704,7 @@ pub unsafe extern "C" fn rust_mob_addtocurrent(bl: *mut BlockList, mut ap: ...) 
 /// Reads `attacker->group_count` and `groups[]` to populate floor-item looters.
 /// Mirrors `mobdb_dropitem` from `c_src/mob.c`.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_dropitem(
+pub unsafe fn rust_mob_dropitem(
     blockid: c_uint,
     id: c_uint,
     amount: c_int,
@@ -1890,17 +1739,13 @@ pub unsafe extern "C" fn rust_mob_dropitem(
     (*fl).data.protected = protected_ as c_uint;
     (*fl).data.owner = owner as c_uint;
 
-    map_foreachincell(
-        rust_mob_addtocurrent,
-        m,
-        x,
-        y,
-        BL_ITEM,
-        &raw mut def as *mut c_int,
-        id as c_int,
-        fl,
-        sd,
-    );
+    {
+        let def_ptr = &raw mut def;
+        let fl_ptr = fl;
+        let sd_ptr = sd;
+        foreach_in_cell(m, x, y, BL_ITEM,
+            |bl| rust_mob_addtocurrent_inner(bl, def_ptr, id as i32, fl_ptr, sd_ptr));
+    }
 
     (*fl).timer = libc::time(std::ptr::null_mut()) as c_uint;
     libc::memset(
@@ -1935,16 +1780,7 @@ pub unsafe extern "C" fn rust_mob_dropitem(
 
     if def == 0 {
         map_additem(&raw mut (*fl).bl);
-        map_foreachinarea(
-            clif_object_look_sub2,
-            m,
-            x,
-            y,
-            AREA,
-            BL_PC,
-            LOOK_SEND as c_int,
-            &raw mut (*fl).bl,
-        );
+        { let fl_bl = &raw mut (*fl).bl; foreach_in_area(m, x, y, AreaType::Area, BL_PC, |bl| clif_object_look_sub2_inner(bl, LOOK_SEND, fl_bl)); }
     } else {
         libc::free(fl as *mut libc::c_void);
     }
@@ -1983,19 +1819,16 @@ pub unsafe fn mobdb_drops(mob: *mut MobSpawnData, sd: *mut std::ffi::c_void) -> 
 
 // ─── USER-dependent mob functions (ported from c_src/mob.c) ──────────────────
 
-/// va_list callback: selects a PC as this mob's target.
-/// Args (via va_list): `MOB* mob`.
+/// Typed inner: selects a PC as this mob's target.
 /// Reads `sd->status.dura_aether` to check sneak/cloak/hide, then conditionally
 /// updates `mob->target` based on `sd->status.gm_level` and a random roll.
 /// Mirrors `mob_find_target` from `c_src/mob.c`.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_find_target(bl: *mut BlockList, mut ap: ...) -> c_int {
+pub unsafe fn rust_mob_find_target_inner(bl: *mut BlockList, mob: *mut MobSpawnData) -> i32 {
     use crate::game::pc::PC_DIE;
     if bl.is_null() {
         return 0;
     }
-    let mob = ap.arg::<*mut MobSpawnData>();
     if mob.is_null() {
         return 0;
     }
@@ -2062,8 +1895,7 @@ pub unsafe extern "C" fn rust_mob_find_target(bl: *mut BlockList, mut ap: ...) -
 /// Calls scripting hooks `hitCritChance` and `swingDamage`, then sends network damage.
 /// Mirrors `mob_attack` from `c_src/mob.c`.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_attack(mob: *mut MobSpawnData, id: c_int) -> c_int {
+pub unsafe fn rust_mob_attack(mob: *mut MobSpawnData, id: c_int) -> c_int {
     use crate::game::pc::{OPT_FLAG_STEALTH, SFLAG_HPMP, U_FLAG_IMMORTAL};
     if id < 0 {
         return 0;
@@ -2133,8 +1965,7 @@ pub unsafe extern "C" fn rust_mob_attack(mob: *mut MobSpawnData, id: c_int) -> c
 /// Returns 0 (miss), 1 (normal hit), or 2 (critical hit).
 /// Mirrors `mob_calc_critical` from `c_src/mob.c`.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_calc_critical(
+pub unsafe fn rust_mob_calc_critical(
     mob: *mut MobSpawnData,
     sd: *mut MapSessionData,
 ) -> c_int {
@@ -2167,17 +1998,15 @@ pub unsafe extern "C" fn rust_mob_calc_critical(
     }
 }
 
-/// va_list callback: check whether an entity blocks mob movement.
+/// Typed inner: check whether an entity blocks mob movement.
 /// Sets `mob->canmove = 1` if the entity occupies the cell and is not a valid ghost/GM.
 /// Mirrors `mob_move` from `c_src/mob.c`.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_move(bl: *mut BlockList, mut ap: ...) -> c_int {
+pub unsafe fn rust_mob_move_inner(bl: *mut BlockList, mob: *mut MobSpawnData) -> i32 {
     use crate::game::pc::PC_DIE;
     if bl.is_null() {
         return 0;
     }
-    let mob = ap.arg::<*mut MobSpawnData>();
     if mob.is_null() {
         return 0;
     }
@@ -2285,8 +2114,7 @@ pub unsafe fn mobspawn_onetime(
 
 /// Heal mob: fire on_healed Lua event then send the negative-damage health packet.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn sl_mob_addhealth(mob: *mut MobSpawnData, damage: c_int) {
+pub unsafe fn sl_mob_addhealth(mob: *mut MobSpawnData, damage: c_int) {
     use crate::game::map_parse::combat::clif_send_mob_healthscript;
     if mob.is_null() { return; }
     let bl = map_id2bl((*mob).attacker);
@@ -2317,8 +2145,7 @@ pub unsafe extern "C" fn sl_mob_addhealth(mob: *mut MobSpawnData, damage: c_int)
 
 /// Damage mob: set attacker/damage fields then send the health packet.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn sl_mob_removehealth(mob: *mut MobSpawnData, damage: c_int, caster_id: c_uint) {
+pub unsafe fn sl_mob_removehealth(mob: *mut MobSpawnData, damage: c_int, caster_id: c_uint) {
     use crate::game::map_parse::combat::clif_send_mob_healthscript;
     if mob.is_null() { return; }
     let bl = if caster_id > 0 {
@@ -2348,8 +2175,7 @@ pub unsafe extern "C" fn sl_mob_removehealth(mob: *mut MobSpawnData, damage: c_i
 
 /// Return accumulated threat amount from a specific player on this mob.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn sl_mob_checkthreat(mob: *mut MobSpawnData, player_id: c_uint) -> c_int {
+pub unsafe fn sl_mob_checkthreat(mob: *mut MobSpawnData, player_id: c_uint) -> c_int {
     if mob.is_null() { return 0; }
     let tsd = map_id2sd_mob(player_id);
     if tsd.is_null() { return 0; }
@@ -2364,8 +2190,7 @@ pub unsafe extern "C" fn sl_mob_checkthreat(mob: *mut MobSpawnData, player_id: c
 
 /// Add individual damage from player to mob's dmgindtable.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn sl_mob_setinddmg(mob: *mut MobSpawnData, player_id: c_uint, dmg: f32) -> c_int {
+pub unsafe fn sl_mob_setinddmg(mob: *mut MobSpawnData, player_id: c_uint, dmg: f32) -> c_int {
     if mob.is_null() { return 0; }
     let sd = map_id2sd_mob(player_id);
     if sd.is_null() { return 0; }
@@ -2382,8 +2207,7 @@ pub unsafe extern "C" fn sl_mob_setinddmg(mob: *mut MobSpawnData, player_id: c_u
 
 /// Add group damage from player to mob's dmggrptable.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn sl_mob_setgrpdmg(mob: *mut MobSpawnData, player_id: c_uint, dmg: f32) -> c_int {
+pub unsafe fn sl_mob_setgrpdmg(mob: *mut MobSpawnData, player_id: c_uint, dmg: f32) -> c_int {
     if mob.is_null() { return 0; }
     let sd = map_id2sd_mob(player_id);
     if sd.is_null() { return 0; }
@@ -2400,8 +2224,7 @@ pub unsafe extern "C" fn sl_mob_setgrpdmg(mob: *mut MobSpawnData, player_id: c_u
 
 /// Call a named event on this mob's custom AI script.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn sl_mob_callbase(mob: *mut MobSpawnData, script: *const c_char) -> c_int {
+pub unsafe fn sl_mob_callbase(mob: *mut MobSpawnData, script: *const c_char) -> c_int {
     if mob.is_null() || script.is_null() { return 0; }
     let bl = map_id2bl((*mob).attacker);
     let yname = (*(*mob).data).yname.as_ptr();
@@ -2415,8 +2238,7 @@ pub unsafe extern "C" fn sl_mob_callbase(mob: *mut MobSpawnData, script: *const 
 
 /// Return 1 if the mob can step forward in its current direction, 0 if blocked.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn sl_mob_checkmove(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn sl_mob_checkmove(mob: *mut MobSpawnData) -> c_int {
     if mob.is_null() { return 0; }
     let m = (*mob).bl.m as c_int;
     let mut dx = (*mob).bl.x as c_int;
@@ -2435,9 +2257,9 @@ pub unsafe extern "C" fn sl_mob_checkmove(mob: *mut MobSpawnData) -> c_int {
     dy = dy.max(0).min((*slot).ys as c_int - 1);
     if warp_at(slot, dx, dy) { return 0; }
     (*mob).canmove = 0;
-    map_foreachincell(rust_mob_move, m, dx, dy, BL_MOB, mob as *mut _);
-    map_foreachincell(rust_mob_move, m, dx, dy, BL_PC, mob as *mut _);
-    map_foreachincell(rust_mob_move, m, dx, dy, BL_NPC, mob as *mut _);
+    { let mob_ptr = mob; foreach_in_cell(m, dx, dy, BL_MOB, |bl| rust_mob_move_inner(bl, mob_ptr)); }
+    { let mob_ptr = mob; foreach_in_cell(m, dx, dy, BL_PC, |bl| rust_mob_move_inner(bl, mob_ptr)); }
+    { let mob_ptr = mob; foreach_in_cell(m, dx, dy, BL_NPC, |bl| rust_mob_move_inner(bl, mob_ptr)); }
     if clif_object_canmove(m, dx, dy, direction) != 0 { return 0; }
     if clif_object_canmove_from(m, (*mob).bl.x as c_int, (*mob).bl.y as c_int, direction) != 0 { return 0; }
     if map_canmove(m, dx, dy) == 1 || (*mob).canmove == 1 { return 0; }
@@ -2446,8 +2268,7 @@ pub unsafe extern "C" fn sl_mob_checkmove(mob: *mut MobSpawnData) -> c_int {
 
 /// Set or clear a magic-effect duration slot on the mob.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn sl_mob_setduration(
+pub unsafe fn sl_mob_setduration(
     mob: *mut MobSpawnData, name: *const c_char,
     mut time: c_int, caster_id: c_uint, recast: c_int,
 ) {
@@ -2465,8 +2286,7 @@ pub unsafe extern "C" fn sl_mob_setduration(
         if mid == id && time <= 0 && (*mob).da[x].caster_id == caster_id && alreadycast == 1 {
             let saved_caster_id = (*mob).da[x].caster_id;
             (*mob).da[x].duration = 0; (*mob).da[x].id = 0; (*mob).da[x].caster_id = 0;
-            map_foreachinarea(clif_sendanimation, (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
-                              AREA, BL_PC, (*mob).da[x].animation as c_int, &raw mut (*mob).bl, -1i32);
+            { let t = &raw mut (*mob).bl; let anim = (*mob).da[x].animation as i32; foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC, |bl| clif_sendanimation_inner(bl, anim, t, -1)); }
             (*mob).da[x].animation = 0;
             let bl = if saved_caster_id != (*mob).bl.id { map_id2bl(saved_caster_id) } else { std::ptr::null_mut() };
             if !bl.is_null() { sl_doscript_2(magicdb_yname(mid), c"uncast".as_ptr(), &raw mut (*mob).bl, bl); }
@@ -2487,8 +2307,7 @@ pub unsafe extern "C" fn sl_mob_setduration(
 
 /// Clear magic-effect timers in id range [minid..maxid], firing uncast Lua events.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn sl_mob_flushduration(mob: *mut MobSpawnData, dis: c_int, minid: c_int, maxid: c_int) {
+pub unsafe fn sl_mob_flushduration(mob: *mut MobSpawnData, dis: c_int, minid: c_int, maxid: c_int) {
     if mob.is_null() { return; }
     let maxid = if maxid < minid { minid } else { maxid };
     for x in 0..MAX_MAGIC_TIMERS {
@@ -2498,8 +2317,7 @@ pub unsafe extern "C" fn sl_mob_flushduration(mob: *mut MobSpawnData, dis: c_int
         let flush = if minid <= 0 { true } else if maxid <= 0 { id == minid } else { id >= minid && id <= maxid };
         if flush {
             (*mob).da[x].duration = 0;
-            map_foreachinarea(clif_sendanimation, (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
-                              AREA, BL_PC, (*mob).da[x].animation as c_int, &raw mut (*mob).bl, -1i32);
+            { let t = &raw mut (*mob).bl; let anim = (*mob).da[x].animation as i32; foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC, |bl| clif_sendanimation_inner(bl, anim, t, -1)); }
             (*mob).da[x].animation = 0; (*mob).da[x].id = 0;
             let bl = map_id2bl((*mob).da[x].caster_id);
             (*mob).da[x].caster_id = 0;
@@ -2511,8 +2329,7 @@ pub unsafe extern "C" fn sl_mob_flushduration(mob: *mut MobSpawnData, dis: c_int
 
 /// Clear magic-effect timers without firing uncast Lua events.
 #[cfg(not(test))]
-#[no_mangle]
-pub unsafe extern "C" fn sl_mob_flushdurationnouncast(mob: *mut MobSpawnData, dis: c_int, minid: c_int, maxid: c_int) {
+pub unsafe fn sl_mob_flushdurationnouncast(mob: *mut MobSpawnData, dis: c_int, minid: c_int, maxid: c_int) {
     if mob.is_null() { return; }
     let maxid = if maxid < minid { minid } else { maxid };
     for x in 0..MAX_MAGIC_TIMERS {
@@ -2522,8 +2339,7 @@ pub unsafe extern "C" fn sl_mob_flushdurationnouncast(mob: *mut MobSpawnData, di
         let flush = if minid <= 0 { true } else if maxid <= 0 { id == minid } else { id >= minid && id <= maxid };
         if flush {
             (*mob).da[x].duration = 0; (*mob).da[x].caster_id = 0;
-            map_foreachinarea(clif_sendanimation, (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
-                              AREA, BL_PC, (*mob).da[x].animation as c_int, &raw mut (*mob).bl, -1i32);
+            { let t = &raw mut (*mob).bl; let anim = (*mob).da[x].animation as i32; foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC, |bl| clif_sendanimation_inner(bl, anim, t, -1)); }
             (*mob).da[x].animation = 0; (*mob).da[x].id = 0;
         }
     }
@@ -2553,28 +2369,28 @@ mod tests {
 
 // ─── FFI bridge (moved from src/ffi/mob.rs) ───────────────────────────────
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_mobspawn_read() -> c_int {
+#[cfg(not(test))]
+pub unsafe fn rust_mobspawn_read() -> c_int {
     mobspawn_read()
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_timer_spawns(id: c_int, n: c_int) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn rust_mob_timer_spawns(id: c_int, n: c_int) -> c_int {
     mob_timer_spawns(id, n)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_respawn_getstats(mob: *mut MobSpawnData) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn rust_mob_respawn_getstats(mob: *mut MobSpawnData) -> c_int {
     mob_respawn_getstats(mob)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_warp(mob: *mut MobSpawnData, m: c_int, x: c_int, y: c_int) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn rust_mob_warp(mob: *mut MobSpawnData, m: c_int, x: c_int, y: c_int) -> c_int {
     mob_warp(mob, m, x, y)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_mobspawn_onetime(
+#[cfg(not(test))]
+pub unsafe fn rust_mobspawn_onetime(
     id: c_uint, m: c_int, x: c_int, y: c_int,
     times: c_int, start: c_int, end: c_int,
     replace: c_uint, owner: c_uint,
@@ -2582,69 +2398,69 @@ pub unsafe extern "C" fn rust_mobspawn_onetime(
     mobspawn_onetime(id, m, x, y, times, start, end, replace, owner)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_readglobalreg(mob: *mut MobSpawnData, reg: *const c_char) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn rust_mob_readglobalreg(mob: *mut MobSpawnData, reg: *const c_char) -> c_int {
     mob_readglobalreg(mob, reg)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_setglobalreg(mob: *mut MobSpawnData, reg: *const c_char, val: c_int) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn rust_mob_setglobalreg(mob: *mut MobSpawnData, reg: *const c_char, val: c_int) -> c_int {
     mob_setglobalreg(mob, reg, val)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_drops(mob: *mut MobSpawnData, sd: *mut std::ffi::c_void) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn rust_mob_drops(mob: *mut MobSpawnData, sd: *mut std::ffi::c_void) -> c_int {
     mobdb_drops(mob, sd)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_handle_sub(mob: *mut MobSpawnData) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn rust_mob_handle_sub(mob: *mut MobSpawnData) -> c_int {
     mob_handle_sub(mob);
     0
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_kill_mob(mob: *mut MobSpawnData) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn rust_kill_mob(mob: *mut MobSpawnData) -> c_int {
     kill_mob(mob)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_calcstat(mob: *mut MobSpawnData) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn rust_mob_calcstat(mob: *mut MobSpawnData) -> c_int {
     mob_calcstat(mob)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_respawn(mob: *mut MobSpawnData) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn rust_mob_respawn(mob: *mut MobSpawnData) -> c_int {
     mob_respawn(mob)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_respawn_nousers(mob: *mut MobSpawnData) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn rust_mob_respawn_nousers(mob: *mut MobSpawnData) -> c_int {
     mob_respawn_nousers(mob)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_mob_flushmagic(mob: *mut MobSpawnData) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn rust_mob_flushmagic(mob: *mut MobSpawnData) -> c_int {
     mob_flushmagic(mob)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_move_mob(mob: *mut MobSpawnData) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn rust_move_mob(mob: *mut MobSpawnData) -> c_int {
     move_mob(mob)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_move_mob_ignore_object(mob: *mut MobSpawnData) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn rust_move_mob_ignore_object(mob: *mut MobSpawnData) -> c_int {
     move_mob_ignore_object(mob)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_moveghost_mob(mob: *mut MobSpawnData) -> c_int {
+#[cfg(not(test))]
+pub unsafe fn rust_moveghost_mob(mob: *mut MobSpawnData) -> c_int {
     moveghost_mob(mob)
 }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_move_mob_intent(
+#[cfg(not(test))]
+pub unsafe fn rust_move_mob_intent(
     mob: *mut MobSpawnData,
     bl: *mut crate::database::map_db::BlockList,
 ) -> c_int {

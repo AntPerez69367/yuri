@@ -26,16 +26,11 @@ pub fn store_menu_opts(user: *mut c_void, opts: Vec<String>) {
         .insert(user as usize, opts);
 }
 
-// ─── C accessor stubs ────────────────────────────────────────────────────────
-// sl_compat.c exposes thin wrappers for USER struct fields so Rust avoids
-// hard-coded byte offsets into an unported C struct.
-
-extern "C" {
-    fn sl_user_coref(sd: *mut c_void) -> c_uint;
-    fn sl_user_set_coref(sd: *mut c_void, v: c_uint);
-    fn sl_user_coref_container(sd: *mut c_void) -> c_uint;
-    fn sl_user_map_id2sd(id: c_uint) -> *mut c_void;
-}
+// ─── PC accessor wrappers ─────────────────────────────────────────────────────
+// Previously called via extern "C" to sl_compat.c; now direct Rust imports.
+use crate::game::scripting::pc_accessors::{
+    sl_user_coref, sl_user_set_coref, sl_user_coref_container, sl_user_map_id2sd,
+};
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 

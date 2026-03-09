@@ -4,6 +4,7 @@
 //! `GlobalReg` mirrors `struct global_reg` from `mmo.h` exactly.
 
 use std::os::raw::{c_char, c_int, c_uchar, c_uint, c_ushort};
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use anyhow::{Context, Result};
 use rayon::prelude::*;
@@ -635,14 +636,14 @@ mod layout_tests {
 use std::ffi::CStr;
 
 // Rust owns these globals. Exported to C so map_server.c can read map[id].* unchanged.
-#[no_mangle]
+// SAFETY: Raw pointer to heap-allocated MapData array. Allocated once in rust_map_init,
+// never reallocated. All accesses on the game thread. Single-threaded game loop — no concurrent access.
 pub static mut map: *mut MapData = std::ptr::null_mut();
-#[no_mangle]
-pub static mut map_n: c_int = 0;
+/// Count of loaded map slots. Written once in `rust_map_init` during startup.
+pub static map_n: AtomicI32 = AtomicI32::new(0);
 
 /// Allocate the 65535-slot map array, load all maps from DB + files, set C globals.
-#[no_mangle]
-pub unsafe extern "C" fn rust_map_init(maps_dir: *const c_char, server_id: c_int) -> c_int {
+pub unsafe fn rust_map_init(maps_dir: *const c_char, server_id: c_int) -> c_int {
     ffi_catch!(-1, {
         let dir = match unsafe { CStr::from_ptr(maps_dir) }.to_str() {
             Ok(s) => s,
@@ -662,7 +663,7 @@ pub unsafe extern "C" fn rust_map_init(maps_dir: *const c_char, server_id: c_int
             Ok(count) => {
                 unsafe {
                     map = raw;
-                    map_n = count as c_int;
+                    map_n.store(count as c_int, Ordering::Relaxed);
                 }
                 tracing::info!("[map] map data loaded count={count}");
                 0
@@ -680,8 +681,7 @@ pub unsafe extern "C" fn rust_map_init(maps_dir: *const c_char, server_id: c_int
 }
 
 /// Reload map metadata + registry in-place.
-#[no_mangle]
-pub unsafe extern "C" fn rust_map_reload(maps_dir: *const c_char, server_id: c_int) -> c_int {
+pub unsafe fn rust_map_reload(maps_dir: *const c_char, server_id: c_int) -> c_int {
     ffi_catch!(-1, {
         if unsafe { map.is_null() } { return -1; }
         let dir = match unsafe { CStr::from_ptr(maps_dir) }.to_str() {
@@ -728,8 +728,7 @@ pub unsafe fn map_is_loaded(id: u16) -> bool {
 }
 
 /// Reload the MapRegistry for a single map.
-#[no_mangle]
-pub unsafe extern "C" fn rust_map_loadregistry(map_id: c_int) -> c_int {
+pub unsafe fn rust_map_loadregistry(map_id: c_int) -> c_int {
     ffi_catch!(-1, {
         if unsafe { map.is_null() } { return -1; }
         let id = map_id as usize;

@@ -3,12 +3,12 @@
 //! Covers the initial login packet sequence and periodic state updates sent
 //! to a single player's own socket (as opposed to area-broadcast packets).
 //!
-//! Functions declared `#[no_mangle] pub unsafe extern "C"` so they remain
+//! Functions declared `pub unsafe extern "C"` so they remain
 //! callable from any remaining C code that has not yet been ported.
 
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
-use std::ffi::{c_char, c_int, c_uint};
+use std::ffi::{c_char, c_int};
 use std::ptr;
 
 use crate::database::map_db::BlockList;
@@ -28,7 +28,6 @@ use crate::servers::char::charstatus::MAX_LEGENDS;
 
 use super::packet::{
     encrypt, wfifob, wfifohead, wfifol, wfifoset, wfifow,
-    SAMEAREA,
 };
 
 // Constants not in packet.rs — defined locally (from map_server.h / map_parse.h).
@@ -63,67 +62,29 @@ unsafe fn replace_str_local(src: *const c_char, orig: &[u8], rep: *const c_char)
     REPL_BUF.as_ptr() as *const c_char
 }
 
-// ─── External C globals ──────────────────────────────────────────────────────
+// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
 
-extern "C" {
-    /// Current in-game time tick (from `map_server.c`).
-    static cur_time: c_int;
-    /// Current in-game year (from `map_server.c`).
-    static cur_year: c_int;
-}
+use crate::game::map_server::{cur_time, cur_year};
+use crate::database::class_db::rust_classdb_name;
+use crate::database::clan_db::rust_clandb_name;
+use crate::database::item_db::{
+    rust_itemdb_name, rust_itemdb_icon, rust_itemdb_iconcolor, rust_itemdb_protected,
+};
+use crate::game::map_server::map_id2name;
+use crate::game::client::handlers::clif_getName;
+use crate::game::client::visual::{
+    clif_sendweather, clif_destroyold, clif_getLevelTNL, clif_getXPBarPercent,
+};
+use crate::game::map_parse::visual::{clif_mob_look_start, clif_mob_look_close};
+use crate::game::map_parse::movement::clif_sendchararea;
+use crate::game::map_parse::groups::{clif_grouphealth_update, clif_leavegroup};
+use crate::game::map_parse::chat::clif_sendminitext;
+use crate::network::crypt::rust_crypt_set_packet_indexes;
 
-// ─── External C functions not yet ported ─────────────────────────────────────
-
-extern "C" {
-    // classdb / clandb / itemdb helpers — implemented in Rust, exposed via C shims.
-    fn rust_classdb_name(id: c_int, rank: c_int) -> *mut c_char;
-    fn rust_clandb_name(id: c_int) -> *const c_char;
-    fn rust_itemdb_name(id: c_uint) -> *mut c_char;
-    fn rust_itemdb_icon(id: c_uint) -> c_int;
-    fn rust_itemdb_iconcolor(id: c_uint) -> c_int;
-    fn rust_itemdb_protected(id: c_uint) -> c_int;
-
-    // map_id2name — char-server side helper, still in C.
-    fn map_id2name(id: c_uint) -> *mut c_char;
-
-    // clif_getName — static-char SQL lookup, still in C.
-    fn clif_getName(id: c_uint) -> *mut c_char;
-
-    // clif_sendweather — sends weather packet, still in C.
-    fn clif_sendweather(sd: *mut MapSessionData) -> c_int;
-
-    // Area / entity scan helpers — now in visual.rs (Rust).
-    fn clif_mob_look_start(sd: *mut MapSessionData) -> c_int;
-    fn clif_mob_look_close(sd: *mut MapSessionData) -> c_int;
-    fn clif_object_look_sub(bl: *mut BlockList, ...) -> c_int;
-    fn clif_destroyold(sd: *mut MapSessionData) -> c_int;
-    fn clif_sendchararea(sd: *mut MapSessionData) -> c_int;
-
-    // Group helpers — remain in C.
-    fn clif_grouphealth_update(sd: *mut MapSessionData) -> c_int;
-    fn clif_leavegroup(sd: *mut MapSessionData) -> c_int;
-    fn clif_sendminitext(sd: *mut MapSessionData, msg: *const c_char) -> c_int;
-
-    // Area iteration — remain in C.
-    fn map_foreachinarea(
-        f: unsafe extern "C" fn(*mut BlockList, ...) -> c_int,
-        m: c_int, x: c_int, y: c_int,
-        range: c_int, bl_type: c_int,
-        ...
-    ) -> c_int;
-
-    // set_packet_indexes — net_crypt helper, shim in net_crypt.h.
-    fn rust_crypt_set_packet_indexes(pkt: *mut u8) -> c_int;
-
-    // charlook / cmoblook area callbacks — remain in C.
-    fn clif_charlook_sub(bl: *mut BlockList, ...) -> c_int;
-    fn clif_cnpclook_sub(bl: *mut BlockList, ...) -> c_int;
-    fn clif_cmoblook_sub(bl: *mut BlockList, ...) -> c_int;
-
-    // XP helpers — still in C (map_parse.c); call rather than replicate DB logic.
-    fn clif_getLevelTNL(sd: *mut MapSessionData) -> c_int;
-    fn clif_getXPBarPercent(sd: *mut MapSessionData) -> c_int;
-}
+use crate::game::block::{foreach_in_area, AreaType};
+use crate::game::map_parse::visual::{
+    clif_object_look_sub_inner, clif_charlook_inner, clif_cnpclook_inner, clif_cmoblook_inner,
+};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -150,8 +111,7 @@ const OPT_WALKTHROUGH: u64 = 128;
 ///   [6]      = 0x00
 ///
 /// Mirrors `clif_sendack` from `c_src/map_parse.c` ~line 4274.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendack(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendack(sd: *mut MapSessionData) -> c_int {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -176,8 +136,7 @@ pub unsafe extern "C" fn clif_sendack(sd: *mut MapSessionData) -> c_int {
 /// Send the profile retrieval trigger packet.
 ///
 /// Mirrors `clif_retrieveprofile` from `c_src/map_parse.c` ~line 4297.
-#[no_mangle]
-pub unsafe extern "C" fn clif_retrieveprofile(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_retrieveprofile(sd: *mut MapSessionData) -> c_int {
     let fd = (*sd).fd;
     wfifob(fd, 0, 0xAA);
     wfifob(fd, 1, 0x00);
@@ -194,8 +153,7 @@ pub unsafe extern "C" fn clif_retrieveprofile(sd: *mut MapSessionData) -> c_int 
 /// Send the AFK / screensaver state packet.
 ///
 /// Mirrors `clif_screensaver` from `c_src/map_parse.c` ~line 4310.
-#[no_mangle]
-pub unsafe extern "C" fn clif_screensaver(sd: *mut MapSessionData, screen: c_int) -> c_int {
+pub unsafe fn clif_screensaver(sd: *mut MapSessionData, screen: c_int) -> c_int {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -229,8 +187,7 @@ pub unsafe extern "C" fn clif_screensaver(sd: *mut MapSessionData, screen: c_int
 ///   [6]    = cur_year
 ///
 /// Mirrors `clif_sendtime` from `c_src/map_parse.c` ~line 4328.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendtime(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendtime(sd: *mut MapSessionData) -> c_int {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -242,8 +199,8 @@ pub unsafe extern "C" fn clif_sendtime(sd: *mut MapSessionData) -> c_int {
     wfifob(fd, 2, 0x04);
     wfifob(fd, 3, 0x20);
     wfifob(fd, 4, 0x03);
-    wfifob(fd, 5, cur_time as u8);
-    wfifob(fd, 6, cur_year as u8);
+    wfifob(fd, 5, cur_time.load(std::sync::atomic::Ordering::Relaxed) as u8);
+    wfifob(fd, 6, cur_year.load(std::sync::atomic::Ordering::Relaxed) as u8);
     wfifoset(fd, encrypt(fd) as usize);
     0
 }
@@ -264,8 +221,7 @@ pub unsafe extern "C" fn clif_sendtime(sd: *mut MapSessionData) -> c_int {
 ///   [14..15] = BE u16 0x0000
 ///
 /// Mirrors `clif_sendid` from `c_src/map_parse.c` ~line 4346.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendid(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendid(sd: *mut MapSessionData) -> c_int {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -296,8 +252,7 @@ pub unsafe extern "C" fn clif_sendid(sd: *mut MapSessionData) -> c_int {
 /// Followed by a call to `clif_sendweather` (still in C).
 ///
 /// Mirrors `clif_sendmapinfo` from `c_src/map_parse.c` ~line 4382.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendmapinfo(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendmapinfo(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
@@ -383,8 +338,7 @@ pub unsafe extern "C" fn clif_sendmapinfo(sd: *mut MapSessionData) -> c_int {
 /// whether the map is larger than the 16 × 14 client viewport.
 ///
 /// Mirrors `clif_sendxy` from `c_src/map_parse.c` ~line 4471.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendxy(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendxy(sd: *mut MapSessionData) -> c_int {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -446,8 +400,7 @@ pub unsafe extern "C" fn clif_sendxy(sd: *mut MapSessionData) -> c_int {
 /// variant (both write 0x00 at [13]).
 ///
 /// Mirrors `clif_sendxynoclick` from `c_src/map_parse.c` ~line 4516.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendxynoclick(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendxynoclick(sd: *mut MapSessionData) -> c_int {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -498,8 +451,7 @@ pub unsafe extern "C" fn clif_sendxynoclick(sd: *mut MapSessionData) -> c_int {
 /// then stores the resulting offsets in `sd->viewx`/`sd->viewy`.
 ///
 /// Mirrors `clif_sendxychange` from `c_src/map_parse.c` ~line 4558.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendxychange(sd: *mut MapSessionData, dx: c_int, dy: c_int) -> c_int {
+pub unsafe fn clif_sendxychange(sd: *mut MapSessionData, dx: c_int, dy: c_int) -> c_int {
     if sd.is_null() { return 0; }
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
@@ -551,8 +503,7 @@ pub unsafe extern "C" fn clif_sendxychange(sd: *mut MapSessionData, dx: c_int, d
 /// added; `SFLAG_GMON` is added for GMs who are walking-through.
 ///
 /// Mirrors `clif_sendstatus` from `c_src/map_parse.c` ~line 4595.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendstatus(sd: *mut MapSessionData, flags: c_int) -> c_int {
+pub unsafe fn clif_sendstatus(sd: *mut MapSessionData, flags: c_int) -> c_int {
     if sd.is_null() { return 0; }
 
     let mut f = flags | SFLAG_ALWAYSON;
@@ -647,8 +598,7 @@ pub unsafe extern "C" fn clif_sendstatus(sd: *mut MapSessionData, flags: c_int) 
 /// helm, realm) to the player.
 ///
 /// Mirrors `clif_sendoptions` from `c_src/map_parse.c` ~line 4680.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendoptions(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendoptions(sd: *mut MapSessionData) -> c_int {
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
         return 0;
@@ -687,8 +637,7 @@ pub unsafe extern "C" fn clif_sendoptions(sd: *mut MapSessionData) -> c_int {
 ///   - Legend entries (icon, color, text — with optional $player substitution)
 ///
 /// Mirrors `clif_mystaytus` from `c_src/map_parse.c` ~line 2747.
-#[no_mangle]
-pub unsafe extern "C" fn clif_mystaytus(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
 
     if rust_session_exists((*sd).fd) == 0 {
@@ -928,23 +877,16 @@ pub unsafe extern "C" fn clif_mystaytus(sd: *mut MapSessionData) -> c_int {
 /// player.
 ///
 /// Mirrors `clif_getchararea` from `c_src/map_parse.c` ~line 3895.
-#[no_mangle]
-pub unsafe extern "C" fn clif_getchararea(sd: *mut MapSessionData) -> c_int {
-    map_foreachinarea(
-        clif_charlook_sub,
-        (*sd).bl.m as c_int, (*sd).bl.x as c_int, (*sd).bl.y as c_int,
-        SAMEAREA, BL_PC, LOOK_GET, sd,
-    );
-    map_foreachinarea(
-        clif_cnpclook_sub,
-        (*sd).bl.m as c_int, (*sd).bl.x as c_int, (*sd).bl.y as c_int,
-        SAMEAREA, BL_NPC, LOOK_GET, sd,
-    );
-    map_foreachinarea(
-        clif_cmoblook_sub,
-        (*sd).bl.m as c_int, (*sd).bl.x as c_int, (*sd).bl.y as c_int,
-        SAMEAREA, BL_MOB, LOOK_GET, sd,
-    );
+pub unsafe fn clif_getchararea(sd: *mut MapSessionData) -> c_int {
+    let m = (*sd).bl.m as i32;
+    let x = (*sd).bl.x as i32;
+    let y = (*sd).bl.y as i32;
+    foreach_in_area(m, x, y, AreaType::SameArea, BL_PC,
+        |bl| clif_charlook_inner(bl, LOOK_GET, sd));
+    foreach_in_area(m, x, y, AreaType::SameArea, BL_NPC,
+        |bl| clif_cnpclook_inner(bl, LOOK_GET, sd as *mut BlockList));
+    foreach_in_area(m, x, y, AreaType::SameArea, BL_MOB,
+        |bl| clif_cmoblook_inner(bl, LOOK_GET, sd as *mut BlockList));
     0
 }
 
@@ -958,15 +900,14 @@ pub unsafe extern "C" fn clif_getchararea(sd: *mut MapSessionData) -> c_int {
 /// disbanded.
 ///
 /// Mirrors `clif_refresh` from `c_src/map_parse.c` ~line 8531.
-#[no_mangle]
-pub unsafe extern "C" fn clif_refresh(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_refresh(sd: *mut MapSessionData) -> c_int {
     clif_sendmapinfo(sd);
     clif_sendxy(sd);
     clif_mob_look_start(sd);
-    map_foreachinarea(
-        clif_object_look_sub,
-        (*sd).bl.m as c_int, (*sd).bl.x as c_int, (*sd).bl.y as c_int,
-        SAMEAREA, BL_ALL, LOOK_GET, sd,
+    foreach_in_area(
+        (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
+        AreaType::SameArea, BL_ALL,
+        |bl| clif_object_look_sub_inner(bl, LOOK_GET, sd as *mut BlockList),
     );
     clif_mob_look_close(sd);
     clif_destroyold(sd);
@@ -1022,8 +963,7 @@ pub unsafe extern "C" fn clif_refresh(sd: *mut MapSessionData) -> c_int {
 /// existing C bug; we replicate it faithfully.
 ///
 /// Mirrors `clif_sendminimap` from `c_src/map_parse.c` ~line 11437.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendminimap(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendminimap(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
     wfifohead(fd, 0);
@@ -1065,6 +1005,5 @@ unsafe fn copy_cstr_to_wfifo(fd: c_int, pos: usize, src: *const u8, len: usize) 
 /// not be used after this call.
 #[inline]
 unsafe fn libc_free(ptr: *mut std::ffi::c_void) {
-    extern "C" { fn free(ptr: *mut std::ffi::c_void); }
-    if !ptr.is_null() { free(ptr); }
+    if !ptr.is_null() { libc::free(ptr); }
 }

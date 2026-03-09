@@ -215,68 +215,52 @@ pub fn bn_searchexist(id: i32) -> *mut BnData {
 
 // ─── FFI bridge (moved from src/ffi/board_db.rs) ──────────────────────────
 
-#[no_mangle]
-pub extern "C" fn rust_boarddb_init() -> c_int { ffi_catch!(-1, init()) }
+pub fn rust_boarddb_init() -> c_int { ffi_catch!(-1, init()) }
 
-#[no_mangle]
-pub extern "C" fn rust_boarddb_term() { ffi_catch!((), term()) }
+pub fn rust_boarddb_term() { ffi_catch!((), term()) }
 
-#[no_mangle]
-pub extern "C" fn rust_boarddb_search(id: c_int) -> *mut BoardData { ffi_catch!(null_mut(), search(id)) }
+pub fn rust_boarddb_search(id: c_int) -> *mut BoardData { ffi_catch!(null_mut(), search(id)) }
 
-#[no_mangle]
-pub extern "C" fn rust_boarddb_searchexist(id: c_int) -> *mut BoardData { ffi_catch!(null_mut(), searchexist(id)) }
+pub fn rust_boarddb_searchexist(id: c_int) -> *mut BoardData { ffi_catch!(null_mut(), searchexist(id)) }
 
-#[no_mangle]
-pub unsafe extern "C" fn rust_boarddb_id(s: *const c_char) -> c_uint { ffi_catch!(0, unsafe { board_id(s) }) }
+pub unsafe fn rust_boarddb_id(s: *const c_char) -> c_uint { ffi_catch!(0, unsafe { board_id(s) }) }
 
-#[no_mangle]
-pub extern "C" fn rust_boarddb_name(id: c_int) -> *mut c_char {
+pub fn rust_boarddb_name(id: c_int) -> *mut c_char {
     ffi_catch!(null_mut(), {
         let p = search(id);
         if p.is_null() { null_mut() } else { unsafe { (*p).name.as_mut_ptr() } }
     })
 }
-#[no_mangle]
-pub extern "C" fn rust_boarddb_yname(id: c_int) -> *mut c_char {
+pub fn rust_boarddb_yname(id: c_int) -> *mut c_char {
     ffi_catch!(null_mut(), {
         let p = search(id);
         if p.is_null() { null_mut() } else { unsafe { (*p).yname.as_mut_ptr() } }
     })
 }
-#[no_mangle]
-pub extern "C" fn rust_boarddb_level(id: c_int) -> c_int {
+pub fn rust_boarddb_level(id: c_int) -> c_int {
     ffi_catch!(-1, { let p = search(id); if p.is_null() { -1 } else { unsafe { (*p).level } } })
 }
-#[no_mangle]
-pub extern "C" fn rust_boarddb_gmlevel(id: c_int) -> c_int {
+pub fn rust_boarddb_gmlevel(id: c_int) -> c_int {
     ffi_catch!(-1, { let p = search(id); if p.is_null() { -1 } else { unsafe { (*p).gmlevel } } })
 }
-#[no_mangle]
-pub extern "C" fn rust_boarddb_path(id: c_int) -> c_int {
+pub fn rust_boarddb_path(id: c_int) -> c_int {
     ffi_catch!(-1, { let p = search(id); if p.is_null() { -1 } else { unsafe { (*p).path } } })
 }
-#[no_mangle]
-pub extern "C" fn rust_boarddb_clan(id: c_int) -> c_int {
+pub fn rust_boarddb_clan(id: c_int) -> c_int {
     ffi_catch!(-1, { let p = search(id); if p.is_null() { -1 } else { unsafe { (*p).clan } } })
 }
-#[no_mangle]
-pub extern "C" fn rust_boarddb_sort(id: c_int) -> c_int {
+pub fn rust_boarddb_sort(id: c_int) -> c_int {
     ffi_catch!(-1, { let p = search(id); if p.is_null() { -1 } else { unsafe { (*p).sort } } })
 }
-#[no_mangle]
-pub extern "C" fn rust_boarddb_script(id: c_int) -> c_int {
+pub fn rust_boarddb_script(id: c_int) -> c_int {
     ffi_catch!(-1, { let p = search(id); if p.is_null() { -1 } else { unsafe { (*p).script as c_int } } })
 }
 
-#[no_mangle]
-pub extern "C" fn rust_bn_search(id: c_int) -> *mut BnData { ffi_catch!(null_mut(), bn_search(id)) }
+pub fn rust_bn_search(id: c_int) -> *mut BnData { ffi_catch!(null_mut(), bn_search(id)) }
 
-#[no_mangle]
-pub extern "C" fn rust_bn_searchexist(id: c_int) -> *mut BnData { ffi_catch!(null_mut(), bn_searchexist(id)) }
+pub fn rust_bn_searchexist(id: c_int) -> *mut BnData { ffi_catch!(null_mut(), bn_searchexist(id)) }
 
-#[no_mangle]
-pub extern "C" fn rust_bn_name(id: c_int) -> *mut c_char {
+pub fn rust_bn_name(id: c_int) -> *mut c_char {
     ffi_catch!(null_mut(), {
         let p = bn_search(id);
         if p.is_null() { null_mut() } else { unsafe { (*p).name.as_mut_ptr() } }

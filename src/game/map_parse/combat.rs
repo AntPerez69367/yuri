@@ -1,6 +1,6 @@
 //! Port of the combat/magic/animation/durability helpers from `c_src/map_parse.c`.
 //!
-//! Functions declared `#[no_mangle] pub unsafe extern "C"` so they remain
+//! Functions declared `pub unsafe extern "C"` so they remain
 //! callable from any remaining C code that has not yet been ported.
 
 #![allow(non_snake_case, clippy::wildcard_imports)]
@@ -24,53 +24,45 @@ use crate::servers::char::charstatus::MAX_SPELLS;
 
 use super::packet::{
     encrypt, wfifob, wfifohead, wfifol, wfifoset, wfifow, wfifoheader,
-    clif_send, map_foreachinarea,
+    clif_send,
     AREA, SELF, SAMEAREA,
 };
+use crate::game::block::{foreach_in_area, AreaType};
 
 // enum { LOOK_GET = 0, LOOK_SEND = 1 } from map_parse.h
 const LOOK_GET: c_int = 0;
 
-// ─── C FFI: functions remaining in C ─────────────────────────────────────────
+// ─── Direct Rust imports (replacing extern "C" declarations) ─────────────────
 
-extern "C" {
-    fn clif_sendstatus(sd: *mut MapSessionData, flags: c_int) -> c_int;
-    fn clif_grouphealth_update(sd: *mut MapSessionData) -> c_int;
-    fn clif_sendmsg(sd: *mut MapSessionData, t: c_int, msg: *const c_char) -> c_int;
-    fn clif_sendminitext(sd: *mut MapSessionData, msg: *const c_char) -> c_int;
-    fn clif_unequipit(sd: *mut MapSessionData, t: c_int) -> c_int;
-    fn clif_getequiptype(val: c_int) -> c_int;
-    fn broadcast_update_state(sd: *mut MapSessionData);
-    fn clif_playsound(bl: *mut BlockList, sound: c_int) -> c_int;
-    fn clif_isingroup(sd: *mut MapSessionData, tsd: *mut MapSessionData) -> c_int;
-    fn map_lastdeath_mob(mob: *mut MobSpawnData) -> c_int;
-    fn addtokillreg(sd: *mut MapSessionData, mob: c_int) -> c_int;
-    fn clif_addtokillreg(sd: *mut MapSessionData, mob: c_int) -> c_int;
-    fn map_id2bl(id: c_uint) -> *mut BlockList;
-    fn map_id2sd(id: c_uint) -> *mut MapSessionData;
-    fn rust_pc_calcstat(sd: *mut MapSessionData) -> c_int;
-    fn rust_pc_checklevel(sd: *mut MapSessionData) -> c_int;
-    fn rust_pc_isequip(sd: *mut MapSessionData, t: c_int) -> c_int;
-    fn rust_itemdb_name(id: c_uint) -> *mut c_char;
-    fn rust_itemdb_yname(id: c_uint) -> *mut c_char;
-    fn rust_itemdb_sound(id: c_uint) -> c_uint;
-    fn rust_itemdb_soundhit(id: c_uint) -> c_uint;
-    fn rust_itemdb_ethereal(id: c_uint) -> c_int;
-    fn rust_itemdb_dura(id: c_uint) -> c_int;
-    fn rust_itemdb_protected(id: c_uint) -> c_int;
-    fn rust_itemdb_breakondeath(id: c_uint) -> c_int;
-    fn rust_itemdb_look(id: c_uint) -> c_int;
-    fn rust_magicdb_name(id: c_int) -> *mut c_char;
-    fn rust_magicdb_yname(id: c_int) -> *mut c_char;
-    fn rust_magicdb_question(id: c_int) -> *mut c_char;
-    fn rust_magicdb_type(id: c_int) -> c_int;
-    fn rust_magicdb_mute(id: c_int) -> c_int;
-    fn rust_magicdb_ticker(id: c_int) -> c_int;
-    fn rust_mob_flushmagic(mob: *mut MobSpawnData) -> c_int;
-    fn rust_sl_async_freeco(user: *mut std::ffi::c_void);
-    fn rust_magicdb_canfail(id: c_int) -> c_int;
-    fn map_id2mob(id: c_uint) -> *mut MobSpawnData;
-    static groups: [c_uint; 65536]; // 256 * 256 flat
+use crate::game::map_parse::player_state::clif_sendstatus;
+use crate::game::map_parse::groups::{clif_grouphealth_update, clif_isingroup};
+use crate::game::map_parse::chat::{clif_sendmsg, clif_sendminitext, clif_playsound};
+use crate::game::map_parse::items::clif_unequipit;
+use crate::game::client::visual::{clif_getequiptype, broadcast_update_state};
+use crate::game::map_server::{map_lastdeath_mob, map_id2mob};
+use crate::game::map_server::groups;
+use crate::game::pc::{addtokillreg, rust_pc_calcstat, rust_pc_checklevel, rust_pc_isequip};
+use crate::game::client::handlers::clif_addtokillreg;
+use crate::database::item_db::{
+    rust_itemdb_name, rust_itemdb_yname, rust_itemdb_sound, rust_itemdb_soundhit,
+    rust_itemdb_ethereal, rust_itemdb_dura, rust_itemdb_protected, rust_itemdb_breakondeath,
+    rust_itemdb_look,
+};
+use crate::database::magic_db::{
+    rust_magicdb_name, rust_magicdb_yname, rust_magicdb_question, rust_magicdb_type,
+    rust_magicdb_mute, rust_magicdb_ticker, rust_magicdb_canfail,
+};
+use crate::game::mob::rust_mob_flushmagic;
+use crate::game::scripting::rust_sl_async_freeco;
+
+// map_id2bl/map_id2sd return *mut c_void in map_server — wrap with type casts.
+#[inline]
+unsafe fn map_id2bl(id: c_uint) -> *mut BlockList {
+    crate::game::map_server::map_id2bl(id) as *mut BlockList
+}
+#[inline]
+unsafe fn map_id2sd(id: c_uint) -> *mut MapSessionData {
+    crate::game::map_server::map_id2sd(id) as *mut MapSessionData
 }
 
 /// Dispatch a Lua event with a single block_list argument.
@@ -98,8 +90,7 @@ fn rnd(x: c_int) -> c_int {
 /// Apply a critical hit: run scripts and send health packet.
 ///
 /// Mirrors `clif_pc_damage` from `c_src/map_parse.c` ~line 1009.
-#[no_mangle]
-pub unsafe extern "C" fn clif_pc_damage(sd: *mut MapSessionData, src: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_pc_damage(sd: *mut MapSessionData, src: *mut MapSessionData) -> c_int {
     if sd.is_null() || src.is_null() { return 0; }
 
     if (*src).status.state == 1 { return 0; }
@@ -158,8 +149,7 @@ pub unsafe extern "C" fn clif_pc_damage(sd: *mut MapSessionData, src: *mut MapSe
 /// Trigger player combat scripts when attacked.
 ///
 /// Mirrors `clif_send_pc_health` from `c_src/map_parse.c` ~line 1071.
-#[no_mangle]
-pub unsafe extern "C" fn clif_send_pc_health(src: *mut MapSessionData, damage: c_int, critical: c_int) -> c_int {
+pub unsafe fn clif_send_pc_health(src: *mut MapSessionData, damage: c_int, critical: c_int) -> c_int {
     let _ = (damage, critical);
     let mut bl = map_id2bl((*src).attacker);
     if bl.is_null() {
@@ -176,8 +166,7 @@ pub unsafe extern "C" fn clif_send_pc_health(src: *mut MapSessionData, damage: c
 /// packet to the area, and fire all combat scripts.
 ///
 /// Mirrors `clif_send_pc_healthscript` from `c_src/map_parse.c` ~line 1089.
-#[no_mangle]
-pub unsafe extern "C" fn clif_send_pc_healthscript(
+pub unsafe fn clif_send_pc_healthscript(
     sd: *mut MapSessionData,
     damage: c_int,
     critical: c_int,
@@ -304,8 +293,7 @@ pub unsafe extern "C" fn clif_send_pc_healthscript(
 /// Send the player's own health bar to themselves.
 ///
 /// Mirrors `clif_send_selfbar` from `c_src/map_parse.c` ~line 1262.
-#[no_mangle]
-pub unsafe extern "C" fn clif_send_selfbar(sd: *mut MapSessionData) {
+pub unsafe fn clif_send_selfbar(sd: *mut MapSessionData) {
     let mut percentage: f32 = if (*sd).status.hp == 0 {
         0.0f32
     } else {
@@ -338,8 +326,7 @@ pub unsafe extern "C" fn clif_send_selfbar(sd: *mut MapSessionData) {
 /// Send another player's health bar to `sd` (group bar update).
 ///
 /// Mirrors `clif_send_groupbars` from `c_src/map_parse.c` ~line 1290.
-#[no_mangle]
-pub unsafe extern "C" fn clif_send_groupbars(sd: *mut MapSessionData, tsd: *mut MapSessionData) {
+pub unsafe fn clif_send_groupbars(sd: *mut MapSessionData, tsd: *mut MapSessionData) {
     if sd.is_null() || tsd.is_null() { return; }
 
     let mut percentage: f32 = if (*tsd).status.hp == 0 {
@@ -371,13 +358,12 @@ pub unsafe extern "C" fn clif_send_groupbars(sd: *mut MapSessionData, tsd: *mut 
 
 // ─── clif_send_mobbars ────────────────────────────────────────────────────────
 
-/// Send a mob's health bar to a player (foreachinarea callback).
+/// Typed inner function replacing the old variadic `clif_send_mobbars` callback.
 ///
-/// va_list: USER *sd
+/// Send a mob's health bar to a player.
+/// `bl` is the mob, `sd` is the receiving player.
 /// Mirrors `clif_send_mobbars` from `c_src/map_parse.c` ~line 1322.
-#[no_mangle]
-pub unsafe extern "C" fn clif_send_mobbars(bl: *mut BlockList, mut ap: ...) -> c_int {
-    let sd: *mut MapSessionData = ap.arg::<*mut MapSessionData>();
+pub unsafe fn clif_send_mobbars_inner(bl: *mut BlockList, sd: *mut MapSessionData) -> i32 {
     let mob = bl as *mut MobSpawnData;
 
     if sd.is_null() || mob.is_null() { return 1; }
@@ -416,8 +402,7 @@ pub unsafe extern "C" fn clif_send_mobbars(bl: *mut BlockList, mut ap: ...) -> c
 /// Find the spell slot index for a given spell id. Returns -1 if not found.
 ///
 /// Mirrors `clif_findspell_pos` from `c_src/map_parse.c` ~line 1361.
-#[no_mangle]
-pub unsafe extern "C" fn clif_findspell_pos(sd: *mut MapSessionData, id: c_int) -> c_int {
+pub unsafe fn clif_findspell_pos(sd: *mut MapSessionData, id: c_int) -> c_int {
     for x in 0..52usize {
         if (*sd).status.skill[x] as c_int == id {
             return x as c_int;
@@ -432,8 +417,7 @@ pub unsafe extern "C" fn clif_findspell_pos(sd: *mut MapSessionData, id: c_int) 
 /// Returns 0 (miss), 1 (hit), or 2 (critical).
 ///
 /// Mirrors `clif_calc_critical` from `c_src/map_parse.c` ~line 1372.
-#[no_mangle]
-pub unsafe extern "C" fn clif_calc_critical(sd: *mut MapSessionData, bl: *mut BlockList) -> c_int {
+pub unsafe fn clif_calc_critical(sd: *mut MapSessionData, bl: *mut BlockList) -> c_int {
     let max_hit = 95;
     let mut equat: c_int = 0;
 
@@ -472,8 +456,7 @@ pub unsafe extern "C" fn clif_calc_critical(sd: *mut MapSessionData, bl: *mut Bl
 /// Return the aether value for a given spell id, or 0 if not found.
 ///
 /// Mirrors `clif_has_aethers` from `c_src/map_parse.c` ~line 1414.
-#[no_mangle]
-pub unsafe extern "C" fn clif_has_aethers(sd: *mut MapSessionData, spell: c_int) -> c_int {
+pub unsafe fn clif_has_aethers(sd: *mut MapSessionData, spell: c_int) -> c_int {
     for x in 0..MAX_MAGIC_TIMERS {
         if (*sd).status.dura_aether[x].id as c_int == spell {
             return (*sd).status.dura_aether[x].aether;
@@ -487,8 +470,7 @@ pub unsafe extern "C" fn clif_has_aethers(sd: *mut MapSessionData, spell: c_int)
 /// Send a duration/ticker bar packet to the player.
 ///
 /// Mirrors `clif_send_duration` from `c_src/map_parse.c` ~line 1430.
-#[no_mangle]
-pub unsafe extern "C" fn clif_send_duration(
+pub unsafe fn clif_send_duration(
     sd: *mut MapSessionData,
     id: c_int,
     time: c_int,
@@ -568,8 +550,7 @@ pub unsafe extern "C" fn clif_send_duration(
 /// Send aether (spell cooldown) bar update to the player.
 ///
 /// Mirrors `clif_send_aether` from `c_src/map_parse.c` ~line 1474.
-#[no_mangle]
-pub unsafe extern "C" fn clif_send_aether(sd: *mut MapSessionData, id: c_int, time: c_int) -> c_int {
+pub unsafe fn clif_send_aether(sd: *mut MapSessionData, id: c_int, time: c_int) -> c_int {
     if sd.is_null() { return 0; }
 
     let pos = clif_findspell_pos(sd, id);
@@ -594,8 +575,7 @@ pub unsafe extern "C" fn clif_send_aether(sd: *mut MapSessionData, id: c_int, ti
 /// Apply a melee hit to a mob: fire scripts, update threat, send health packet.
 ///
 /// Mirrors `clif_mob_damage` from `c_src/map_parse.c` ~line 1560.
-#[no_mangle]
-pub unsafe extern "C" fn clif_mob_damage(sd: *mut MapSessionData, mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn clif_mob_damage(sd: *mut MapSessionData, mob: *mut MobSpawnData) -> c_int {
     if sd.is_null() || mob.is_null() { return 0; }
 
     if (*mob).state == MOB_DEAD { return 0; }
@@ -661,17 +641,19 @@ pub unsafe extern "C" fn clif_mob_damage(sd: *mut MapSessionData, mob: *mut MobS
 
 // ─── clif_send_mob_health_sub ─────────────────────────────────────────────────
 
-/// Send mob health bar to a player in the area (group-filtered, foreachinarea callback).
+/// Typed inner function replacing the old variadic `clif_send_mob_health_sub` callback.
 ///
-/// va_list: USER *sd, MOB *mob, int critical, int percentage, int damage
+/// Send mob health bar to a player in the area (group-filtered).
+/// `bl` is the receiving player.
 /// Mirrors `clif_send_mob_health_sub` from `c_src/map_parse.c` ~line 1627.
-#[no_mangle]
-pub unsafe extern "C" fn clif_send_mob_health_sub(bl: *mut BlockList, mut ap: ...) -> c_int {
-    let sd:         *mut MapSessionData = ap.arg::<*mut MapSessionData>();
-    let mob:        *mut MobSpawnData   = ap.arg::<*mut MobSpawnData>();
-    let critical:   c_int               = ap.arg::<c_int>();
-    let percentage: c_int               = ap.arg::<c_int>();
-    let damage:     c_int               = ap.arg::<c_int>();
+pub unsafe fn clif_send_mob_health_sub_inner(
+    bl: *mut BlockList,
+    sd: *mut MapSessionData,
+    mob: *mut MobSpawnData,
+    critical: c_int,
+    percentage: c_int,
+    damage: c_int,
+) -> i32 {
     let tsd = bl as *mut MapSessionData;
 
     if sd.is_null() || mob.is_null() || tsd.is_null() { return 0; }
@@ -706,16 +688,18 @@ pub unsafe extern "C" fn clif_send_mob_health_sub(bl: *mut BlockList, mut ap: ..
 
 // ─── clif_send_mob_health_sub_nosd ────────────────────────────────────────────
 
-/// Send mob health bar to a player in the area (no-sd variant, foreachinarea callback).
+/// Typed inner function replacing the old variadic `clif_send_mob_health_sub_nosd` callback.
 ///
-/// va_list: MOB *mob, int critical, int percentage, int damage
+/// Send mob health bar to a player in the area (no-sd variant).
+/// `bl` is the receiving player.
 /// Mirrors `clif_send_mob_health_sub_nosd` from `c_src/map_parse.c` ~line 1667.
-#[no_mangle]
-pub unsafe extern "C" fn clif_send_mob_health_sub_nosd(bl: *mut BlockList, mut ap: ...) -> c_int {
-    let mob:        *mut MobSpawnData = ap.arg::<*mut MobSpawnData>();
-    let critical:   c_int             = ap.arg::<c_int>();
-    let percentage: c_int             = ap.arg::<c_int>();
-    let damage:     c_int             = ap.arg::<c_int>();
+pub unsafe fn clif_send_mob_health_sub_nosd_inner(
+    bl: *mut BlockList,
+    mob: *mut MobSpawnData,
+    critical: c_int,
+    percentage: c_int,
+    damage: c_int,
+) -> i32 {
     let sd = bl as *mut MapSessionData;
 
     if mob.is_null() || sd.is_null() { return 0; }
@@ -741,8 +725,7 @@ pub unsafe extern "C" fn clif_send_mob_health_sub_nosd(bl: *mut BlockList, mut a
 /// Trigger mob combat AI scripts when the mob is attacked.
 ///
 /// Mirrors `clif_send_mob_health` from `c_src/map_parse.c` ~line 1695.
-#[no_mangle]
-pub unsafe extern "C" fn clif_send_mob_health(mob: *mut MobSpawnData, damage: c_int, critical: c_int) -> c_int {
+pub unsafe fn clif_send_mob_health(mob: *mut MobSpawnData, damage: c_int, critical: c_int) -> c_int {
     let _ = (damage, critical);
     if (*mob).bl.bl_type != BL_MOB as u8 { return 0; }
 
@@ -776,8 +759,7 @@ pub unsafe extern "C" fn clif_send_mob_health(mob: *mut MobSpawnData, damage: c_
 /// Apply damage to a mob, compute percentage, broadcast health bars, run scripts.
 ///
 /// Mirrors `clif_send_mob_healthscript` from `c_src/map_parse.c` ~line 1721.
-#[no_mangle]
-pub unsafe extern "C" fn clif_send_mob_healthscript(mob: *mut MobSpawnData, damage: c_int, critical: c_int) -> c_int {
+pub unsafe fn clif_send_mob_healthscript(mob: *mut MobSpawnData, damage: c_int, critical: c_int) -> c_int {
     let _ = critical;
     if mob.is_null() { return 0; }
 
@@ -845,18 +827,16 @@ pub unsafe extern "C" fn clif_send_mob_healthscript(mob: *mut MobSpawnData, dama
     let pct_int = percentage as c_int;
 
     if !sd.is_null() {
-        map_foreachinarea(
-            clif_send_mob_health_sub,
-            (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
-            AREA, BL_PC,
-            sd, mob, critical, pct_int, damage,
+        foreach_in_area(
+            (*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32,
+            AreaType::Area, BL_PC,
+            |bl| clif_send_mob_health_sub_inner(bl, sd, mob, critical, pct_int, damage),
         );
     } else {
-        map_foreachinarea(
-            clif_send_mob_health_sub_nosd,
-            (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
-            AREA, BL_PC,
-            mob, critical, pct_int, damage,
+        foreach_in_area(
+            (*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32,
+            AreaType::Area, BL_PC,
+            |bl| clif_send_mob_health_sub_nosd_inner(bl, mob, critical, pct_int, damage),
         );
     }
 
@@ -932,11 +912,10 @@ pub unsafe extern "C" fn clif_send_mob_healthscript(mob: *mut MobSpawnData, dama
                 map_id2sd(groups[dropid as usize * 256])
             };
 
-            extern "C" { fn rust_mob_drops(mob: *mut MobSpawnData, sd: *mut std::ffi::c_void) -> c_int; }
             if !tsd2.is_null() {
-                rust_mob_drops(mob, tsd2 as *mut std::ffi::c_void);
+                crate::game::mob::rust_mob_drops(mob, tsd2 as *mut std::ffi::c_void);
             } else {
-                rust_mob_drops(mob, sd as *mut std::ffi::c_void);
+                crate::game::mob::rust_mob_drops(mob, sd as *mut std::ffi::c_void);
             }
 
             if (*sd).group_count == 0 {
@@ -984,8 +963,7 @@ pub unsafe extern "C" fn clif_send_mob_healthscript(mob: *mut MobSpawnData, dama
 /// Mark a mob as dead, clear threat tables, broadcast despawn packets.
 ///
 /// Mirrors `clif_mob_kill` from `c_src/map_parse.c` ~line 1964.
-#[no_mangle]
-pub unsafe extern "C" fn clif_mob_kill(mob: *mut MobSpawnData) -> c_int {
+pub unsafe fn clif_mob_kill(mob: *mut MobSpawnData) -> c_int {
     for x in 0..MAX_THREATCOUNT {
         (*mob).threat[x].user   = 0;
         (*mob).threat[x].amount = 0;
@@ -1005,26 +983,24 @@ pub unsafe extern "C" fn clif_mob_kill(mob: *mut MobSpawnData) -> c_int {
         map_lastdeath_mob(mob);
     }
 
-    map_foreachinarea(
-        clif_send_destroy,
-        (*mob).bl.m as c_int, (*mob).bl.x as c_int, (*mob).bl.y as c_int,
-        AREA, BL_PC,
-        LOOK_GET, &raw mut (*mob).bl,
+    let mob_ptr = mob;
+    foreach_in_area(
+        (*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32,
+        AreaType::Area, BL_PC,
+        |bl| clif_send_destroy_inner(bl, mob_ptr),
     );
 
     0
 }
 
-// ─── clif_send_destroy ────────────────────────────────────────────────────────
+// ─── clif_send_destroy_inner ──────────────────────────────────────────────────
 
-/// Send despawn packet for a mob to one player (foreachinarea callback).
+/// Typed inner function replacing the old variadic `clif_send_destroy` callback.
 ///
-/// va_list: int type, MOB *mob
+/// Send despawn packet for a mob to one player.
+/// `bl` is the receiving player, `mob` is the mob being despawned.
 /// Mirrors `clif_send_destroy` from `c_src/map_parse.c` ~line 1990.
-#[no_mangle]
-pub unsafe extern "C" fn clif_send_destroy(bl: *mut BlockList, mut ap: ...) -> c_int {
-    let _type: c_int             = ap.arg::<c_int>();
-    let mob:   *mut MobSpawnData = ap.arg::<*mut MobSpawnData>();
+pub unsafe fn clif_send_destroy_inner(bl: *mut BlockList, mob: *mut MobSpawnData) -> i32 {
     let sd = bl as *mut MapSessionData;
 
     if sd.is_null() || mob.is_null() { return 0; }
@@ -1054,8 +1030,7 @@ pub unsafe extern "C" fn clif_send_destroy(bl: *mut BlockList, mut ap: ...) -> c
 /// Send a spell slot packet to the player.
 ///
 /// Mirrors `clif_sendmagic` from `c_src/map_parse.c` ~line 5987.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendmagic(sd: *mut MapSessionData, pos: c_int) -> c_int {
+pub unsafe fn clif_sendmagic(sd: *mut MapSessionData, pos: c_int) -> c_int {
     let id   = (*sd).status.skill[pos as usize] as c_int;
     let name = rust_magicdb_name(id);
     let question = rust_magicdb_question(id);
@@ -1101,18 +1076,9 @@ pub unsafe extern "C" fn clif_sendmagic(sd: *mut MapSessionData, pos: c_int) -> 
 /// Handle incoming spell cast packet from client.
 ///
 /// Mirrors `clif_parsemagic` from `c_src/map_parse.c` ~line 6022.
-#[no_mangle]
-pub unsafe extern "C" fn clif_parsemagic(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parsemagic(sd: *mut MapSessionData) -> c_int {
     use crate::game::map_parse::packet::{rfifob, rfifol, rfifop};
 
-    // struct point { int m, x, y; } from mmo.h
-    #[repr(C)]
-    struct Point { m: c_int, x: c_int, y: c_int }
-
-    extern "C" {
-        fn CheckProximity(one: Point, two: Point, radius: c_int) -> c_int;
-        fn rand() -> c_int;
-    }
 
     let pos = (rfifob((*sd).fd, 5) as c_int) - 1;
 
@@ -1181,10 +1147,10 @@ pub unsafe extern "C" fn clif_parsemagic(sd: *mut MapSessionData) -> c_int {
             }
         }
 
-        let one = Point { m: (*tbl).m as c_int, x: (*tbl).x as c_int, y: (*tbl).y as c_int };
-        let two = Point { m: (*sd).bl.m as c_int, x: (*sd).bl.x as c_int, y: (*sd).bl.y as c_int };
+        let one = ((*tbl).m as i32, (*tbl).x as i32, (*tbl).y as i32);
+        let two = ((*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32);
 
-        if CheckProximity(one, two, 21) == 1 {
+        if crate::game::util::check_proximity(one, two, 21) {
             let mut health: i64 = 0;
             let mut twill: c_int = 0;
             let mut tprotection: c_int = 0;
@@ -1208,7 +1174,7 @@ pub unsafe extern "C" fn clif_parsemagic(sd: *mut MapSessionData) -> c_int {
                 // Pure-integer equivalent: (will_diff + 5) / 10 (will_diff >= 0 here).
                 let prot = (tprotection + (will_diff + 5) / 10).max(0);
                 let fail_chance = (100.0f64 - (0.9f64.powi(prot) * 100.0f64) + 0.5f64) as c_int;
-                let cast_test = (rand() % 100) as c_int;
+                let cast_test = rnd(100);
                 if cast_test < fail_chance {
                     clif_sendminitext(sd, b"The magic has been deflected.\0".as_ptr() as *const c_char);
                     return 0;
@@ -1233,8 +1199,7 @@ pub unsafe extern "C" fn clif_parsemagic(sd: *mut MapSessionData) -> c_int {
 /// Broadcast an action animation to the area, optionally play a sound.
 ///
 /// Mirrors `clif_sendaction` from `c_src/map_parse.c` ~line 5836.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendaction(bl: *mut BlockList, action_type: c_int, time: c_int, sound: c_int) -> c_int {
+pub unsafe fn clif_sendaction(bl: *mut BlockList, action_type: c_int, time: c_int, sound: c_int) -> c_int {
     let mut buf = [0u8; 32];
     buf[0] = 0xAA;
     buf[1] = 0x00;
@@ -1270,8 +1235,7 @@ pub unsafe extern "C" fn clif_sendaction(bl: *mut BlockList, action_type: c_int,
 /// Broadcast a mob action animation to the area, optionally play a sound.
 ///
 /// Mirrors `clif_sendmob_action` from `c_src/map_parse.c` ~line 5871.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendmob_action(mob: *mut MobSpawnData, action_type: c_int, time: c_int, sound: c_int) -> c_int {
+pub unsafe fn clif_sendmob_action(mob: *mut MobSpawnData, action_type: c_int, time: c_int, sound: c_int) -> c_int {
     let mut buf = [0u8; 32];
     buf[0] = 0xAA;
     buf[1] = 0x00;
@@ -1299,16 +1263,12 @@ pub unsafe extern "C" fn clif_sendmob_action(mob: *mut MobSpawnData, action_type
 
 // ─── clif_sendanimation_xy ────────────────────────────────────────────────────
 
-/// Send a positional animation packet to one player (foreachinarea callback).
+/// Typed inner function replacing the old variadic `clif_sendanimation_xy` callback.
 ///
-/// va_list: int anim, int times, int x, int y
+/// Send a positional animation packet to one player.
+/// `bl` is the receiving player.
 /// Mirrors `clif_sendanimation_xy` from `c_src/map_parse.c` ~line 5898.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendanimation_xy(bl: *mut BlockList, mut ap: ...) -> c_int {
-    let anim:  c_int = ap.arg::<c_int>();
-    let times: c_int = ap.arg::<c_int>();
-    let x:     c_int = ap.arg::<c_int>();
-    let y:     c_int = ap.arg::<c_int>();
+pub unsafe fn clif_sendanimation_xy_inner(bl: *mut BlockList, anim: c_int, times: c_int, x: c_int, y: c_int) -> i32 {
     let src = bl as *mut MapSessionData;
 
     if rust_session_exists((*src).fd) == 0 {
@@ -1332,16 +1292,14 @@ pub unsafe extern "C" fn clif_sendanimation_xy(bl: *mut BlockList, mut ap: ...) 
 
 // ─── clif_sendanimation ───────────────────────────────────────────────────────
 
-/// Send animation for a target to one player (foreachinarea callback).
+/// Typed inner function replacing the old variadic `clif_sendanimation` callback.
 ///
-/// va_list: int anim, block_list *t, int times
+/// Send animation for a target to one player.
+/// `bl` is the receiving player, `t` is the animation target, `anim` is the anim ID,
+/// `times` is the loop count (pass -1 for duration-based).
 /// Mirrors `clif_sendanimation` from `c_src/map_parse.c` ~line 5926.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendanimation(bl: *mut BlockList, mut ap: ...) -> c_int {
-    let anim: c_int         = ap.arg::<c_int>();
-    let t: *mut BlockList   = ap.arg::<*mut BlockList>();
+pub unsafe fn clif_sendanimation_inner(bl: *mut BlockList, anim: i32, t: *mut BlockList, times: i32) -> i32 {
     let sd = bl as *mut MapSessionData;
-    let times: c_int        = ap.arg::<c_int>();
 
     if t.is_null() || sd.is_null() { return 0; }
 
@@ -1370,8 +1328,7 @@ pub unsafe extern "C" fn clif_sendanimation(bl: *mut BlockList, mut ap: ...) -> 
 /// Send animation for `sd`'s block_list to `src`'s socket.
 ///
 /// Mirrors `clif_animation` from `c_src/map_parse.c` ~line 5955.
-#[no_mangle]
-pub unsafe extern "C" fn clif_animation(
+pub unsafe fn clif_animation(
     src: *mut MapSessionData,
     sd: *mut MapSessionData,
     animation: c_int,
@@ -1402,8 +1359,7 @@ pub unsafe extern "C" fn clif_animation(
 /// Send all active aether animations from `sd` to `src`.
 ///
 /// Mirrors `clif_sendanimations` from `c_src/map_parse.c` ~line 5975.
-#[no_mangle]
-pub unsafe extern "C" fn clif_sendanimations(src: *mut MapSessionData, sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_sendanimations(src: *mut MapSessionData, sd: *mut MapSessionData) -> c_int {
     for x in 0..MAX_MAGIC_TIMERS {
         if (*sd).status.dura_aether[x].duration > 0 && (*sd).status.dura_aether[x].animation != 0 {
             clif_animation(src, sd, (*sd).status.dura_aether[x].animation as c_int, (*sd).status.dura_aether[x].duration);
@@ -1417,8 +1373,7 @@ pub unsafe extern "C" fn clif_sendanimations(src: *mut MapSessionData, sd: *mut 
 /// Handle a melee attack swing from the client.
 ///
 /// Mirrors `clif_parseattack` from `c_src/map_parse.c` ~line 7379.
-#[no_mangle]
-pub unsafe extern "C" fn clif_parseattack(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_parseattack(sd: *mut MapSessionData) -> c_int {
     let attackspeed = (*sd).attack_speed as c_int;
 
     if (*sd).paralyzed != 0 || (*sd).sleep != 1.0f32 { return 0; }
@@ -1470,8 +1425,7 @@ pub unsafe extern "C" fn clif_parseattack(sd: *mut MapSessionData) -> c_int {
 /// Reduce durability of an equipment slot by `val`. Checks pvp map and ethereal flag.
 ///
 /// Mirrors `clif_deductdura` from `c_src/map_parse.c` ~line 3908.
-#[no_mangle]
-pub unsafe extern "C" fn clif_deductdura(sd: *mut MapSessionData, equip: c_int, val: c_int) -> c_int {
+pub unsafe fn clif_deductdura(sd: *mut MapSessionData, equip: c_int, val: c_int) -> c_int {
     if sd.is_null() { return 0; }
     let equip_idx = equip as usize;
     if (*sd).status.equip[equip_idx].id == 0 { return 0; }
@@ -1492,8 +1446,7 @@ pub unsafe extern "C" fn clif_deductdura(sd: *mut MapSessionData, equip: c_int, 
 /// Randomly reduce weapon durability by `hit`.
 ///
 /// Mirrors `clif_deductweapon` from `c_src/map_parse.c` ~line 3922.
-#[no_mangle]
-pub unsafe extern "C" fn clif_deductweapon(sd: *mut MapSessionData, hit: c_int) -> c_int {
+pub unsafe fn clif_deductweapon(sd: *mut MapSessionData, hit: c_int) -> c_int {
     if rust_pc_isequip(sd, EQ_WEAP) != 0 {
         if rnd(100) > 50 {
             clif_deductdura(sd, EQ_WEAP, hit);
@@ -1507,8 +1460,7 @@ pub unsafe extern "C" fn clif_deductweapon(sd: *mut MapSessionData, hit: c_int) 
 /// Randomly reduce durability of all armor slots by `hit`.
 ///
 /// Mirrors `clif_deductarmor` from `c_src/map_parse.c` ~line 3932.
-#[no_mangle]
-pub unsafe extern "C" fn clif_deductarmor(sd: *mut MapSessionData, hit: c_int) -> c_int {
+pub unsafe fn clif_deductarmor(sd: *mut MapSessionData, hit: c_int) -> c_int {
     macro_rules! maybe_deduct {
         ($slot:expr) => {
             if rust_pc_isequip(sd, $slot) != 0 && rnd(100) > 50 {
@@ -1538,8 +1490,7 @@ pub unsafe extern "C" fn clif_deductarmor(sd: *mut MapSessionData, hit: c_int) -
 /// Check durability thresholds and handle item destruction.
 ///
 /// Mirrors `clif_checkdura` from `c_src/map_parse.c` ~line 4006.
-#[no_mangle]
-pub unsafe extern "C" fn clif_checkdura(sd: *mut MapSessionData, equip: c_int) -> c_int {
+pub unsafe fn clif_checkdura(sd: *mut MapSessionData, equip: c_int) -> c_int {
     if sd.is_null() { return 0; }
     let equip_idx = equip as usize;
     if (*sd).status.equip[equip_idx].id == 0 { return 0; }
@@ -1632,8 +1583,7 @@ pub unsafe extern "C" fn clif_checkdura(sd: *mut MapSessionData, equip: c_int) -
 /// Reduce durability of all equipped items by 10% of max, checking thresholds.
 ///
 /// Mirrors `clif_deductduraequip` from `c_src/map_parse.c` ~line 4114.
-#[no_mangle]
-pub unsafe extern "C" fn clif_deductduraequip(sd: *mut MapSessionData) -> c_int {
+pub unsafe fn clif_deductduraequip(sd: *mut MapSessionData) -> c_int {
     if sd.is_null() { return 0; }
 
     let m = (*sd).bl.m as usize;
@@ -1764,8 +1714,7 @@ unsafe fn cstr_bytes<'a>(ptr: *const u8) -> &'a [u8] {
 /// Thin wrapper around libc `time(NULL)`.
 #[inline]
 unsafe fn libc_time() -> u64 {
-    extern "C" { fn time(t: *mut u64) -> u64; }
-    time(std::ptr::null_mut())
+    libc::time(std::ptr::null_mut()) as u64
 }
 
 /// Write "Your <name> is at <pct>%." into buf (C sprintf equivalent).
