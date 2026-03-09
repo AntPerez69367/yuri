@@ -6,7 +6,7 @@ use yuri::config::ServerConfig;
 use yuri::game::client::rust_clif_parse;
 use yuri::game::block::map_initblock;
 use yuri::game::map_server::map_initiddb;
-use yuri::game::npc::{npc_init, npc_runtimers, warp_init};
+use yuri::game::npc::{npc_init, warp_init};
 use yuri::game::scripting::rust_sl_init;
 use yuri::game::map_server::{lang_read, map_do_term, map_loadgameregistry};
 use yuri::game::client::visual::clif_timeout;
@@ -17,13 +17,12 @@ use yuri::database::item_db::rust_itemdb_init;
 use yuri::database::recipe_db::rust_recipedb_init;
 use yuri::database::magic_db::rust_magicdb_init;
 use yuri::database::mob_db::rust_mobdb_init;
-use yuri::game::mob::{rust_mob_timer_spawns, rust_mobspawn_read};
+use yuri::game::mob::rust_mobspawn_read;
 use yuri::session::{
     rust_session_set_default_parse, rust_session_set_default_timeout,
     rust_make_listen_port,
 };
 use yuri::core::{rust_core_init, rust_set_termfunc};
-use yuri::timer::timer_init;
 use yuri::servers::map::MapState;
 
 
@@ -44,7 +43,7 @@ async fn main() -> Result<()> {
         rust_core_init();
         // fd_max is now owned by session.rs (get_fd_max()); no external callback needed.
         // db_init() is now a no-op stub defined above
-        timer_init();
+        // timer_init() was a no-op — removed
     }
 
     let mut conf_file = "conf/server.yaml".to_string();
@@ -157,9 +156,6 @@ async fn main() -> Result<()> {
                 // Timers from the old do_init — restored here after do_init was removed.
                 let startup = std::ffi::CString::new("startup").unwrap();
                 yuri::game::scripting::doscript_blargs(startup.as_ptr(), std::ptr::null(), &[]);
-                yuri::timer::timer_insert(50,   50,   Some(rust_mob_timer_spawns), 0, 0);
-                yuri::timer::timer_insert(100,  100,  Some(npc_runtimers),    0, 0);
-                yuri::timer::timer_insert(1000, 1000, Some(yuri::game::map_server::rust_map_cronjob), 0, 0);
 
                 rust_set_termfunc(Some(map_do_term));
             }

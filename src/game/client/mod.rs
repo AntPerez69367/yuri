@@ -89,7 +89,7 @@ use crate::game::scripting::pc_accessors::{
 };
 use crate::database::item_db::rust_itemdb_thrownconfirm;
 use crate::game::pc::rust_pc_atkspeed;
-use crate::timer::timer_insert;
+use crate::game::time_util::timer_insert;
 
 // Dispatcher wrappers — match dispatcher's *mut std::ffi::c_void calling convention.
 type SD = *mut crate::game::pc::MapSessionData;

@@ -30,7 +30,7 @@ pub mod events;
 
 use crate::database::map_db::map;
 use crate::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof, rust_session_set_eof};
-use crate::timer::timer_insert;
+use crate::game::time_util::timer_insert;
 use crate::game::pc::MapSessionData;
 
 use crate::game::map_parse::packet::{

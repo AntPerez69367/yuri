@@ -33,6 +33,13 @@ pub(crate) fn get_pool() -> &'static MySqlPool {
     DB_POOL.get().expect("[db] pool not initialized — rust_db_connect() must be called first")
 }
 
+/// Run a future to completion, blocking the current thread.
+///
+/// Safe for startup code running in `spawn_blocking` (multi-thread runtime, not a LocalSet):
+/// uses `block_in_place` so the blocking thread is parked while the future runs.
+///
+/// **NOT safe from a `LocalSet` task** — `block_in_place` panics there.
+/// Use `blocking_run_async` instead for any code called from the game session loop.
 pub(crate) fn blocking_run<F: Future>(f: F) -> F::Output {
     match tokio::runtime::Handle::try_current() {
         Ok(handle) => tokio::task::block_in_place(|| handle.block_on(f)),

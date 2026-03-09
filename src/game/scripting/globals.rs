@@ -3,7 +3,7 @@
 use std::ffi::{CStr, CString};
 use mlua::{Lua, Value};
 
-use crate::database::{blocking_run, get_pool};
+use crate::database::{blocking_run_async, get_pool};
 use crate::database::map_db::get_map_ptr;
 use crate::game::scripting::ffi as sffi;
 use crate::game::scripting::types;
@@ -30,29 +30,10 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     g.set("MOB_ESCAPE", 5i64)?;
 
     // -----------------------------------------------------------------------
-    // Async coroutines
-    // -----------------------------------------------------------------------
-    g.set("_async", lua.create_function(|lua, (player_ud, func): (mlua::AnyUserData, mlua::Function)| {
-        let sd = player_ud.borrow::<types::pc::PcObject>()?.ptr;
-        if sd.is_null() {
-            return Err(mlua::Error::RuntimeError("_async: null player pointer".into()));
-        }
-        unsafe {
-            lua.exec_raw::<()>(func, |L| {
-                crate::game::scripting::async_coro::start_async(sd, L);
-            })?;
-        }
-        Ok(())
-    })?)?;
-    g.set("_asyncDone", lua.create_function(|_, _: mlua::MultiValue| {
-        Ok(())
-    })?)?;
-
-    // -----------------------------------------------------------------------
     // Tick / time
     // -----------------------------------------------------------------------
     g.set("getTick", lua.create_function(|_, ()| {
-        Ok(unsafe { crate::timer::gettick() } as i64)
+        Ok(unsafe { crate::game::time_util::gettick() } as i64)
     })?)?;
 
     g.set("timeMS", lua.create_function(|_, ()| {
@@ -560,7 +541,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     g.set("addMob", lua.create_function(|_, (m, x, y, mobid): (i32, i32, i32, i32)| {
         if !unsafe { crate::database::map_db::map_is_loaded(m as u16) } { return Ok(false); }
         let sid = unsafe { sffi::serverid };
-        let ok = blocking_run(
+        let ok = blocking_run_async(async move {
             sqlx::query(&format!(
                 "INSERT INTO `Spawns{}` (`SpnMapId`,`SpnX`,`SpnY`,`SpnMobId`,\
                  `SpnLastDeath`,`SpnStartTime`,`SpnEndTime`,`SpnMobIdReplace`) \
@@ -569,7 +550,8 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
             ))
             .bind(m).bind(x).bind(y).bind(mobid)
             .execute(get_pool())
-        ).is_ok();
+            .await
+        }).is_ok();
         Ok(ok)
     })?)?;
 
@@ -577,19 +559,19 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         let online: bool = match v {
             Value::Integer(id) => {
                 let id = id as u32;
-                blocking_run(sqlx::query_scalar!(
+                blocking_run_async(sqlx::query_scalar!(
                     "SELECT COUNT(*) FROM `Character` WHERE `ChaOnline`=1 AND `ChaId`=?", id
                 ).fetch_one(get_pool())).map(|n: i64| n > 0).unwrap_or(false)
             }
             Value::Number(f) => {
                 let id = f as u32;
-                blocking_run(sqlx::query_scalar!(
+                blocking_run_async(sqlx::query_scalar!(
                     "SELECT COUNT(*) FROM `Character` WHERE `ChaOnline`=1 AND `ChaId`=?", id
                 ).fetch_one(get_pool())).map(|n: i64| n > 0).unwrap_or(false)
             }
             Value::String(ref s) => {
                 let name = s.to_str()?.to_owned();
-                blocking_run(sqlx::query_scalar!(
+                blocking_run_async(sqlx::query_scalar!(
                     "SELECT COUNT(*) FROM `Character` WHERE `ChaOnline`=1 AND `ChaName`=?", name
                 ).fetch_one(get_pool())).map(|n: i64| n > 0).unwrap_or(false)
             }
@@ -599,7 +581,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("getOfflineID", lua.create_function(|_, name: String| {
-        let id: u32 = blocking_run(sqlx::query_scalar!(
+        let id: u32 = blocking_run_async(sqlx::query_scalar!(
             "SELECT `ChaId` FROM `Character` WHERE `ChaName`=?", name
         ).fetch_optional(get_pool())).unwrap_or(None).unwrap_or(0);
         Ok(id as i64)
@@ -614,8 +596,8 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("addMapModifier", lua.create_function(|_, (mapid, modifier, value): (u32, String, i32)| {
-        use crate::database::{blocking_run, get_pool};
-        let ok = blocking_run(sqlx::query!(
+        use crate::database::{blocking_run_async, get_pool};
+        let ok = blocking_run_async(sqlx::query!(
             "INSERT INTO `MapModifiers` (`ModMapId`,`ModModifier`,`ModValue`) VALUES(?,?,?)",
             mapid, modifier, value
         ).execute(get_pool())).is_ok();
@@ -623,8 +605,8 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("removeMapModifier", lua.create_function(|_, (mapid, modifier): (u32, String)| {
-        use crate::database::{blocking_run, get_pool};
-        let ok = blocking_run(sqlx::query!(
+        use crate::database::{blocking_run_async, get_pool};
+        let ok = blocking_run_async(sqlx::query!(
             "DELETE FROM `MapModifiers` WHERE `ModMapId`=? AND `ModModifier`=?",
             mapid, modifier
         ).execute(get_pool())).is_ok();
@@ -632,16 +614,16 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("removeMapModifierId", lua.create_function(|_, mapid: u32| {
-        use crate::database::{blocking_run, get_pool};
-        let ok = blocking_run(sqlx::query!(
+        use crate::database::{blocking_run_async, get_pool};
+        let ok = blocking_run_async(sqlx::query!(
             "DELETE FROM `MapModifiers` WHERE `ModMapId`=?", mapid
         ).execute(get_pool())).is_ok();
         Ok(ok)
     })?)?;
 
     g.set("getFreeMapModifierId", lua.create_function(|_, ()| {
-        use crate::database::{blocking_run, get_pool};
-        let max: Option<u32> = blocking_run(sqlx::query_scalar!(
+        use crate::database::{blocking_run_async, get_pool};
+        let max: Option<u32> = blocking_run_async(sqlx::query_scalar!(
             "SELECT MAX(`ModMapId`) FROM `MapModifiers`"
         ).fetch_one(get_pool())).unwrap_or(None);
         Ok(max.unwrap_or(0) as i64 + 1)
@@ -651,7 +633,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // WisdomStar
     // -----------------------------------------------------------------------
     g.set("getWisdomStarMultiplier", lua.create_function(|_, ()| {
-        let mult: f32 = blocking_run(sqlx::query_scalar!(
+        let mult: f32 = blocking_run_async(sqlx::query_scalar!(
             "SELECT `WSMultiplier` FROM `WisdomStar`"
         ).fetch_optional(get_pool())).unwrap_or(None).unwrap_or(0.0);
         Ok(mult as f64)
@@ -659,7 +641,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("setWisdomStarMultiplier", lua.create_function(|_, (mult, _val): (f64, i32)| {
         let mult = mult as f32;
-        let _ = blocking_run(sqlx::query!(
+        let _ = blocking_run_async(sqlx::query!(
             "UPDATE `WisdomStar` SET `WSMultiplier`=?", mult
         ).execute(get_pool()));
         Ok(())
@@ -683,21 +665,21 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // Clan tribute
     // -----------------------------------------------------------------------
     g.set("getClanTribute", lua.create_function(|_, clan: i32| {
-        let val: u32 = blocking_run(sqlx::query_scalar!(
+        let val: u32 = blocking_run_async(sqlx::query_scalar!(
             "SELECT `ClnTribute` FROM `Clans` WHERE `ClnId`=?", clan
         ).fetch_optional(get_pool())).unwrap_or(None).unwrap_or(0);
         Ok(val as i64)
     })?)?;
 
     g.set("setClanTribute", lua.create_function(|_, (clan, val): (i32, u32)| {
-        let _ = blocking_run(sqlx::query!(
+        let _ = blocking_run_async(sqlx::query!(
             "UPDATE `Clans` SET `ClnTribute`=? WHERE `ClnId`=?", val, clan
         ).execute(get_pool()));
         Ok(())
     })?)?;
 
     g.set("addClanTribute", lua.create_function(|_, (clan, val): (i32, u32)| {
-        let _ = blocking_run(sqlx::query!(
+        let _ = blocking_run_async(sqlx::query!(
             "UPDATE `Clans` SET `ClnTribute`=`ClnTribute`+? WHERE `ClnId`=?", val, clan
         ).execute(get_pool()));
         Ok(())
@@ -707,14 +689,14 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // Clan name
     // -----------------------------------------------------------------------
     g.set("getClanName", lua.create_function(|_, clan: i32| {
-        let name: String = blocking_run(sqlx::query_scalar!(
+        let name: String = blocking_run_async(sqlx::query_scalar!(
             "SELECT `ClnName` FROM `Clans` WHERE `ClnId`=?", clan
         ).fetch_optional(get_pool())).unwrap_or(None).unwrap_or_default();
         Ok(name)
     })?)?;
 
     g.set("setClanName", lua.create_function(|_, (clan, name): (i32, String)| {
-        let _ = blocking_run(sqlx::query!(
+        let _ = blocking_run_async(sqlx::query!(
             "UPDATE `Clans` SET `ClnName`=? WHERE `ClnId`=?", name, clan
         ).execute(get_pool()));
         let ptr = unsafe { crate::database::clan_db::searchexist(clan) };
@@ -734,14 +716,14 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // Clan bank slots
     // -----------------------------------------------------------------------
     g.set("getClanBankSlots", lua.create_function(|_, clan: i32| {
-        let val: u32 = blocking_run(sqlx::query_scalar!(
+        let val: u32 = blocking_run_async(sqlx::query_scalar!(
             "SELECT `ClnBankSlots` FROM `Clans` WHERE `ClnId`=?", clan
         ).fetch_optional(get_pool())).unwrap_or(None).unwrap_or(0);
         Ok(val as i64)
     })?)?;
 
     g.set("setClanBankSlots", lua.create_function(|_, (clan, val): (i32, i32)| {
-        let _ = blocking_run(sqlx::query!(
+        let _ = blocking_run_async(sqlx::query!(
             "UPDATE `Clans` SET `ClnBankSlots`=? WHERE `ClnId`=?", val, clan
         ).execute(get_pool()));
         Ok(())
@@ -768,7 +750,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
                 sffi::clif_mystaytus(sd as *mut std::ffi::c_void);
             }
         }
-        let ok = blocking_run(sqlx::query!(
+        let ok = blocking_run_async(sqlx::query!(
             "UPDATE `Character` SET `ChaClnId`='0',`ChaClanTitle`='',`ChaClnRank`='0' WHERE `ChaId`=?",
             id as u32
         ).execute(get_pool())).map(|r| r.rows_affected() > 0).unwrap_or(false);
@@ -785,7 +767,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
                 sffi::clif_mystaytus(sd as *mut std::ffi::c_void);
             }
         }
-        let ok = blocking_run(sqlx::query!(
+        let ok = blocking_run_async(sqlx::query!(
             "UPDATE `Character` SET `ChaClnId`=?,`ChaClanTitle`='',`ChaClnRank`='1' WHERE `ChaId`=?",
             clan as u32, id as u32
         ).execute(get_pool())).map(|r| r.rows_affected() > 0).unwrap_or(false);
@@ -797,7 +779,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         if !sd.is_null() {
             unsafe { (*sd).status.clan_rank = rank; }
         }
-        let ok = blocking_run(sqlx::query!(
+        let ok = blocking_run_async(sqlx::query!(
             "UPDATE `Character` SET `ChaClnRank`=? WHERE `ChaId`=?", rank, id as u32
         ).execute(get_pool())).map(|r| r.rows_affected() > 0).unwrap_or(false);
         Ok(ok)
@@ -815,7 +797,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
                 sffi::clif_mystaytus(sd as *mut std::ffi::c_void);
             }
         }
-        let ok = blocking_run(sqlx::query!(
+        let ok = blocking_run_async(sqlx::query!(
             "UPDATE `Character` SET `ChaClanTitle`=? WHERE `ChaId`=?", title, id as u32
         ).execute(get_pool())).map(|r| r.rows_affected() > 0).unwrap_or(false);
         Ok(ok)
@@ -835,18 +817,18 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
                 (*sd).status.class_rank = 0;
                 sffi::clif_mystaytus(sd as *mut std::ffi::c_void);
             }
-            let ok = blocking_run(sqlx::query!(
+            let ok = blocking_run_async(sqlx::query!(
                 "UPDATE `Character` SET `ChaPthId`=?,`ChaPthRank`='0' WHERE `ChaId`=?",
                 new_class as u32, id as u32
             ).execute(get_pool())).map(|r| r.rows_affected() > 0).unwrap_or(false);
             return Ok(ok);
         }
         // offline: fetch current class, apply path(), update
-        let pth: u32 = blocking_run(sqlx::query_scalar!(
+        let pth: u32 = blocking_run_async(sqlx::query_scalar!(
             "SELECT `ChaPthId` FROM `Character` WHERE `ChaId`=?", id as u32
         ).fetch_optional(get_pool())).unwrap_or(None).unwrap_or(0);
         let new_pth = crate::database::class_db::path(pth as i32) as u32;
-        let ok = blocking_run(sqlx::query!(
+        let ok = blocking_run_async(sqlx::query!(
             "UPDATE `Character` SET `ChaPthId`=?,`ChaPthRank`='0' WHERE `ChaId`=?",
             new_pth, id as u32
         ).execute(get_pool())).map(|r| r.rows_affected() > 0).unwrap_or(false);
@@ -862,7 +844,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
                 sffi::clif_mystaytus(sd as *mut std::ffi::c_void);
             }
         }
-        let ok = blocking_run(sqlx::query!(
+        let ok = blocking_run_async(sqlx::query!(
             "UPDATE `Character` SET `ChaPthId`=?,`ChaPthRank`='0' WHERE `ChaId`=?",
             cls as u32, id as u32
         ).execute(get_pool())).map(|r| r.rows_affected() > 0).unwrap_or(false);

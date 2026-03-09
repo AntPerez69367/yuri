@@ -194,10 +194,10 @@ pub fn get_session_manager() -> &'static SessionManager {
     SESSION_MANAGER.get_or_init(SessionManager::new)
 }
 
-/// Outgoing connections created from timer callbacks, pending session_io_task spawn.
-/// Timer callbacks run synchronously inside the Tokio select! arm, so they cannot
+/// Outgoing connections created from game callbacks, pending session_io_task spawn.
+/// Game callbacks run synchronously inside the Tokio select! arm, so they cannot
 /// use block_on or spawn_local directly. Instead they push fds here and
-/// run_async_server drains this queue after each timer_do() call.
+/// run_async_server drains this queue after each cron tick.
 pub static PENDING_CONNECTIONS: OnceLock<StdMutex<Vec<i32>>> = OnceLock::new();
 
 pub fn push_pending_connection(fd: i32) {
@@ -737,38 +737,14 @@ unsafe impl Sync for Session {}
 ///
 /// Replaces the C main loop in core.c:
 /// - Spawns accept tasks for all registered listeners
-/// - Calls C timer_do() every 10ms
+/// - Drives mob/npc/cron/ddos/throttle ticks via Tokio intervals
 /// - Session I/O is handled by per-connection tasks (session_io_task)
-/// - Drains PENDING_CONNECTIONS after each timer tick (for connections
-///   made from timer callbacks via rust_make_connection)
+/// - Drains PENDING_CONNECTIONS after each cron tick (for connections
+///   made from game callbacks via rust_make_connection)
 pub async fn run_async_server(_port: u16) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("[rust_server] Starting event loop");
 
     let manager = get_session_manager();
-
-    // Register the DDoS history cleanup timer (1s interval, matching C's do_socket).
-    #[cfg(not(test))]
-    unsafe {
-        crate::timer::timer_insert(
-            1000,
-            1000,
-            Some(crate::session::rust_connect_check_clear),
-            0,
-            0,
-        );
-    }
-
-    // Register throttle reset timer (10 min interval, matching login_server.c).
-    #[cfg(not(test))]
-    unsafe {
-        crate::timer::timer_insert(
-            10 * 60 * 1000,
-            10 * 60 * 1000,
-            Some(crate::session::rust_remove_throttle),
-            0,
-            0,
-        );
-    }
 
     // Take all registered std::net listeners, convert to tokio, spawn accept tasks
     let listen_fds = manager.listen_fds.lock().unwrap().clone();
@@ -782,21 +758,28 @@ pub async fn run_async_server(_port: u16) -> Result<(), Box<dyn std::error::Erro
         }
     }
 
-    // Timer tick interval (10ms, matching C's SERVER_TICK_RATE_NS)
-    let mut timer_interval = tokio::time::interval(Duration::from_millis(10));
+    let mut mob_tick      = tokio::time::interval(Duration::from_millis(50));
+    let mut npc_tick      = tokio::time::interval(Duration::from_millis(100));
+    let mut cron_tick     = tokio::time::interval(Duration::from_secs(1));
+    cron_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut ddos_tick     = tokio::time::interval(Duration::from_secs(1));
+    let mut throttle_tick = tokio::time::interval(Duration::from_secs(600));
 
     loop {
         tokio::select! {
-            _ = timer_interval.tick() => {
-                // Drive C timer system (synchronous call - no block_on needed)
+            _ = mob_tick.tick() => {
                 #[cfg(not(test))]
-                unsafe {
-                    let tick = crate::timer::gettick_nocache();
-                    crate::timer::timer_do(tick);
-                }
+                unsafe { crate::game::mob::rust_mob_timer_spawns(); }
+            }
+            _ = npc_tick.tick() => {
+                #[cfg(not(test))]
+                unsafe { crate::game::npc::npc_runtimers(); }
+            }
+            _ = cron_tick.tick() => {
+                #[cfg(not(test))]
+                unsafe { crate::game::map_server::rust_map_cronjob(); }
 
-                // Spawn I/O tasks for connections made during timer callbacks.
-                // rust_make_connection pushes fds here instead of using block_on.
+                // Spawn I/O tasks for connections made from callbacks.
                 for fd in drain_pending_connections() {
                     tracing::debug!("[rust_server] Spawning io task for pending fd={}", fd);
                     tokio::task::spawn_local(session_io_task(fd));
@@ -808,6 +791,14 @@ pub async fn run_async_server(_port: u16) -> Result<(), Box<dyn std::error::Erro
                     tracing::info!("[rust_server] Shutdown requested");
                     break;
                 }
+            }
+            _ = ddos_tick.tick() => {
+                #[cfg(not(test))]
+                crate::session::rust_connect_check_clear();
+            }
+            _ = throttle_tick.tick() => {
+                #[cfg(not(test))]
+                crate::session::rust_remove_throttle();
             }
         }
     }
@@ -1549,17 +1540,16 @@ pub fn rust_add_ip_lockout(ip: u32) {
     crate::network::ddos::add_ip_lockout(ip);
 }
 
-pub fn rust_connect_check_clear(_id: i32, _data: i32) -> i32 {
-    crate::network::ddos::connect_check_clear()
+pub fn rust_connect_check_clear() {
+    crate::network::ddos::connect_check_clear();
 }
 
 pub fn rust_add_throttle(ip: u32) {
     crate::network::throttle::add_throttle(ip);
 }
 
-pub fn rust_remove_throttle(_id: i32, _data: i32) -> i32 {
+pub fn rust_remove_throttle() {
     crate::network::throttle::remove_throttle();
-    0
 }
 
 #[cfg(test)]

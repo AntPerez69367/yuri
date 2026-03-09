@@ -218,7 +218,7 @@ use crate::database::magic_db::{
 #[cfg(not(test))]
 use crate::database::mob_db::{rust_mobdb_experience as mobdb_experience, rust_mobdb_search as mobdb_search};
 #[cfg(not(test))]
-use crate::timer::gettick;
+use crate::game::time_util::gettick;
 #[cfg(not(test))]
 use crate::game::map_server::cur_time;
 #[cfg(not(test))]
@@ -414,12 +414,12 @@ pub unsafe fn mob_respawn_getstats(mob: *mut MobSpawnData) -> i32 {
 // ─── Spawn table loader ───────────────────────────────────────────────────────
 
 #[cfg(not(test))]
-use crate::database::{blocking_run, get_pool};
+use crate::database::{blocking_run_async, get_pool};
 
 #[cfg(not(test))]
 pub unsafe fn mobspawn_read() -> i32 {
     let serverid_val = serverid;
-    let result = blocking_run(async move {
+    let result = blocking_run_async(async move {
         let pool = get_pool();
         let query = format!(
             "SELECT `SpnMapId`, `SpnX`, `SpnY`, `SpnMobId`, \
@@ -1055,9 +1055,9 @@ pub unsafe fn mob_trap_look_inner(bl: *mut BlockList, mob: *mut MobSpawnData, ty
     0
 }
 
-/// Called every 50ms by the timer system.
+/// Called every 50ms by the game loop.
 #[cfg(not(test))]
-pub unsafe fn mob_timer_spawns(_id: i32, _n: i32) -> i32 {
+pub unsafe fn mob_timer_spawns() {
     TIMERCHECK.fetch_add(1, Ordering::Relaxed);
 
     let spawn_start = MOB_SPAWN_START.load(Ordering::Relaxed);
@@ -1089,7 +1089,6 @@ pub unsafe fn mob_timer_spawns(_id: i32, _n: i32) -> i32 {
     if TIMERCHECK.load(Ordering::Relaxed) >= 30 {
         TIMERCHECK.store(0, Ordering::Relaxed);
     }
-    0
 }
 
 #[cfg(not(test))]
@@ -2365,8 +2364,8 @@ pub unsafe fn rust_mobspawn_read() -> i32 {
 }
 
 #[cfg(not(test))]
-pub unsafe fn rust_mob_timer_spawns(id: i32, n: i32) -> i32 {
-    mob_timer_spawns(id, n)
+pub unsafe fn rust_mob_timer_spawns() {
+    mob_timer_spawns()
 }
 
 #[cfg(not(test))]

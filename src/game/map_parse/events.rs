@@ -2,7 +2,7 @@
 #![allow(non_snake_case, clippy::wildcard_imports, clippy::too_many_lines)]
 
 
-use crate::database::{blocking_run, get_pool};
+use crate::database::{blocking_run_async, get_pool};
 
 use crate::game::pc::{
     MapSessionData,
@@ -207,7 +207,7 @@ pub unsafe fn sendRewardParcel(
 
     // Find highest existing position for this receiver.
     // ParPosition is int(10) unsigned — query_scalar must use u32.
-    let newest: i32 = (blocking_run(async move {
+    let newest: i32 = (blocking_run_async(async move {
         sqlx::query_scalar::<_, Option<u32>>(
             "SELECT MAX(`ParPosition`) FROM `Parcels` WHERE `ParChaIdDestination` = ?"
         )
@@ -225,7 +225,7 @@ pub unsafe fn sendRewardParcel(
         .unwrap_or("")
         .to_owned();
 
-    let ok = blocking_run(async move {
+    let ok = blocking_run_async(async move {
         sqlx::query(
             "INSERT INTO `Parcels` (`ParChaIdDestination`, `ParSender`, `ParItmId`, \
 `ParAmount`, `ParChaIdOwner`, `ParEngrave`, `ParPosition`, `ParNpc`) \
@@ -302,7 +302,7 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: i32) -> i32 {
 
     // Query 1: event metadata + per-rank rewards
     let event_id_u = eventid as u32;
-    let Some(er) = blocking_run(async move {
+    let Some(er) = blocking_run_async(async move {
         sqlx::query_as::<_, EventRewardRow>(
             "SELECT `EventName`, `EventLegend`, `EventRewardRanks_Display`, \
              `EventLegendIcon1`, `EventLegendIcon1Color`, \
@@ -377,7 +377,7 @@ pub unsafe fn clif_getReward(sd: *mut MapSessionData, fd: i32) -> i32 {
     // Query 2: player's rank for this event
     // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
     let cha_id = (*sd).status.id as i32;
-    let Some(rank) = blocking_run(async move {
+    let Some(rank) = blocking_run_async(async move {
         sqlx::query_scalar::<_, i32>(
             "SELECT `Rank` FROM `RankingScores` WHERE `ChaId` = ? AND `EventId` = ?"
         )
@@ -580,7 +580,7 @@ You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewar
         let eventid_i32 = eventid;
         // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
         let cha_id_i32  = (*sd).status.id as i32;
-        let _ = blocking_run(async move {
+        let _ = blocking_run_async(async move {
             sqlx::query(
                 "UPDATE `RankingScores` SET `EventClaim` = 2 WHERE `EventId` = ? AND `ChaId` = ?"
             )
@@ -648,7 +648,7 @@ pub unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: i32) -> i32 {
     let mut _5thPlaceReward1_ItmId = 0i32;    let mut _5thPlaceReward1_Amount = 0i32;
     let mut _5thPlaceReward2_ItmId = 0i32;    let mut _5thPlaceReward2_Amount = 0i32;
 
-    let Some(rr) = blocking_run(async move {
+    let Some(rr) = blocking_run_async(async move {
         sqlx::query_as::<_, RankingEventRow>(
             "SELECT `EventRewardRanks_Display`, `EventLegend`, \
              `EventLegendIcon1`, `EventLegendIcon1Color`, \
@@ -848,7 +848,7 @@ pub unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: i32) -> i32 {
 /// C line 4900.
 pub unsafe fn retrieveEventDates(eventid: i32, pos: i32, fd: i32) {
     let event_id_u = eventid as u32;
-    let Some(dates) = blocking_run(async move {
+    let Some(dates) = blocking_run_async(async move {
         sqlx::query_as::<_, EventDates>(
             "SELECT `FromDate`, `FromTime`, `ToDate`, `ToTime` FROM `RankingEvents` WHERE `EventId` = ?"
         )
@@ -875,7 +875,7 @@ pub unsafe fn checkPlayerScore(eventid: i32, sd: *mut MapSessionData) -> i32 {
     let event_id_i = eventid;
     // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
     let cha_id = (*sd).status.id as i32;
-    blocking_run(async move {
+    blocking_run_async(async move {
         sqlx::query_scalar::<_, i32>(
             "SELECT `Score` FROM `RankingScores` WHERE `EventId` = ? AND `ChaId` = ?"
         )
@@ -898,7 +898,7 @@ pub unsafe fn checkPlayerScore(eventid: i32, sd: *mut MapSessionData) -> i32 {
 pub unsafe fn updateRanks(eventid: i32) {
     // EventId is int(10) signed — i32 bind is correct
     // The vestigial SELECT is dropped; just run the rank-update pair.
-    blocking_run(async move {
+    blocking_run_async(async move {
         let pool = get_pool();
         let _ = sqlx::query("SET @r=0").execute(pool).await;
         let _ = sqlx::query(
@@ -920,7 +920,7 @@ pub unsafe fn checkPlayerRank(eventid: i32, sd: *mut MapSessionData) -> i32 {
     let event_id_i = eventid;
     // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
     let cha_id = (*sd).status.id as i32;
-    blocking_run(async move {
+    blocking_run_async(async move {
         sqlx::query_scalar::<_, i32>(
             "SELECT `Rank` FROM `RankingScores` WHERE `EventId` = ? AND `ChaId` = ?"
         )
@@ -946,7 +946,7 @@ pub unsafe fn checkevent_claim(eventid: i32, _fd: i32, sd: *mut MapSessionData) 
     // EventId is int(10) signed — i32 bind is correct
     let event_id = eventid;
 
-    blocking_run(async move {
+    blocking_run_async(async move {
         sqlx::query_scalar::<_, i32>(
             "SELECT `EventClaim` FROM `RankingScores` WHERE `EventId` = ? AND `ChaId` = ?"
         )
@@ -1001,7 +1001,7 @@ pub unsafe fn filler_block(pos: i32, eventid: i32, fd: i32, sd: *mut MapSessionD
 /// SQL: SELECT COUNT(*) FROM RankingScores WHERE EventId=?
 pub unsafe fn gettotalscores(eventid: i32) -> i32 {
     let event_id = eventid as u32;
-    blocking_run(async move {
+    blocking_run_async(async move {
         sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM `RankingScores` WHERE `EventId` = ?"
         )
@@ -1018,7 +1018,7 @@ pub unsafe fn gettotalscores(eventid: i32) -> i32 {
 ///
 /// SQL: SELECT COUNT(*) FROM RankingEvents
 pub unsafe fn getevents() -> i32 {
-    blocking_run(async {
+    blocking_run_async(async {
         sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM `RankingEvents`"
         )
@@ -1048,7 +1048,7 @@ pub unsafe fn getevent_name(mut pos: i32, fd: i32, sd: *mut MapSessionData) -> i
         }
     }
 
-    let rows: Vec<EventRow> = blocking_run(async {
+    let rows: Vec<EventRow> = blocking_run_async(async {
         sqlx::query_as::<_, EventRow>("SELECT `EventId`, `EventName` FROM `RankingEvents`")
             .fetch_all(get_pool())
             .await
@@ -1097,7 +1097,7 @@ pub unsafe fn getevent_playerscores(
     }
 
     let event_id = eventid as u32;
-    let rows: Vec<ScoreRow> = blocking_run(async move {
+    let rows: Vec<ScoreRow> = blocking_run_async(async move {
         if totalscores > 10 {
             sqlx::query_as::<_, ScoreRow>(
                 "SELECT `ChaName`, `Score`, `Rank` FROM `RankingScores` \

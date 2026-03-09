@@ -14,7 +14,7 @@
 
 use std::ffi::CStr;
 
-use crate::database::{blocking_run, get_pool};
+use crate::database::{blocking_run_async, get_pool};
 use crate::database::map_db::BlockList;
 use crate::game::block::map_delblock;
 use crate::game::scripting::rust_sl_resumemenu;
@@ -41,7 +41,7 @@ use crate::game::pc::{
     rust_pc_dropitemmap as pc_dropitemmap, rust_pc_setpos as pc_setpos,
     addtokillreg,
 };
-use crate::timer::timer_remove;
+use crate::game::time_util::timer_remove;
 use crate::game::scripting::rust_sl_async_freeco as sl_async_freeco;
 use crate::game::map_char::intif_save_impl::rust_sl_intif_savequit as sl_intif_savequit;
 use crate::game::client::visual::clif_showboards;
@@ -155,7 +155,7 @@ pub unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
     map_deliddb(&raw mut (*sd).bl);
 
     let id = (*sd).status.id;
-    if let Err(e) = blocking_run(async {
+    if let Err(e) = blocking_run_async(async move {
         sqlx::query("UPDATE `Character` SET `ChaOnline` = '0' WHERE `ChaId` = ?")
             .bind(id)
             .execute(get_pool())
@@ -405,7 +405,7 @@ pub unsafe fn clif_parsefriends(
     }
 
     let id = (*sd).status.id;
-    if let Err(e) = blocking_run(async move {
+    if let Err(e) = blocking_run_async(async move {
         let pool = get_pool();
         // Upsert: ensure row exists
         let exists: bool = sqlx::query_scalar(
@@ -448,7 +448,7 @@ pub unsafe fn clif_parsefriends(
 
 /// Return the AccountId for the given character ID, or 0 if not found.
 pub unsafe fn clif_isregistered(id: u32) -> i32 {
-    blocking_run(async move {
+    blocking_run_async(async move {
         sqlx::query_scalar::<_, u32>(
             "SELECT `AccountId` FROM `Accounts` WHERE \
              `AccountCharId1`=? OR `AccountCharId2`=? OR `AccountCharId3`=? OR \
@@ -468,7 +468,7 @@ pub unsafe fn clif_isregistered(id: u32) -> i32 {
 pub unsafe fn clif_getaccountemail(id: u32) -> *const i8 {
     let acct_id = clif_isregistered(id);
     if acct_id == 0 { return std::ptr::null(); }
-    let email: Option<String> = blocking_run(async move {
+    let email: Option<String> = blocking_run_async(async move {
         sqlx::query_scalar(
             "SELECT `AccountEmail` FROM `Accounts` WHERE `AccountId` = ?"
         )
@@ -650,7 +650,7 @@ static NAME_BUF: std::sync::Mutex<[u8; 16]> = std::sync::Mutex::new([0u8; 16]);
 
 /// Look up a character name by ChaId; returns pointer into a static 16-byte buffer.
 pub unsafe fn clif_getName(id: u32) -> *mut i8 {
-    let name: String = blocking_run(async move {
+    let name: String = blocking_run_async(async move {
         sqlx::query_scalar::<_, String>(
             "SELECT `ChaName` FROM `Character` WHERE `ChaId` = ?"
         )
@@ -699,7 +699,7 @@ pub unsafe fn clif_accept2(
     std::ptr::copy_nonoverlapping(name as *const u8, n.as_mut_ptr(), name_len as usize);
     let name_str = CStr::from_ptr(n.as_ptr() as *const i8)
         .to_str().unwrap_or("").to_owned();
-    let id: u32 = blocking_run(async move {
+    let id: u32 = blocking_run_async(async move {
         sqlx::query_scalar::<_, u32>(
             "SELECT `ChaId` FROM `Character` WHERE `ChaName` = ?"
         )

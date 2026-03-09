@@ -33,8 +33,6 @@ pub mod database;
 pub mod servers;
 /// Session management (replaces session.c)
 pub mod session;
-/// Timer system (replaces c_deps/timer.c)
-pub mod timer;
 
 // ============================================
 // Game Logic Modules (Phase 3)

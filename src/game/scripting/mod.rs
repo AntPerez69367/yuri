@@ -7,6 +7,7 @@ pub mod globals;
 pub mod object_collect;
 pub mod pc_accessors;
 pub mod map_globals;
+pub mod pending;
 pub mod types;
 
 use mlua::Lua;
@@ -551,5 +552,6 @@ pub unsafe fn rust_sl_exec(user: *mut std::ffi::c_void, code: *mut i8) {
 }
 
 pub unsafe fn rust_sl_async_freeco(user: *mut std::ffi::c_void) {
-    ffi_catch!((), async_coro::free_coref(user))
+    pending::cancel(user);
+    async_coro::clear_menu_opts(user);
 }

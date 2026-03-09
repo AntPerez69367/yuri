@@ -10,7 +10,7 @@ use crate::database::map_db::BlockList;
 use crate::database::map_db::{get_map_ptr, map_is_loaded};
 use crate::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr};
 use crate::game::mob::MobSpawnData;
-use crate::database::{blocking_run, get_pool};
+use crate::database::{blocking_run_async, get_pool};
 
 use crate::game::pc::{
     MapSessionData,
@@ -846,7 +846,7 @@ pub unsafe fn clif_huntertoggle(sd: *mut MapSessionData) -> i32 {
         .unwrap_or("")
         .to_owned();
 
-    blocking_run(async move {
+    blocking_run_async(async move {
         sqlx::query(
             "UPDATE `Character` SET `ChaHunter` = ?, `ChaHunterNote` = ? WHERE `ChaId` = ?"
         )
@@ -894,7 +894,7 @@ pub unsafe fn clif_sendhunternote(sd: *mut MapSessionData) -> i32 {
         .unwrap_or("")
         .to_owned();
 
-    let note_result = blocking_run(async move {
+    let note_result = blocking_run_async(async move {
         sqlx::query_scalar::<_, String>(
             "SELECT `ChaHunterNote` FROM `Character` WHERE `ChaName` = ?"
         )

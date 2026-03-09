@@ -1182,7 +1182,7 @@ pub unsafe fn sl_pc_addclan(_sd: *mut std::ffi::c_void, _name: *const i8) { /* s
 
 pub unsafe fn sl_pc_updatepath(sd: *mut std::ffi::c_void, path: i32, mark: i32) {
     let id = (*(sd as *mut MapSessionData)).status.id;
-    let _ = crate::database::blocking_run(async move {
+    let _ = crate::database::blocking_run_async(async move {
         sqlx::query("UPDATE `Character` SET `ChaPthId`=?,`ChaMark`=? WHERE `ChaId`=?")
             .bind(path).bind(mark).bind(id)
             .execute(crate::database::get_pool()).await
@@ -1191,7 +1191,7 @@ pub unsafe fn sl_pc_updatepath(sd: *mut std::ffi::c_void, path: i32, mark: i32) 
 
 pub unsafe fn sl_pc_updatecountry(sd: *mut std::ffi::c_void, country: i32) {
     let id = (*(sd as *mut MapSessionData)).status.id;
-    let _ = crate::database::blocking_run(async move {
+    let _ = crate::database::blocking_run_async(async move {
         sqlx::query("UPDATE `Character` SET `ChaNation`=? WHERE `ChaId`=?")
             .bind(country).bind(id)
             .execute(crate::database::get_pool()).await
@@ -1222,7 +1222,7 @@ pub unsafe fn sl_pc_setheroshow(sd: *mut std::ffi::c_void, flag: i32) {
     let sd = sd as *mut MapSessionData;
     (*sd).status.heroes = flag as u32;
     let id = (*sd).status.id;
-    let _ = crate::database::blocking_run(async move {
+    let _ = crate::database::blocking_run_async(async move {
         sqlx::query("UPDATE `Character` SET `ChaHeroShow`=? WHERE `ChaId`=?")
             .bind(flag).bind(id)
             .execute(crate::database::get_pool()).await
@@ -2088,7 +2088,7 @@ pub unsafe fn sl_pc_removeparcel(
     let sd = sd_ptr as *mut MapSessionData;
     if sd.is_null() { return; }
     let char_id = (*sd).status.id;
-    let _ = crate::database::blocking_run(async move {
+    let _ = crate::database::blocking_run_async(async move {
         sqlx::query(
             "DELETE FROM `Parcels` WHERE `ParChaIdDestination`=? AND `ParPosition`=?"
         )

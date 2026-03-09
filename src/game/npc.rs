@@ -465,7 +465,7 @@ pub unsafe fn npc_duration(nd: *mut NpcData) -> i32 {
 ///
 /// Caller must hold the server-wide lock.  `map_id2npc` must be safe to call
 /// for any ID in the scanned ranges.
-pub unsafe fn npc_runtimers(_id: i32, _n: i32) -> i32 {
+pub unsafe fn npc_runtimers() {
     // regular NPCs
     let mut x = NPC_START_NUM;
     let npc_hi = NPC_ID.load(Ordering::Relaxed);
@@ -503,7 +503,6 @@ pub unsafe fn npc_runtimers(_id: i32, _n: i32) -> i32 {
         }
         x += 1;
     }
-    0
 }
 
 // ---------------------------------------------------------------------------

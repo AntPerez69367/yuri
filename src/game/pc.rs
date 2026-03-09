@@ -554,7 +554,7 @@ use crate::game::client::visual::{
 #[cfg(not(test))]
 use crate::game::client::handlers::{clif_quit, clif_transfer};
 #[cfg(not(test))]
-use crate::timer::{timer_insert, timer_remove};
+use crate::game::time_util::{timer_insert, timer_remove};
 #[cfg(not(test))]
 use crate::game::scripting::rust_sl_async_freeco as sl_async_freeco;
 #[cfg(not(test))]
@@ -588,7 +588,7 @@ unsafe fn encrypt_fd(fd: i32) -> i32 { encrypt(fd) }
 #[cfg(not(test))]
 use crate::game::scripting::pc_accessors::sl_pc_forcesave;
 #[cfg(not(test))]
-use crate::timer::gettick;
+use crate::game::time_util::gettick;
 #[cfg(not(test))]
 unsafe fn gettick_pc() -> u32 { gettick() }
 #[cfg(not(test))]
@@ -1292,7 +1292,7 @@ pub unsafe fn rust_pc_requestmp(sd: *mut MapSessionData) -> i32 {
     let char_id = (*sd).status.id;
 
     // Check for new mail
-    let has_mail = crate::database::blocking_run(async move {
+    let has_mail = crate::database::blocking_run_async(async move {
         sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM `Mail` WHERE `MalNew` = 1 AND `MalChaNameDestination` = ?"
         )
@@ -1304,7 +1304,7 @@ pub unsafe fn rust_pc_requestmp(sd: *mut MapSessionData) -> i32 {
     if has_mail { (*sd).flags |= FLAG_MAIL; }
 
     // Check for pending parcels
-    let has_parcel = crate::database::blocking_run(async move {
+    let has_parcel = crate::database::blocking_run_async(async move {
         sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM `Parcels` WHERE `ParChaIdDestination` = ?"
         )
@@ -3695,7 +3695,7 @@ pub unsafe fn rust_pc_warp(
         }
 
         let map_id = m;
-        let destsrv = crate::database::blocking_run(async move {
+        let destsrv = crate::database::blocking_run_async(async move {
             sqlx::query_scalar::<_, Option<u32>>(
                 "SELECT `MapServer` FROM `Maps` WHERE `MapId` = ?"
             )

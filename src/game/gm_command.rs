@@ -41,7 +41,7 @@ use std::sync::atomic::Ordering;
 // char_fd, sql_handle, and userlist are now Rust statics in src/game/map_server.rs.
 use crate::game::map_server::{char_fd, userlist};
 
-use crate::database::{blocking_run, get_pool};
+use crate::database::{blocking_run_async, get_pool};
 
 type LuaState = std::ffi::c_void; // opaque
 
@@ -97,7 +97,7 @@ use crate::session::{
 use crate::network::crypt::encrypt as encrypt_fd;
 
 // ── timer ──────────────────────────────────────────────────────────────────────
-use crate::timer::{timer_insert, timer_remove};
+use crate::game::time_util::{timer_insert, timer_remove};
 
 // ── libc printf (used for debug logging) ──────────────────────────────────────
 use libc::printf;
@@ -625,7 +625,7 @@ unsafe fn command_ban(_sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState
         printf(b"Banning %s\n\0".as_ptr() as *const i8, name.as_ptr());
         let name_str = std::ffi::CStr::from_ptr(name.as_ptr())
             .to_str().unwrap_or("").to_owned();
-        blocking_run(async move {
+        blocking_run_async(async move {
             sqlx::query("UPDATE `Character` SET `ChaBanned` = '1' WHERE `ChaName` = ?")
                 .bind(name_str)
                 .execute(get_pool())
@@ -641,7 +641,7 @@ unsafe fn command_unban(_sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaSta
     printf(b"Unbanning %s\n\0".as_ptr() as *const i8, name.as_ptr());
     let name_str = std::ffi::CStr::from_ptr(name.as_ptr())
         .to_str().unwrap_or("").to_owned();
-    blocking_run(async move {
+    blocking_run_async(async move {
         sqlx::query("UPDATE `Character` SET `ChaBanned` = '0' WHERE `ChaName` = ?")
             .bind(name_str)
             .execute(get_pool())
@@ -988,7 +988,7 @@ unsafe fn command_job(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaState)
     let class_val = (*sd).status.class as u32;
     let mark_val = (*sd).status.mark as u32;
     let char_id = (*sd).status.id;
-    blocking_run(async move {
+    blocking_run_async(async move {
         sqlx::query(
             "UPDATE `Character` SET `ChaPthId` = ?, `ChaMark` = ? WHERE `ChaId` = ?"
         )

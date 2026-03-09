@@ -1,4 +1,5 @@
 pub mod block;
+pub mod time_util;
 pub mod util;
 #[cfg(not(test))]
 pub mod map_char;

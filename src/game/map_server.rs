@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::database::{blocking_run, blocking_run_async, get_pool};
+use crate::database::{blocking_run_async, get_pool};
 use crate::game::pc::{
     MapSessionData,
     U_FLAG_UNPHYSICAL,
@@ -368,11 +368,11 @@ pub unsafe fn map_readglobalgamereg(reg: *const i8) -> i32 {
     0
 }
 
-/// Timer callback — runs Lua cron hooks based on wall-clock seconds.
+/// Game loop callback — runs Lua cron hooks based on wall-clock seconds.
 ///
-/// Registered every 1000 ms via `timer_insert` in `map_server.rs`.
+/// Called every 1000 ms from the Tokio select! loop.
 /// Must be called on the Lua-owning thread (LocalSet).
-pub unsafe fn rust_map_cronjob(_id: i32, _n: i32) -> i32 {
+pub unsafe fn rust_map_cronjob() {
     let t = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -384,7 +384,6 @@ pub unsafe fn rust_map_cronjob(_id: i32, _n: i32) -> i32 {
     if t % 3600  == 0 { cron(b"cronJobHour\0");   }
     if t % 86400 == 0 { cron(b"cronJobDay\0");    }
     cron(b"cronJobSec\0");
-    0
 }
 
 /// Dispatch a Lua event with a single block_list argument.
@@ -984,7 +983,7 @@ pub unsafe fn nmail_luascript(
     let body = std::ffi::CStr::from_ptr(message.as_ptr())
         .to_str().unwrap_or("").to_owned();
 
-    let ok = blocking_run(async move {
+    let ok = blocking_run_async(async move {
         sqlx::query(
             "INSERT INTO `Mail` (`MalChaName`, `MalChaNameDestination`, `MalBody`) VALUES (?, 'Lua', ?)"
         )
@@ -1023,7 +1022,7 @@ pub unsafe fn nmail_poemscript(
     let char_id = (*sd).status.id as i32;
 
     // Check whether the player already submitted a poem this cycle.
-    let already_submitted = blocking_run(async move {
+    let already_submitted = blocking_run_async(async move {
         sqlx::query_scalar::<_, Option<u32>>(
             "SELECT `BrdId` FROM `Boards` WHERE `BrdBnmId` = '19' AND `BrdChaId` = ? LIMIT 1"
         )
@@ -1051,7 +1050,7 @@ pub unsafe fn nmail_poemscript(
         .to_str().unwrap_or("").to_owned();
 
     // Find the current maximum board position.
-    let boardpos: u32 = blocking_run(async {
+    let boardpos: u32 = blocking_run_async(async {
         sqlx::query_scalar::<_, Option<u32>>(
             "SELECT MAX(`BrdPosition`) FROM `Boards` WHERE `BrdBnmId` = '19'"
         )
@@ -1063,7 +1062,7 @@ pub unsafe fn nmail_poemscript(
         .unwrap_or(0)
     });
 
-    let ok = blocking_run(async move {
+    let ok = blocking_run_async(async move {
         sqlx::query(
             "INSERT INTO `Boards` (`BrdBnmId`, `BrdChaName`, `BrdChaId`, `BrdTopic`, `BrdPost`, `BrdMonth`, `BrdDay`, `BrdPosition`) VALUES ('19', 'Anonymous', ?, ?, ?, ?, ?, ?)"
         )
@@ -1327,7 +1326,7 @@ pub unsafe fn map_changepostcolor(
     post:  i32,
     color: i32,
 ) -> i32 {
-    blocking_run(async move {
+    blocking_run_async(async move {
         sqlx::query(
             "UPDATE `Boards` SET `BrdHighlighted` = ? WHERE `BrdBnmId` = ? AND `BrdPosition` = ?"
         )
@@ -1348,7 +1347,7 @@ pub unsafe fn map_changepostcolor(
 // ---------------------------------------------------------------------------
 
 pub unsafe fn map_getpostcolor(board: i32, post: i32) -> i32 {
-    blocking_run(async move {
+    blocking_run_async(async move {
         sqlx::query_scalar::<_, Option<i32>>(
             "SELECT `BrdHighlighted` FROM `Boards` WHERE `BrdBnmId` = ? AND `BrdPosition` = ?"
         )
@@ -1567,7 +1566,7 @@ pub unsafe fn change_time_char(_id: i32, _n: i32) -> i32 {
         cur_season.load(Ordering::Relaxed),
         cur_year.load(Ordering::Relaxed),
     );
-    blocking_run(async move {
+    blocking_run_async(async move {
         sqlx::query(
             "UPDATE `Time` SET `TimHour` = ?, `TimDay` = ?, `TimSeason` = ?, `TimYear` = ?"
         )
@@ -1601,7 +1600,7 @@ pub unsafe fn get_time_thing() -> i32 {
         #[sqlx(rename = "TimYear")]   year:   u32,
     }
 
-    if let Some(row) = blocking_run(async {
+    if let Some(row) = blocking_run_async(async {
         sqlx::query_as::<_, TimeRow>(
             "SELECT `TimHour`, `TimDay`, `TimSeason`, `TimYear` FROM `Time` LIMIT 1"
         )
@@ -1635,7 +1634,7 @@ pub unsafe fn uptime() -> i32 {
         .map(|d| d.as_secs() as i32)
         .unwrap_or(0);
 
-    blocking_run(async move {
+    blocking_run_async(async move {
         let pool = get_pool();
         sqlx::query("DELETE FROM `UpTime` WHERE `UtmId` = '3'")
             .execute(pool)
@@ -2027,13 +2026,13 @@ pub unsafe fn map_registrysave(m: i32, i: i32) -> i32 {
     let i_u32 = i as u32;
 
     // SELECT existing position.
-    let save_id: Option<u32> = blocking_run(
+    let save_id: Option<u32> = blocking_run_async(
         sqlx::query_scalar::<_, u32>(
             "SELECT MrgPosition FROM MapRegistry \
              WHERE MrgMapId = ? AND MrgIdentifier = ?",
         )
         .bind(m_u32)
-        .bind(&identifier)
+        .bind(identifier.clone())
         .fetch_optional(get_pool()),
     )
     .unwrap_or(None);
@@ -2042,23 +2041,23 @@ pub unsafe fn map_registrysave(m: i32, i: i32) -> i32 {
         Some(pos) => {
             if val == 0 {
                 // Delete the entry — value cleared.
-                let _ = blocking_run(
+                let _ = blocking_run_async(
                     sqlx::query(
                         "DELETE FROM MapRegistry \
                          WHERE MrgMapId = ? AND MrgIdentifier = ?",
                     )
                     .bind(m_u32)
-                    .bind(&identifier)
+                    .bind(identifier.clone())
                     .execute(get_pool()),
                 );
             } else {
                 // Update in-place.
-                let _ = blocking_run(
+                let _ = blocking_run_async(
                     sqlx::query(
                         "UPDATE MapRegistry SET MrgIdentifier = ?, MrgValue = ? \
                          WHERE MrgMapId = ? AND MrgPosition = ?",
                     )
-                    .bind(&identifier)
+                    .bind(identifier.clone())
                     .bind(val)
                     .bind(m_u32)
                     .bind(pos)
@@ -2069,14 +2068,14 @@ pub unsafe fn map_registrysave(m: i32, i: i32) -> i32 {
         None => {
             if val > 0 {
                 // Insert new row.
-                let _ = blocking_run(
+                let _ = blocking_run_async(
                     sqlx::query(
                         "INSERT INTO MapRegistry \
                          (MrgMapId, MrgIdentifier, MrgValue, MrgPosition) \
                          VALUES (?, ?, ?, ?)",
                     )
                     .bind(m_u32)
-                    .bind(&identifier)
+                    .bind(identifier)
                     .bind(val)
                     .bind(i_u32)
                     .execute(get_pool()),
@@ -2228,9 +2227,9 @@ pub unsafe fn map_loadgameregistry() -> i32 {
         grg_value: u32, // INT UNSIGNED in schema
     }
 
-    let rows: Vec<GrgRow> = match blocking_run(
-        sqlx::query_as::<_, GrgRow>(&sql).fetch_all(get_pool()),
-    ) {
+    let rows: Vec<GrgRow> = match blocking_run_async(async move {
+        sqlx::query_as::<_, GrgRow>(&sql).fetch_all(get_pool()).await
+    }) {
         Ok(r) => r,
         Err(e) => {
             tracing::error!("[map] map_loadgameregistry failed: {e:#}");
@@ -2292,50 +2291,57 @@ pub unsafe fn map_savegameregistry(i: i32) -> i32 {
     let val = entry.val;
 
     // SELECT existing GrgId.
-    let save_id: Option<u32> = blocking_run(
+    let id2 = identifier.clone();
+    let save_id: Option<u32> = blocking_run_async(async move {
         sqlx::query_scalar::<_, u32>(&format!(
             "SELECT GrgId FROM `GameRegistry{sid}` WHERE GrgIdentifier = ?",
         ))
-        .bind(&identifier)
-        .fetch_optional(get_pool()),
-    )
+        .bind(id2)
+        .fetch_optional(get_pool())
+        .await
+    })
     .unwrap_or(None);
 
     match save_id {
         Some(grg_id) if grg_id != 0 => {
             if val == 0 {
-                let _ = blocking_run(
+                let id2 = identifier.clone();
+                let _ = blocking_run_async(async move {
                     sqlx::query(&format!(
                         "DELETE FROM `GameRegistry{sid}` WHERE GrgIdentifier = ?",
                     ))
-                    .bind(&identifier)
-                    .execute(get_pool()),
-                );
+                    .bind(id2)
+                    .execute(get_pool())
+                    .await
+                });
             } else {
-                let _ = blocking_run(
+                let id2 = identifier.clone();
+                let _ = blocking_run_async(async move {
                     sqlx::query(&format!(
                         "UPDATE `GameRegistry{sid}` \
                          SET GrgIdentifier = ?, GrgValue = ? \
                          WHERE GrgId = ?",
                     ))
-                    .bind(&identifier)
+                    .bind(id2)
                     .bind(val)
                     .bind(grg_id)
-                    .execute(get_pool()),
-                );
+                    .execute(get_pool())
+                    .await
+                });
             }
         }
         _ => {
             if val > 0 {
-                let _ = blocking_run(
+                let _ = blocking_run_async(async move {
                     sqlx::query(&format!(
                         "INSERT INTO `GameRegistry{sid}` \
                          (GrgIdentifier, GrgValue) VALUES (?, ?)",
                     ))
-                    .bind(&identifier)
+                    .bind(identifier)
                     .bind(val)
-                    .execute(get_pool()),
-                );
+                    .execute(get_pool())
+                    .await
+                });
             }
         }
     }
@@ -2423,7 +2429,7 @@ pub unsafe fn map_id2name(id: u32) -> *mut i8 {
         std::ptr::copy_nonoverlapping(none.as_ptr() as *const i8, buf, none.len());
         return buf;
     }
-    let name: Option<String> = crate::database::blocking_run(async move {
+    let name: Option<String> = crate::database::blocking_run_async(async move {
         sqlx::query_scalar::<_, String>(
             "SELECT `ChaName` FROM `Character` WHERE `ChaId`=?"
         )
@@ -2506,15 +2512,16 @@ pub unsafe fn map_lastdeath_mob(
          WHERE SpnX = ? AND SpnY = ? AND SpnMapId = ? AND SpnId = ?",
     );
 
-    blocking_run(
+    blocking_run_async(async move {
         sqlx::query(&sql)
             .bind(last_death)
             .bind(startx)
             .bind(starty)
             .bind(map_id)
             .bind(mob_id)
-            .execute(get_pool()),
-    )
+            .execute(get_pool())
+            .await
+    })
     .unwrap_or_else(|e| {
         tracing::error!("[map] map_lastdeath_mob failed: {e:#}");
         Default::default()

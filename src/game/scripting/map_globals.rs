@@ -290,7 +290,7 @@ pub unsafe fn sl_g_sendparcel(
     let item_u = item as u32;
     let dura = crate::database::item_db::rust_itemdb_dura(item_u) as i32;
     let prot = crate::database::item_db::rust_itemdb_protected(item_u) as i32;
-    let _ = crate::database::blocking_run(async move {
+    let _ = crate::database::blocking_run_async(async move {
         let newest: i32 = sqlx::query_scalar::<_, i32>(
             "SELECT COALESCE(MAX(`ParPosition`), -1) FROM `Parcels` WHERE `ParChaIdDestination`=?"
         )

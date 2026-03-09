@@ -1,6 +1,6 @@
-//! Rust replacement for c_deps/timer.c
+//! Time helpers and timer system used by game logic.
 //!
-//! Pure Rust timer system — no C dependencies.
+//! Moved from `crate::timer` (src/timer.rs) — pure Rust timer system with no C dependencies.
 //!
 //! # Safety model
 //! The map server is single-threaded on its event-loop thread.  All timer
