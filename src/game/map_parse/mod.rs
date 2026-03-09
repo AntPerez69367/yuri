@@ -243,7 +243,7 @@ pub async unsafe fn clif_parse(fd: i32) -> i32 {
                     delay,
                     delay,
                     Some(rust_pc_atkspeed as unsafe fn(i32, i32) -> i32),
-                    (*sd).status.id as i32,
+                    (*sd).bl.id as i32,
                     0,
                 );
                 clif_parseattack(sd);

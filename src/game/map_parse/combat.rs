@@ -1352,31 +1352,31 @@ pub unsafe fn clif_parseattack(sd: *mut MapSessionData) -> i32 {
         clif_sendaction(&raw mut (*sd).bl, 1, attackspeed, sound);
     }
 
-    sl_doscript_simple(b"swingDamage\0".as_ptr() as *const i8, std::ptr::null(), &raw mut (*sd).bl);
-    sl_doscript_simple(b"swing\0".as_ptr() as *const i8, std::ptr::null(), &raw mut (*sd).bl);
-    sl_doscript_simple(b"onSwing\0".as_ptr() as *const i8, std::ptr::null(), &raw mut (*sd).bl);
+    sl_doscript_simple(c"swingDamage".as_ptr(), std::ptr::null(), &raw mut (*sd).bl);
+    sl_doscript_simple(c"swing".as_ptr(), std::ptr::null(), &raw mut (*sd).bl);
+    sl_doscript_simple(c"onSwing".as_ptr(), std::ptr::null(), &raw mut (*sd).bl);
 
     let weap_look = rust_itemdb_look(weap_id);
-    if weap_look >= 20000 && weap_look < 30000 {
-        sl_doscript_simple(rust_itemdb_yname(weap_id), b"shootArrow\0".as_ptr() as *const i8, &raw mut (*sd).bl);
-        sl_doscript_simple(b"shootArrow\0".as_ptr() as *const i8, std::ptr::null(), &raw mut (*sd).bl);
+    if (20000..30000).contains(&weap_look) {
+        sl_doscript_simple(rust_itemdb_yname(weap_id), c"shootArrow".as_ptr(), &raw mut (*sd).bl);
+        sl_doscript_simple(c"shootArrow".as_ptr(), std::ptr::null(), &raw mut (*sd).bl);
     }
 
     for x in 0..14usize {
         if (*sd).status.equip[x].id > 0 {
-            sl_doscript_simple(rust_itemdb_yname((*sd).status.equip[x].id), b"on_swing\0".as_ptr() as *const i8, &raw mut (*sd).bl);
+            sl_doscript_simple(rust_itemdb_yname((*sd).status.equip[x].id), c"on_swing".as_ptr(), &raw mut (*sd).bl);
         }
     }
 
     for x in 0..MAX_SPELLS {
         if (*sd).status.skill[x] > 0 {
-            sl_doscript_simple(rust_magicdb_yname((*sd).status.skill[x] as i32), b"passive_on_swing\0".as_ptr() as *const i8, &raw mut (*sd).bl);
+            sl_doscript_simple(rust_magicdb_yname((*sd).status.skill[x] as i32), c"passive_on_swing".as_ptr(), &raw mut (*sd).bl);
         }
     }
 
     for x in 0..MAX_MAGIC_TIMERS {
         if (*sd).status.dura_aether[x].id > 0 && (*sd).status.dura_aether[x].duration > 0 {
-            sl_doscript_simple(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), b"on_swing_while_cast\0".as_ptr() as *const i8, &raw mut (*sd).bl);
+            sl_doscript_simple(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), c"on_swing_while_cast".as_ptr(), &raw mut (*sd).bl);
         }
     }
 
@@ -1397,7 +1397,7 @@ pub unsafe fn clif_deductdura(sd: *mut MapSessionData, equip: i32, val: i32) -> 
 
     let eth = rust_itemdb_ethereal((*sd).status.equip[equip_idx].id);
     if eth == 0 {
-        (*sd).status.equip[equip_idx].dura -= val as i32;
+        (*sd).status.equip[equip_idx].dura -= val;
         clif_checkdura(sd, equip);
     }
     0

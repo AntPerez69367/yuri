@@ -115,7 +115,6 @@ struct TimerData {
     /// Combination of TIMER_* flags.
     typ: u8,
     interval: u32,
-    #[allow(dead_code)]
     id: i32,
     data1: i32,
     data2: i32,
@@ -295,7 +294,7 @@ pub fn timer_do(tick: u32) -> i32 {
         // non-reentrant, so holding the guard across the call would deadlock.
         let (f, d1, d2) = {
             let entry = &s.data[tid];
-            (entry.func, entry.data1, entry.data2)
+            (entry.func, entry.id, entry.data1)
         };
         drop(s); // release lock — callbacks are now free to modify timer state
 

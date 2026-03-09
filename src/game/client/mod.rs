@@ -815,12 +815,15 @@ pub async fn rust_clif_parse(fd: i32) -> i32 {
             0x13 => {
                 clif_cancelafk(sd);
                 sl_pc_set_time(sd_pc, sl_pc_time(sd_pc) + 1);
-                if sl_pc_attacked(sd_pc) != 1 && sl_pc_attack_speed(sd_pc) > 0 {
+                let attacked_val = sl_pc_attacked(sd_pc);
+                let spd_val = sl_pc_attack_speed(sd_pc);
+                tracing::info!("[attack] 0x13 bl_id={} attacked={} spd={}", (*sd_pc).bl.id, attacked_val, spd_val);
+                if attacked_val != 1 && spd_val > 0 {
                     sl_pc_set_attacked(sd_pc, 1);
-                    let spd = sl_pc_attack_speed(sd_pc);
-                    let delay = ((spd * 1000) / 60) as u32;
+                    let delay = ((spd_val * 1000) / 60) as u32;
+                    tracing::info!("[attack] registering timer delay={}ms bl_id={}", delay, (*sd_pc).bl.id);
                     timer_insert(
-                        delay, delay, Some(rust_pc_atkspeed), sl_pc_status_id(sd_pc), 0,
+                        delay, delay, Some(rust_pc_atkspeed), (*sd_pc).bl.id as i32, 0,
                     );
                     clif_parseattack(sd);
                 }

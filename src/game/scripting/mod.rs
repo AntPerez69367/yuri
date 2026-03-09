@@ -251,7 +251,7 @@ fn load_lua_file(lua: &Lua, path: &std::path::Path) -> mlua::Result<()> {
 
 fn load_lua_dir(lua: &Lua, dir: &str) -> mlua::Result<()> {
     // Load sys.lua first.
-    let sys = std::path::PathBuf::from(format!("{dir}/sys.lua"));
+    let sys = std::path::Path::new(dir).join("sys.lua");
     if sys.exists() {
         load_lua_file(lua, &sys)?;
     }

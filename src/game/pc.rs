@@ -1200,8 +1200,10 @@ pub unsafe fn rust_pc_scripttimer(id: i32, _none: i32) -> i32 {
 #[cfg(not(test))]
 pub unsafe fn rust_pc_atkspeed(id: i32, _none: i32) -> i32 {
     let sd = map_id2sd_pc(id as u32);
+    tracing::info!("[attack] rust_pc_atkspeed id={} sd_null={}", id, sd.is_null());
     if sd.is_null() { return 1; }
     (*sd).attacked = 0;
+    tracing::info!("[attack] attacked reset for bl_id={}", id);
     1
 }
 

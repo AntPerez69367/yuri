@@ -435,32 +435,30 @@ pub unsafe fn isActive(sd: *mut MapSessionData) -> i32 {
 // Online status
 // ---------------------------------------------------------------------------
 
-/// Updates `Character.ChaOnline`/`ChaLastIP` and fires the "login" Lua hook on first login.
-pub async unsafe fn mmo_setonline(id: u32, val: i32) {
+/// Updates `Character.ChaOnline`/`ChaLastIP`.
+///
+/// Returns `true` if the login Lua hook should be fired (character exists and val != 0).
+/// The caller is responsible for firing the hook AFTER this future completes so that
+/// any DB calls inside the hook do not re-enter DB_RUNTIME (which would deadlock).
+pub async unsafe fn mmo_setonline(id: u32, val: i32) -> bool {
     // Extract all data from raw pointers BEFORE any .await so no raw pointers
     // cross yield points (required for the future to be Send).
-    let (addr, name_str, bl_usize) = {
+    let addr = {
         let sd = map_id2sd(id) as *mut MapSessionData;
-        if sd.is_null() { return; }
+        if sd.is_null() { return false; }
         let fd = (*sd).fd;
         // rust_session_get_client_ip returns IP in network byte order (sin_addr.s_addr).
         let raw_ip = rust_session_get_client_ip(fd);
-        let addr = format!(
+        format!(
             "{}.{}.{}.{}",
             raw_ip & 0xff,
             (raw_ip >> 8) & 0xff,
             (raw_ip >> 16) & 0xff,
             (raw_ip >> 24) & 0xff,
-        );
-        let name_str = std::ffi::CStr::from_ptr((*sd).status.name.as_ptr() as *const i8)
-            .to_string_lossy()
-            .into_owned();
-        let bl_usize = std::ptr::addr_of_mut!((*sd).bl) as usize;
-        (addr, name_str, bl_usize)
+        )
     };
-    // From here on: only Send-safe owned types and usize are used across .await points.
 
-    // Check character exists, then fire login script.
+    // Check character exists.
     let pool = get_pool();
     let exists: bool = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(*) FROM `Character` WHERE `ChaId` = ?"
@@ -469,18 +467,6 @@ pub async unsafe fn mmo_setonline(id: u32, val: i32) {
         .fetch_one(pool)
         .await
         .unwrap_or(0) > 0;
-
-    if exists && val != 0 {
-        println!("[map] [login] name={} addr={}", name_str, addr);
-
-        // Fire "login" Lua hook: doscript_blargs("login", NULL, &[bl])
-        let bl_ptr = bl_usize as *mut crate::database::map_db::BlockList;
-        crate::game::scripting::doscript_blargs(
-            b"login\0".as_ptr() as *const i8,
-            std::ptr::null(),
-            &[bl_ptr],
-        );
-    }
 
     // Update online status + last IP regardless of whether character was found in SELECT.
     let pool = get_pool();
@@ -492,6 +478,8 @@ pub async unsafe fn mmo_setonline(id: u32, val: i32) {
         .bind(id)
         .execute(pool)
         .await;
+
+    exists && val != 0
 }
 
 // ---------------------------------------------------------------------------

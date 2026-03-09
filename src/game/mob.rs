@@ -198,7 +198,7 @@ use crate::game::map_server::{
 use crate::game::block::{map_addblock, map_delblock, map_moveblock};
 #[cfg(not(test))]
 use crate::game::map_parse::combat::{
-    clif_send_pc_health, clif_send_mob_health,
+    clif_send_pc_health, clif_send_mob_health, clif_sendmob_action,
 };
 #[cfg(not(test))]
 use crate::game::map_parse::visual::clif_lookgone;
@@ -1920,6 +1920,8 @@ pub unsafe fn rust_mob_attack(mob: *mut MobSpawnData, id: i32) -> i32 {
         sl_doscript_2(c"hitCritChance".as_ptr(), std::ptr::null(), &raw mut (*mob).bl, &raw mut (*tmob).bl);
     }
     if (*mob).critchance != 0 {
+        let sound = if !(*mob).data.is_null() { (*(*mob).data).sound } else { 0 };
+        clif_sendmob_action(mob, 1, 20, sound);
         if !sd.is_null() {
             sl_doscript_2(c"swingDamage".as_ptr(), std::ptr::null(), &raw mut (*mob).bl, &raw mut (*sd).bl);
             for x in 0..MAX_MAGIC_TIMERS {

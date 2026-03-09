@@ -215,7 +215,26 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
     // Register the player in the global ID database and mark online.
     tracing::info!("[map] [login] fd={} step=addiddb", fd);
     crate::game::map_server::map_addiddb(ptr::addr_of_mut!((*sd).bl));
-    crate::database::blocking_run_async(crate::game::map_server::mmo_setonline((*sd).status.id, 1));
+    // mmo_setonline returns true when the "login" Lua hook should fire.
+    // We capture that here and fire the hook AFTER blocking_run_async returns so
+    // Lua's DB calls (which also use blocking_run_async) don't deadlock on DB_RUNTIME.
+    let fire_login_hook = crate::database::blocking_run_async(
+        crate::database::assert_send(crate::game::map_server::mmo_setonline((*sd).status.id, 1))
+    );
+    if fire_login_hook {
+        let name_str = std::ffi::CStr::from_ptr((*sd).status.name.as_ptr() as *const i8)
+            .to_string_lossy();
+        let raw_ip = crate::session::rust_session_get_client_ip(fd);
+        let addr = format!("{}.{}.{}.{}", raw_ip & 0xff, (raw_ip >> 8) & 0xff,
+            (raw_ip >> 16) & 0xff, (raw_ip >> 24) & 0xff);
+        println!("[map] [login] name={} addr={}", name_str, addr);
+        let bl_ptr = ptr::addr_of_mut!((*sd).bl);
+        crate::game::scripting::doscript_blargs(
+            b"login\0".as_ptr() as *const i8,
+            std::ptr::null(),
+            &[bl_ptr],
+        );
+    }
 
     // Final stat calculation and state broadcast.
     tracing::info!("[map] [login] fd={} step=calcstat", fd);
