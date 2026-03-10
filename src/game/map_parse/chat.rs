@@ -14,7 +14,6 @@ use crate::game::pc::{
     FLAG_ADVICE, FLAG_SHOUT, FLAG_WHISPER,
     OPT_FLAG_STEALTH, U_FLAG_SILENCED,
     MAP_WHISPFAIL,
-    BL_PC, BL_MOB, BL_NPC,
     groups,
     map_msg,
 };
@@ -25,7 +24,8 @@ use super::packet::{
     clif_send,
     SAMEMAP, SAMEAREA,
 };
-use crate::game::block::{foreach_in_area, AreaType};
+use crate::game::block::AreaType;
+use crate::game::block_grid;
 
 // crate::session::get_fd_max() is defined in the binary (src/bin/map_server.rs) — cannot import from library.
 
@@ -217,11 +217,27 @@ pub unsafe fn clif_broadcast(msg: *const i8, m: i32) -> i32 {
     if m == -1 {
         for x in 0..65535usize {
             if map_isloaded(x) {
-                foreach_in_area(x as i32, 1, 1, AreaType::SameMap, BL_PC, |bl| clif_broadcast_sub_inner(bl, msg));
+                if let Some(grid) = block_grid::get_grid(x) {
+                    let slot = &*raw_map_ptr().add(x);
+                    let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+                    for id in ids {
+                        if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                            clif_broadcast_sub_inner(&raw mut pc.bl, msg);
+                        }
+                    }
+                }
             }
         }
     } else {
-        foreach_in_area(m, 1, 1, AreaType::SameMap, BL_PC, |bl| clif_broadcast_sub_inner(bl, msg));
+        if let Some(grid) = block_grid::get_grid(m as usize) {
+            let slot = &*raw_map_ptr().add(m as usize);
+            let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+            for id in ids {
+                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_broadcast_sub_inner(&raw mut pc.bl, msg);
+                }
+            }
+        }
     }
     0
 }
@@ -234,11 +250,27 @@ pub unsafe fn clif_gmbroadcast(msg: *const i8, m: i32) -> i32 {
     if m == -1 {
         for x in 0..65535usize {
             if map_isloaded(x) {
-                foreach_in_area(x as i32, 1, 1, AreaType::SameMap, BL_PC, |bl| clif_gmbroadcast_sub_inner(bl, msg));
+                if let Some(grid) = block_grid::get_grid(x) {
+                    let slot = &*raw_map_ptr().add(x);
+                    let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+                    for id in ids {
+                        if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                            clif_gmbroadcast_sub_inner(&raw mut pc.bl, msg);
+                        }
+                    }
+                }
             }
         }
     } else {
-        foreach_in_area(m, 1, 1, AreaType::SameMap, BL_PC, |bl| clif_gmbroadcast_sub_inner(bl, msg));
+        if let Some(grid) = block_grid::get_grid(m as usize) {
+            let slot = &*raw_map_ptr().add(m as usize);
+            let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+            for id in ids {
+                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_gmbroadcast_sub_inner(&raw mut pc.bl, msg);
+                }
+            }
+        }
     }
     0
 }
@@ -251,11 +283,27 @@ pub unsafe fn clif_broadcasttogm(msg: *const i8, m: i32) -> i32 {
     if m == -1 {
         for x in 0..65535usize {
             if map_isloaded(x) {
-                foreach_in_area(x as i32, 1, 1, AreaType::SameMap, BL_PC, |bl| clif_broadcasttogm_sub_inner(bl, msg));
+                if let Some(grid) = block_grid::get_grid(x) {
+                    let slot = &*raw_map_ptr().add(x);
+                    let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+                    for id in ids {
+                        if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                            clif_broadcasttogm_sub_inner(&raw mut pc.bl, msg);
+                        }
+                    }
+                }
             }
         }
     } else {
-        foreach_in_area(m, 1, 1, AreaType::SameMap, BL_PC, |bl| clif_broadcasttogm_sub_inner(bl, msg));
+        if let Some(grid) = block_grid::get_grid(m as usize) {
+            let slot = &*raw_map_ptr().add(m as usize);
+            let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+            for id in ids {
+                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_broadcasttogm_sub_inner(&raw mut pc.bl, msg);
+                }
+            }
+        }
     }
     0
 }
@@ -1110,12 +1158,25 @@ pub unsafe fn clif_sendscriptsay(
     let m = (*sd).bl.m as i32;
     let bx = (*sd).bl.x as i32;
     let by = (*sd).bl.y as i32;
-    if say_type == 1 {
-        foreach_in_area(m, bx, by, AreaType::SameMap, BL_NPC, |bl| clif_sendnpcyell_inner(bl, msg, sd));
-        foreach_in_area(m, bx, by, AreaType::SameMap, BL_MOB, |bl| clif_sendmobyell_inner(bl, msg, sd));
-    } else {
-        foreach_in_area(m, bx, by, AreaType::Area, BL_NPC, |bl| clif_sendnpcsay_inner(bl, msg, sd));
-        foreach_in_area(m, bx, by, AreaType::Area, BL_MOB, |bl| clif_sendmobsay_inner(bl, msg, sd));
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let slot = &*raw_map_ptr().add(m as usize);
+        let area = if say_type == 1 { AreaType::SameMap } else { AreaType::Area };
+        let ids = block_grid::ids_in_area(grid, bx, by, area, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(npc) = crate::game::map_server::map_id2npc_ref(id) {
+                if say_type == 1 {
+                    clif_sendnpcyell_inner(&raw mut npc.bl, msg, sd);
+                } else {
+                    clif_sendnpcsay_inner(&raw mut npc.bl, msg, sd);
+                }
+            } else if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
+                if say_type == 1 {
+                    clif_sendmobyell_inner(&raw mut mob.bl, msg, sd);
+                } else {
+                    clif_sendmobsay_inner(&raw mut mob.bl, msg, sd);
+                }
+            }
+        }
     }
     0
 }

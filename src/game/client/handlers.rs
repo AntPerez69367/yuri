@@ -51,7 +51,8 @@ use crate::database::item_db::{rust_itemdb_droppable as itemdb_droppable, rust_i
 use crate::database::magic_db::rust_magicdb_yname as magicdb_yname;
 use crate::session::{rust_session_exists, rust_session_set_eof};
 
-use crate::game::block::{foreach_in_area, AreaType};
+use crate::game::block::AreaType;
+use crate::game::block_grid;
 use crate::game::map_parse::visual::clif_object_look_sub_inner;
 
 /// Dispatch a Lua event with a single block_list argument.
@@ -594,7 +595,6 @@ pub unsafe fn clif_parsedropitem(sd: *mut MapSessionData) -> i32 {
 
 #[allow(dead_code)]
 const SAMEAREA: i32 = 6;
-const BL_ALL:   i32 = 0x0F;
 const LOOK_GET:  i32 = 0;
 
 // ─── Board questionnaire struct ─────────────────────────────────────────────
@@ -945,11 +945,16 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
             clif_sendmapinfo(sd);
             clif_spawn(sd);
             clif_mob_look_start(sd);
-            foreach_in_area(
-                (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
-                AreaType::SameArea, BL_ALL,
-                |bl| clif_object_look_sub_inner(bl, LOOK_GET, sd as *mut BlockList),
-            );
+            if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
+                let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).bl.m as usize);
+                let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
+                for id in ids {
+                    let bl_ptr = crate::game::map_server::map_id2bl(id);
+                    if !bl_ptr.is_null() {
+                        clif_object_look_sub_inner(bl_ptr as *mut BlockList, LOOK_GET, sd as *mut BlockList);
+                    }
+                }
+            }
             clif_mob_look_close(sd);
             crate::game::client::visual::clif_destroyold(sd);
             clif_sendchararea(sd);

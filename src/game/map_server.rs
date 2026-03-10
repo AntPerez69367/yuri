@@ -635,26 +635,6 @@ struct BoardsPost0 {
 }
 
 // ---------------------------------------------------------------------------
-// Inline helpers for WFIFO writes to char_fd
-// ---------------------------------------------------------------------------
-
-/// Write `val` as a little-endian u16 into the char_fd WFIFO at `pos`.
-#[inline]
-unsafe fn wfifow_char(pos: usize, val: u16) {
-    let p = rust_session_wdata_ptr(char_fd.load(Ordering::Relaxed), pos) as *mut u16;
-    if !p.is_null() { p.write_unaligned(val.to_le()); }
-}
-
-/// Write `count` bytes from `src` into the char_fd WFIFO starting at `pos`.
-#[inline]
-unsafe fn wfifop_copy_char(pos: usize, src: *const u8, count: usize) {
-    let dst = rust_session_wdata_ptr(char_fd.load(Ordering::Relaxed), pos);
-    if !dst.is_null() {
-        std::ptr::copy_nonoverlapping(src, dst, count);
-    }
-}
-
-// ---------------------------------------------------------------------------
 // nmail_sendmessage — sends a notification message packet to the player's fd.
 //
 // Packet layout (pre-encryption):
@@ -727,9 +707,6 @@ pub unsafe fn boards_delete(sd: *mut MapSessionData, board: i32) -> i32 {
         u16::from_be(p.read_unaligned()) as i32
     };
 
-    let cfd = char_fd.load(Ordering::Relaxed);
-    if cfd == 0 { return 0; }
-
     // Packet 0x3008 is 28 bytes:
     //   [0..1]   = 0x3008 (opcode, LE)
     //   [2..3]   = sd->fd
@@ -738,16 +715,15 @@ pub unsafe fn boards_delete(sd: *mut MapSessionData, board: i32) -> i32 {
     //   [8..9]   = board
     //   [10..11] = post
     //   [12..27] = name (16 bytes)
-    const PKT_LEN: usize = 28;
-    rust_session_wfifohead(cfd, PKT_LEN);
-    wfifow_char(0, 0x3008_u16);
-    wfifow_char(2, (*sd).fd as u16);
-    wfifow_char(4, (*sd).status.gm_level as u8 as u16);
-    wfifow_char(6, (*sd).board_candel as u16);
-    wfifow_char(8, board as u16);
-    wfifow_char(10, post as u16);
-    wfifop_copy_char(12, (*sd).status.name.as_ptr() as *const u8, 16);
-    rust_session_commit(cfd, PKT_LEN);
+    let mut pkt = vec![0u8; 28];
+    pkt[0..2].copy_from_slice(&0x3008u16.to_le_bytes());
+    pkt[2..4].copy_from_slice(&((*sd).fd as u16).to_le_bytes());
+    pkt[4..6].copy_from_slice(&((*sd).status.gm_level as u8 as u16).to_le_bytes());
+    pkt[6..8].copy_from_slice(&((*sd).board_candel as u16).to_le_bytes());
+    pkt[8..10].copy_from_slice(&(board as u16).to_le_bytes());
+    pkt[10..12].copy_from_slice(&(post as u16).to_le_bytes());
+    std::ptr::copy_nonoverlapping((*sd).status.name.as_ptr() as *const u8, pkt[12..].as_mut_ptr(), 16);
+    crate::game::map_char::send(pkt);
     0
 }
 
@@ -796,6 +772,10 @@ pub unsafe fn boards_showposts(
         flags |= BOARD_CAN_DEL;
     }
 
+    // Packet 0x3009: opcode(2) + BoardShow0 struct as raw bytes
+    let struct_size = std::mem::size_of::<BoardShow0>();
+    let mut pkt = vec![0u8; 2 + struct_size];
+    pkt[0..2].copy_from_slice(&0x3009u16.to_le_bytes());
     let mut a = BoardShow0 {
         fd:     (*sd).fd,
         board,
@@ -809,19 +789,13 @@ pub unsafe fn boards_showposts(
         a.name.as_mut_ptr(),
         16,
     );
-
-    let cfd = char_fd.load(Ordering::Relaxed);
-    if cfd == 0 { return 0; }
-
-    let pkt_size = std::mem::size_of::<BoardShow0>() + 2;
-    rust_session_wfifohead(cfd, pkt_size);
-    wfifow_char(0, 0x3009_u16);
-    wfifop_copy_char(
-        2,
+    std::ptr::copy_nonoverlapping(
         std::ptr::addr_of!(a) as *const u8,
-        std::mem::size_of::<BoardShow0>(),
+        pkt[2..].as_mut_ptr(),
+        struct_size,
     );
-    rust_session_commit(cfd, pkt_size);
+    tracing::debug!("[map] [boards] showposts: sending 0x3009 board={} flags={} pkt_size={}", board, flags, pkt.len());
+    crate::game::map_char::send(pkt);
     0
 }
 
@@ -866,18 +840,15 @@ pub unsafe fn boards_readpost(
         16,
     );
 
-    let cfd = char_fd.load(Ordering::Relaxed);
-    if cfd == 0 { return 0; }
-
-    let pkt_size = std::mem::size_of::<BoardsReadPost0>() + 2;
-    rust_session_wfifohead(cfd, pkt_size);
-    wfifow_char(0, 0x300A_u16);
-    wfifop_copy_char(
-        2,
+    let struct_size = std::mem::size_of::<BoardsReadPost0>();
+    let mut pkt = vec![0u8; 2 + struct_size];
+    pkt[0..2].copy_from_slice(&0x300Au16.to_le_bytes());
+    std::ptr::copy_nonoverlapping(
         std::ptr::addr_of!(header) as *const u8,
-        std::mem::size_of::<BoardsReadPost0>(),
+        pkt[2..].as_mut_ptr(),
+        struct_size,
     );
-    rust_session_commit(cfd, pkt_size);
+    crate::game::map_char::send(pkt);
     0
 }
 
@@ -955,18 +926,15 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
         header.nval = 1;
     }
 
-    let cfd = char_fd.load(Ordering::Relaxed);
-    if cfd == 0 { return 0; }
-
-    let pkt_size = std::mem::size_of::<BoardsPost0>() + 2;
-    rust_session_wfifohead(cfd, pkt_size);
-    wfifow_char(0, 0x300C_u16);
-    wfifop_copy_char(
-        2,
+    let struct_size = std::mem::size_of::<BoardsPost0>();
+    let mut pkt = vec![0u8; 2 + struct_size];
+    pkt[0..2].copy_from_slice(&0x300Cu16.to_le_bytes());
+    std::ptr::copy_nonoverlapping(
         std::ptr::addr_of!(header) as *const u8,
-        std::mem::size_of::<BoardsPost0>(),
+        pkt[2..].as_mut_ptr(),
+        struct_size,
     );
-    rust_session_commit(cfd, pkt_size);
+    crate::game::map_char::send(pkt);
     0
 }
 
@@ -1127,18 +1095,16 @@ pub unsafe fn nmail_sendmailcopy(
     {
         return 0;
     }
-    let cfd = char_fd.load(Ordering::Relaxed);
-    if cfd == 0 { return 0; }
 
     const PKT_LEN: usize = 4124;
-    rust_session_wfifohead(cfd, PKT_LEN);
-    wfifow_char(0, 0x300F_u16);
-    wfifow_char(2, (*sd).fd as u16);
-    wfifop_copy_char(4,   (*sd).status.name.as_ptr() as *const u8, 16);
-    wfifop_copy_char(20,  to_user as *const u8, 16);
-    wfifop_copy_char(72,  topic   as *const u8, 52);
-    wfifop_copy_char(124, message as *const u8, 4000);
-    rust_session_commit(cfd, PKT_LEN);
+    let mut pkt = vec![0u8; PKT_LEN];
+    pkt[0..2].copy_from_slice(&0x300Fu16.to_le_bytes());
+    pkt[2..4].copy_from_slice(&((*sd).fd as u16).to_le_bytes());
+    std::ptr::copy_nonoverlapping((*sd).status.name.as_ptr() as *const u8, pkt[4..].as_mut_ptr(), 16);
+    std::ptr::copy_nonoverlapping(to_user as *const u8, pkt[20..].as_mut_ptr(), 16);
+    std::ptr::copy_nonoverlapping(topic   as *const u8, pkt[72..].as_mut_ptr(), 52);
+    std::ptr::copy_nonoverlapping(message as *const u8, pkt[124..].as_mut_ptr(), 4000);
+    crate::game::map_char::send(pkt);
     0
 }
 
@@ -1316,18 +1282,16 @@ pub unsafe fn nmail_sendmail(
     {
         return 0;
     }
-    let cfd = char_fd.load(Ordering::Relaxed);
-    if cfd == 0 { return 0; }
 
     const PKT_LEN: usize = 4124;
-    rust_session_wfifohead(cfd, PKT_LEN);
-    wfifow_char(0, 0x300D_u16);
-    wfifow_char(2, (*sd).fd as u16);
-    wfifop_copy_char(4,   (*sd).status.name.as_ptr() as *const u8, 16);
-    wfifop_copy_char(20,  to_user as *const u8, 16);
-    wfifop_copy_char(72,  topic   as *const u8, 52);
-    wfifop_copy_char(124, message as *const u8, 4000);
-    rust_session_commit(cfd, PKT_LEN);
+    let mut pkt = vec![0u8; PKT_LEN];
+    pkt[0..2].copy_from_slice(&0x300Du16.to_le_bytes());
+    pkt[2..4].copy_from_slice(&((*sd).fd as u16).to_le_bytes());
+    std::ptr::copy_nonoverlapping((*sd).status.name.as_ptr() as *const u8, pkt[4..].as_mut_ptr(), 16);
+    std::ptr::copy_nonoverlapping(to_user as *const u8, pkt[20..].as_mut_ptr(), 16);
+    std::ptr::copy_nonoverlapping(topic   as *const u8, pkt[72..].as_mut_ptr(), 52);
+    std::ptr::copy_nonoverlapping(message as *const u8, pkt[124..].as_mut_ptr(), 4000);
+    crate::game::map_char::send(pkt);
     0
 }
 
@@ -2739,7 +2703,7 @@ pub unsafe fn hasCoref(sd: *mut MapSessionData) -> i32 {
 /// clients have been disconnected.
 pub unsafe fn map_do_term() {
     use crate::database::map_db::{GlobalReg, MAP_SLOTS, MAX_MAPREG};
-    use crate::database::map_db::{BlockList, WarpList};
+    use crate::database::map_db::WarpList;
 
     map_savechars(0, 0);
     map_clritem();
@@ -2768,14 +2732,7 @@ pub unsafe fn map_do_term() {
                 drop(Vec::from_raw_parts(slot.pass, cells, cells));
                 slot.pass = std::ptr::null_mut();
             }
-            if !slot.block.is_null() && bcells > 0 {
-                drop(Vec::<*mut BlockList>::from_raw_parts(slot.block, bcells, bcells));
-                slot.block = std::ptr::null_mut();
-            }
-            if !slot.block_mob.is_null() && bcells > 0 {
-                drop(Vec::<*mut BlockList>::from_raw_parts(slot.block_mob, bcells, bcells));
-                slot.block_mob = std::ptr::null_mut();
-            }
+            // block/block_mob are no longer allocated (block_grid handles spatial indexing).
             if !slot.warp.is_null() && bcells > 0 {
                 drop(Vec::<*mut WarpList>::from_raw_parts(slot.warp, bcells, bcells));
                 slot.warp = std::ptr::null_mut();
@@ -2834,9 +2791,6 @@ pub static oldMinute: AtomicI32 = AtomicI32::new(0);
 /// Timer ID returned by timer_insert for the cron-job callback.
 pub static cronjobtimer: AtomicI32 = AtomicI32::new(0);
 
-/// Current count of block-list entries being iterated. Used by the block-grid
-pub static bl_list_count: AtomicI32 = AtomicI32::new(0);
-
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
@@ -2864,19 +2818,17 @@ pub unsafe fn map_reload() -> i32 {
         // map_isloaded(i): registry pointer is non-null iff the map was loaded.
         let slot = &*crate::database::map_db::raw_map_ptr().add(i);
         if !slot.registry.is_null() {
-            crate::game::block::foreach_in_area(
-                i as i32,
-                0,
-                0,
-                crate::game::block::AreaType::SameMap,
-                crate::game::mob::BL_PC,
-                |bl| {
-                    crate::game::scripting::sl_updatepeople_impl(
-                        bl as *mut std::ffi::c_void,
-                        std::ptr::null_mut(),
-                    )
-                },
-            );
+            if let Some(grid) = crate::game::block_grid::get_grid(i) {
+                let ids = crate::game::block_grid::ids_in_area(grid, 0, 0, crate::game::block::AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+                for id in ids {
+                    if let Some(pc) = map_id2sd_pc(id) {
+                        crate::game::scripting::sl_updatepeople_impl(
+                            &raw mut pc.bl as *mut std::ffi::c_void,
+                            std::ptr::null_mut(),
+                        );
+                    }
+                }
+            }
         }
     }
 

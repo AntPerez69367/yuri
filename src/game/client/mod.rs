@@ -555,8 +555,7 @@ unsafe fn send_to_area(
     src_bl: *mut BlockList,
     send_type: i32,
 ) {
-    use crate::game::block::foreach_in_area;
-    use crate::game::mob::BL_PC as BL_PC_I32;
+    use crate::game::block_grid;
 
     if buf.is_null() || src_bl.is_null() || len <= 0 {
         return;
@@ -565,11 +564,17 @@ unsafe fn send_to_area(
     // Determine if this is a channel packet: opcode 0x0D (byte 3) and channel byte (byte 5) >= 10.
     let is_channel_pkt = len >= 6 && *buf.add(3) == 0x0D && *buf.add(5) >= 10;
 
+    let Some(grid) = block_grid::get_grid(m as usize) else { return; };
+    let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
+    let ids = block_grid::ids_in_area(grid, x, y, area, slot.xs as i32, slot.ys as i32);
+
     let mut _send_count = 0i32;
-    foreach_in_area(m, x, y, area, BL_PC_I32, |bl| {
-        let sd = bl as *mut MapSessionData;
+    for id in ids {
+        let Some(sd_ref) = crate::game::map_server::map_id2sd_pc(id) else { continue; };
+        let sd = sd_ref as *mut MapSessionData;
+        let bl = &raw mut (*sd).bl;
         if !should_send_to(sd, src_bl, send_type, buf as *const u8, len) {
-            return 0;
+            continue;
         }
 
         let fd = (*sd).fd;
@@ -624,8 +629,7 @@ unsafe fn send_to_area(
             rust_session_commit(fd, encrypt(fd) as usize);
         }
 
-        0
-    });
+    }
 }
 
 ////

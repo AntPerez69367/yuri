@@ -900,23 +900,10 @@ pub unsafe fn clif_user_list(
         return 0;
     }
 
-    let cfd = crate::game::map_server::char_fd.load(std::sync::atomic::Ordering::Relaxed);
-    if cfd == 0 {
-        return 0;
-    }
-
-    rust_session_wfifohead(cfd, 4);
-    let p = rust_session_wdata_ptr(cfd, 0);
-    if p.is_null() {
-        return 0;
-    }
-
-    // WFIFOW(char_fd, 0) = 0x300B — no SWAP16 → little-endian
-    std::ptr::copy_nonoverlapping(0x300Bu16.to_le_bytes().as_ptr(), p, 2);
-    // WFIFOW(char_fd, 2) = sd->fd — no SWAP16 → little-endian; int truncated to u16
-    std::ptr::copy_nonoverlapping((sdr.fd as u16).to_le_bytes().as_ptr(), p.add(2), 2);
-
-    rust_session_commit(cfd, 4);
+    let mut pkt = Vec::with_capacity(4);
+    pkt.extend_from_slice(&0x300Bu16.to_le_bytes());
+    pkt.extend_from_slice(&(sdr.fd as u16).to_le_bytes());
+    crate::game::map_char::send(pkt);
     0
 }
 
@@ -1457,13 +1444,13 @@ pub unsafe fn clif_sendmob_side(mob: *mut crate::game::mob::MobSpawnData) -> i32
 // ─── clif_updatestate / broadcast_update_state ────────────────────────────────
 
 use crate::game::pc::{
-    BL_PC,
     EQ_ARMOR, EQ_COAT, EQ_WEAP, EQ_SHIELD, EQ_HELM,
     EQ_FACEACC, EQ_CROWN, EQ_FACEACCTWO, EQ_MANTLE, EQ_NECKLACE, EQ_BOOTS,
     FLAG_HELM, FLAG_NECKLACE,
     OPT_FLAG_STEALTH,
 };
-use crate::game::block::{foreach_in_area, AreaType};
+use crate::game::block::AreaType;
+use crate::game::block_grid;
 
 // optFlag_ghosts = 256 (bit 8 of optFlags).
 const OPT_FLAG_GHOSTS: u64 = 256;
@@ -1870,11 +1857,15 @@ pub unsafe fn broadcast_update_state(src: *mut MapSessionData) {
     let m = (*src).bl.m as i32;
     let x = (*src).bl.x as i32;
     let y = (*src).bl.y as i32;
-    foreach_in_area(m, x, y, AreaType::Area, BL_PC, |bl| {
-        // sd=src (player being shown), src_sd=bl (viewer receiving packet)
-        write_state_packet(src, bl as *mut MapSessionData);
-        0
-    });
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(m as usize) };
+        let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                write_state_packet(src, pc as *mut MapSessionData);
+            }
+        }
+    }
 }
 
 // ─── clif_clickonplayer ───────────────────────────────────────────────────────

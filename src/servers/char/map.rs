@@ -524,7 +524,7 @@ async fn handle_read_post(state: &Arc<CharState>, map_idx: usize, pkt: &[u8]) {
         if unread.map(|(n,)| n).unwrap_or(0) <= 0 {
             let mut flag_resp = Vec::with_capacity(6);
             write_u16_le(&mut flag_resp, 0x380E);
-            write_u32_le(&mut flag_resp, fd_sl);
+            write_u16_le(&mut flag_resp, fd_sl as u16);
             write_u16_le(&mut flag_resp, 0);
             send_to_map(state, map_idx, flag_resp).await;
         }
@@ -546,27 +546,32 @@ async fn handle_user_list(state: &Arc<CharState>, map_idx: usize, pkt: &[u8]) {
     ).fetch_all(&state.db).await.unwrap_or_default();
 
     let count = rows.len() as u16;
-    let total_len = (count as u32) * 26 + 36;
+    // C layout: opcode(2)+len(4)+sfd(2)+count(2) = 10 header, entries at offset 10, 22 bytes each
+    // Entry: hunter(2)+class(2)+mark(2)+clan(2)+nation(2)+name(16)=26 but C uses 22-byte stride
+    // (last 4 bytes of name overlap next entry — matches what the client expects)
+    let total_len = (count as u32) * 22 + 36;
 
     let mut resp = Vec::with_capacity(total_len as usize);
     write_u16_le(&mut resp, 0x380A);
-    write_u32_le(&mut resp, total_len);
+    write_u32_le(&mut resp, 10); // placeholder, updated below
     write_u16_le(&mut resp, sfd);
     write_u16_le(&mut resp, count);
 
-    // Pad header to 36 bytes before user entries (header fields occupy 10 bytes)
-    while resp.len() < 36 {
-        resp.push(0);
-    }
-
     for (class, mark, clan, name, hunter, nation) in &rows {
+        let base = resp.len();
         write_u16_le(&mut resp, *hunter as u16);
         write_u16_le(&mut resp, *class as u16);
         write_u16_le(&mut resp, *mark as u16);
         write_u16_le(&mut resp, *clan as u16);
         write_u16_le(&mut resp, *nation as u16);
         write_str_padded(&mut resp, name, 16);
+        // Truncate to 22-byte stride (matching C's overlapping name behavior)
+        resp.truncate(base + 22);
     }
+
+    // Update length field at offset 2
+    let final_len = resp.len() as u32;
+    resp[2..6].copy_from_slice(&final_len.to_le_bytes());
 
     send_to_map(state, map_idx, resp).await;
 }
@@ -601,7 +606,7 @@ async fn handle_board_post(state: &Arc<CharState>, map_idx: usize, pkt: &[u8]) {
 
     let mut resp = Vec::with_capacity(6);
     write_u16_le(&mut resp, 0x380B);
-    write_u32_le(&mut resp, fd_slot);
+    write_u16_le(&mut resp, fd_slot as u16);
     write_u16_le(&mut resp, if result.is_err() { 1 } else { 0 });
     send_to_map(state, map_idx, resp).await;
 }

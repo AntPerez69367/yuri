@@ -222,8 +222,9 @@ fn map_id2sd_mob(id: u32) -> *mut MapSessionData {
         .unwrap_or(std::ptr::null_mut())
 }
 
-// Import Rust closure-based block grid traversal API.
-use crate::game::block::{foreach_in_area, foreach_in_cell, foreach_in_rect, AreaType};
+// Import safe block grid traversal API.
+use crate::game::block::AreaType;
+use crate::game::block_grid;
 use crate::game::map_parse::visual::{
     clif_mob_look_start_func_inner, clif_mob_look_close_func_inner,
     clif_object_look_sub_inner, clif_object_look_sub2_inner,
@@ -231,6 +232,21 @@ use crate::game::map_parse::visual::{
 };
 use crate::game::map_parse::movement::clif_mob_move_inner;
 use crate::game::map_parse::combat::clif_sendanimation_inner;
+
+/// Helper: broadcast animation removal to nearby PCs via block_grid.
+unsafe fn broadcast_animation_to_pcs(mob: &MobSpawnData, anim: i32) {
+    let m = mob.bl.m as usize;
+    if let Some(grid) = block_grid::get_grid(m) {
+        let slot = &*ffi_get_map_ptr(mob.bl.m);
+        let ids = block_grid::ids_in_area(grid, mob.bl.x as i32, mob.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        let t = &mob.bl as *const BlockList as *mut BlockList;
+        for id in ids {
+            if let Some(sd) = crate::game::map_server::map_id2sd_pc(id) {
+                clif_sendanimation_inner(&mut sd.bl, anim, t, -1);
+            }
+        }
+    }
+}
 
 /// Dispatch a Lua event with a single block_list argument.
 /// Wraps `crate::game::scripting::doscript_blargs` for the common 1-arg case.
@@ -547,7 +563,7 @@ pub unsafe fn mob_duratimer(mob: *mut MobSpawnData) -> i32 {
                 (*mob).da[x].duration = 0;
                 (*mob).da[x].id = 0;
                 (*mob).da[x].caster_id = 0;
-                { let t = &raw mut (*mob).bl; let anim = (*mob).da[x].animation as i32; foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC, |bl| clif_sendanimation_inner(unsafe { &mut *bl }, anim, t, -1)); }
+                broadcast_animation_to_pcs(&*mob, (*mob).da[x].animation as i32);
                 (*mob).da[x].animation = 0;
                 if !tbl.is_null() {
                     sl_doscript_2(magicdb_yname(id), c"uncast".as_ptr(), &raw mut (*mob).bl, tbl);
@@ -623,7 +639,7 @@ pub unsafe fn mob_flushmagic(mob: *mut MobSpawnData) -> i32 {
         (*mob).da[x].duration = 0;
         (*mob).da[x].id = 0;
         (*mob).da[x].caster_id = 0;
-        { let t = &raw mut (*mob).bl; let anim = (*mob).da[x].animation as i32; foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC, |bl| clif_sendanimation_inner(unsafe { &mut *bl }, anim, t, -1)); }
+        broadcast_animation_to_pcs(&*mob, (*mob).da[x].animation as i32);
         (*mob).da[x].animation = 0;
         // Note: caster_id is already 0 here; map_id2bl(0) returns NULL.
         // Porting C behavior faithfully (C bug: checks stale zeroed field).
@@ -740,18 +756,33 @@ pub unsafe fn mob_respawn(mob: *mut MobSpawnData) -> i32 {
     mob_respawn_getstats(mob);
     if !(*mob).data.is_null() {
         let d = &*(*mob).data;
-        if d.mobtype == 1 {
-            let mob_ptr = mob;
-            foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
-                |bl| clif_cmoblook_inner(bl, LOOK_SEND, mob_ptr as *mut _));
-        } else {
-            foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
-                |bl| clif_mob_look_start_func_inner(bl));
-            let mob_bl = &raw mut (*mob).bl;
-            foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
-                |bl| clif_object_look_sub_inner(bl, LOOK_SEND, mob_bl));
-            foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
-                |bl| clif_mob_look_close_func_inner(bl));
+        if let Some(grid) = block_grid::get_grid((*mob).bl.m as usize) {
+            let slot = &*ffi_get_map_ptr((*mob).bl.m);
+            let ids = block_grid::ids_in_area(grid, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+            if d.mobtype == 1 {
+                for id in ids {
+                    if let Some(sd) = crate::game::map_server::map_id2sd_pc(id) {
+                        clif_cmoblook_inner(&mut sd.bl, LOOK_SEND, mob as *mut _);
+                    }
+                }
+            } else {
+                let mob_bl = &raw mut (*mob).bl;
+                for id in &ids {
+                    if let Some(sd) = crate::game::map_server::map_id2sd_pc(*id) {
+                        clif_mob_look_start_func_inner(&mut sd.bl);
+                    }
+                }
+                for id in &ids {
+                    if let Some(sd) = crate::game::map_server::map_id2sd_pc(*id) {
+                        clif_object_look_sub_inner(&mut sd.bl, LOOK_SEND, mob_bl);
+                    }
+                }
+                for id in &ids {
+                    if let Some(sd) = crate::game::map_server::map_id2sd_pc(*id) {
+                        clif_mob_look_close_func_inner(&mut sd.bl);
+                    }
+                }
+            }
         }
     }
     sl_doscript_simple(c"on_spawn".as_ptr(), std::ptr::null(), &raw mut (*mob).bl);
@@ -778,14 +809,23 @@ pub unsafe fn mob_warp(mob: *mut MobSpawnData, m: i32, x: i32, y: i32) -> i32 {
     if map_addblock(&mut (*mob).bl) != 0 {
         tracing::warn!("Error warping mob.");
     }
-    if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
-        let mob_ptr = mob;
-        foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
-            |bl| clif_cmoblook_inner(bl, LOOK_SEND, mob_ptr as *mut _));
-    } else {
-        let mob_bl = &raw mut (*mob).bl;
-        foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
-            |bl| clif_object_look_sub2_inner(bl, LOOK_SEND, mob_bl));
+    if let Some(grid) = block_grid::get_grid((*mob).bl.m as usize) {
+        let slot = &*ffi_get_map_ptr((*mob).bl.m);
+        let ids = block_grid::ids_in_area(grid, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
+            for id in ids {
+                if let Some(sd) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_cmoblook_inner(&mut sd.bl, LOOK_SEND, mob as *mut _);
+                }
+            }
+        } else {
+            let mob_bl = &raw mut (*mob).bl;
+            for id in ids {
+                if let Some(sd) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_object_look_sub2_inner(&mut sd.bl, LOOK_SEND, mob_bl);
+                }
+            }
+        }
     }
     0
 }
@@ -815,7 +855,7 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
                 (*mob).target = 0;
                 (*mob).attacker = 0;
                 let has_users =
-                    ffi_map_is_loaded((*mob).bl.m) && (*ffi_get_map_ptr((*mob).bl.m)).user > 0;
+                    ffi_map_is_loaded((*mob).bl.m) && crate::game::block::map_user_count((*mob).bl.m as usize) > 0;
                 if has_users {
                     mob_respawn(mob);
                 } else {
@@ -829,7 +869,7 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
         return;
     }
 
-    let has_users = ffi_map_is_loaded((*mob).bl.m) && (*ffi_get_map_ptr((*mob).bl.m)).user > 0;
+    let has_users = ffi_map_is_loaded((*mob).bl.m) && crate::game::block::map_user_count((*mob).bl.m as usize) > 0;
     let subtype2 = (*mob).data.as_ref().map_or(0, |d| d.subtype);
 
     if !has_users && (*mob).onetime != 0 && subtype2 != 2 {
@@ -866,9 +906,15 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
                     return;
                 }
                 if data.r#type == 1 && (*mob).target == 0 {
-                    let mob_ptr = mob;
-                    foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
-                        |bl| rust_mob_find_target_inner(bl, mob_ptr));
+                    if let Some(grid) = block_grid::get_grid((*mob).bl.m as usize) {
+                        let slot = &*ffi_get_map_ptr((*mob).bl.m);
+                        let ids = block_grid::ids_in_area(grid, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+                        for id in ids {
+                            if let Some(sd) = crate::game::map_server::map_id2sd_pc(id) {
+                                rust_mob_find_target_inner(&mut sd.bl, mob);
+                            }
+                        }
+                    }
                 }
                 let bl = mob_resolve_target(mob);
                 let pre_x = (*mob).bl.x;
@@ -928,9 +974,15 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
                     return;
                 }
                 if data.r#type == 1 && (*mob).target == 0 {
-                    let mob_ptr = mob;
-                    foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
-                        |bl| rust_mob_find_target_inner(bl, mob_ptr));
+                    if let Some(grid) = block_grid::get_grid((*mob).bl.m as usize) {
+                        let slot = &*ffi_get_map_ptr((*mob).bl.m);
+                        let ids = block_grid::ids_in_area(grid, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+                        for id in ids {
+                            if let Some(sd) = crate::game::map_server::map_id2sd_pc(id) {
+                                rust_mob_find_target_inner(&mut sd.bl, mob);
+                            }
+                        }
+                    }
                 }
                 let bl = mob_resolve_target(mob);
                 (*mob).time_ = 0;
@@ -1231,89 +1283,100 @@ unsafe fn broadcast_move(
     y1: i32,
     nothingnew: bool,
 ) {
-    let m = (*mob).bl.m as i32;
+    let m = (*mob).bl.m as usize;
     let mut subt = [0i32; 1];
-    if !nothingnew {
-        if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
-            let mob_ptr = mob;
-            foreach_in_rect(m, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC,
-                |bl| clif_cmoblook_inner(bl, LOOK_SEND, mob_ptr as *mut _));
-        } else {
-            foreach_in_rect(m, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC,
-                |bl| clif_mob_look_start_func_inner(bl));
-            let mob_bl = &raw mut (*mob).bl;
-            foreach_in_rect(m, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC,
-                |bl| clif_object_look_sub_inner(bl, LOOK_SEND, mob_bl));
-            foreach_in_rect(m, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC,
-                |bl| clif_mob_look_close_func_inner(bl));
+    if let Some(grid) = block_grid::get_grid(m) {
+        if !nothingnew {
+            let rect_ids = grid.ids_in_rect(x0, y0, x0 + x1 - 1, y0 + y1 - 1);
+            if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
+                for id in &rect_ids {
+                    if let Some(sd) = crate::game::map_server::map_id2sd_pc(*id) {
+                        clif_cmoblook_inner(&mut sd.bl, LOOK_SEND, mob as *mut _);
+                    }
+                }
+            } else {
+                let mob_bl = &raw mut (*mob).bl;
+                for id in &rect_ids {
+                    if let Some(sd) = crate::game::map_server::map_id2sd_pc(*id) {
+                        clif_mob_look_start_func_inner(&mut sd.bl);
+                    }
+                }
+                for id in &rect_ids {
+                    if let Some(sd) = crate::game::map_server::map_id2sd_pc(*id) {
+                        clif_object_look_sub_inner(&mut sd.bl, LOOK_SEND, mob_bl);
+                    }
+                }
+                for id in &rect_ids {
+                    if let Some(sd) = crate::game::map_server::map_id2sd_pc(*id) {
+                        clif_mob_look_close_func_inner(&mut sd.bl);
+                    }
+                }
+            }
         }
-    }
-    {
-        let mob_ptr = mob;
-        let def_ptr = subt.as_mut_ptr();
-        foreach_in_cell(m, (*mob).bl.x as i32, (*mob).bl.y as i32, BL_NPC,
-            |bl| mob_trap_look_inner(bl, mob_ptr, 0, def_ptr));
-    }
-    {
-        let mob_ptr = mob;
-        foreach_in_area(m, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC,
-            |bl| clif_mob_move_inner(bl, mob_ptr));
+        // NPC trap check at mob's current cell
+        {
+            let cell_ids = grid.ids_at_tile((*mob).bl.x, (*mob).bl.y);
+            let def_ptr = subt.as_mut_ptr();
+            for id in cell_ids {
+                if let Some(npc) = crate::game::map_server::map_id2npc_ref(id) {
+                    mob_trap_look_inner(&mut npc.bl, mob, 0, def_ptr);
+                }
+            }
+        }
+        // Send mob move to nearby PCs
+        {
+            let slot = &*ffi_get_map_ptr((*mob).bl.m);
+            let ids = block_grid::ids_in_area(grid, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+            for id in ids {
+                if let Some(sd) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_mob_move_inner(&mut sd.bl, mob);
+                }
+            }
+        }
     }
 }
 
 unsafe fn check_mob_collision(moving_mob: *mut MobSpawnData, m: i32, x: i32, y: i32) {
     if (*moving_mob).canmove == 1 { return; }
     if x < 0 || y < 0 { return; }
-    let slot = ffi_get_map_ptr(m as u16);
-    if slot.is_null() { return; }
-    let bxs = (*slot).bxs as usize;
-    let bys = (*slot).bys as usize;
-    let bx = x as usize / BLOCK_SIZE;
-    let by = y as usize / BLOCK_SIZE;
-    if bx >= bxs || by >= bys { return; }
-    let pos = bx + by * bxs;
-    let mut bl = *(*slot).block_mob.add(pos);
-    while !bl.is_null() {
-        if (*bl).x as i32 == x && (*bl).y as i32 == y {
-            let m2 = bl as *mut MobSpawnData;
-            if (*m2).state != MOB_DEAD && bl != &raw mut (*moving_mob).bl {
-                (*moving_mob).canmove = 1;
-                return;
+    let self_id = (*moving_mob).bl.id;
+    if let Some(grid) = crate::game::block_grid::get_grid(m as usize) {
+        for id in grid.ids_at_tile(x as u16, y as u16) {
+            if id == self_id { continue; }
+            if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
+                if mob.bl.x as i32 == x && mob.bl.y as i32 == y && mob.state != MOB_DEAD {
+                    (*moving_mob).canmove = 1;
+                    return;
+                }
             }
         }
-        bl = (*bl).next;
     }
 }
 
 /// PC-collision check — sets `moving_mob.canmove = 1` if a physical, non-GM, non-dead player occupies `(x, y)`.
 unsafe fn check_pc_collision(moving_mob: *mut MobSpawnData, m: i32, x: i32, y: i32) {
-    use crate::game::pc::{MapSessionData, PC_DIE};
+    use crate::game::pc::PC_DIE;
     if (*moving_mob).canmove == 1 { return; }
     if x < 0 || y < 0 { return; }
     let slot = ffi_get_map_ptr(m as u16);
     if slot.is_null() { return; }
     let show_ghosts = (*slot).show_ghosts;
-    let bxs = (*slot).bxs as usize;
-    let bys = (*slot).bys as usize;
-    let bx = x as usize / BLOCK_SIZE;
-    let by = y as usize / BLOCK_SIZE;
-    if bx >= bxs || by >= bys { return; }
-    let pos = bx + by * bxs;
-    let mut bl = *(*slot).block.add(pos);
-    while !bl.is_null() {
-        if (*bl).bl_type == BL_PC as u8 && (*bl).x as i32 == x && (*bl).y as i32 == y {
-            let sd = bl as *mut MapSessionData;
-            let state   = (*sd).status.state;
-            let gm_lvl  = (*sd).status.gm_level;
-            let passable = (show_ghosts != 0 && state == PC_DIE as i8)
-                || state == -1
-                || gm_lvl >= 50;
-            if !passable {
-                (*moving_mob).canmove = 1;
-                return;
+    if let Some(grid) = crate::game::block_grid::get_grid(m as usize) {
+        for id in grid.ids_at_tile(x as u16, y as u16) {
+            if let Some(sd) = crate::game::map_server::map_id2sd_pc(id) {
+                if sd.bl.x as i32 == x && sd.bl.y as i32 == y {
+                    let state  = sd.status.state;
+                    let gm_lvl = sd.status.gm_level;
+                    let passable = (show_ghosts != 0 && state == PC_DIE as i8)
+                        || state == -1
+                        || gm_lvl >= 50;
+                    if !passable {
+                        (*moving_mob).canmove = 1;
+                        return;
+                    }
+                }
             }
         }
-        bl = (*bl).next;
     }
 }
 
@@ -1344,7 +1407,14 @@ pub unsafe fn move_mob(mob: *mut MobSpawnData) -> i32 {
 
     check_mob_collision(mob, m, dx, dy);
     check_pc_collision(mob, m, dx, dy);
-    { let mob_ptr = mob; foreach_in_cell(m, dx, dy, BL_NPC, |bl| rust_mob_move_inner(bl, mob_ptr)); }
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
+        for id in cell_ids {
+            if let Some(npc) = crate::game::map_server::map_id2npc_ref(id) {
+                rust_mob_move_inner(&mut npc.bl, mob);
+            }
+        }
+    }
 
     if clif_object_canmove(m, dx, dy, (*mob).side) != 0 {
         (*mob).canmove = 0;
@@ -1466,7 +1536,14 @@ pub unsafe fn moveghost_mob(mob: *mut MobSpawnData) -> i32 {
 
     check_mob_collision(mob, m, dx, dy);
     check_pc_collision(mob, m, dx, dy);
-    { let mob_ptr = mob; foreach_in_cell(m, dx, dy, BL_NPC, |bl| rust_mob_move_inner(bl, mob_ptr)); }
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
+        for id in cell_ids {
+            if let Some(npc) = crate::game::map_server::map_id2npc_ref(id) {
+                rust_mob_move_inner(&mut npc.bl, mob);
+            }
+        }
+    }
 
     // Collision checks only apply when mob has no target
     if (*mob).target == 0 {
@@ -1525,7 +1602,15 @@ pub unsafe fn mob_move2(mob: *mut MobSpawnData, x: i32, y: i32, side: i32) -> i3
         (*mob).bx = (*mob).bl.x;
         (*mob).by_ = (*mob).bl.y;
         map_moveblock(&mut (*mob).bl, x, y);
-        { let mob_ptr = mob; foreach_in_area(m, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC, |bl| clif_mob_move_inner(bl, mob_ptr)); }
+        if let Some(grid) = block_grid::get_grid(m as usize) {
+            let slot = &*ffi_get_map_ptr((*mob).bl.m);
+            let ids = block_grid::ids_in_area(grid, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+            for id in ids {
+                if let Some(sd) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_mob_move_inner(&mut sd.bl, mob);
+                }
+            }
+        }
         (*mob).canmove = 1;
     } else {
         (*mob).canmove = 0;
@@ -1681,12 +1766,16 @@ pub unsafe fn rust_mob_dropitem(
     (*fl).data.protected = protected_ as u32;
     (*fl).data.owner = owner as u32;
 
-    {
+    if let Some(grid) = block_grid::get_grid(m as usize) {
         let def_ptr = &raw mut def;
         let fl_ptr = fl.as_mut() as *mut FloorItemData;
         let sd_ptr = sd;
-        foreach_in_cell(m, x, y, BL_ITEM,
-            |bl| rust_mob_addtocurrent_inner(bl, def_ptr, id as i32, fl_ptr, sd_ptr));
+        let cell_ids = grid.ids_at_tile(x as u16, y as u16);
+        for cid in cell_ids {
+            if let Some(fl_ref) = crate::game::map_server::map_id2fl_ref(cid) {
+                rust_mob_addtocurrent_inner(&mut fl_ref.bl, def_ptr, id as i32, fl_ptr, sd_ptr);
+            }
+        }
     }
 
     (*fl).timer = libc::time(std::ptr::null_mut()) as u32;
@@ -1719,7 +1808,16 @@ pub unsafe fn rust_mob_dropitem(
     if def == 0 {
         let fl_raw = Box::into_raw(fl);
         map_additem(&raw mut (*fl_raw).bl);
-        { let fl_bl = &raw mut (*fl_raw).bl; foreach_in_area(m, x, y, AreaType::Area, BL_PC, |bl| clif_object_look_sub2_inner(bl, LOOK_SEND, fl_bl)); }
+        if let Some(grid) = block_grid::get_grid(m as usize) {
+            let slot = &*ffi_get_map_ptr(m as u16);
+            let fl_bl = &raw mut (*fl_raw).bl;
+            let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
+            for id in ids {
+                if let Some(sd) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_object_look_sub2_inner(&mut sd.bl, LOOK_SEND, fl_bl);
+                }
+            }
+        }
     } else {
         drop(fl);
     }
@@ -2027,7 +2125,7 @@ pub unsafe fn mobspawn_onetime(
         map_addblock(&mut (*db).bl);
         crate::game::map_server::map_addiddb_mob((*db).bl.id, mob_box);
 
-        let has_users = ffi_map_is_loaded((*db).bl.m) && (*ffi_get_map_ptr((*db).bl.m)).user > 0;
+        let has_users = ffi_map_is_loaded((*db).bl.m) && crate::game::block::map_user_count((*db).bl.m as usize) > 0;
         if has_users {
             mob_respawn(db);
         } else {
@@ -2177,9 +2275,20 @@ pub unsafe fn sl_mob_checkmove(mob: *mut MobSpawnData) -> i32 {
     dy = dy.max(0).min((*slot).ys as i32 - 1);
     if warp_at(slot, dx, dy) { return 0; }
     (*mob).canmove = 0;
-    { let mob_ptr = mob; foreach_in_cell(m, dx, dy, BL_MOB, |bl| rust_mob_move_inner(bl, mob_ptr)); }
-    { let mob_ptr = mob; foreach_in_cell(m, dx, dy, BL_PC, |bl| rust_mob_move_inner(bl, mob_ptr)); }
-    { let mob_ptr = mob; foreach_in_cell(m, dx, dy, BL_NPC, |bl| rust_mob_move_inner(bl, mob_ptr)); }
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
+        for id in cell_ids {
+            if let Some(ent) = crate::game::map_server::map_id2entity(id) {
+                let bl_ptr = match ent {
+                    crate::game::map_server::GameEntity::Mob(mob_ref) => &mut mob_ref.bl as *mut BlockList,
+                    crate::game::map_server::GameEntity::Player(sd) => &mut sd.bl as *mut BlockList,
+                    crate::game::map_server::GameEntity::Npc(npc) => &mut npc.bl as *mut BlockList,
+                    _ => continue,
+                };
+                rust_mob_move_inner(bl_ptr, mob);
+            }
+        }
+    }
     if clif_object_canmove(m, dx, dy, direction) != 0 { return 0; }
     if clif_object_canmove_from(m, (*mob).bl.x as i32, (*mob).bl.y as i32, direction) != 0 { return 0; }
     if map_canmove(m, dx, dy) == 1 || (*mob).canmove == 1 { return 0; }
@@ -2205,7 +2314,7 @@ pub unsafe fn sl_mob_setduration(
         if mid == id && time <= 0 && (*mob).da[x].caster_id == caster_id && alreadycast == 1 {
             let saved_caster_id = (*mob).da[x].caster_id;
             (*mob).da[x].duration = 0; (*mob).da[x].id = 0; (*mob).da[x].caster_id = 0;
-            { let t = &raw mut (*mob).bl; let anim = (*mob).da[x].animation as i32; foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC, |bl| clif_sendanimation_inner(unsafe { &mut *bl }, anim, t, -1)); }
+            broadcast_animation_to_pcs(&*mob, (*mob).da[x].animation as i32);
             (*mob).da[x].animation = 0;
             let bl = if saved_caster_id != (*mob).bl.id { map_id2bl(saved_caster_id) } else { std::ptr::null_mut() };
             if !bl.is_null() { sl_doscript_2(magicdb_yname(mid), c"uncast".as_ptr(), &raw mut (*mob).bl, bl); }
@@ -2235,7 +2344,7 @@ pub unsafe fn sl_mob_flushduration(mob: *mut MobSpawnData, dis: i32, minid: i32,
         let flush = if minid <= 0 { true } else if maxid <= 0 { id == minid } else { id >= minid && id <= maxid };
         if flush {
             (*mob).da[x].duration = 0;
-            { let t = &raw mut (*mob).bl; let anim = (*mob).da[x].animation as i32; foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC, |bl| clif_sendanimation_inner(unsafe { &mut *bl }, anim, t, -1)); }
+            broadcast_animation_to_pcs(&*mob, (*mob).da[x].animation as i32);
             (*mob).da[x].animation = 0; (*mob).da[x].id = 0;
             let bl = map_id2bl((*mob).da[x].caster_id);
             (*mob).da[x].caster_id = 0;
@@ -2256,7 +2365,7 @@ pub unsafe fn sl_mob_flushdurationnouncast(mob: *mut MobSpawnData, dis: i32, min
         let flush = if minid <= 0 { true } else if maxid <= 0 { id == minid } else { id >= minid && id <= maxid };
         if flush {
             (*mob).da[x].duration = 0; (*mob).da[x].caster_id = 0;
-            { let t = &raw mut (*mob).bl; let anim = (*mob).da[x].animation as i32; foreach_in_area((*mob).bl.m as i32, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, BL_PC, |bl| clif_sendanimation_inner(unsafe { &mut *bl }, anim, t, -1)); }
+            broadcast_animation_to_pcs(&*mob, (*mob).da[x].animation as i32);
             (*mob).da[x].animation = 0; (*mob).da[x].id = 0;
         }
     }

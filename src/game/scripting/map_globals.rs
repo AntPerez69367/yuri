@@ -5,7 +5,8 @@ use crate::database::map_db::{BlockList, WarpList, BLOCK_SIZE, MAX_MAPREG};
 use crate::game::block::map_delblock;
 use crate::database::map_db::get_map_ptr;
 use crate::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof};
-use crate::game::block::{map_is_loaded, foreach_in_area, foreach_in_cell, AreaType};
+use crate::game::block::{map_is_loaded, AreaType};
+use crate::game::block_grid;
 use crate::game::client::visual::clif_sendweather;
 use crate::game::map_server::{map_deliddb, map_id2sd_pc, map_readglobalreg, map_setglobalreg};
 use crate::game::pc::MapSessionData;
@@ -375,9 +376,15 @@ pub unsafe fn sl_g_sendanimation(bl_ptr: *mut std::ffi::c_void, anim: i32, times
     let m  = (*bl).m as i32;
     let x  = (*bl).x as i32;
     let y  = (*bl).y as i32;
-    foreach_in_area(m, x, y, AreaType::Area, BL_PC_TYPE, |target_bl| {
-        clif_sendanimation_inner(unsafe { &mut *target_bl }, anim, bl, times)
-    });
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
+        let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(pc) = map_id2sd_pc(id) {
+                clif_sendanimation_inner(&mut pc.bl, anim, bl, times);
+            }
+        }
+    }
 }
 
 /// Broadcast an animation at position (x, y) to all PCs in AREA around bl.
@@ -394,9 +401,15 @@ pub unsafe fn sl_g_sendanimxy(
     let m  = (*bl).m as i32;
     let bx = (*bl).x as i32;
     let by = (*bl).y as i32;
-    foreach_in_area(m, bx, by, AreaType::Area, BL_PC_TYPE, |target_bl| {
-        clif_sendanimation_xy_inner(unsafe { &mut *target_bl }, anim, times, x, y)
-    });
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
+        let ids = block_grid::ids_in_area(grid, bx, by, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(pc) = map_id2sd_pc(id) {
+                clif_sendanimation_xy_inner(&mut pc.bl, anim, times, x, y);
+            }
+        }
+    }
 }
 
 /// Broadcast a repeating animation to all PCs in AREA around bl.
@@ -411,9 +424,15 @@ pub unsafe fn sl_g_repeatanimation(bl_ptr: *mut std::ffi::c_void, anim: i32, dur
     // Integer division: sub-second durations (1-999 ms) truncate to wire value 0,
     // same as the C original. Callers should pass multiples of 1000.
     let wire_dur = if duration > 0 { duration / 1000 } else { duration };
-    foreach_in_area(m, x, y, AreaType::Area, BL_PC_TYPE, |target_bl| {
-        clif_sendanimation_inner(unsafe { &mut *target_bl }, anim, bl, wire_dur)
-    });
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
+        let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(pc) = map_id2sd_pc(id) {
+                clif_sendanimation_inner(&mut pc.bl, anim, bl, wire_dur);
+            }
+        }
+    }
 }
 
 /// Send a self-targeted animation from `bl` to the single player at `target_id`.
@@ -432,9 +451,14 @@ pub unsafe fn sl_g_selfanimation(
     let m  = sd.bl.m as i32;
     let x  = sd.bl.x as i32;
     let y  = sd.bl.y as i32;
-    foreach_in_cell(m, x, y, BL_PC_TYPE, |target_bl| {
-        clif_sendanimation_inner(unsafe { &mut *target_bl }, anim, bl, times)
-    });
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let cell_ids = grid.ids_at_tile(x as u16, y as u16);
+        for id in cell_ids {
+            if let Some(pc) = map_id2sd_pc(id) {
+                clif_sendanimation_inner(&mut pc.bl, anim, bl, times);
+            }
+        }
+    }
 }
 
 /// Send a self-targeted XY animation to the single player at `target_id`.
@@ -453,9 +477,14 @@ pub unsafe fn sl_g_selfanimationxy(
     let m  = sd.bl.m as i32;
     let sx = sd.bl.x as i32;
     let sy = sd.bl.y as i32;
-    foreach_in_cell(m, sx, sy, BL_PC_TYPE, |target_bl| {
-        clif_sendanimation_xy_inner(unsafe { &mut *target_bl }, anim, times, x, y)
-    });
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let cell_ids = grid.ids_at_tile(sx as u16, sy as u16);
+        for id in cell_ids {
+            if let Some(pc) = map_id2sd_pc(id) {
+                clif_sendanimation_xy_inner(&mut pc.bl, anim, times, x, y);
+            }
+        }
+    }
 }
 
 /// Send a talk/speech packet from `bl` to all PCs in AREA.
@@ -466,9 +495,15 @@ pub unsafe fn sl_g_talk(bl_ptr: *mut std::ffi::c_void, talk_type: i32, msg: *con
     let m  = (*bl).m as i32;
     let x  = (*bl).x as i32;
     let y  = (*bl).y as i32;
-    foreach_in_area(m, x, y, AreaType::Area, BL_PC_TYPE, |target_bl| {
-        clif_speak_inner(target_bl, msg, bl, talk_type)
-    });
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
+        let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(pc) = map_id2sd_pc(id) {
+                clif_speak_inner(&raw mut pc.bl, msg, bl, talk_type);
+            }
+        }
+    }
 }
 
 /// Send metadata to all online players.
@@ -772,49 +807,30 @@ pub unsafe fn sl_g_setmap(
         let mut new_warp: Vec<*mut WarpList> = vec![std::ptr::null_mut(); new_block_count];
         slot.warp = new_warp.as_mut_ptr();
         std::mem::forget(new_warp);
-
-        // Reallocate block/block_mob: zero out extra slots if shrinking,
-        // then resize (realloc semantics: preserve existing pointers, zero new).
-        // Since map_foreachinarea walks the chains, any freed pointers must
-        // already have been removed by map_delblock callers — we only resize
-        // the pointer array itself.
-        if !slot.block.is_null() && old_block_count > 0 {
-            let mut v = Vec::<*mut BlockList>::from_raw_parts(
-                slot.block, old_block_count, old_block_count,
-            );
-            v.resize(new_block_count, std::ptr::null_mut());
-            slot.block = v.as_mut_ptr();
-            std::mem::forget(v);
-        }
-        if !slot.block_mob.is_null() && old_block_count > 0 {
-            let mut v = Vec::<*mut BlockList>::from_raw_parts(
-                slot.block_mob, old_block_count, old_block_count,
-            );
-            v.resize(new_block_count, std::ptr::null_mut());
-            slot.block_mob = v.as_mut_ptr();
-            std::mem::forget(v);
-        }
     } else {
-        // Not previously loaded — allocate fresh zeroed block/block_mob/warp/registry.
+        // Not previously loaded -- allocate fresh zeroed warp/registry.
         let mut warp_v: Vec<*mut WarpList>   = vec![std::ptr::null_mut(); new_block_count];
-        let mut bl_v:   Vec<*mut BlockList>  = vec![std::ptr::null_mut(); new_block_count];
-        let mut blm_v:  Vec<*mut BlockList>  = vec![std::ptr::null_mut(); new_block_count];
         slot.warp      = warp_v.as_mut_ptr();
-        slot.block     = bl_v.as_mut_ptr();
-        slot.block_mob = blm_v.as_mut_ptr();
         std::mem::forget(warp_v);
-        std::mem::forget(bl_v);
-        std::mem::forget(blm_v);
 
         let reg_layout = std::alloc::Layout::array::<GlobalReg>(MAX_MAPREG).unwrap();
         slot.registry = std::alloc::alloc_zeroed(reg_layout) as *mut GlobalReg;
     }
 
+    // ── Recreate block grid for the (possibly resized) map ────────────────
+    block_grid::create_grid(m as usize, slot.xs, slot.ys);
+
     // ── Registry + client update ────────────────────────────────────────────
     rust_map_loadregistry(m);
-    foreach_in_area(m, 0, 0, AreaType::SameMap, BL_PC_TYPE, |bl| {
-        crate::game::scripting::sl_updatepeople(bl as *mut std::ffi::c_void, std::ptr::null_mut())
-    });
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
+        let ids = block_grid::ids_in_area(grid, 0, 0, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(pc) = map_id2sd_pc(id) {
+                crate::game::scripting::sl_updatepeople(&raw mut pc.bl as *mut std::ffi::c_void, std::ptr::null_mut());
+            }
+        }
+    }
 
     0
 }

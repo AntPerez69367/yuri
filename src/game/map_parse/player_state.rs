@@ -76,7 +76,8 @@ use crate::game::map_parse::groups::{clif_grouphealth_update, clif_leavegroup};
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::network::crypt::rust_crypt_set_packet_indexes;
 
-use crate::game::block::{foreach_in_area, AreaType};
+use crate::game::block::AreaType;
+use crate::game::block_grid;
 use crate::game::map_parse::visual::{
     clif_object_look_sub_inner, clif_charlook_inner, clif_cnpclook_inner, clif_cmoblook_inner,
 };
@@ -916,12 +917,19 @@ pub unsafe fn clif_getchararea(sd: *mut MapSessionData) -> i32 {
     let m = (*sd).bl.m as i32;
     let x = (*sd).bl.x as i32;
     let y = (*sd).bl.y as i32;
-    foreach_in_area(m, x, y, AreaType::SameArea, BL_PC,
-        |bl| clif_charlook_inner(bl, LOOK_GET, sd));
-    foreach_in_area(m, x, y, AreaType::SameArea, BL_NPC,
-        |bl| clif_cnpclook_inner(bl, LOOK_GET, sd as *mut BlockList));
-    foreach_in_area(m, x, y, AreaType::SameArea, BL_MOB,
-        |bl| clif_cmoblook_inner(bl, LOOK_GET, sd as *mut BlockList));
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
+        let ids = block_grid::ids_in_area(grid, x, y, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                clif_charlook_inner(&raw mut pc.bl, LOOK_GET, sd);
+            } else if let Some(npc) = crate::game::map_server::map_id2npc_ref(id) {
+                clif_cnpclook_inner(&raw mut npc.bl, LOOK_GET, sd as *mut BlockList);
+            } else if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
+                clif_cmoblook_inner(&raw mut mob.bl, LOOK_GET, sd as *mut BlockList);
+            }
+        }
+    }
     0
 }
 
@@ -938,11 +946,16 @@ pub unsafe fn clif_refresh(sd: *mut MapSessionData) -> i32 {
     clif_sendmapinfo(sd);
     clif_sendxy(sd);
     clif_mob_look_start(sd);
-    foreach_in_area(
-        (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
-        AreaType::SameArea, BL_ALL,
-        |bl| clif_object_look_sub_inner(bl, LOOK_GET, sd as *mut BlockList),
-    );
+    if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).bl.m as usize);
+        let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            let bl_ptr = crate::game::map_server::map_id2bl(id);
+            if !bl_ptr.is_null() {
+                clif_object_look_sub_inner(bl_ptr as *mut BlockList, LOOK_GET, sd as *mut BlockList);
+            }
+        }
+    }
     clif_mob_look_close(sd);
     clif_destroyold(sd);
     clif_sendchararea(sd);

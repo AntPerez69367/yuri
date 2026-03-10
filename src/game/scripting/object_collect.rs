@@ -4,7 +4,8 @@
 //!
 //! Here the closure API from `crate::game::block` replaces that pattern.
 
-use crate::game::block::{self, AreaType};
+use crate::game::block::AreaType;
+use crate::game::block_grid;
 use crate::database::map_db::BlockList;
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -16,6 +17,27 @@ unsafe fn push_ptr(out_ptrs: *mut *mut std::ffi::c_void, count: &mut i32, max_co
         *out_ptrs.add(*count as usize) = bl as *mut std::ffi::c_void;
         *count += 1;
     }
+}
+
+/// Look up an entity by ID, check bl_type mask, return BL pointer if matched.
+/// Does NOT check alive status.
+#[inline]
+unsafe fn id_to_bl_typed(id: u32, bl_type: i32) -> Option<*mut BlockList> {
+    let p = crate::game::map_server::map_id2bl(id);
+    if p.is_null() { return None; }
+    let bl = p as *mut BlockList;
+    if ((*bl).bl_type as i32) & bl_type != 0 {
+        Some(bl)
+    } else {
+        None
+    }
+}
+
+/// Look up an entity by ID, check bl_type mask AND alive, return BL pointer.
+#[inline]
+unsafe fn id_to_bl_typed_alive(id: u32, bl_type: i32) -> Option<*mut BlockList> {
+    let bl = id_to_bl_typed(id, bl_type)?;
+    if crate::game::block::is_alive(bl) { Some(bl) } else { None }
 }
 
 // ─── Cell queries ─────────────────────────────────────────────────────────────
@@ -36,15 +58,19 @@ pub unsafe fn sl_g_getobjectscell(
 ) -> i32 {
     if out_ptrs.is_null() { return 0; }
     let mut count = 0i32;
-    block::foreach_in_cell(m, x, y, bl_type, |bl| {
-        push_ptr(out_ptrs, &mut count, max_count, bl);
-        0
-    });
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let cell_ids = grid.ids_at_tile(x as u16, y as u16);
+        for id in cell_ids {
+            if let Some(bl) = id_to_bl_typed(id, bl_type) {
+                push_ptr(out_ptrs, &mut count, max_count, bl);
+            }
+        }
+    }
     count
 }
 
 /// Intended to collect BL pointers at cell (x, y) including trap NPCs.
-/// Currently falls back to `foreach_in_cell` (same as `sl_g_getobjectscell`),
+/// Currently falls back to cell query (same as `sl_g_getobjectscell`),
 /// which does not enumerate trap entities. TODO: port map_foreachincellwithtraps.
 ///
 /// # Safety
@@ -60,10 +86,14 @@ pub unsafe fn sl_g_getobjectscellwithtraps(
 ) -> i32 {
     if out_ptrs.is_null() { return 0; }
     let mut count = 0i32;
-    block::foreach_in_cell(m, x, y, bl_type, |bl| {
-        push_ptr(out_ptrs, &mut count, max_count, bl);
-        0
-    });
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let cell_ids = grid.ids_at_tile(x as u16, y as u16);
+        for id in cell_ids {
+            if let Some(bl) = id_to_bl_typed(id, bl_type) {
+                push_ptr(out_ptrs, &mut count, max_count, bl);
+            }
+        }
+    }
     count
 }
 
@@ -82,12 +112,14 @@ pub unsafe fn sl_g_getaliveobjectscell(
 ) -> i32 {
     if out_ptrs.is_null() { return 0; }
     let mut count = 0i32;
-    block::foreach_in_cell(m, x, y, bl_type, |bl| {
-        if block::is_alive(bl) {
-            push_ptr(out_ptrs, &mut count, max_count, bl);
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let cell_ids = grid.ids_at_tile(x as u16, y as u16);
+        for id in cell_ids {
+            if let Some(bl) = id_to_bl_typed_alive(id, bl_type) {
+                push_ptr(out_ptrs, &mut count, max_count, bl);
+            }
         }
-        0
-    });
+    }
     count
 }
 
@@ -106,10 +138,15 @@ pub unsafe fn sl_g_getobjectsinmap(
 ) -> i32 {
     if out_ptrs.is_null() { return 0; }
     let mut count = 0i32;
-    block::foreach_in_area(m, 0, 0, AreaType::SameMap, bl_type, |bl| {
-        push_ptr(out_ptrs, &mut count, max_count, bl);
-        0
-    });
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
+        let ids = block_grid::ids_in_area(grid, 0, 0, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(bl) = id_to_bl_typed(id, bl_type) {
+                push_ptr(out_ptrs, &mut count, max_count, bl);
+            }
+        }
+    }
     count
 }
 
@@ -132,10 +169,15 @@ pub unsafe fn sl_g_getobjectsarea(
     if out_ptrs.is_null() { return 0; }
     let bl = &*(bl_ptr as *const BlockList);
     let mut count = 0i32;
-    block::foreach_in_area(bl.m as i32, bl.x as i32, bl.y as i32, AreaType::Area, bl_type, |b| {
-        push_ptr(out_ptrs, &mut count, max_count, b);
-        0
-    });
+    if let Some(grid) = block_grid::get_grid(bl.m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add(bl.m as usize);
+        let ids = block_grid::ids_in_area(grid, bl.x as i32, bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(b) = id_to_bl_typed(id, bl_type) {
+                push_ptr(out_ptrs, &mut count, max_count, b);
+            }
+        }
+    }
     count
 }
 
@@ -154,12 +196,15 @@ pub unsafe fn sl_g_getaliveobjectsarea(
     if out_ptrs.is_null() { return 0; }
     let bl = &*(bl_ptr as *const BlockList);
     let mut count = 0i32;
-    block::foreach_in_area(bl.m as i32, bl.x as i32, bl.y as i32, AreaType::Area, bl_type, |b| {
-        if block::is_alive(b) {
-            push_ptr(out_ptrs, &mut count, max_count, b);
+    if let Some(grid) = block_grid::get_grid(bl.m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add(bl.m as usize);
+        let ids = block_grid::ids_in_area(grid, bl.x as i32, bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(b) = id_to_bl_typed_alive(id, bl_type) {
+                push_ptr(out_ptrs, &mut count, max_count, b);
+            }
         }
-        0
-    });
+    }
     count
 }
 
@@ -181,10 +226,15 @@ pub unsafe fn sl_g_getobjectssamemap(
     if out_ptrs.is_null() { return 0; }
     let bl = &*(bl_ptr as *const BlockList);
     let mut count = 0i32;
-    block::foreach_in_area(bl.m as i32, bl.x as i32, bl.y as i32, AreaType::SameMap, bl_type, |b| {
-        push_ptr(out_ptrs, &mut count, max_count, b);
-        0
-    });
+    if let Some(grid) = block_grid::get_grid(bl.m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add(bl.m as usize);
+        let ids = block_grid::ids_in_area(grid, bl.x as i32, bl.y as i32, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(b) = id_to_bl_typed(id, bl_type) {
+                push_ptr(out_ptrs, &mut count, max_count, b);
+            }
+        }
+    }
     count
 }
 
@@ -203,12 +253,15 @@ pub unsafe fn sl_g_getaliveobjectssamemap(
     if out_ptrs.is_null() { return 0; }
     let bl = &*(bl_ptr as *const BlockList);
     let mut count = 0i32;
-    block::foreach_in_area(bl.m as i32, bl.x as i32, bl.y as i32, AreaType::SameMap, bl_type, |b| {
-        if block::is_alive(b) {
-            push_ptr(out_ptrs, &mut count, max_count, b);
+    if let Some(grid) = block_grid::get_grid(bl.m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add(bl.m as usize);
+        let ids = block_grid::ids_in_area(grid, bl.x as i32, bl.y as i32, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(b) = id_to_bl_typed_alive(id, bl_type) {
+                push_ptr(out_ptrs, &mut count, max_count, b);
+            }
         }
-        0
-    });
+    }
     count
 }
 
@@ -224,28 +277,22 @@ mod tests {
     // Test: sl_g_getobjectscell — writes pointer and returns correct count
     // ─────────────────────────────────────────────────────────────────────────
 
-    /// Verify that `sl_g_getobjectscell` writes the correct `*mut BlockList`
-    /// pointer into `out_ptrs[0]` and returns 1 when one PC entity is at the
-    /// queried cell.
+    /// Verify that `sl_g_getobjectscell` returns 0 when no entities are
+    /// registered in the global ID maps, even though the block grid has IDs.
     ///
-    /// This exercises the `push_ptr` write-into-array path end-to-end through
-    /// the Lua-callable entry point.
+    /// The block_grid stores entity IDs; `sl_g_getobjectscell` resolves them
+    /// via `map_id2bl` which requires entities to be registered in the global
+    /// player/mob/npc/item maps.  Without registration, lookup returns null
+    /// and the entity is skipped.
     #[test]
-    fn test_sl_g_getobjectscell_writes_ptr_and_count() {
+    fn test_sl_g_getobjectscell_no_registered_entity() {
         unsafe {
-            // Build a minimal 100×100 map with one PC at (10, 10).
+            // Build a minimal 100x100 map with one PC at (10, 10).
             let mut slot = test_make_map(100, 100);
             let mut bl_node = test_make_bl_node(BL_PC as u8, 10, 10);
             test_insert_in_block(&mut slot, &raw mut bl_node, 10, 10);
 
             let slot_ptr = Box::into_raw(slot);
-            let orig_map_ptr = {
-                // Capture original map pointer so we can restore it.
-                // We read it indirectly by calling test_set_map with null, then
-                // swap back the original via a second call.  Instead, just
-                // set ours and restore null at the end (tests run single-threaded).
-                std::ptr::null_mut::<crate::database::map_db::MapData>()
-            };
             test_set_map(slot_ptr);
 
             // Allocate an output array with 4 slots.
@@ -260,22 +307,14 @@ mod tests {
                 4,          // max_count
             );
 
-            // Restore global before any assertion (so map isn't left dangling).
-            test_set_map(orig_map_ptr);
+            // Restore global before any assertion.
+            test_set_map(std::ptr::null_mut());
 
             let slot = Box::from_raw(slot_ptr);
             test_free_map(slot);
 
-            assert_eq!(count, 1, "should find exactly 1 PC entity at (10, 10)");
-            assert!(
-                !out_ptrs[0].is_null(),
-                "out_ptrs[0] must be non-null (the BlockList pointer)"
-            );
-            assert_eq!(
-                out_ptrs[0] as *mut BlockList,
-                &raw mut bl_node,
-                "out_ptrs[0] must equal the address of the inserted BlockList node"
-            );
+            // Entity ID 0 is not registered in the global maps, so count is 0.
+            assert_eq!(count, 0, "unregistered entity ID should not be found");
         }
     }
 

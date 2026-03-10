@@ -37,7 +37,7 @@ const OPT_FLAG_STEALTH: u64 = 32;
 
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::map_parse::player_state::clif_sendstatus;
-use crate::game::block::map_firstincell;
+use crate::game::block_grid;
 use crate::game::pc::{
     rust_pc_additem as pc_additem, rust_pc_additemnolog as pc_additemnolog,
     rust_pc_delitem as pc_delitem, rust_pc_isinvenspace as pc_isinvenspace,
@@ -794,11 +794,12 @@ pub unsafe fn clif_handgold(sd: *mut MapSessionData) -> i32 {
     // Compute adjacent cell based on facing direction
     let (x, y) = side_cell(&*sd);
 
-    let bl = map_firstincell((*sd).bl.m as i32, x, y, BL_ALL);
+    let bl = block_grid::first_in_cell((*sd).bl.m as usize, x as u16, y as u16, BL_ALL)
+        .and_then(|id| { let p = crate::game::map_server::map_id2bl(id); if p.is_null() { None } else { Some(p as *mut BlockList) } });
 
     (*sd).exchange.gold = gold;
 
-    if !bl.is_null() {
+    if let Some(bl) = bl {
         if (*bl).bl_type as i32 == BL_PC {
             let tsd = map_id2sd_local((*bl).id);
             if !tsd.is_null() && (*tsd).status.setting_flags as u32 & FLAG_EXCHANGE != 0 {
@@ -831,9 +832,11 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
 
     (*sd).invslot = slot as u8;
 
-    let bl = map_firstincell((*sd).bl.m as i32, x, y, BL_ALL);
-
-    if bl.is_null() { return 0; }
+    let bl = match block_grid::first_in_cell((*sd).bl.m as usize, x as u16, y as u16, BL_ALL)
+        .and_then(|id| { let p = crate::game::map_server::map_id2bl(id); if p.is_null() { None } else { Some(p as *mut BlockList) } }) {
+        Some(p) => p,
+        None => return 0,
+    };
 
     if (*bl).bl_type as i32 == BL_PC {
         let tsd = map_id2sd_local((*bl).id);

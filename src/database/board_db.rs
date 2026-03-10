@@ -221,12 +221,6 @@ pub fn rust_boarddb_searchexist(id: i32) -> *mut BoardData { ffi_catch!(null_mut
 
 pub unsafe fn rust_boarddb_id(s: *const i8) -> u32 { ffi_catch!(0, unsafe { board_id(s) }) }
 
-pub fn rust_boarddb_name(id: i32) -> *mut i8 {
-    ffi_catch!(null_mut(), {
-        let p = search(id);
-        if p.is_null() { null_mut() } else { unsafe { (*p).name.as_mut_ptr() } }
-    })
-}
 pub fn rust_boarddb_yname(id: i32) -> *mut i8 {
     ffi_catch!(null_mut(), {
         let p = search(id);
@@ -252,13 +246,30 @@ pub fn rust_boarddb_script(id: i32) -> i32 {
     ffi_catch!(-1, { let p = search(id); if p.is_null() { -1 } else { unsafe { (*p).script as i32 } } })
 }
 
+/// Read a null-terminated string from a fixed-size `[i8; N]` array.
+fn fixed_to_string(arr: &[i8]) -> String {
+    let bytes = unsafe { std::slice::from_raw_parts(arr.as_ptr() as *const u8, arr.len()) };
+    let nul = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..nul]).into_owned()
+}
+
+/// Safe accessor: board display name by ID.
+pub fn board_name(id: i32) -> String {
+    let map = board_db().lock().unwrap();
+    match map.get(&id) {
+        Some(b) => fixed_to_string(&b.name),
+        None => String::from("??"),
+    }
+}
+
+/// Safe accessor: bn (board-name category) display name by ID.
+pub fn bn_name(id: i32) -> String {
+    let mut map = bn_db().lock().unwrap();
+    let b = map.entry(id).or_insert_with(|| make_default_bn(id));
+    fixed_to_string(&b.name)
+}
+
 pub fn rust_bn_search(id: i32) -> *mut BnData { ffi_catch!(null_mut(), bn_search(id)) }
 
 pub fn rust_bn_searchexist(id: i32) -> *mut BnData { ffi_catch!(null_mut(), bn_searchexist(id)) }
 
-pub fn rust_bn_name(id: i32) -> *mut i8 {
-    ffi_catch!(null_mut(), {
-        let p = bn_search(id);
-        if p.is_null() { null_mut() } else { unsafe { (*p).name.as_mut_ptr() } }
-    })
-}

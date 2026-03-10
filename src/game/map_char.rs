@@ -46,7 +46,8 @@ use crate::game::pc::{
 use crate::game::map_parse::visual::{clif_spawn, clif_mob_look_start, clif_mob_look_close};
 use crate::game::client::visual::broadcast_update_state;
 
-use crate::game::block::{foreach_in_area, AreaType};
+use crate::game::block::AreaType;
+use crate::game::block_grid;
 use crate::game::map_parse::visual::clif_object_look_sub_inner;
 
 // ---------------------------------------------------------------------------
@@ -188,14 +189,16 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
     // Broadcast visible entities to the new player.
     tracing::info!("[map] [login] fd={} step=mob_look_start", fd);
     clif_mob_look_start(sd);
-    foreach_in_area(
-        (*sd).bl.m as i32,
-        (*sd).bl.x as i32,
-        (*sd).bl.y as i32,
-        AreaType::SameArea,
-        BL_ALL,
-        |bl| clif_object_look_sub_inner(bl, LOOK_GET, sd as *mut BlockList),
-    );
+    if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).bl.m as usize);
+        let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            let bl_ptr = crate::game::map_server::map_id2bl(id);
+            if !bl_ptr.is_null() {
+                clif_object_look_sub_inner(bl_ptr as *mut BlockList, LOOK_GET, sd as *mut BlockList);
+            }
+        }
+    }
     clif_mob_look_close(sd);
 
     // Load inventory and equipment.
@@ -275,7 +278,7 @@ pub fn set_map_state(state: Arc<MapState>) {
     let _ = MAP_STATE.set(state);
 }
 
-fn send(data: Vec<u8>) {
+pub fn send(data: Vec<u8>) {
     if let Some(state) = MAP_STATE.get() {
         let s = Arc::clone(state);
         if let Ok(handle) = Handle::try_current() {

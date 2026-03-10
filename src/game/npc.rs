@@ -117,7 +117,8 @@ unsafe fn map_id2bl(id: u32) -> *mut std::ffi::c_void {
     crate::game::map_server::map_id2bl(id)
 }
 
-use crate::game::block::{foreach_in_area, foreach_in_cell, foreach_in_rect, AreaType};
+use crate::game::block::AreaType;
+use crate::game::block_grid;
 use crate::game::map_parse::visual::{
     clif_cnpclook_inner, clif_mob_look_start_func_inner, clif_mob_look_close_func_inner,
     clif_object_look_sub_inner, clif_object_look_sub2_inner,
@@ -320,14 +321,23 @@ pub unsafe fn npc_warp(nd: *mut NpcData, m: i32, x: i32, y: i32) -> i32 {
         tracing::error!("Error warping npcchar.");
     }
 
-    if nd.npctype == 1 {
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
+        let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
         let nd_bl = nd as *mut NpcData as *mut BlockList;
-        foreach_in_area(m, x, y, AreaType::Area, BL_PC,
-            |bl| clif_cnpclook_inner(bl, LOOK_SEND, nd_bl));
-    } else {
-        let nd_bl = nd as *mut NpcData as *mut BlockList;
-        foreach_in_area(m, x, y, AreaType::Area, BL_PC,
-            |bl| clif_object_look_sub2_inner(bl, LOOK_SEND, nd_bl));
+        if nd.npctype == 1 {
+            for id in ids {
+                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_cnpclook_inner(&raw mut pc.bl, LOOK_SEND, nd_bl);
+                }
+            }
+        } else {
+            for id in ids {
+                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_object_look_sub2_inner(&raw mut pc.bl, LOOK_SEND, nd_bl);
+                }
+            }
+        }
     }
     0
 }
@@ -1028,9 +1038,19 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> i32 {
 
     // Check for blockers in destination cell
     nd.canmove = 0;
-    foreach_in_cell(m, dx, dy, BL_MOB, |bl| npc_move_sub_inner(bl, nd as *mut NpcData));
-    foreach_in_cell(m, dx, dy, BL_PC,  |bl| npc_move_sub_inner(bl, nd as *mut NpcData));
-    foreach_in_cell(m, dx, dy, BL_NPC, |bl| npc_move_sub_inner(bl, nd as *mut NpcData));
+    if let Some(grid) = block_grid::get_grid(m as usize) {
+        let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
+        for id in cell_ids {
+            let bl_ptr = crate::game::map_server::map_id2bl(id);
+            if !bl_ptr.is_null() {
+                let bl = bl_ptr as *mut BlockList;
+                let ty = (*bl).bl_type as i32;
+                if ty == BL_MOB || ty == BL_PC || ty == BL_NPC {
+                    npc_move_sub_inner(bl, nd as *mut NpcData);
+                }
+            }
+        }
+    }
 
     if clif_object_canmove(m, dx, dy, direction) != 0 {
         nd.canmove = 0;
@@ -1061,26 +1081,46 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> i32 {
 
         if nothingnew == 0 {
             let nm = nd.bl.m as i32;
-            if nd.npctype == 1 {
-                let nd_bl = nd as *mut NpcData as *mut BlockList;
-                foreach_in_rect(nm, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC,
-                    |bl| clif_cnpclook_inner(bl, LOOK_SEND, nd_bl));
-            } else {
-                let nd_ptr = nd as *mut NpcData;
-                foreach_in_rect(nm, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC,
-                    |bl| clif_mob_look_start_func_inner(bl));
-                let nd_bl = &raw mut nd.bl;
-                foreach_in_rect(nm, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC,
-                    |bl| clif_object_look_sub_inner(bl, LOOK_SEND, nd_bl));
-                foreach_in_rect(nm, x0, y0, x0 + x1 - 1, y0 + y1 - 1, BL_PC,
-                    |bl| clif_mob_look_close_func_inner(bl));
-                let _ = nd_ptr;
+            if let Some(grid) = block_grid::get_grid(nm as usize) {
+                let rect_ids = grid.ids_in_rect(x0, y0, x0 + x1 - 1, y0 + y1 - 1);
+                if nd.npctype == 1 {
+                    let nd_bl = nd as *mut NpcData as *mut BlockList;
+                    for &id in &rect_ids {
+                        if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                            clif_cnpclook_inner(&raw mut pc.bl, LOOK_SEND, nd_bl);
+                        }
+                    }
+                } else {
+                    let nd_bl = &raw mut nd.bl;
+                    for &id in &rect_ids {
+                        if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                            clif_mob_look_start_func_inner(&raw mut pc.bl);
+                        }
+                    }
+                    for &id in &rect_ids {
+                        if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                            clif_object_look_sub_inner(&raw mut pc.bl, LOOK_SEND, nd_bl);
+                        }
+                    }
+                    for &id in &rect_ids {
+                        if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                            clif_mob_look_close_func_inner(&raw mut pc.bl);
+                        }
+                    }
+                }
             }
         }
 
         let nd_ptr = nd as *mut NpcData;
-        foreach_in_area(m, nd.bl.x as i32, nd.bl.y as i32, AreaType::Area, BL_PC,
-            |bl| clif_npc_move_inner(bl, nd_ptr));
+        if let Some(grid) = block_grid::get_grid(m as usize) {
+            let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
+            let ids = block_grid::ids_in_area(grid, nd.bl.x as i32, nd.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+            for id in ids {
+                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_npc_move_inner(&raw mut pc.bl, nd_ptr);
+                }
+            }
+        }
         return 1;
     }
     0

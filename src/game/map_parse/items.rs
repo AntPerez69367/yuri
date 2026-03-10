@@ -9,7 +9,7 @@ use crate::session::{rust_session_exists, rust_session_set_eof, rust_session_wda
 use crate::game::mob::MOB_DEAD;
 use crate::game::pc::{
     MapSessionData,
-    BL_PC, BL_MOB, BL_NPC, BL_ITEM,
+    BL_PC, BL_MOB, BL_NPC,
     EQ_WEAP, EQ_ARMOR, EQ_SHIELD, EQ_HELM, EQ_LEFT, EQ_RIGHT,
     EQ_SUBLEFT, EQ_SUBRIGHT, EQ_FACEACC, EQ_CROWN, EQ_MANTLE, EQ_NECKLACE, EQ_BOOTS, EQ_COAT,
     SFLAG_FULLSTATS, SFLAG_HPMP, SFLAG_XPMONEY,
@@ -72,7 +72,8 @@ use crate::database::magic_db::rust_magicdb_yname;
 
 
 use crate::game::pc::rust_pc_addtocurrent_inner;
-use crate::game::block::{foreach_in_area, foreach_in_cell, AreaType};
+use crate::game::block::AreaType;
+use crate::game::block_grid;
 use crate::game::map_parse::visual::clif_object_look_sub2_inner;
 
 // ─── Lua dispatch helpers ─────────────────────────────────────────────────────
@@ -776,11 +777,14 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
     clif_sendminitext(sd, mini.as_ptr());
 
     let mut def = [0i32; 1];
-    foreach_in_cell(
-        (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
-        BL_ITEM,
-        |bl| clif_addtocurrent_inner(bl, def.as_mut_ptr(), amount, std::ptr::null_mut()),
-    );
+    if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
+        let cell_ids = grid.ids_at_tile((*sd).bl.x, (*sd).bl.y);
+        for id in cell_ids {
+            if let Some(fl) = crate::game::map_server::map_id2fl_ref(id) {
+                clif_addtocurrent_inner(&raw mut fl.bl, def.as_mut_ptr(), amount, std::ptr::null_mut());
+            }
+        }
+    }
 
     if def[0] == 0 {
         let fl_raw = Box::into_raw(fl);
@@ -807,11 +811,15 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
         sl_doscript_2(b"characterLog\0".as_ptr().cast(), b"dropWrite\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl_raw).bl);
 
         let fl_bl = &raw mut (*fl_raw).bl;
-        foreach_in_area(
-            (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
-            AreaType::Area, BL_PC,
-            |bl| clif_object_look_sub2_inner(bl, LOOK_SEND, fl_bl),
-        );
+        if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
+            let slot = &*raw_map_ptr().add((*sd).bl.m as usize);
+            let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+            for id in ids {
+                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_object_look_sub2_inner(&raw mut pc.bl, LOOK_SEND, fl_bl);
+                }
+            }
+        }
     } else {
         drop(fl);
     }
@@ -941,11 +949,14 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
     let mut def = [0i32; 1];
 
     if (*fl).data.dura == rust_itemdb_dura((*fl).data.id) {
-        foreach_in_cell(
-            (*sd).bl.m as i32, x, y,
-            BL_ITEM,
-            |bl| rust_pc_addtocurrent_inner(bl, def.as_mut_ptr(), id as i32, item_type, sd),
-        );
+        if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
+            let cell_ids = grid.ids_at_tile(x as u16, y as u16);
+            for cid in cell_ids {
+                if let Some(fl_ref) = crate::game::map_server::map_id2fl_ref(cid) {
+                    rust_pc_addtocurrent_inner(&raw mut fl_ref.bl, def.as_mut_ptr(), id as i32, item_type, sd);
+                }
+            }
+        }
     }
 
     (*sd).status.inventory[id].amount -= 1;
@@ -1017,11 +1028,15 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
         let fl_raw = Box::into_raw(fl);
         map_additem(&raw mut (*fl_raw).bl);
         let fl_bl = &raw mut (*fl_raw).bl;
-        foreach_in_area(
-            (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
-            AreaType::Area, BL_PC,
-            |bl| clif_object_look_sub2_inner(bl, LOOK_SEND, fl_bl),
-        );
+        if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
+            let slot = &*raw_map_ptr().add((*sd).bl.m as usize);
+            let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+            for id in ids {
+                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_object_look_sub2_inner(&raw mut pc.bl, LOOK_SEND, fl_bl);
+                }
+            }
+        }
     } else {
         drop(fl);
     }
@@ -1131,9 +1146,19 @@ pub unsafe fn clif_parsethrow(sd: *mut MapSessionData) -> i32 {
         if x1 >= map_data.xs as i32 { x1 = map_data.xs as i32 - 1; }
         if y1 >= map_data.ys as i32 { y1 = map_data.ys as i32 - 1; }
 
-        foreach_in_cell(m, x1, y1, BL_NPC, |bl| clif_throw_check_inner(bl, found.as_mut_ptr()));
-        foreach_in_cell(m, x1, y1, BL_PC,  |bl| clif_throw_check_inner(bl, found.as_mut_ptr()));
-        foreach_in_cell(m, x1, y1, BL_MOB, |bl| clif_throw_check_inner(bl, found.as_mut_ptr()));
+        if let Some(grid) = block_grid::get_grid(m as usize) {
+            let cell_ids = grid.ids_at_tile(x1 as u16, y1 as u16);
+            for cid in cell_ids {
+                let bl_ptr = crate::game::map_server::map_id2bl(cid);
+                if !bl_ptr.is_null() {
+                    let bl = bl_ptr as *mut crate::database::map_db::BlockList;
+                    let ty = (*bl).bl_type as i32;
+                    if ty == BL_NPC || ty == BL_PC || ty == BL_MOB {
+                        clif_throw_check_inner(bl, found.as_mut_ptr());
+                    }
+                }
+            }
+        }
         // read_pass(m, x, y) — accesses map[m].pass[x + y*xs]
         let pass_val = if raw_map_ptr().is_null() { 0 } else {
             let md = &*raw_map_ptr().add(m as usize);

@@ -5,7 +5,7 @@
 use std::sync::atomic::{AtomicI32, AtomicI8};
 
 use crate::database::map_db::BlockList;
-use crate::game::mob::{MobSpawnData, BL_MOB, BL_PC, MOB_DEAD};
+use crate::game::mob::{MobSpawnData, MOB_DEAD};
 use crate::game::pc::{MapSessionData, PC_DIE, SFLAG_FULLSTATS, SFLAG_HPMP};
 
 // Module globals
@@ -47,7 +47,8 @@ type LuaState = std::ffi::c_void; // opaque
 
 // ── map functions ──────────────────────────────────────────────────────────────
 use crate::game::map_server::{map_name2sd, map_reload, map_reset_timer};
-use crate::game::block::{map_respawnmobs, foreach_in_area, AreaType};
+use crate::game::block::AreaType;
+use crate::game::block_grid;
 
 // ── clif functions ─────────────────────────────────────────────────────────────
 use crate::game::map_parse::chat::{clif_sendminitext, clif_sendmsg, clif_broadcast, clif_playsound};
@@ -419,11 +420,15 @@ unsafe fn command_spell(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaStat
     let sd_bl = &mut (*sd).bl as *mut BlockList;
     let anim = SPELLGFX.load(Ordering::Relaxed);
     let times = SOUNDFX.load(Ordering::Relaxed);
-    foreach_in_area(
-        (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
-        AreaType::Area, BL_PC,
-        |target_bl| clif_sendanimation_inner(unsafe { &mut *target_bl }, anim, sd_bl, times),
-    );
+    if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
+        let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add((*sd).bl.m as usize) };
+        let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                clif_sendanimation_inner(&mut pc.bl, anim, sd_bl, times);
+            }
+        }
+    }
     0
 }
 unsafe fn command_val(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
@@ -610,14 +615,16 @@ unsafe fn command_luafix(_sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaS
 }
 unsafe fn command_respawn(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
     if sd.is_null() { return 0; }
-    map_respawnmobs(|bl| {
-        if bl.is_null() { return 0; }
-        let mob = bl as *mut MobSpawnData;
-        if (*mob).state == MOB_DEAD && (*mob).onetime == 0 {
-            mob_respawn(mob);
+    if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
+        let all_ids: Vec<u32> = grid.all_ids().collect();
+        for id in all_ids {
+            if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
+                if mob.state == MOB_DEAD && mob.onetime == 0 {
+                    mob_respawn(mob as *mut MobSpawnData);
+                }
+            }
         }
-        0
-    }, (*sd).bl.m as i32, BL_MOB);
+    }
     0
 }
 async fn ban_character(name_str: String) {
@@ -1094,11 +1101,15 @@ unsafe fn command_nspell(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaSt
     let sd_bl = &mut (*sd).bl as *mut BlockList;
     let anim = g;
     let times = SOUNDFX.load(Ordering::Relaxed);
-    foreach_in_area(
-        (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
-        AreaType::Area, BL_PC,
-        |target_bl| clif_sendanimation_inner(unsafe { &mut *target_bl }, anim, sd_bl, times),
-    );
+    if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
+        let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add((*sd).bl.m as usize) };
+        let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                clif_sendanimation_inner(&mut pc.bl, anim, sd_bl, times);
+            }
+        }
+    }
     0
 }
 unsafe fn command_pspell(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {
@@ -1108,11 +1119,15 @@ unsafe fn command_pspell(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaSt
     let sd_bl = &mut (*sd).bl as *mut BlockList;
     let anim = g;
     let times = SOUNDFX.load(Ordering::Relaxed);
-    foreach_in_area(
-        (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
-        AreaType::Area, BL_PC,
-        |target_bl| clif_sendanimation_inner(unsafe { &mut *target_bl }, anim, sd_bl, times),
-    );
+    if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
+        let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add((*sd).bl.m as usize) };
+        let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                clif_sendanimation_inner(&mut pc.bl, anim, sd_bl, times);
+            }
+        }
+    }
     0
 }
 unsafe fn command_spellq(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaState) -> i32 {

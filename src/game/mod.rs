@@ -1,4 +1,5 @@
 pub mod block;
+pub mod block_grid;
 pub mod time_util;
 pub mod util;
 pub mod map_char;

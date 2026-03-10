@@ -26,7 +26,8 @@ use super::packet::{
     rfifob, rfifop,
     wfifob, wfifoset, wfifohead,
 };
-use crate::game::block::{foreach_in_area, foreach_in_cell, AreaType};
+use crate::game::block::AreaType;
+use crate::game::block_grid;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -38,7 +39,6 @@ const BL_ALL: i32 = 0x0F;
 
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::map_server::{map_name2sd, groups as groups_raw};
-use crate::game::block::map_firstincell;
 use crate::game::map_parse::movement::clif_object_canmove;
 use crate::database::class_db::{rust_classdb_path as classdb_path, rust_classdb_level as classdb_level};
 use crate::database::item_db::{
@@ -543,10 +543,14 @@ pub unsafe fn clif_findmount(sd: *mut MapSessionData) -> i32 {
         _ => {}
     }
 
-    let bl = map_firstincell((*sd).bl.m as i32, x, y, BL_MOB);
-    if bl.is_null() { return 0; }
-
-    let mob = bl as *mut MobSpawnData;
+    let mob_id = match block_grid::first_in_cell((*sd).bl.m as usize, x as u16, y as u16, BL_MOB) {
+        Some(id) => id,
+        None => return 0,
+    };
+    let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+        Some(m) => m as *mut MobSpawnData,
+        None => return 0,
+    };
 
     if (*sd).status.state != 0 { return 0; }
 
@@ -655,9 +659,22 @@ pub unsafe fn clif_canmove(
         _ => {}
     }
 
-    foreach_in_cell((*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32, BL_MOB, |bl| clif_canmove_sub_inner(bl, sd));
-    foreach_in_cell((*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32, BL_PC,  |bl| clif_canmove_sub_inner(bl, sd));
-    foreach_in_cell((*sd).bl.m as i32, nx, ny, BL_PC, |bl| clif_canmove_sub_inner(bl, sd));
+    if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
+        let cell_ids = grid.ids_at_tile((*sd).bl.x, (*sd).bl.y);
+        for id in cell_ids {
+            if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
+                clif_canmove_sub_inner(&raw mut mob.bl, sd);
+            } else if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                clif_canmove_sub_inner(&raw mut pc.bl, sd);
+            }
+        }
+        let cell_ids2 = grid.ids_at_tile(nx as u16, ny as u16);
+        for id in cell_ids2 {
+            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                clif_canmove_sub_inner(&raw mut pc.bl, sd);
+            }
+        }
+    }
 
     if clif_object_canmove((*sd).bl.m as i32, nx, ny, direct) != 0 {
         (*sd).canmove = 1;
@@ -797,14 +814,15 @@ pub unsafe fn clif_sendpowerboard(sd: *mut MapSessionData) -> i32 {
     wfifob((*sd).fd, 5, 1);
 
     let len_ptr = len.as_mut_ptr();
-    foreach_in_area(
-        (*sd).bl.m as i32,
-        (*sd).bl.x as i32,
-        (*sd).bl.y as i32,
-        AreaType::SameMap,
-        BL_PC,
-        |bl| clif_pb_sub_inner(bl, sd, len_ptr),
-    );
+    if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
+        let slot = &*get_map_ptr((*sd).bl.m);
+        let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+        for id in ids {
+            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                clif_pb_sub_inner(&raw mut pc.bl, sd, len_ptr);
+            }
+        }
+    }
 
     wfifow_be((*sd).fd, 6, len[1] as u16);
     wfifow_be((*sd).fd, 1, (len[0] + 5) as u16);

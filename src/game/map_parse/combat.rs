@@ -4,8 +4,6 @@
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
 
-use std::ffi::CStr;
-
 use crate::database::map_db::BlockList;
 use crate::database::mob_db::MobDbData;
 use crate::database::map_db::raw_map_ptr;
@@ -26,7 +24,8 @@ use super::packet::{
     clif_send,
     AREA, SELF, SAMEAREA,
 };
-use crate::game::block::{foreach_in_area, AreaType};
+use crate::game::block::AreaType;
+use crate::game::block_grid;
 
 // enum { LOOK_GET = 0, LOOK_SEND = 1 } from map_parse.h
 const LOOK_GET: i32 = 0;
@@ -886,19 +885,27 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
 
     if !sd.is_null() {
         unsafe {
-            foreach_in_area(
-                mob.bl.m as i32, mob.bl.x as i32, mob.bl.y as i32,
-                AreaType::Area, BL_PC,
-                |bl| clif_send_mob_health_sub_inner(&mut *bl, &mut *sd, mob, critical, pct_int, damage),
-            );
+            if let Some(grid) = block_grid::get_grid(mob.bl.m as usize) {
+                let slot = &*crate::database::map_db::raw_map_ptr().add(mob.bl.m as usize);
+                let ids = block_grid::ids_in_area(grid, mob.bl.x as i32, mob.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+                for id in ids {
+                    if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                        clif_send_mob_health_sub_inner(&mut pc.bl, &mut *sd, mob, critical, pct_int, damage);
+                    }
+                }
+            }
         }
     } else {
         unsafe {
-            foreach_in_area(
-                mob.bl.m as i32, mob.bl.x as i32, mob.bl.y as i32,
-                AreaType::Area, BL_PC,
-                |bl| clif_send_mob_health_sub_nosd_inner(&mut *bl, mob, critical, pct_int, damage),
-            );
+            if let Some(grid) = block_grid::get_grid(mob.bl.m as usize) {
+                let slot = &*crate::database::map_db::raw_map_ptr().add(mob.bl.m as usize);
+                let ids = block_grid::ids_in_area(grid, mob.bl.x as i32, mob.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+                for id in ids {
+                    if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                        clif_send_mob_health_sub_nosd_inner(&mut pc.bl, mob, critical, pct_int, damage);
+                    }
+                }
+            }
         }
     }
 
@@ -1056,11 +1063,15 @@ pub async fn clif_mob_kill(mob: &mut MobSpawnData) -> i32 {
 
     let mob_ptr = mob as *mut MobSpawnData;
     unsafe {
-        foreach_in_area(
-            mob.bl.m as i32, mob.bl.x as i32, mob.bl.y as i32,
-            AreaType::Area, BL_PC,
-            |bl| clif_send_destroy_inner(&mut *bl, mob_ptr),
-        );
+        if let Some(grid) = block_grid::get_grid(mob.bl.m as usize) {
+            let slot = &*crate::database::map_db::raw_map_ptr().add(mob.bl.m as usize);
+            let ids = block_grid::ids_in_area(grid, mob.bl.x as i32, mob.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+            for id in ids {
+                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_send_destroy_inner(&mut pc.bl, mob_ptr);
+                }
+            }
+        }
     }
 
     0

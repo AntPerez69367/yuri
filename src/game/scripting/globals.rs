@@ -113,7 +113,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         if m < 0 { return Ok(0i64); }
         let mp = get_map_ptr(m as u16);
         if mp.is_null() || unsafe { (*mp).registry.is_null() } { return Ok(0i64); }
-        Ok(unsafe { (*mp).user as i64 })
+        Ok(crate::game::block::map_user_count(m as usize) as i64)
     })?)?;
 
     g.set("getMapXMax", lua.create_function(|_, m: i32| {
