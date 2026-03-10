@@ -255,7 +255,6 @@ pub fn setup_connection(
     manager.insert_session(fd, session_arc)?;
 
     tracing::info!("[session] New connection: fd={}, addr={}", fd, addr);
-    #[cfg(not(test))]
     crate::session::update_fd_max_pub(fd);
     Ok(fd)
 }
@@ -777,6 +776,7 @@ pub async fn run_async_server(_port: u16) -> Result<(), Box<dyn std::error::Erro
         }
     }
 
+    let mut timer_tick    = tokio::time::interval(Duration::from_millis(10));
     let mut mob_tick      = tokio::time::interval(Duration::from_millis(50));
     let mut npc_tick      = tokio::time::interval(Duration::from_millis(100));
     let mut cron_tick     = tokio::time::interval(Duration::from_secs(1));
@@ -786,16 +786,16 @@ pub async fn run_async_server(_port: u16) -> Result<(), Box<dyn std::error::Erro
 
     loop {
         tokio::select! {
+            _ = timer_tick.tick() => {
+                crate::game::time_util::timer_do(crate::game::time_util::gettick());
+            }
             _ = mob_tick.tick() => {
-                #[cfg(not(test))]
                 unsafe { crate::game::mob::rust_mob_timer_spawns(); }
             }
             _ = npc_tick.tick() => {
-                #[cfg(not(test))]
                 unsafe { crate::game::npc::npc_runtimers(); }
             }
             _ = cron_tick.tick() => {
-                #[cfg(not(test))]
                 unsafe { crate::game::map_server::rust_map_cronjob(); }
 
                 // Spawn I/O tasks for connections made from callbacks.
@@ -805,18 +805,15 @@ pub async fn run_async_server(_port: u16) -> Result<(), Box<dyn std::error::Erro
                 }
 
                 // Check shutdown signal
-                #[cfg(not(test))]
                 if crate::core::rust_should_shutdown() != 0 {
                     tracing::info!("[rust_server] Shutdown requested");
                     break;
                 }
             }
             _ = ddos_tick.tick() => {
-                #[cfg(not(test))]
                 crate::session::rust_connect_check_clear();
             }
             _ = throttle_tick.tick() => {
-                #[cfg(not(test))]
                 crate::session::rust_remove_throttle();
             }
         }

@@ -178,7 +178,6 @@ pub fn tk_crypt_static(buff: &mut [u8], xor_key: &[u8]) {
 ///
 /// # Safety
 /// `fd` must be a valid session fd with pending write data staged by `rust_session_wfifohead`.
-#[cfg(not(test))]
 pub unsafe fn encrypt(fd: i32) -> i32 {
     use crate::config::config;
     use crate::session::{rust_session_get_data, rust_session_wdata_ptr};
@@ -228,7 +227,6 @@ pub unsafe fn encrypt(fd: i32) -> i32 {
 /// `fd` must be a valid session fd with a complete incoming packet in the read buffer.
 /// The `*const u8 → *mut u8` cast for in-place XOR is safe here because
 /// packet dispatch is single-threaded and no other thread aliases this buffer.
-#[cfg(not(test))]
 pub unsafe fn decrypt(fd: i32) -> i32 {
     use crate::config::config;
     use crate::session::{rust_session_available, rust_session_get_data, rust_session_rdata_ptr};
@@ -266,7 +264,6 @@ pub unsafe fn decrypt(fd: i32) -> i32 {
 
 // ─── Meta file packet senders ─────────────────────────────────────────────────
 
-#[cfg(not(test))]
 unsafe fn metacrc_path(path: &str) -> u32 {
     use flate2::Crc;
     let data = std::fs::read(path).unwrap_or_default();
@@ -275,7 +272,6 @@ unsafe fn metacrc_path(path: &str) -> u32 {
     crc.sum()
 }
 
-#[cfg(not(test))]
 unsafe fn send_metafile_impl(fd: i32, file: &str) {
     use flate2::write::ZlibEncoder;
     use flate2::Compression;
@@ -343,7 +339,6 @@ unsafe fn send_metafile_impl(fd: i32, file: &str) {
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`crate::game::pc::MapSessionData`].
-#[cfg(not(test))]
 pub unsafe fn send_meta(sd: *mut crate::game::pc::MapSessionData) -> i32 {
     use crate::session::rust_session_rdata_ptr;
     if sd.is_null() { return 0; }
@@ -362,7 +357,6 @@ pub unsafe fn send_meta(sd: *mut crate::game::pc::MapSessionData) -> i32 {
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`crate::game::pc::MapSessionData`].
-#[cfg(not(test))]
 pub unsafe fn send_metalist(sd: *mut crate::game::pc::MapSessionData) -> i32 {
     use flate2::Crc;
     use crate::config::config;

@@ -50,7 +50,6 @@ async fn handle_accept(state: &Arc<MapState>, pkt: &[u8]) {
     tracing::info!("[map] [charif] handle_accept");
     // Collect loaded map IDs from the Rust-owned map array.
     // map[i].tile != NULL means the map was loaded (same check as C gm_command.c:1504).
-    #[cfg(not(test))]
     let map_ids: Vec<u16> = unsafe {
         let map_ptr = crate::database::map_db::raw_map_ptr();
         let map_n   = crate::database::map_db::map_n.load(std::sync::atomic::Ordering::Relaxed) as usize;
@@ -154,7 +153,6 @@ async fn handle_charload(_state: &Arc<MapState>, pkt: &[u8]) {
     // This prevents concurrent Lua state access: timer callbacks (mob AI, NPC timers) and
     // charload both call sl_doscript_blargs, and LuaJIT is single-threaded.
     // spawn_blocking would put this on a separate OS thread, racing with timer_do.
-    #[cfg(not(test))]
     {
         let rc = crate::game::map_char::call_intif_mmo_tosd(fd, &mut raw);
         tracing::info!("[map] [charif] intif_mmo_tosd returned rc={}", rc);
@@ -172,7 +170,6 @@ async fn handle_charload(_state: &Arc<MapState>, pkt: &[u8]) {
 }
 
 /// 0x3804 — char_server is forcing a player offline (duplicate login detected).
-#[cfg(not(test))]
 async fn handle_checkonline(_state: &Arc<MapState>, pkt: &[u8]) {
     use crate::session::{rust_session_get_data, rust_session_set_eof};
     use crate::game::scripting::pc_accessors::sl_pc_status_id;
@@ -184,7 +181,7 @@ async fn handle_checkonline(_state: &Arc<MapState>, pkt: &[u8]) {
     for fd in manager.get_all_fds() {
         let tsd = rust_session_get_data(fd) as *mut crate::game::pc::MapSessionData;
         if tsd.is_null() { continue; }
-        if unsafe { sl_pc_status_id(tsd) } as u32 == char_id {
+        if unsafe { sl_pc_status_id(&mut *tsd) } as u32 == char_id {
             tracing::warn!("[map] [charif] checkonline: kicking char_id={} fd={}", char_id, fd);
             rust_session_set_eof(fd, 1);
             return;
@@ -193,13 +190,6 @@ async fn handle_checkonline(_state: &Arc<MapState>, pkt: &[u8]) {
     tracing::debug!("[map] [charif] checkonline: char_id={} not found on this map", char_id);
 }
 
-/// 0x3804 stub — not used in test builds (scripting module not available).
-#[cfg(test)]
-async fn handle_checkonline(_state: &Arc<MapState>, pkt: &[u8]) {
-    if pkt.len() < 6 { return; }
-    let char_id = u32::from_le_bytes([pkt[2], pkt[3], pkt[4], pkt[5]]);
-    tracing::debug!("[map] [charif] checkonline: char_id={} (test build)", char_id);
-}
 
 /// Board/mail response packets (0x3808–0x380F) are forwarded to map_parse.c via C handler.
 /// Once map_parse.c is ported, implement handlers here directly.

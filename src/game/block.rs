@@ -16,40 +16,26 @@
 use crate::database::map_db::{BlockList, MAP_SLOTS, BLOCK_SIZE};
 use crate::game::mob::{BL_MOB, MOB_DEAD, MobSpawnData};
 
-// In test builds crate::ffi is absent.  We provide local substitutes:
-//   - a module-level `map` static used in place of `raw_map_ptr()` from the production path
-//   - BL_LIST_MAX constant matching ffi::block::BL_LIST_MAX
-//   - a sentinel BlockList node standing in for ffi::block::bl_head
-// SAFETY: Test-only substitute for `raw_map_ptr()` in block grid lookups.
-// Set once in map_initblock. Single-threaded game loop — no concurrent access.
-#[cfg(test)]
+// Module-level map pointer override.
+// In production, this is null and `map_ptr()` delegates to `raw_map_ptr()`.
+// In tests, this can be set via `test_set_map()` to inject a custom map without
+// touching the global OnceLock.
+// SAFETY: Only written in test code from a single test thread (guarded by MAP_MUTEX).
 static mut map: *mut crate::database::map_db::MapData = std::ptr::null_mut();
 
 /// Returns the live map pointer.
-/// In production, delegates to `map_db::raw_map_ptr()` (backed by `OnceLock<MapPtr>`).
-/// In tests, reads the module-local `map` static so tests can inject their own slot.
-#[cfg(not(test))]
-#[inline(always)]
-fn map_ptr() -> *mut crate::database::map_db::MapData {
-    crate::database::map_db::raw_map_ptr()
-}
-#[cfg(test)]
+/// Checks the module-local override first (used by tests); otherwise delegates
+/// to `map_db::raw_map_ptr()` (backed by `OnceLock<MapPtr>`).
 #[inline(always)]
 unsafe fn map_ptr() -> *mut crate::database::map_db::MapData {
-    map
+    if !map.is_null() { map } else { crate::database::map_db::raw_map_ptr() }
 }
 
-/// Entity list capacity cap — matches `ffi::block::BL_LIST_MAX`.
-/// In non-test builds we read the authoritative constant from the ffi module.
-/// In test builds crate::ffi is absent so we inline the same literal value.
-#[cfg(not(test))]
+/// Entity list capacity cap — always returns BL_LIST_MAX.
 #[inline(always)]
-fn bl_list_max() -> usize { crate::game::block::BL_LIST_MAX }
-#[cfg(test)]
-#[inline(always)]
-fn bl_list_max() -> usize { 32768 }
+fn bl_list_max() -> usize { BL_LIST_MAX }
 
-/// Sentinel node used in tests as a substitute for `ffi::block::bl_head`.
+/// Sentinel node used in tests as a substitute for `bl_head`.
 /// An entity whose `prev` points here is considered live by the traversal.
 // SAFETY: Test-only sentinel block list node. Only accessed from the single test thread.
 #[cfg(test)]
@@ -412,7 +398,6 @@ pub unsafe fn collect_entities(
 /// `bl` must be a valid, aligned pointer to a live `BlockList` (or a struct
 /// that begins with `BlockList` as its first field, such as `MapSessionData`
 /// or `MobSpawnData`).
-#[cfg(not(test))]
 pub unsafe fn is_alive(bl: *mut BlockList) -> bool {
     use crate::game::mob::BL_PC;
     use crate::game::pc::{MapSessionData, OPT_FLAG_STEALTH, PC_DIE};
@@ -445,7 +430,6 @@ pub unsafe fn is_alive(bl: *mut BlockList) -> bool {
 ///
 /// # Safety
 /// Same as `foreach_in_area`.
-#[cfg(not(test))]
 pub unsafe fn collect_alive(
     m: i32,
     x: i32,
@@ -473,14 +457,13 @@ pub unsafe fn collect_alive(
 /// # Safety
 /// The caller must ensure `ptr` stays valid for the lifetime of the test and
 /// that no other thread concurrently reads the `map` global.
-#[cfg(test)]
 pub(crate) unsafe fn test_set_map(ptr: *mut crate::database::map_db::MapData) {
     map = ptr;
 }
 
 /// Allocate a zeroed `MapData` on the heap, set up minimum block-grid fields
 /// for a `xs × ys` map, and return the `Box`.  The caller must eventually free
-/// it via `test_free_map`.  Only available in test builds.
+/// it via `test_free_map`.
 ///
 /// # Safety
 /// Uses raw allocation.  The returned `Box` must not be dropped normally — pass
@@ -999,15 +982,11 @@ mod tests {
     }
 }
 
-#[cfg(not(test))]
-#[cfg(not(test))]
 use crate::game::scripting::types::floor::FloorItemData;
 
 /// `ITM_TRAPS` from `item_db.h` — floor items of this type are skipped by `map_firstincell`.
-#[cfg(not(test))]
 const ITM_TRAPS: i32 = 20;
 
-#[cfg(not(test))]
 use crate::database::item_db::rust_itemdb_type as itemdb_type;
 
 pub const BL_LIST_MAX: usize = 32768;
@@ -1015,7 +994,6 @@ pub const BL_LIST_MAX: usize = 32768;
 /// Sentinel node for the block entity linked list.
 // SAFETY: Sentinel head node for the block entity linked list.
 // Single-threaded game loop — no concurrent access.
-#[cfg(not(test))]
 pub static mut bl_head: crate::database::map_db::BlockList = crate::database::map_db::BlockList {
     next:          std::ptr::null_mut(),
     prev:          std::ptr::null_mut(),
@@ -1034,10 +1012,8 @@ pub static mut bl_head: crate::database::map_db::BlockList = crate::database::ma
 /// Scratch buffer used by block query functions.
 // SAFETY: Populated and consumed within a single function call, never concurrently.
 // Single-threaded game loop — no concurrent access.
-#[cfg(not(test))]
 pub static mut bl_list: [*mut crate::database::map_db::BlockList; BL_LIST_MAX] = [std::ptr::null_mut(); BL_LIST_MAX];
 
-#[cfg(not(test))]
 fn alloc_ptr_array<T>(len: usize) -> *mut *mut T {
     let mut v: Vec<*mut T> = vec![std::ptr::null_mut(); len];
     let p = v.as_mut_ptr();
@@ -1046,7 +1022,6 @@ fn alloc_ptr_array<T>(len: usize) -> *mut *mut T {
 }
 
 /// Allocate block/block_mob/warp arrays for every loaded map slot.
-#[cfg(not(test))]
 pub unsafe fn map_initblock() {
     if map_ptr().is_null() { return; }
     let slots = std::slice::from_raw_parts_mut(map_ptr(), crate::database::map_db::MAP_SLOTS);
@@ -1060,11 +1035,9 @@ pub unsafe fn map_initblock() {
 }
 
 /// Free block grid arrays for all map slots (no-op, matches C).
-#[cfg(not(test))]
 pub unsafe fn map_termblock() {}
 
 /// Insert `bl` into the appropriate block grid chain.
-#[cfg(not(test))]
 pub unsafe fn map_addblock(bl: *mut crate::database::map_db::BlockList) -> i32 {
     if bl.is_null() { return 1; }
     let bl = unsafe { &mut *bl };
@@ -1114,7 +1087,6 @@ pub unsafe fn map_addblock(bl: *mut crate::database::map_db::BlockList) -> i32 {
 }
 
 /// Remove `bl` from the block grid.
-#[cfg(not(test))]
 pub unsafe fn map_delblock(bl: *mut crate::database::map_db::BlockList) -> i32 {
     if bl.is_null() { return 0; }
     let bl = unsafe { &mut *bl };
@@ -1154,7 +1126,6 @@ pub unsafe fn map_delblock(bl: *mut crate::database::map_db::BlockList) -> i32 {
 }
 
 /// Remove `bl` from current cell, update coords, re-insert.
-#[cfg(not(test))]
 pub unsafe fn map_moveblock(bl: *mut crate::database::map_db::BlockList, x1: i32, y1: i32) -> i32 {
     map_delblock(bl);
     if !bl.is_null() {
@@ -1165,7 +1136,6 @@ pub unsafe fn map_moveblock(bl: *mut crate::database::map_db::BlockList, x1: i32
     0
 }
 
-#[cfg(not(test))]
 #[inline]
 unsafe fn first_mob_in_cell(
     slot: &crate::database::map_db::MapData,
@@ -1186,7 +1156,6 @@ unsafe fn first_mob_in_cell(
 }
 
 /// Return the first live entity at cell (x, y) on map `m`.
-#[cfg(not(test))]
 pub unsafe fn map_firstincell(
     m: i32, x: i32, y: i32, bl_type: i32,
 ) -> *mut crate::database::map_db::BlockList {
@@ -1224,7 +1193,6 @@ pub unsafe fn map_firstincell(
 }
 
 /// Iterate mobs across entire map `m`, calling `func` for each live entity.
-#[cfg(not(test))]
 pub unsafe fn map_respawnmobs<F: FnMut(*mut crate::database::map_db::BlockList) -> i32>(
     mut func: F, m: i32, bl_type: i32,
 ) -> i32 {
@@ -1266,7 +1234,6 @@ pub unsafe fn map_respawnmobs<F: FnMut(*mut crate::database::map_db::BlockList) 
 }
 
 /// Same as `map_firstincell` but includes trap floor items.
-#[cfg(not(test))]
 pub unsafe fn map_firstincellwithtraps(
     m: i32, x: i32, y: i32, bl_type: i32,
 ) -> *mut crate::database::map_db::BlockList {

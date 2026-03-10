@@ -507,57 +507,41 @@ pub use crate::game::map_server::{MapMsgData, map_msg};
 
 
 
-#[cfg(not(test))]
 use crate::game::map_server::{
     map_id2fl, map_delitem,
     map_additem, map_readglobalreg,
 };
-#[cfg(not(test))]
 use crate::game::block::map_firstincell;
-#[cfg(not(test))]
-use crate::game::map_server::{map_id2bl, map_id2sd};
-#[cfg(not(test))]
-unsafe fn map_id2sd_pc(id: u32) -> *mut MapSessionData {
-    map_id2sd(id) as *mut MapSessionData
+use crate::game::map_server::{map_id2bl};
+fn map_id2sd_pc(id: u32) -> *mut MapSessionData {
+    crate::game::map_server::map_id2sd_pc(id)
+        .map(|r| r as *mut MapSessionData)
+        .unwrap_or(std::ptr::null_mut())
 }
-#[cfg(not(test))]
 unsafe fn map_id2bl_pc(id: u32) -> *mut BlockList {
     map_id2bl(id) as *mut BlockList
 }
-#[cfg(not(test))]
 use crate::game::map_parse::player_state::{
     clif_sendstatus, clif_getchararea, clif_refresh, clif_sendtime,
 };
-#[cfg(not(test))]
 use crate::game::client::visual::clif_sendupdatestatus;
-#[cfg(not(test))]
 use crate::game::map_parse::movement::clif_sendchararea;
-#[cfg(not(test))]
 use crate::game::map_parse::chat::clif_sendminitext;
-#[cfg(not(test))]
 use crate::game::map_parse::items::{
     clif_sendadditem, clif_senddelitem, clif_sendequip,
 };
-#[cfg(not(test))]
 use crate::game::map_parse::combat::{
     clif_sendmagic, clif_sendaction, clif_send_selfbar, clif_send_groupbars,
     clif_send_duration, clif_send_aether,
 };
-#[cfg(not(test))]
 use crate::game::map_parse::visual::clif_spawn;
-#[cfg(not(test))]
 use crate::game::map_parse::groups::clif_grouphealth_update;
-#[cfg(not(test))]
 use crate::game::client::visual::{
     broadcast_update_state, clif_sendupdatestatus_onequip,
 };
-#[cfg(not(test))]
 use crate::game::client::handlers::{clif_quit, clif_transfer};
-#[cfg(not(test))]
 use crate::game::time_util::{timer_insert, timer_remove};
-#[cfg(not(test))]
 use crate::game::scripting::rust_sl_async_freeco as sl_async_freeco;
-#[cfg(not(test))]
 use crate::database::item_db::{
     rust_itemdb_name as itemdb_name, rust_itemdb_yname as itemdb_yname,
     rust_itemdb_vita as itemdb_vita, rust_itemdb_mana as itemdb_mana,
@@ -575,25 +559,15 @@ use crate::database::item_db::{
     rust_itemdb_minSdam as itemdb_minSdam, rust_itemdb_maxSdam as itemdb_maxSdam,
     rust_itemdb_minLdam as itemdb_minLdam, rust_itemdb_maxLdam as itemdb_maxLdam,
 };
-#[cfg(not(test))]
 use crate::database::magic_db::{rust_magicdb_dispel as magicdb_dispel, rust_magicdb_yname as magicdb_yname_pc};
-#[cfg(not(test))]
 use crate::database::class_db::{rust_classdb_path as classdb_path, rust_classdb_level as classdb_level};
-#[cfg(not(test))]
 use crate::session::{rust_session_exists, rust_session_set_eof};
-#[cfg(not(test))]
 use crate::network::crypt::encrypt;
-#[cfg(not(test))]
 unsafe fn encrypt_fd(fd: i32) -> i32 { encrypt(fd) }
-#[cfg(not(test))]
 use crate::game::scripting::pc_accessors::sl_pc_forcesave;
-#[cfg(not(test))]
 use crate::game::time_util::gettick;
-#[cfg(not(test))]
 unsafe fn gettick_pc() -> u32 { gettick() }
-#[cfg(not(test))]
 use crate::game::map_parse::visual::clif_lookgone;
-#[cfg(not(test))]
 unsafe fn clif_lookgone_pc(bl: *mut BlockList) { clif_lookgone(bl); }
 
 
@@ -602,7 +576,6 @@ unsafe fn clif_lookgone_pc(bl: *mut BlockList) { clif_lookgone(bl); }
 pub use crate::game::map_server::groups;
 
 
-#[cfg(not(test))]
 
 use crate::game::block::{foreach_in_area, foreach_in_cell, AreaType};
 use crate::game::map_parse::combat::{clif_send_mobbars_inner, clif_sendanimation_inner};
@@ -611,13 +584,11 @@ use crate::game::map_parse::visual::clif_object_look_sub2_inner;
 // ─── Lua dispatch helpers ─────────────────────────────────────────────────────
 
 /// Dispatch a Lua event with a single block_list argument.
-#[cfg(not(test))]
 unsafe fn sl_doscript_simple_pc(root: *const i8, method: *const i8, bl: *mut BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
 }
 
 /// Dispatch a Lua event with two block_list arguments.
-#[cfg(not(test))]
 unsafe fn sl_doscript_2_pc(root: *const i8, method: *const i8, bl1: *mut BlockList, bl2: *mut BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
 }
@@ -630,7 +601,6 @@ unsafe fn sl_doscript_2_pc(root: *const i8, method: *const i8, bl1: *mut BlockLi
 
 /// `int pc_item_timer(int id, int none)` — removes a floor item when its timer expires.
 /// Calls `clif_lookgone` to hide it from clients, then `map_delitem` to remove it.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_item_timer(id: i32, _none: i32) -> i32 {
     let fl = map_id2bl_pc(id as u32);
     if fl.is_null() { return 1; }
@@ -640,17 +610,15 @@ pub unsafe fn rust_pc_item_timer(id: i32, _none: i32) -> i32 {
 }
 
 /// `int pc_savetimer(int id, int none)` — periodically saves a player's character data.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_savetimer(id: i32, _none: i32) -> i32 {
     let sd = map_id2sd_pc(id as u32);
     if !sd.is_null() {
-        sl_pc_forcesave(sd);
+        sl_pc_forcesave(&mut *sd);
     }
     0
 }
 
 /// `int pc_castusetimer(int id, int none)` — resets `castusetimer` field to 0 each tick.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_castusetimer(id: i32, _none: i32) -> i32 {
     let sd = map_id2sd_pc(id as u32);
     if !sd.is_null() {
@@ -660,7 +628,6 @@ pub unsafe fn rust_pc_castusetimer(id: i32, _none: i32) -> i32 {
 }
 
 /// `int pc_afktimer(int id, int none)` — tracks AFK time and plays idle animations.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_afktimer(id: i32, _none: i32) -> i32 {
     let sd = map_id2sd_pc(id as u32);
     if sd.is_null() { return 0; }
@@ -669,7 +636,7 @@ pub unsafe fn rust_pc_afktimer(id: i32, _none: i32) -> i32 {
 
     if (*sd).afk == 1 && (*sd).status.state == 0 {
         (*sd).totalafktime += 10;
-        clif_sendaction(&mut (*sd).bl as *mut BlockList, 0x10, 0x4E, 0);
+        clif_sendaction(&mut (*sd).bl, 0x10, 0x4E, 0);
         return 0;
     }
 
@@ -679,7 +646,7 @@ pub unsafe fn rust_pc_afktimer(id: i32, _none: i32) -> i32 {
         foreach_in_area(
             (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
             AreaType::Area, BL_PC,
-            |target_bl| clif_sendanimation_inner(target_bl, 324, sd_bl, 0),
+            |target_bl| clif_sendanimation_inner(unsafe { &mut *target_bl }, 324, sd_bl, 0),
         );
         return 0;
     }
@@ -692,14 +659,14 @@ pub unsafe fn rust_pc_afktimer(id: i32, _none: i32) -> i32 {
     if (*sd).afktime >= 30 {
         if (*sd).status.state == 0 {
             (*sd).totalafktime += 300;
-            clif_sendaction(&mut (*sd).bl as *mut BlockList, 0x10, 0x4E, 0);
+            clif_sendaction(&mut (*sd).bl, 0x10, 0x4E, 0);
         } else if (*sd).status.state == 3 {
             (*sd).totalafktime += 300;
             let sd_bl = &mut (*sd).bl as *mut BlockList;
             foreach_in_area(
                 (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
                 AreaType::Area, BL_PC,
-                |target_bl| clif_sendanimation_inner(target_bl, 324, sd_bl, 0),
+                |target_bl| clif_sendanimation_inner(unsafe { &mut *target_bl }, 324, sd_bl, 0),
             );
         }
         (*sd).afk = 1;
@@ -709,7 +676,6 @@ pub unsafe fn rust_pc_afktimer(id: i32, _none: i32) -> i32 {
 }
 
 /// `int pc_starttimer(USER* sd)` — registers all periodic timers for a logged-in player.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_starttimer(sd: *mut MapSessionData) -> i32 {
     (*sd).timer = timer_insert(1000, 1000,
         Some(rust_pc_timer as unsafe fn(i32, i32) -> i32),
@@ -750,7 +716,6 @@ pub unsafe fn rust_pc_starttimer(sd: *mut MapSessionData) -> i32 {
 }
 
 /// `int pc_stoptimer(USER* sd)` — removes all periodic timers for a player.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_stoptimer(sd: *mut MapSessionData) -> i32 {
     if (*sd).timer != 0         { timer_remove((*sd).timer);         (*sd).timer = 0; }
     if (*sd).healingtimer != 0  { timer_remove((*sd).healingtimer);  (*sd).healingtimer = 0; }
@@ -768,7 +733,6 @@ pub unsafe fn rust_pc_stoptimer(sd: *mut MapSessionData) -> i32 {
 
 /// `int bl_duratimer(int id, int none)` — 1000ms tick: processes skill passive/equip
 /// while-effects and decrements duration/aether for active magic on a player.
-#[cfg(not(test))]
 pub unsafe fn rust_bl_duratimer(id: i32, _none: i32) -> i32 {
     use crate::game::mob::MAX_MAGIC_TIMERS;
     let sd = map_id2sd_pc(id as u32);
@@ -819,7 +783,7 @@ pub unsafe fn rust_bl_duratimer(id: i32, _none: i32) -> i32 {
                 if (*sd).status.dura_aether[x].duration <= 0 {
                     (*sd).status.dura_aether[x].duration = 0;
                     clif_send_duration(
-                        sd,
+                        &mut *sd,
                         (*sd).status.dura_aether[x].id as i32,
                         0i32,
                         map_id2sd_pc((*sd).status.dura_aether[x].caster_id),
@@ -831,7 +795,7 @@ pub unsafe fn rust_bl_duratimer(id: i32, _none: i32) -> i32 {
                         foreach_in_area(
                             (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
                             AreaType::Area, BL_PC,
-                            |target_bl| clif_sendanimation_inner(target_bl, anim, sd_bl, -1),
+                            |target_bl| clif_sendanimation_inner(unsafe { &mut *target_bl }, anim, sd_bl, -1),
                         );
                     }
                     (*sd).status.dura_aether[x].animation = 0;
@@ -852,7 +816,7 @@ pub unsafe fn rust_bl_duratimer(id: i32, _none: i32) -> i32 {
                 (*sd).status.dura_aether[x].aether -= 1000;
 
                 if (*sd).status.dura_aether[x].aether <= 0 {
-                    clif_send_aether(sd, (*sd).status.dura_aether[x].id as i32, 0);
+                    clif_send_aether(&mut *sd, (*sd).status.dura_aether[x].id as i32, 0);
 
                     if (*sd).status.dura_aether[x].duration == 0 {
                         (*sd).status.dura_aether[x].id = 0;
@@ -869,7 +833,6 @@ pub unsafe fn rust_bl_duratimer(id: i32, _none: i32) -> i32 {
 
 /// `int bl_secondduratimer(int id, int none)` — 250ms tick: fires `while_passive_250`
 /// and `while_equipped_250` and `while_cast_250` events (no expire logic).
-#[cfg(not(test))]
 pub unsafe fn rust_bl_secondduratimer(id: i32, _none: i32) -> i32 {
     use crate::game::mob::MAX_MAGIC_TIMERS;
     let sd = map_id2sd_pc(id as u32);
@@ -918,7 +881,6 @@ pub unsafe fn rust_bl_secondduratimer(id: i32, _none: i32) -> i32 {
 
 /// `int bl_thirdduratimer(int id, int none)` — 500ms tick: fires `while_passive_500`,
 /// `while_equipped_500`, `while_cast_500` events (no expire logic).
-#[cfg(not(test))]
 pub unsafe fn rust_bl_thirdduratimer(id: i32, _none: i32) -> i32 {
     use crate::game::mob::MAX_MAGIC_TIMERS;
     let sd = map_id2sd_pc(id as u32);
@@ -967,7 +929,6 @@ pub unsafe fn rust_bl_thirdduratimer(id: i32, _none: i32) -> i32 {
 
 /// `int bl_fourthduratimer(int id, int none)` — 1500ms tick: fires `while_passive_1500`,
 /// `while_equipped_1500`, `while_cast_1500` events (no expire logic).
-#[cfg(not(test))]
 pub unsafe fn rust_bl_fourthduratimer(id: i32, _none: i32) -> i32 {
     use crate::game::mob::MAX_MAGIC_TIMERS;
     let sd = map_id2sd_pc(id as u32);
@@ -1016,7 +977,6 @@ pub unsafe fn rust_bl_fourthduratimer(id: i32, _none: i32) -> i32 {
 
 /// `int bl_fifthduratimer(int id, int none)` — 3000ms tick: fires `while_passive_3000`,
 /// `while_equipped_3000`, `while_cast_3000` events (no expire logic).
-#[cfg(not(test))]
 pub unsafe fn rust_bl_fifthduratimer(id: i32, _none: i32) -> i32 {
     use crate::game::mob::MAX_MAGIC_TIMERS;
     let sd = map_id2sd_pc(id as u32);
@@ -1065,7 +1025,6 @@ pub unsafe fn rust_bl_fifthduratimer(id: i32, _none: i32) -> i32 {
 
 /// `int bl_aethertimer(int id, int none)` — decrements aether timers and clears
 /// expired aether slots; called from NPC/scripting code via a one-shot timer.
-#[cfg(not(test))]
 pub unsafe fn rust_bl_aethertimer(id: i32, _none: i32) -> i32 {
     use crate::game::mob::MAX_MAGIC_TIMERS;
     let sd = map_id2sd_pc(id as u32);
@@ -1078,7 +1037,7 @@ pub unsafe fn rust_bl_aethertimer(id: i32, _none: i32) -> i32 {
             }
 
             if (*sd).status.dura_aether[x].aether <= 0 {
-                clif_send_aether(sd, (*sd).status.dura_aether[x].id as i32, 0);
+                clif_send_aether(&mut *sd, (*sd).status.dura_aether[x].id as i32, 0);
 
                 if (*sd).status.dura_aether[x].duration == 0 {
                     (*sd).status.dura_aether[x].id = 0;
@@ -1095,7 +1054,6 @@ pub unsafe fn rust_bl_aethertimer(id: i32, _none: i32) -> i32 {
 
 /// `int pc_timer(int id, int none)` — 1000ms main player tick: resets cooldowns,
 /// expires PvP flags, decrements PK duration, and updates group health bars.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_timer(id: i32, _none: i32) -> i32 {
     let sd = map_id2sd_pc(id as u32);
     if sd.is_null() { return 1; }
@@ -1142,14 +1100,13 @@ pub unsafe fn rust_pc_timer(id: i32, _none: i32) -> i32 {
 
 /// `int pc_scripttimer(int id, int none)` — 500ms script tick: updates UI bars,
 /// fires die script on death, fires Lua `pc_timer` tick/advice hooks.
-#[cfg(not(test))]
 #[allow(static_mut_refs)]
 pub unsafe fn rust_pc_scripttimer(id: i32, _none: i32) -> i32 {
     let sd = map_id2sd_pc(id as u32);
     if sd.is_null() { return 1; }
 
     if (*sd).selfbar != 0 {
-        clif_send_selfbar(sd);
+        clif_send_selfbar(&mut *sd);
     }
 
     if (*sd).groupbars != 0 && (*sd).group_count > 1 {
@@ -1160,7 +1117,7 @@ pub unsafe fn rust_pc_scripttimer(id: i32, _none: i32) -> i32 {
                 let tsd = map_id2sd_pc(groups[base + x]);
                 if tsd.is_null() { continue; }
                 if (*tsd).bl.m == (*sd).bl.m {
-                    clif_send_groupbars(sd, tsd);
+                    clif_send_groupbars(&mut *sd, &mut *tsd);
                     clif_grouphealth_update(sd);
                 }
             }
@@ -1171,7 +1128,7 @@ pub unsafe fn rust_pc_scripttimer(id: i32, _none: i32) -> i32 {
         foreach_in_area(
             (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
             AreaType::Area, BL_MOB,
-            |bl| clif_send_mobbars_inner(bl, sd),
+            |bl| clif_send_mobbars_inner(unsafe { &mut *bl }, unsafe { &mut *sd }),
         );
     }
 
@@ -1181,7 +1138,7 @@ pub unsafe fn rust_pc_scripttimer(id: i32, _none: i32) -> i32 {
     }
 
     if (*sd).dmgshield > 0.0 {
-        clif_send_duration(sd, 0, (*sd).dmgshield as i32 + 1, std::ptr::null_mut());
+        clif_send_duration(&mut *sd, 0, (*sd).dmgshield as i32 + 1, std::ptr::null_mut());
     }
 
     (*sd).deathflag = 0;
@@ -1197,19 +1154,19 @@ pub unsafe fn rust_pc_scripttimer(id: i32, _none: i32) -> i32 {
 }
 
 /// `int pc_atkspeed(int id, int none)` — resets `attacked` flag; called by a one-shot timer.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_atkspeed(id: i32, _none: i32) -> i32 {
     let sd = map_id2sd_pc(id as u32);
-    tracing::info!("[attack] rust_pc_atkspeed id={} sd_null={}", id, sd.is_null());
-    if sd.is_null() { return 1; }
+    if sd.is_null() {
+        tracing::warn!("[attack] rust_pc_atkspeed: id={} sd=null, removing timer", id);
+        return 1;
+    }
+    tracing::debug!("[attack] rust_pc_atkspeed: id={} resetting attacked from {} to 0", id, (*sd).attacked);
     (*sd).attacked = 0;
-    tracing::info!("[attack] attacked reset for bl_id={}", id);
     1
 }
 
 /// `int pc_disptimertick(int id, int none)` — counts down the display timer and fires
 /// the Lua `display_timer` event when it reaches zero.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_disptimertick(id: i32, _none: i32) -> i32 {
     let sd = map_id2sd_pc(id as u32);
     if sd.is_null() { return 1; }
@@ -1237,7 +1194,6 @@ pub unsafe fn rust_pc_disptimertick(id: i32, _none: i32) -> i32 {
 ///
 /// The C WFIFO macros expand to `rust_session_*` calls, so they are invoked
 
-#[cfg(not(test))]
 pub unsafe fn rust_pc_sendpong(id: i32, _none: i32) -> i32 {
     let sd = map_id2sd_pc(id as u32);
     if sd.is_null() { return 1; }
@@ -1284,7 +1240,6 @@ pub unsafe fn rust_pc_sendpong(id: i32, _none: i32) -> i32 {
 /// `int pc_requestmp(USER *sd)` — checks mail and parcel tables via SQL and sets
 /// FLAG_MAIL / FLAG_PARCEL bits on `sd->flags`.
 ///
-#[cfg(not(test))]
 async fn check_new_mail(char_name: String) -> bool {
     sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM `Mail` WHERE `MalNew` = 1 AND `MalChaNameDestination` = ?"
@@ -1295,7 +1250,6 @@ async fn check_new_mail(char_name: String) -> bool {
     .unwrap_or(0) > 0
 }
 
-#[cfg(not(test))]
 async fn check_pending_parcels(char_id: u32) -> bool {
     sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*) FROM `Parcels` WHERE `ParChaIdDestination` = ?"
@@ -1306,7 +1260,6 @@ async fn check_pending_parcels(char_id: u32) -> bool {
     .unwrap_or(0) > 0
 }
 
-#[cfg(not(test))]
 pub unsafe fn rust_pc_requestmp(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
@@ -1336,7 +1289,6 @@ pub unsafe fn rust_pc_requestmp(sd: *mut MapSessionData) -> i32 {
 /// the player's XP meets the threshold, and fires the "onLevel" script for each
 /// level they qualify for.
 ///
-#[cfg(not(test))]
 pub unsafe fn rust_pc_checklevel(sd: *mut MapSessionData) -> i32 {
     let path_raw = (*sd).status.class as i32;
     let path = if path_raw > 5 { classdb_path(path_raw) } else { path_raw };
@@ -1357,7 +1309,6 @@ pub unsafe fn rust_pc_checklevel(sd: *mut MapSessionData) -> i32 {
 ///
 /// Note: the `if (exp < 0)` branch in C is dead code because `exp` is `unsigned int`
 /// and can never be negative; it is preserved here for faithful translation.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_givexp(
     sd: *mut MapSessionData,
     exp: u32,
@@ -1464,7 +1415,6 @@ pub unsafe fn rust_pc_givexp(
 /// equipped items, applies active magic aether/passive skills, computes TNL percentage,
 /// clamps all stats, then sends a full status update to the client.
 ///
-#[cfg(not(test))]
 pub unsafe fn rust_pc_calcstat(sd: *mut MapSessionData) -> i32 {
     use crate::game::mob::MAX_MAGIC_TIMERS;
 
@@ -1642,7 +1592,6 @@ pub unsafe fn rust_pc_calcstat(sd: *mut MapSessionData) -> i32 {
 /// `float pc_calcdamage(USER *sd)` — calculates the physical damage the player
 /// can deal: base damage from might plus a random roll from equipped weapon range.
 ///
-#[cfg(not(test))]
 pub unsafe fn rust_pc_calcdamage(sd: *mut MapSessionData) -> f32 {
     let mut damage: f32 = 6.0f32 + ((*sd).might as f32) / 8.0f32;
 
@@ -1659,7 +1608,6 @@ pub unsafe fn rust_pc_calcdamage(sd: *mut MapSessionData) -> f32 {
 /// `int pc_calcdam(USER *sd)` — minimal damage helper; always returns 1.
 ///
 /// The body is intentionally trivial.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_calcdam(_sd: *mut MapSessionData) -> i32 {
     // C body: `int dam = 1; return dam;` — trivial stub.
     1
@@ -1680,7 +1628,6 @@ pub unsafe fn rust_pc_calcdam(_sd: *mut MapSessionData) -> i32 {
 /// `int pc_readreg(USER *sd, int reg)` — reads a local integer variable by index.
 ///
 /// Scans `sd->reg[0..reg_num]` for a slot with `index == reg`.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_readreg(sd: *mut MapSessionData, reg: i32) -> i32 {
     if sd.is_null() { return 0; }
     let sd = &*sd;
@@ -1694,8 +1641,7 @@ pub unsafe fn rust_pc_readreg(sd: *mut MapSessionData, reg: i32) -> i32 {
 /// `int pc_setreg(USER *sd, int reg, int val)` — sets a local integer variable by index.
 ///
 /// Scans for an existing slot; if found, updates `data`. If not found, grows the
-/// `reg` array with `libc::realloc`, zeroes the new slot, then sets index and data.
-#[cfg(not(test))]
+/// `reg` array, zeroes the new slot, then sets index and data.
 pub unsafe fn rust_pc_setreg(sd: *mut MapSessionData, reg: i32, val: i32) -> i32 {
     if sd.is_null() { return 0; }
     // Search for existing slot
@@ -1726,7 +1672,6 @@ pub unsafe fn rust_pc_setreg(sd: *mut MapSessionData, reg: i32, val: i32) -> i32
 /// `char *pc_readregstr(USER *sd, int reg)` — reads a local string variable by index.
 ///
 /// Returns pointer to the stored C string, or NULL if not found.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_readregstr(sd: *mut MapSessionData, reg: i32) -> *mut i8 {
     if sd.is_null() { return std::ptr::null_mut(); }
     for i in 0..(*sd).regstr_num as usize {
@@ -1740,7 +1685,6 @@ pub unsafe fn rust_pc_readregstr(sd: *mut MapSessionData, reg: i32) -> *mut i8 {
 /// `int pc_setregstr(USER *sd, int reg, char *str)` — sets a local string variable by index.
 ///
 /// Checks length, updates existing slot or grows the `regstr` array.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_setregstr(sd: *mut MapSessionData, reg: i32, str_: *mut i8) -> i32 {
     if sd.is_null() { return 0; }
     // Check string length — must fit in data[256] (including null terminator)
@@ -1780,7 +1724,6 @@ pub unsafe fn rust_pc_setregstr(sd: *mut MapSessionData, reg: i32, str_: *mut i8
 ///
 /// Scans `sd->status.global_regstring[0..MAX_GLOBALPLAYERREG]` for a case-insensitive match.
 /// Returns pointer to `val` if found, or pointer to static empty string.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_readglobalregstring(
     sd: *mut MapSessionData, reg: *const i8,
 ) -> *mut i8 {
@@ -1798,7 +1741,6 @@ pub unsafe fn rust_pc_readglobalregstring(
 ///
 /// Finds an existing slot by case-insensitive key match, or claims the first empty slot.
 /// Setting to `""` clears the key string (marks slot unused).
-#[cfg(not(test))]
 pub unsafe fn rust_pc_setglobalregstring(
     sd: *mut MapSessionData, reg: *const i8, val: *const i8,
 ) -> i32 {
@@ -1841,7 +1783,6 @@ pub unsafe fn rust_pc_setglobalregstring(
 /// `int pc_readglobalreg(USER *sd, const char *reg)` — reads a global integer variable.
 ///
 /// Scans `sd->status.global_reg[0..MAX_GLOBALPLAYERREG]` for a case-insensitive match.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_readglobalreg(
     sd: *mut MapSessionData, reg: *const i8,
 ) -> i32 {
@@ -1859,7 +1800,6 @@ pub unsafe fn rust_pc_readglobalreg(
 ///
 /// Finds an existing slot by case-insensitive key match (scanning all MAX_GLOBALREG slots),
 /// or claims the first empty slot. Setting val to 0 also clears the key string.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_setglobalreg(
     sd: *mut MapSessionData, reg: *const i8, val: u64,
 ) -> i32 {
@@ -1898,7 +1838,6 @@ pub unsafe fn rust_pc_setglobalreg(
 
 /// `int pc_readparam(USER *sd, int type)` — reads a player parameter by SP_* constant.
 ///
-#[cfg(not(test))]
 pub unsafe fn rust_pc_readparam(sd: *mut MapSessionData, type_: i32) -> i32 {
     if sd.is_null() { return 0; }
     let sd = &*sd;
@@ -1913,7 +1852,6 @@ pub unsafe fn rust_pc_readparam(sd: *mut MapSessionData, type_: i32) -> i32 {
 
 /// `int pc_setparam(USER *sd, int type, int val)` — sets a player parameter by SP_* constant.
 ///
-#[cfg(not(test))]
 pub unsafe fn rust_pc_setparam(sd: *mut MapSessionData, type_: i32, val: i32) -> i32 {
     if sd.is_null() { return 0; }
     match type_ {
@@ -1934,7 +1872,6 @@ pub unsafe fn rust_pc_setparam(sd: *mut MapSessionData, type_: i32, val: i32) ->
 /// Scans `sd->status.acctreg[0..MAX_GLOBALREG]` for a case-insensitive match.
 /// Returns the integer value or 0. (Function declared in pc.h but never defined in pc.c;
 /// implemented here for completeness.)
-#[cfg(not(test))]
 pub unsafe fn rust_pc_readacctreg(
     sd: *mut MapSessionData, reg: *const i8,
 ) -> i32 {
@@ -1953,7 +1890,6 @@ pub unsafe fn rust_pc_readacctreg(
 /// Finds an existing slot by case-insensitive key match, or claims the first empty slot.
 /// Setting val to 0 clears the key string (marks slot unused).
 /// (Function declared in pc.h but never defined in pc.c; implemented here.)
-#[cfg(not(test))]
 pub unsafe fn rust_pc_setacctreg(
     sd: *mut MapSessionData, reg: *const i8, val: i32,
 ) -> i32 {
@@ -1988,7 +1924,6 @@ pub unsafe fn rust_pc_setacctreg(
 /// `int pc_saveacctregistry(USER *sd, int flag)` — stub; declared in pc.h but never defined.
 ///
 /// Returns 0 (no-op). Translating the declaration only.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_saveacctregistry(
     _sd: *mut MapSessionData, _flag: i32,
 ) -> i32 {
@@ -2000,7 +1935,6 @@ pub unsafe fn rust_pc_saveacctregistry(
 /// `int pc_readnpcintreg(USER *sd, const char *reg)` — reads an NPC-scoped integer variable.
 ///
 /// Scans `sd->status.npcintreg[0..MAX_GLOBALNPCREG]` for a case-insensitive match.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_readnpcintreg(
     sd: *mut MapSessionData, reg: *const i8,
 ) -> i32 {
@@ -2018,7 +1952,6 @@ pub unsafe fn rust_pc_readnpcintreg(
 ///
 /// Finds an existing slot by case-insensitive key match, or claims the first empty slot.
 /// Setting val to 0 clears the key string (marks slot unused).
-#[cfg(not(test))]
 pub unsafe fn rust_pc_setnpcintreg(
     sd: *mut MapSessionData, reg: *const i8, val: i32,
 ) -> i32 {
@@ -2055,7 +1988,6 @@ pub unsafe fn rust_pc_setnpcintreg(
 /// `int pc_readquestreg(USER *sd, const char *reg)` — reads a quest integer variable.
 ///
 /// Scans `sd->status.questreg[0..MAX_GLOBALQUESTREG]` for a case-insensitive match.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_readquestreg(
     sd: *mut MapSessionData, reg: *const i8,
 ) -> i32 {
@@ -2073,7 +2005,6 @@ pub unsafe fn rust_pc_readquestreg(
 ///
 /// Finds an existing slot by case-insensitive key match, or claims the first empty slot.
 /// Setting val to 0 clears the key string (marks slot unused).
-#[cfg(not(test))]
 pub unsafe fn rust_pc_setquestreg(
     sd: *mut MapSessionData, reg: *const i8, val: i32,
 ) -> i32 {
@@ -2117,7 +2048,6 @@ use crate::game::scripting::types::floor::FloorItemData;
 ///
 /// Returns the first inventory slot that can accept an item with the given
 /// attributes, or `sd->status.maxinv` when no slot is available.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_isinvenspace(
     sd:               *mut MapSessionData,
     id:               i32,
@@ -2222,7 +2152,6 @@ pub unsafe fn rust_pc_isinvenspace(
 ///
 /// Returns the number of additional units of `id` that can be placed in
 /// inventory slot `num`.  Returns 0 when the slot is incompatible.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_isinvenitemspace(
     sd:      *mut MapSessionData,
     num:     i32,
@@ -2285,12 +2214,10 @@ pub unsafe fn rust_pc_isinvenitemspace(
 
 /// Allocate a `FloorItemData` from `fl2`, attempt to stack it on an existing
 /// floor item at the player's cell, and if no match exists add it to the map.
-#[cfg(not(test))]
 unsafe fn pc_dropitemfull_inner(sd: *mut MapSessionData, fl2: *const Item) -> i32 {
     use std::mem;
 
-    let fl = libc::calloc(1, mem::size_of::<FloorItemData>()) as *mut FloorItemData;
-    if fl.is_null() { return 0; }
+    let mut fl = Box::new(mem::zeroed::<FloorItemData>());
 
     (*fl).bl.m = (*sd).bl.m;
     (*fl).bl.x = (*sd).bl.x;
@@ -2301,11 +2228,7 @@ unsafe fn pc_dropitemfull_inner(sd: *mut MapSessionData, fl2: *const Item) -> i3
         fl2 as *const libc::c_void,
         mem::size_of::<Item>(),
     );
-    libc::memset(
-        (*fl).looters.as_mut_ptr() as *mut libc::c_void,
-        0,
-        mem::size_of::<u32>() * MAX_GROUP_MEMBERS,
-    );
+    // looters is already zeroed by mem::zeroed()
 
     let mut def = [0i32; 2];
 
@@ -2315,27 +2238,27 @@ unsafe fn pc_dropitemfull_inner(sd: *mut MapSessionData, fl2: *const Item) -> i3
         foreach_in_cell(
             (*fl).bl.m as i32, (*fl).bl.x as i32, (*fl).bl.y as i32,
             BL_ITEM,
-            |bl| rust_pc_addtocurrent2_inner(bl, def.as_mut_ptr(), fl),
+            |bl| rust_pc_addtocurrent2_inner(bl, def.as_mut_ptr(), fl.as_mut() as *mut FloorItemData),
         );
         let _ = fl_id;
     }
 
     if def[0] == 0 {
-        map_additem(&mut (*fl).bl);
-        let fl_bl = &mut (*fl).bl as *mut BlockList;
+        let fl_raw = Box::into_raw(fl);
+        map_additem(&mut (*fl_raw).bl);
+        let fl_bl = &mut (*fl_raw).bl as *mut BlockList;
         foreach_in_area(
             (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
             AreaType::Area, BL_PC,
             |bl| clif_object_look_sub2_inner(bl, LOOK_SEND, fl_bl),
         );
     } else {
-        libc::free(fl as *mut libc::c_void);
+        drop(fl);
     }
     0
 }
 
 /// `int pc_dropitemfull(USER* sd, struct item* fl2)` — public C-callable export.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_dropitemfull(
     sd:  *mut MapSessionData,
     fl2: *mut Item,
@@ -2349,7 +2272,6 @@ pub unsafe fn rust_pc_dropitemfull(
 /// Typed inner callback: attempt to stack `fl2` onto the existing floor item `bl`.
 /// Sets `def[0] = 1` on a successful merge.
 ///
-#[cfg(not(test))]
 pub unsafe fn rust_pc_addtocurrent2_inner(
     bl: *mut BlockList,
     def: *mut i32,
@@ -2384,7 +2306,6 @@ pub unsafe fn rust_pc_addtocurrent2_inner(
 /// Typed inner callback: stack inventory slot `id` amount onto existing floor item `fl`.
 /// Sets `def[0] = fl->bl.id` on successful merge.
 ///
-#[cfg(not(test))]
 pub unsafe fn rust_pc_addtocurrent_inner(
     bl: *mut BlockList,
     def: *mut i32,
@@ -2436,7 +2357,6 @@ pub unsafe fn rust_pc_addtocurrent_inner(
 /// Typed inner callback used by `pc_dropitemmap` to notify floor-NPC scripts.
 /// Currently a no-op (the C version also does nothing beyond null checks).
 ///
-#[cfg(not(test))]
 pub unsafe fn rust_pc_npc_drop_inner(
     bl: *mut BlockList,
     _fl: *mut FloorItemData,
@@ -2454,7 +2374,6 @@ pub unsafe fn rust_pc_npc_drop_inner(
 // ─── pc_additem ───────────────────────────────────────────────────────────────
 
 /// `int pc_additem(USER* sd, struct item* fl)` — add item to inventory with logging.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_additem(
     sd: *mut MapSessionData,
     fl: *mut Item,
@@ -2564,7 +2483,6 @@ pub unsafe fn rust_pc_additem(
 // ─── pc_additemnolog ──────────────────────────────────────────────────────────
 
 /// `int pc_additemnolog(USER* sd, struct item* fl)` — add item without SQL logging.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_additemnolog(
     sd: *mut MapSessionData,
     fl: *mut Item,
@@ -2672,7 +2590,6 @@ pub unsafe fn rust_pc_additemnolog(
 /// units from inventory slot `id`.  If the slot becomes empty it is zeroed and
 /// the client is notified with a delete-item packet; otherwise the client
 /// receives an updated add-item count and a mini-text with the item name.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_delitem(
     sd:     *mut MapSessionData,
     id:     i32,
@@ -2717,7 +2634,6 @@ pub unsafe fn rust_pc_delitem(
 
 /// `int pc_dropitemmap(USER* sd, int id, int type)` — drop one (or all) units
 /// of inventory slot `id` onto the map floor.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_dropitemmap(
     sd:    *mut MapSessionData,
     id:    i32,
@@ -2736,8 +2652,7 @@ pub unsafe fn rust_pc_dropitemmap(
 
     let mut def = [0i32; 2];
 
-    let fl = libc::calloc(1, std::mem::size_of::<FloorItemData>()) as *mut FloorItemData;
-    if fl.is_null() { return 0; }
+    let mut fl = Box::new(unsafe { std::mem::zeroed::<FloorItemData>() });
 
     (*fl).bl.m = (*sd).bl.m;
     (*fl).bl.x = (*sd).bl.x;
@@ -2747,11 +2662,7 @@ pub unsafe fn rust_pc_dropitemmap(
         &(*sd).status.inventory[id_u] as *const Item as *const libc::c_void,
         std::mem::size_of::<Item>(),
     );
-    libc::memset(
-        (*fl).looters.as_mut_ptr() as *mut libc::c_void,
-        0,
-        std::mem::size_of::<u32>() * MAX_GROUP_MEMBERS,
-    );
+    // looters is already zeroed by mem::zeroed()
 
     // Attempt to stack onto an existing floor item at full durability.
     if (*fl).data.dura == itemdb_dura((*fl).data.id as u32) {
@@ -2781,20 +2692,21 @@ pub unsafe fn rust_pc_dropitemmap(
     foreach_in_cell(
         (*fl).bl.m as i32, (*fl).bl.x as i32, (*fl).bl.y as i32,
         BL_NPC,
-        |bl| rust_pc_npc_drop_inner(bl, fl, sd),
+        |bl| rust_pc_npc_drop_inner(bl, fl.as_mut() as *mut FloorItemData, sd),
     );
 
     if def[0] == 0 {
-        map_additem(&mut (*fl).bl);
-        sl_doscript_2_pc(c"characterLog".as_ptr(), c"dropWrite".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*fl).bl as *mut BlockList);
-        let fl_bl = &mut (*fl).bl as *mut BlockList;
+        let fl_raw = Box::into_raw(fl);
+        map_additem(&mut (*fl_raw).bl);
+        sl_doscript_2_pc(c"characterLog".as_ptr(), c"dropWrite".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*fl_raw).bl as *mut BlockList);
+        let fl_bl = &mut (*fl_raw).bl as *mut BlockList;
         foreach_in_area(
             (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
             AreaType::Area, BL_PC,
             |bl| clif_object_look_sub2_inner(bl, LOOK_SEND, fl_bl),
         );
     } else {
-        libc::free(fl as *mut libc::c_void);
+        drop(fl);
     }
     0
 }
@@ -2803,7 +2715,6 @@ pub unsafe fn rust_pc_dropitemmap(
 
 /// `int pc_changeitem(USER* sd, int id1, int id2)` — swap inventory slots `id1`
 /// and `id2`, sending the appropriate add/delete packets to the client.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_changeitem(
     sd:  *mut MapSessionData,
     id1: i32,
@@ -2843,7 +2754,6 @@ pub unsafe fn rust_pc_changeitem(
 ///
 /// Handles all item types: food, usables, consumables, mounts, equipment, etc.
 /// Delegates equip logic to `rust_pc_equipitem`.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_useitem(
     sd: *mut MapSessionData,
     id: i32,
@@ -3109,7 +3019,6 @@ pub unsafe fn rust_pc_useitem(
 
 /// `int pc_runfloor_sub(USER* sd)` — check if the player is standing on a FLOOR
 /// or sub-2 NPC cell, and if so trigger its script.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_runfloor_sub(sd: *mut MapSessionData) -> i32 {
     use crate::game::npc::NpcData;
     if sd.is_null() { return 0; }
@@ -3135,7 +3044,6 @@ pub unsafe fn rust_pc_runfloor_sub(sd: *mut MapSessionData) -> i32 {
 // if any translation unit references them.
 
 /// `int pc_getitemmap(USER* sd, int id)` — declared in pc.h, not implemented in C.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_getitemmap(
     _sd: *mut MapSessionData,
     _id: i32,
@@ -3144,20 +3052,17 @@ pub unsafe fn rust_pc_getitemmap(
 }
 
 /// `int pc_getitemsaround(USER* sd)` — declared in pc.h, not implemented in C.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_getitemsaround(_sd: *mut MapSessionData) -> i32 {
     0
 }
 
 /// `int pc_handle_item(int a, int b)` — declared in pc.h, not implemented in C.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_handle_item(_a: i32, _b: i32) -> i32 {
     0
 }
 
 /// `int pc_handle_item_sub(struct block_list* bl, ...)` — declared in pc.h,
 /// not implemented in C.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_handle_item_sub(
     _bl: *mut BlockList,
 ) -> i32 {
@@ -3171,7 +3076,6 @@ pub unsafe fn rust_pc_handle_item_sub(
 /// `type`, or 0 if the slot is empty.
 ///
 /// Bounds-checked: returns 0 for out-of-range `type`.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_isequip(
     sd:   *mut MapSessionData,
     type_: i32,
@@ -3183,7 +3087,6 @@ pub unsafe fn rust_pc_isequip(
 
 /// `int pc_loaditem(USER* sd)` — send all non-empty inventory slots to the
 /// client via `clif_sendadditem`.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_loaditem(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     let maxinv = (*sd).status.maxinv as usize;
@@ -3199,7 +3102,6 @@ pub unsafe fn rust_pc_loaditem(sd: *mut MapSessionData) -> i32 {
 /// via `clif_sendequip`.
 ///
 /// Only slots 0..14 are active equipment positions.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_loadequip(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     for i in 0..14 {
@@ -3211,13 +3113,11 @@ pub unsafe fn rust_pc_loadequip(sd: *mut MapSessionData) -> i32 {
 }
 
 /// `int pc_loadequiprealname(USER* sd)` — stub; C implementation returns 0.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_loadequiprealname(_sd: *mut MapSessionData) -> i32 {
     0
 }
 
 /// `int pc_loaditemrealname(USER* sd)` — stub; C implementation returns 0.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_loaditemrealname(_sd: *mut MapSessionData) -> i32 {
     0
 }
@@ -3234,7 +3134,6 @@ pub unsafe fn rust_pc_loaditemrealname(_sd: *mut MapSessionData) -> i32 {
 /// - Sex restriction.
 ///
 /// `id` is a slot index into `sd->status.inventory`.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_canequipitem(
     sd: *mut MapSessionData,
     id: i32,
@@ -3286,7 +3185,6 @@ pub unsafe fn rust_pc_canequipitem(
 /// `id` can be equipped given the player's current HP/MP totals.
 ///
 /// Returns 1 if allowed, 0 if the vita/mana penalty would reduce hp/mp below 0.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_canequipstats(
     sd: *mut MapSessionData,
     id: u32,
@@ -3311,7 +3209,6 @@ pub unsafe fn rust_pc_canequipstats(
 /// Validates state, ownership, equip eligibility, and stat requirements before
 /// firing the `onEquip` Lua event via `sl_doscript_blargs`.  The actual slot
 /// assignment happens in `pc_equipscript` which runs from within the Lua hook.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_equipitem(
     sd: *mut MapSessionData,
     id: i32,
@@ -3384,7 +3281,6 @@ pub unsafe fn rust_pc_equipitem(
 /// previously-equipped item in that slot via an `onUnequip` hook, copies the
 /// inventory item into the equip array, removes it from the inventory, and then
 /// updates client state.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_equipscript(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
@@ -3480,7 +3376,6 @@ pub unsafe fn rust_pc_equipscript(sd: *mut MapSessionData) -> i32 {
 ///
 /// If the slot is empty, returns 1 immediately.  Otherwise stores `takeoffid`
 /// and fires the `onUnequip` Lua hook so `pc_unequipscript` can finish.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_unequip(
     sd:    *mut MapSessionData,
     type_: i32,
@@ -3504,7 +3399,6 @@ pub unsafe fn rust_pc_unequip(
 /// returned to inventory.
 ///
 /// In both paths the client is updated and `pc_calcstat` recalculates stats.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_unequipscript(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
@@ -3583,7 +3477,6 @@ pub unsafe fn rust_pc_unequipscript(sd: *mut MapSessionData) -> i32 {
 /// - All other cases: pick up the whole stack.
 ///
 /// `clif_lookgone` + `map_delitem` are called when the floor item is exhausted.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_getitemscript(
     sd: *mut MapSessionData,
     id: i32,
@@ -3662,7 +3555,6 @@ pub unsafe fn rust_pc_getitemscript(
 ///
 /// Guards against attempting to set position on a mob object (bl.id >= MOB_START_NUM).
 /// Sets bl.m, bl.x, bl.y, and bl.type.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_setpos(
     sd: *mut MapSessionData,
     m: i32,
@@ -3684,7 +3576,6 @@ pub unsafe fn rust_pc_setpos(
 /// the destination map server and calls `clif_transfer`. Otherwise, fires
 /// pre-warp Lua hooks, calls `clif_quit` / `pc_setpos` / `clif_spawn` /
 /// `clif_refresh`, then fires post-warp Lua hooks.
-#[cfg(not(test))]
 async fn lookup_map_server(map_id: i32) -> Option<u32> {
     sqlx::query_scalar::<_, Option<u32>>(
         "SELECT `MapServer` FROM `Maps` WHERE `MapId` = ?"
@@ -3697,7 +3588,6 @@ async fn lookup_map_server(map_id: i32) -> Option<u32> {
     .flatten()
 }
 
-#[cfg(not(test))]
 pub async unsafe fn rust_pc_warp(
     sd: *mut MapSessionData,
     mut m: i32,
@@ -3801,12 +3691,11 @@ pub async unsafe fn rust_pc_warp(
 
 /// `int pc_loadmagic(USER* sd)` — sends each of the player's known spells to
 /// the client via `clif_sendmagic`.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_loadmagic(sd: *mut MapSessionData) -> i32 {
     use crate::servers::char::charstatus::MAX_SPELLS;
     for i in 0..MAX_SPELLS {
         if (*sd).status.skill[i] > 0 {
-            clif_sendmagic(sd, i as i32);
+            clif_sendmagic(&mut *sd, i as i32);
         }
     }
     0
@@ -3817,7 +3706,6 @@ pub unsafe fn rust_pc_loadmagic(sd: *mut MapSessionData) -> i32 {
 /// For each active aether timer, sends the duration bar to the client and
 /// calls the `recast` Lua hook on the spell.  Also sends any pending aether
 /// (cooldown) values.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_magic_startup(sd: *mut MapSessionData) -> i32 {
     use crate::servers::char::charstatus::MAX_MAGIC_TIMERS;
 
@@ -3829,7 +3717,7 @@ pub unsafe fn rust_pc_magic_startup(sd: *mut MapSessionData) -> i32 {
         if p.id > 0 {
             if p.duration > 0 {
                 let tsd = map_id2sd_pc(p.caster_id);
-                clif_send_duration(sd, p.id as i32, (p.duration / 1000) as i32, tsd);
+                clif_send_duration(&mut *sd, p.id as i32, (p.duration / 1000) as i32, tsd);
 
                 if !tsd.is_null() {
                     (*sd).target   = p.caster_id as i32;
@@ -3843,7 +3731,7 @@ pub unsafe fn rust_pc_magic_startup(sd: *mut MapSessionData) -> i32 {
             }
 
             if p.aether > 0 {
-                clif_send_aether(sd, p.id as i32, p.aether / 1000);
+                clif_send_aether(&mut *sd, p.id as i32, p.aether / 1000);
             }
         }
     }
@@ -3853,13 +3741,12 @@ pub unsafe fn rust_pc_magic_startup(sd: *mut MapSessionData) -> i32 {
 
 /// `int pc_reload_aether(USER* sd)` — resends active aether (spell cooldown)
 /// values to the client.  Called when the client reconnects.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_reload_aether(sd: *mut MapSessionData) -> i32 {
     use crate::servers::char::charstatus::MAX_MAGIC_TIMERS;
     for x in 0..MAX_MAGIC_TIMERS {
         let p = &(*sd).status.dura_aether[x];
         if p.id > 0 && p.aether > 0 {
-            clif_send_aether(sd, p.id as i32, p.aether / 1000);
+            clif_send_aether(&mut *sd, p.id as i32, p.aether / 1000);
         }
     }
     0
@@ -3869,7 +3756,6 @@ pub unsafe fn rust_pc_reload_aether(sd: *mut MapSessionData) -> i32 {
 ///
 /// The actual stat/state changes are handled by `pc_diescript`; this function
 /// just fires the hook so scripts can respond immediately.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_die(sd: *mut MapSessionData) -> i32 {
     sl_doscript_simple_pc(c"onDeathPlayer".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
     0
@@ -3882,7 +3768,6 @@ pub unsafe fn rust_pc_die(sd: *mut MapSessionData) -> i32 {
 /// - Removes the dead player from all mob threat tables.
 /// - Resets combat state (enchanted, flank, backstab, dmgshield).
 /// - Recalculates stats and broadcasts updated state.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_diescript(sd: *mut MapSessionData) -> i32 {
     use crate::servers::char::charstatus::MAX_MAGIC_TIMERS;
     use crate::game::mob::{
@@ -3891,7 +3776,6 @@ pub unsafe fn rust_pc_diescript(sd: *mut MapSessionData) -> i32 {
         MOB_ONETIME_START, MOB_ONETIME_MAX,
     };
     use std::sync::atomic::Ordering;
-    use crate::game::map_server::map_id2mob;
 
     if sd.is_null() { return 0; }
 
@@ -3915,7 +3799,7 @@ pub unsafe fn rust_pc_diescript(sd: *mut MapSessionData) -> i32 {
 
         (*sd).status.dura_aether[i].duration = 0;
         clif_send_duration(
-            sd,
+            &mut *sd,
             (*sd).status.dura_aether[i].id as i32,
             0,
             map_id2sd_pc((*sd).status.dura_aether[i].caster_id),
@@ -3928,7 +3812,7 @@ pub unsafe fn rust_pc_diescript(sd: *mut MapSessionData) -> i32 {
             foreach_in_area(
                 (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
                 AreaType::Area, BL_PC,
-                |target_bl| clif_sendanimation_inner(target_bl, anim, sd_bl, -1),
+                |target_bl| clif_sendanimation_inner(unsafe { &mut *target_bl }, anim, sd_bl, -1),
             );
         }
         (*sd).status.dura_aether[i].animation = 0;
@@ -3957,12 +3841,11 @@ pub unsafe fn rust_pc_diescript(sd: *mut MapSessionData) -> i32 {
     if spawn_start != spawn_max {
         let mut x = spawn_start;
         while x < spawn_max {
-            let tmob = map_id2mob(x);
-            if !tmob.is_null() {
+            if let Some(tmob) = crate::game::map_server::map_id2mob_ref(x) {
                 for i in 0..MAX_THREATCOUNT {
-                    if (*tmob).threat[i].user == (*sd).bl.id {
-                        (*tmob).threat[i].user   = 0;
-                        (*tmob).threat[i].amount = 0;
+                    if tmob.threat[i].user == (*sd).bl.id {
+                        tmob.threat[i].user   = 0;
+                        tmob.threat[i].amount = 0;
                     }
                 }
             }
@@ -3976,12 +3859,11 @@ pub unsafe fn rust_pc_diescript(sd: *mut MapSessionData) -> i32 {
     if onetime_start != onetime_max {
         let mut x = onetime_start;
         while x < onetime_max {
-            let tmob = map_id2mob(x);
-            if !tmob.is_null() {
+            if let Some(tmob) = crate::game::map_server::map_id2mob_ref(x) {
                 for i in 0..MAX_THREATCOUNT {
-                    if (*tmob).threat[i].user == (*sd).bl.id {
-                        (*tmob).threat[i].user   = 0;
-                        (*tmob).threat[i].amount = 0;
+                    if tmob.threat[i].user == (*sd).bl.id {
+                        tmob.threat[i].user   = 0;
+                        tmob.threat[i].amount = 0;
                     }
                 }
             }
@@ -4003,7 +3885,6 @@ pub unsafe fn rust_pc_diescript(sd: *mut MapSessionData) -> i32 {
 
 /// Sync bridge for Lua/FFI callers that cannot `.await`.
 /// SAFETY: MapSessionData: Send; blocking_run_async joins before returning.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_warp_sync(sd: *mut MapSessionData, m: i32, x: i32, y: i32) -> i32 {
     let sd_usize = sd as usize;
     crate::database::blocking_run_async(crate::database::assert_send(async move {
@@ -4017,7 +3898,6 @@ pub unsafe fn rust_pc_warp_sync(sd: *mut MapSessionData, m: i32, x: i32, y: i32)
 /// Sets state to alive, restores 100 HP, sends an HP/MP status update, and
 /// warps the player to their current position (which re-spawns them for other
 /// clients on the same map).
-#[cfg(not(test))]
 pub unsafe fn rust_pc_res(sd: *mut MapSessionData) -> i32 {
     (*sd).status.state = PC_ALIVE as i8;
     (*sd).status.hp    = 100;
@@ -4029,7 +3909,6 @@ pub unsafe fn rust_pc_res(sd: *mut MapSessionData) -> i32 {
 /// `int pc_uncast(USER* sd)` — cancels the player's active cast.
 ///
 /// Stub — intentionally returns a neutral default.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_uncast(sd: *mut MapSessionData) -> i32 {
     0
 }
@@ -4037,7 +3916,6 @@ pub unsafe fn rust_pc_uncast(sd: *mut MapSessionData) -> i32 {
 /// `int pc_checkformail(USER* sd)` — checks for pending mail/parcels.
 ///
 /// Stub — SQL logic intentionally removed.
-#[cfg(not(test))]
 pub unsafe fn rust_pc_checkformail(sd: *mut MapSessionData) -> i32 {
     0
 }

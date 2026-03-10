@@ -4,7 +4,8 @@
 #![allow(static_mut_refs)]
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::database::get_pool;
@@ -85,132 +86,98 @@ pub static auth_n: AtomicI32 = AtomicI32::new(0);
 const MAX_FLOORITEM: usize = 100_000_000;
 
 /// Bitmap tracking which floor item slots are in use (1 = occupied, 0 = free).
-/// Allocated on first `map_additem` call; freed by `map_clritem`.
-// SAFETY: Raw pointer to heap-allocated object name buffer. Allocated once in object_flag_init,
-// then read-only pattern thereafter. Single-threaded game loop — no concurrent access.
-static mut OBJECT: *mut u8 = std::ptr::null_mut();
+/// Grown on demand by `map_additem`; cleared by `map_clritem`.
+/// Mutex is only for the `Sync` bound required by `OnceLock`; the game loop is single-threaded
+/// and never actually contends.
+static OBJECT_SLOTS: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
 
-/// Current allocated length of `OBJECT`.
-static OBJECT_N: AtomicUsize = AtomicUsize::new(0);
+fn object_slots() -> std::sync::MutexGuard<'static, Vec<u8>> {
+    OBJECT_SLOTS.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap_or_else(|e| e.into_inner())
+}
 
-/// Free all floor item ID slots and release the backing memory.
-///
-///
-/// # Safety
-/// Must be called on the game thread. `OBJECT` must be null or a pointer
-/// previously allocated by `map_additem` via `libc::realloc`/`libc::calloc`.
-pub unsafe fn map_clritem() {
-    if !OBJECT.is_null() {
-        // OBJECT was allocated via libc::calloc / libc::realloc — match with libc::free.
-        libc::free(OBJECT as *mut libc::c_void);
-        OBJECT = std::ptr::null_mut();
-    }
-    OBJECT_N.store(0, Ordering::Relaxed);
+/// Free all floor item ID slots.
+pub fn map_clritem() {
+    object_slots().clear();
 }
 
 /// Remove a floor item from the world by its ID.
 ///
-/// Unlinks from the ID database and block grid, then frees the `FloorItemData`
-/// node. The node was allocated with `libc::calloc` by `map_additem` callers
-/// (see `mob.rs`, `pc.rs`), so it is freed with `libc::free`.
-///
+/// Unlinks from the block grid, then drops the `Box<FloorItemData>` by removing
+/// it from `ITEM_MAP`.  The block-grid unlink must come first: `map_delblock`
+/// needs a valid pointer, and removing from `ITEM_MAP` drops the Box.
 ///
 /// # Safety
-/// `id` must be a valid floor item ID currently registered in the ID database.
+/// `id` must be a valid floor item ID currently registered in `ITEM_MAP`.
 pub unsafe fn map_delitem(id: u32) {
     use crate::game::block::map_delblock;
-    let bl = map_id2bl(id) as *mut BlockList;
-    if bl.is_null() {
-        return;
-    }
-    map_deliddb(bl);
+    use crate::game::scripting::types::floor::FloorItemData;
+
+    // Extract raw pointer in a scoped block so the MutexGuard drops before the
+    // map_delblock call.  The Box<FloorItemData> still owns the allocation —
+    // releasing the lock does not free the memory; only item_map().remove() does.
+    let bl: *mut BlockList = {
+        let mut guard = item_map();
+        let Some(item) = guard.get_mut(&id) else { return };
+        item.as_mut() as *mut FloorItemData as *mut BlockList
+        // guard drops here — lock released, Box still alive in ITEM_MAP
+    };
+
+    // Unlink from block grid.  Safe: pointer is valid, Box still in ITEM_MAP.
     map_delblock(bl);
-    // FloorItemData nodes are always allocated via libc::calloc (mob.rs, pc.rs).
-    libc::free(bl as *mut libc::c_void);
+
+    // Drop the Box — this frees the FloorItemData allocation.
+    item_map().remove(&id);
 
     let idx = id.wrapping_sub(crate::game::mob::FLOORITEM_START_NUM) as usize;
-    if !OBJECT.is_null() && idx < OBJECT_N.load(Ordering::Relaxed) {
-        *OBJECT.add(idx) = 0;
+    let mut slots = object_slots();
+    if idx < slots.len() {
+        slots[idx] = 0;
     }
 }
 
 /// Assign an ID to a new floor item and insert it into the world.
 ///
 /// Scans the bitmap for the first free slot, grows the bitmap if necessary,
-/// assigns the item's ID, then registers it in the ID database and block grid.
-///
+/// assigns the item's ID, takes ownership of the `Box<FloorItemData>` via `Box::from_raw`,
+/// registers it in `ITEM_MAP`, and links it into the block grid.
 ///
 /// # Safety
 /// - `bl` must be a valid non-null pointer to a `FloorItemData` (cast to `BlockList`),
-///   allocated via `libc::calloc`, with `m`/`x`/`y` already set.
+///   allocated via `Box` (i.e., `Box::into_raw`), with `m`/`x`/`y` already set.
+/// - Caller must not use `bl` after this call — ownership transfers to `ITEM_MAP`.
 /// - Must be called on the game thread (single-threaded game loop).
 pub unsafe fn map_additem(bl: *mut BlockList) {
     use crate::game::block::map_addblock;
 
+    let mut slots = object_slots();
+
     // Find first free slot.
-    let mut i = 0usize;
-    while !OBJECT.is_null() && i < OBJECT_N.load(Ordering::Relaxed) && *OBJECT.add(i) != 0 {
-        i += 1;
-    }
+    let i = slots.iter().position(|&b| b == 0).unwrap_or(slots.len());
 
     if i >= MAX_FLOORITEM {
         tracing::error!("map_additem: floor item capacity exceeded ({MAX_FLOORITEM})");
         return;
     }
 
-    // Grow bitmap if the free slot is beyond the current allocation.
-    if i >= OBJECT_N.load(Ordering::Relaxed) {
+    // Grow bitmap if the free slot is at or beyond the current length.
+    if i >= slots.len() {
         let new_n = i + 256;
-        if OBJECT_N.load(Ordering::Relaxed) == 0 {
-            // First allocation: calloc for a zeroed array.
-            OBJECT = libc::calloc(new_n, 1) as *mut u8;
-        } else {
-            // Grow with realloc; zero the newly added bytes.
-            let old_n = OBJECT_N.load(Ordering::Relaxed);
-            let old_ptr = OBJECT as *mut libc::c_void;
-            OBJECT = libc::realloc(old_ptr, new_n) as *mut u8;
-            if !OBJECT.is_null() {
-                // Zero the newly appended bytes (realloc does not zero them).
-                std::ptr::write_bytes(OBJECT.add(old_n), 0, new_n - old_n);
-            } else {
-                // realloc failed — free original allocation to avoid leak.
-                libc::free(old_ptr);
-            }
-        }
-        if OBJECT.is_null() {
-            OBJECT_N.store(0, Ordering::Relaxed);
-            tracing::error!("map_additem: realloc failed — item pool cleared");
-            return;
-        }
-        OBJECT_N.store(new_n, Ordering::Relaxed);
+        slots.resize(new_n, 0);
     }
 
-    *OBJECT.add(i) = 1;
+    slots[i] = 1;
+    drop(slots); // release lock before calling map_addiddb_item / map_addblock
+
     let id = (i as u32).wrapping_add(crate::game::mob::FLOORITEM_START_NUM);
     (*bl).id      = id;
     (*bl).bl_type = crate::game::mob::BL_ITEM as u8;
     (*bl).prev    = std::ptr::null_mut();
     (*bl).next    = std::ptr::null_mut();
-    map_addiddb(bl);
+    // Take ownership of the Box<FloorItemData> into ITEM_MAP.
+    // SAFETY: bl was produced by Box::into_raw — Box::from_raw re-establishes ownership.
+    let item_box = Box::from_raw(bl as *mut crate::game::scripting::types::floor::FloorItemData);
+    map_addiddb_item(id, item_box);
     map_addblock(bl);
-}
-
-/// Acquire the deferred-free lock.
-///
-/// The original C implementation was commented out entirely; call sites are
-/// also commented out. This is a no-op that returns 0 for ABI compatibility.
-///
-pub unsafe fn map_freeblock_lock() -> i32 {
-    0
-}
-
-/// Release the deferred-free lock.
-///
-/// The original C implementation was commented out entirely; call sites are
-/// also commented out. This is a no-op that returns 0 for ABI compatibility.
-///
-pub unsafe fn map_freeblock_unlock() -> i32 {
-    0
 }
 
 /// Set the IP address and port for a map slot.
@@ -230,92 +197,160 @@ pub unsafe fn map_setmapip(id: i32, ip: u32, port: u16) -> i32 {
     0
 }
 
-/// Free a block-list pointer.
-///
-/// Since `map_freeblock_lock` and `map_freeblock_unlock` are no-op stubs, the lock
-/// counter is always 0, so the deferred-free path is unreachable. Frees the pointer
-/// immediately with `libc::free`.
-///
-/// Returns 0 (the lock value), matching the original C return convention.
-///
-///
-/// # Safety
-/// `bl`, if non-null, must have been allocated by the C heap allocator (`malloc`/`calloc`/
-/// `realloc`) and must not be freed again after this call.
-pub unsafe fn map_freeblock(bl: *mut std::ffi::c_void) -> i32 {
-    if !bl.is_null() {
-        libc::free(bl);
-    }
-    0 // lock is always 0 (stubs); matches C `return bl_free_lock`
-}
-
 // ---------------------------------------------------------------------------
 // ID database — entity lookup by ID and name
 // ---------------------------------------------------------------------------
 
-// SAFETY: Option<HashMap> used as a deferred-init singleton. Initialized on first use via
-// map_initiddb, then read/write on the game thread only. Single-threaded game loop — no concurrent access.
-static mut ID_DB: Option<HashMap<u32, *mut std::ffi::c_void>> = None;
+// ── Typed entity storage ──────────────────────────────────────────────────
+// Each map owns its entities via Box<T>. The game loop is single-threaded;
+// Mutex satisfies OnceLock<T>: Sync but never actually contends.
 
-unsafe fn id_db() -> &'static mut HashMap<u32, *mut std::ffi::c_void> {
-    ID_DB.get_or_insert_with(HashMap::new)
+static PLAYER_MAP: OnceLock<Mutex<HashMap<u32, Box<crate::game::pc::MapSessionData>>>> = OnceLock::new();
+static MOB_MAP: OnceLock<Mutex<HashMap<u32, Box<crate::game::mob::MobSpawnData>>>> = OnceLock::new();
+static NPC_MAP: OnceLock<Mutex<HashMap<u32, Box<crate::game::npc::NpcData>>>> = OnceLock::new();
+static ITEM_MAP: OnceLock<Mutex<HashMap<u32, Box<crate::game::scripting::types::floor::FloorItemData>>>> = OnceLock::new();
+
+fn player_map() -> std::sync::MutexGuard<'static, HashMap<u32, Box<crate::game::pc::MapSessionData>>> {
+    PLAYER_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
+}
+fn mob_map() -> std::sync::MutexGuard<'static, HashMap<u32, Box<crate::game::mob::MobSpawnData>>> {
+    MOB_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
+}
+fn npc_map() -> std::sync::MutexGuard<'static, HashMap<u32, Box<crate::game::npc::NpcData>>> {
+    NPC_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
+}
+fn item_map() -> std::sync::MutexGuard<'static, HashMap<u32, Box<crate::game::scripting::types::floor::FloorItemData>>> {
+    ITEM_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
 }
 
-pub unsafe fn map_initiddb() {
-    id_db(); // initialise lazily
+pub fn map_initiddb() {}
+pub fn map_termiddb() {
+    player_map().clear();
+    mob_map().clear();
+    npc_map().clear();
+    item_map().clear();
 }
 
-pub unsafe fn map_termiddb() {
-    id_db().clear();
-}
-
-/// Returns a raw pointer to any game object (USER*, MOB*, NPC*, FLOORITEM*) by ID.
-/// Returns null if not found. Callers cast the result to the appropriate type.
+/// Raw pointer lookup for call sites not yet migrated to typed lookups.
+/// Searches all four typed maps. Keep until all callers use typed lookups.
 pub unsafe fn map_id2bl(id: u32) -> *mut std::ffi::c_void {
-    id_db().get(&id).copied().unwrap_or(std::ptr::null_mut())
+    if let Some(sd) = player_map().get_mut(&id) {
+        return sd.as_mut() as *mut crate::game::pc::MapSessionData as *mut std::ffi::c_void;
+    }
+    if let Some(mob) = mob_map().get_mut(&id) {
+        return mob.as_mut() as *mut crate::game::mob::MobSpawnData as *mut std::ffi::c_void;
+    }
+    if let Some(npc) = npc_map().get_mut(&id) {
+        return npc.as_mut() as *mut crate::game::npc::NpcData as *mut std::ffi::c_void;
+    }
+    if let Some(item) = item_map().get_mut(&id) {
+        return item.as_mut() as *mut crate::game::scripting::types::floor::FloorItemData as *mut std::ffi::c_void;
+    }
+    std::ptr::null_mut()
 }
 
-/// Returns the USER* for a player by character ID. NULL if not found or not a player.
-pub unsafe fn map_id2sd(id: u32) -> *mut std::ffi::c_void {
-    map_id2bl(id) // C caller casts to USER*; same raw pointer
+/// Insert a player — takes ownership of the Box.
+pub fn map_addiddb_player(id: u32, sd: Box<crate::game::pc::MapSessionData>) {
+    player_map().insert(id, sd);
 }
 
+/// Insert a mob — takes ownership of the Box.
+pub fn map_addiddb_mob(id: u32, mob: Box<crate::game::mob::MobSpawnData>) {
+    mob_map().insert(id, mob);
+}
+
+/// Insert an NPC — takes ownership of the Box.
+pub fn map_addiddb_npc(id: u32, npc: Box<crate::game::npc::NpcData>) {
+    npc_map().insert(id, npc);
+}
+
+/// Insert a floor item — takes ownership of the Box.
+pub fn map_addiddb_item(id: u32, item: Box<crate::game::scripting::types::floor::FloorItemData>) {
+    item_map().insert(id, item);
+}
+
+/// Legacy untyped insert — warns and no-ops. Replace call sites with typed versions.
 pub unsafe fn map_addiddb(bl: *mut BlockList) {
     if bl.is_null() { return; }
-    id_db().insert((*bl).id, bl as *mut std::ffi::c_void);
+    tracing::warn!("[map_addiddb] untyped call for id={} — migrate to map_addiddb_*", (*bl).id);
 }
 
 pub unsafe fn map_deliddb(bl: *mut BlockList) {
     if bl.is_null() { return; }
-    id_db().remove(&(*bl).id);
+    let id = (*bl).id;
+    if player_map().remove(&id).is_some() { return; }
+    if mob_map().remove(&id).is_some() { return; }
+    if npc_map().remove(&id).is_some() { return; }
+    item_map().remove(&id);
 }
 
-/// Returns the MOB* for an entity by ID. Adjusts IDs below MOB_START_NUM.
-///
-pub unsafe fn map_id2mob(mut id: u32) -> *mut crate::game::mob::MobSpawnData {
-    use crate::game::mob::{MOB_START_NUM, BL_MOB};
-    if id < MOB_START_NUM { id = id.saturating_add(MOB_START_NUM - 1); }
-    let bl = map_id2bl(id) as *mut BlockList;
-    if bl.is_null() { return std::ptr::null_mut(); }
-    if (*bl).bl_type as i32 == BL_MOB { bl as *mut crate::game::mob::MobSpawnData } else { std::ptr::null_mut() }
+// ── Safety model for &'static mut T lookups ───────────────────────────────
+// These functions return &'static mut T by extending the lifetime of a
+// reference into a Box<T> stored in a static map. This is safe under two
+// invariants that callers MUST uphold:
+//
+// 1. Single-threaded access: all entity lookups run on the game event loop
+//    thread only. No other thread calls these functions.
+//
+// 2. No simultaneous aliasing: callers must never hold two live &mut T
+//    references to the *same* entity at the same time. Different entities
+//    stored in different maps can be borrowed simultaneously — they are
+//    distinct allocations with no borrow conflict.
+//
+// Violating either invariant is undefined behavior.
+// ────────────────────────────────────────────────────────────────────────────
+
+/// Safe typed lookup — returns &'static mut MapSessionData if id is a player.
+pub fn map_id2sd_pc(id: u32) -> Option<&'static mut crate::game::pc::MapSessionData> {
+    player_map().get_mut(&id).map(|b| unsafe { &mut *(b.as_mut() as *mut crate::game::pc::MapSessionData) })
 }
 
-/// Returns the NPC* for an entity by ID. Adjusts IDs below NPC_START_NUM.
-///
-pub unsafe fn map_id2npc(id: u32) -> *mut crate::game::npc::NpcData {
-    use crate::game::npc::NPC_START_NUM;
-    let adj_id = if id < NPC_START_NUM { id.saturating_add(NPC_START_NUM - 2) } else { id };
-    let bl = map_id2bl(adj_id) as *mut BlockList;
-    if bl.is_null() { return std::ptr::null_mut(); }
-    if (*bl).bl_type as i32 == crate::game::pc::BL_NPC { bl as *mut crate::game::npc::NpcData } else { std::ptr::null_mut() }
+pub fn map_id2mob_ref(id: u32) -> Option<&'static mut crate::game::mob::MobSpawnData> {
+    mob_map().get_mut(&id).map(|b| unsafe { &mut *(b.as_mut() as *mut crate::game::mob::MobSpawnData) })
 }
 
-/// Returns the FLOORITEM* for an entity by ID.
-///
+pub fn map_id2npc_ref(id: u32) -> Option<&'static mut crate::game::npc::NpcData> {
+    npc_map().get_mut(&id).map(|b| unsafe { &mut *(b.as_mut() as *mut crate::game::npc::NpcData) })
+}
+
+pub fn map_id2fl_ref(id: u32) -> Option<&'static mut crate::game::scripting::types::floor::FloorItemData> {
+    item_map().get_mut(&id).map(|b| unsafe { &mut *(b.as_mut() as *mut crate::game::scripting::types::floor::FloorItemData) })
+}
+
+/// Polymorphic entity reference — used by code that handles any entity type.
+pub enum GameEntity<'a> {
+    Player(&'a mut crate::game::pc::MapSessionData),
+    Mob(&'a mut crate::game::mob::MobSpawnData),
+    Npc(&'a mut crate::game::npc::NpcData),
+    Item(&'a mut crate::game::scripting::types::floor::FloorItemData),
+}
+
+/// Look up any entity by id, dispatching by id range.
+/// Returns None if the id is not registered in any typed map.
+pub fn map_id2entity(id: u32) -> Option<GameEntity<'static>> {
+    use crate::game::mob::{MOB_START_NUM, FLOORITEM_START_NUM, NPC_START_NUM};
+    if id < MOB_START_NUM {
+        return map_id2sd_pc(id).map(GameEntity::Player);
+    }
+    if id >= NPC_START_NUM {
+        return map_id2npc_ref(id).map(GameEntity::Npc);
+    }
+    // id is in [MOB_START_NUM, NPC_START_NUM) — either mob or floor item
+    if id >= FLOORITEM_START_NUM {
+        return map_id2fl_ref(id).map(GameEntity::Item);
+    }
+    map_id2mob_ref(id).map(GameEntity::Mob)
+}
+
+/// Floor item lookup — returns raw pointer into the `Box<FloorItemData>` stored in `ITEM_MAP`.
+/// Prefer `map_id2fl_ref` at new call sites.
 pub unsafe fn map_id2fl(id: u32) -> *mut std::ffi::c_void {
-    let bl = map_id2bl(id) as *mut BlockList;
-    if bl.is_null() { return std::ptr::null_mut(); }
-    if (*bl).bl_type as i32 == crate::game::pc::BL_ITEM { bl as *mut std::ffi::c_void } else { std::ptr::null_mut() }
+    item_map().get_mut(&id).map(|b| b.as_mut() as *mut crate::game::scripting::types::floor::FloorItemData as *mut std::ffi::c_void).unwrap_or(std::ptr::null_mut())
+}
+
+/// Remove a mob from MOB_MAP (called from free_onetime).
+pub fn mob_map_remove(id: u32) {
+    mob_map().remove(&id);
 }
 
 /// Find a player session by name (case-insensitive).
@@ -344,9 +379,10 @@ pub unsafe fn map_name2npc(name: *const i8) -> *mut std::ffi::c_void {
     let mut i = NPC_START_NUM as u32;
     let npc_hi = NPC_ID.load(Ordering::Relaxed);
     while i <= npc_hi {
-        let nd = map_id2npc(i);
-        if !nd.is_null() && libc::strcasecmp((*nd).npc_name.as_ptr(), name) == 0 {
-            return nd as *mut std::ffi::c_void;
+        if let Some(nd) = map_id2npc_ref(i) {
+            if libc::strcasecmp(nd.npc_name.as_ptr(), name) == 0 {
+                return nd as *mut crate::game::npc::NpcData as *mut std::ffi::c_void;
+            }
         }
         i += 1;
     }
@@ -390,7 +426,6 @@ pub unsafe fn rust_map_cronjob() {
 }
 
 /// Dispatch a Lua event with a single block_list argument.
-#[cfg(not(test))]
 #[allow(dead_code)]
 unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
@@ -444,9 +479,8 @@ pub async unsafe fn mmo_setonline(id: u32, val: i32) -> bool {
     // Extract all data from raw pointers BEFORE any .await so no raw pointers
     // cross yield points (required for the future to be Send).
     let addr = {
-        let sd = map_id2sd(id) as *mut MapSessionData;
-        if sd.is_null() { return false; }
-        let fd = (*sd).fd;
+        let Some(sd) = map_id2sd_pc(id) else { return false; };
+        let fd = sd.fd;
         // rust_session_get_client_ip returns IP in network byte order (sin_addr.s_addr).
         let raw_ip = rust_session_get_client_ip(fd);
         format!(
@@ -503,8 +537,11 @@ pub unsafe fn map_canmove(m: i32, x: i32, y: i32) -> i32 {
 
     if pass_val != 0 {
         // A player ID is stored in the pass cell. Look them up.
-        let sd = map_id2sd(pass_val as u32) as *mut MapSessionData;
-        if sd.is_null() || ((*sd).uFlags & U_FLAG_UNPHYSICAL) == 0 {
+        let blocked = match map_id2sd_pc(pass_val as u32) {
+            None => true, // not in player map → treat as blocking
+            Some(sd) => (sd.uFlags & U_FLAG_UNPHYSICAL) == 0,
+        };
+        if blocked {
             // Cell is occupied by a physical player — blocked.
             return 1;
         }
@@ -1623,16 +1660,16 @@ pub async unsafe fn uptime() -> i32 {
 // ---------------------------------------------------------------------------
 // objectFlags — static object collision-flag table loaded from static_objects.tbl
 //
-// `objectFlags` is a heap-allocated byte array indexed by a tile/object ID.
 // Each byte encodes directional movement flags (OBJ_UP / OBJ_RIGHT / OBJ_DOWN /
-// OBJ_LEFT) for its corresponding object.  The C extern declaration in
+// OBJ_LEFT) for its corresponding object.
 // ---------------------------------------------------------------------------
 
-/// Pointer to the static object flag table allocated by `object_flag_init`.
+/// Static object flag table populated by `object_flag_init`.
 ///
 /// Bitmap of directional collision flags for each floor item object slot.
-// SAFETY: Raw pointer to heap buffer allocated once during init, read-only pattern thereafter.
-// Single-threaded game loop — no concurrent access.
+/// Stored as a raw pointer for ABI compatibility with movement.rs access patterns.
+// SAFETY: Written once at startup by object_flag_init before any readers.
+// Single-threaded game loop — no concurrent access after init.
 pub static mut objectFlags: *mut u8 = std::ptr::null_mut();
 
 /// Load the static object flag table from `static_objects.tbl`.
@@ -1646,7 +1683,7 @@ pub static mut objectFlags: *mut u8 = std::ptr::null_mut();
 ///   - 5 bytes: reserved/padding
 ///   - 1 byte: flag byte for this object
 ///
-/// Allocates `objectFlags` with `num + 1` bytes via `libc::calloc`.
+/// Allocates `objectFlags` with `num + 1` zero-initialised bytes.
 /// The actual per-object flag assignment is intentionally left commented out,
 /// preserving the original C behaviour (table allocated but entries stay zero).
 ///
@@ -1687,8 +1724,9 @@ pub unsafe fn object_flag_init() -> i32 {
     let mut num: i32 = 0;
     libc::fread(std::ptr::addr_of_mut!(num).cast(), 4, 1, fi);
 
-    // Allocate objectFlags with num+1 bytes, zero-initialised (matches C CALLOC).
-    objectFlags = libc::calloc((num as usize) + 1, 1).cast();
+    // Allocate objectFlags with num+1 zero-initialised bytes.
+    let flags_vec: Vec<u8> = vec![0u8; (num as usize) + 1];
+    objectFlags = Box::into_raw(flags_vec.into_boxed_slice()) as *mut u8;
 
     let mut flag: i8 = 0;
     libc::fread(std::ptr::addr_of_mut!(flag).cast(), 1, 1, fi);
@@ -2559,37 +2597,21 @@ pub async unsafe fn map_setglobalgamereg(reg: *const i8, val: i32) -> i32 {
 //
 // ---------------------------------------------------------------------------
 
-/// Look up a character's name by ID; allocates a 255-byte heap buffer (caller must free).
-/// Returns "None" for id=0, empty string if not found.
-pub async unsafe fn map_id2name(id: u32) -> *mut i8 {
+/// Look up a character's name by ID.
+/// Returns `"None"` for id=0, empty string if not found.
+pub async fn map_id2name(id: u32) -> String {
     if id == 0 {
-        // Allocate and return before any await — short-circuit path.
-        let buf = libc::calloc(6, 1) as *mut i8;
-        if !buf.is_null() {
-            let none = b"None\0";
-            std::ptr::copy_nonoverlapping(none.as_ptr() as *const i8, buf, none.len());
-        }
-        return buf;
+        return "None".to_string();
     }
-    // Query first (only owned types in state across the await point — future is Send).
-    let name: Option<String> = sqlx::query_scalar::<_, String>(
+    sqlx::query_scalar::<_, String>(
             "SELECT `ChaName` FROM `Character` WHERE `ChaId`=?"
         )
         .bind(id)
         .fetch_optional(get_pool())
         .await
         .ok()
-        .flatten();
-    // Allocate *mut i8 only AFTER the await so it is never stored in the state machine.
-    let buf = libc::calloc(255, 1) as *mut i8;
-    if buf.is_null() { return buf; }
-    if let Some(s) = name {
-        let bytes = s.as_bytes();
-        let len = bytes.len().min(254);
-        std::ptr::copy_nonoverlapping(bytes.as_ptr() as *const i8, buf, len);
-        *buf.add(len) = 0;
-    }
-    buf
+        .flatten()
+        .unwrap_or_default()
 }
 
 /// Trigger the mapWeather Lua hook when the in-game hour changes.
@@ -2697,8 +2719,7 @@ pub unsafe fn hasCoref(sd: *mut MapSessionData) -> i32 {
     }
     // Container coref: the container player must still be in the ID database.
     if (*sd).coref_container != 0 {
-        let container = map_id2sd((*sd).coref_container) as *mut MapSessionData;
-        if !container.is_null() {
+        if map_id2sd_pc((*sd).coref_container).is_some() {
             return 1;
         }
     }

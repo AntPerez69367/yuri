@@ -8,11 +8,11 @@ pub mod object_collect;
 pub mod pc_accessors;
 pub mod map_globals;
 pub mod pending;
+pub mod thread_registry;
 pub mod types;
 
 use mlua::Lua;
 use std::ffi::{CStr, CString};
-use std::sync::{Arc, atomic::{AtomicBool}};
 
 use crate::database::map_db::BlockList;
 use types::floor::FloorListObject;
@@ -56,6 +56,7 @@ pub fn sl_init() {
         globals::register(&lua).expect("failed to register scripting globals");
 
         SL_STATE = Some(lua);
+        thread_registry::init();
 
         // Capture the raw lua_State* via exec_raw and store in sl_gstate so C
         // helpers 
@@ -91,11 +92,16 @@ macro_rules! ctor {
 
 fn register_types(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
-    g.set("PC", lua.create_function(|_, v: mlua::Value| Ok(PcObject { ptr: lua_val_to_ptr(v) as *mut crate::game::pc::MapSessionData }))?)?;
-    g.set("MOB", lua.create_function(|_, v: mlua::Value| Ok(MobObject {
-        ptr: lua_val_to_ptr(v),
-        deleted: Arc::new(AtomicBool::new(false)),
-    }))?)?;
+    g.set("PC", lua.create_function(|_, v: mlua::Value| {
+        let ptr = lua_val_to_ptr(v) as *const crate::game::pc::MapSessionData;
+        let id = if ptr.is_null() { 0u32 } else { unsafe { (*ptr).bl.id } };
+        Ok(PcObject { id })
+    })?)?;
+    g.set("MOB", lua.create_function(|_, v: mlua::Value| {
+        let ptr = lua_val_to_ptr(v) as *const crate::game::mob::MobSpawnData;
+        let id = if ptr.is_null() { 0u32 } else { unsafe { (*ptr).bl.id } };
+        Ok(MobObject { id })
+    })?)?;
     // NPC(id) — looks up the NPC by ID.
     // The old C constructor called map_id2npc(id) which resolves the integer ID
     // to a real pointer; storing the raw integer as a pointer would cause a
@@ -127,23 +133,25 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     let player_tbl = lua.create_table()?;
     let player_mt  = lua.create_table()?;
     player_mt.set("__call", lua.create_function(|lua, (_tbl, v): (mlua::Value, mlua::Value)| -> mlua::Result<mlua::Value> {
-        let ptr = match v {
+        let bl_id = match v {
             mlua::Value::Integer(id) => {
                 if id < 0 || id > u32::MAX as i64 { return Ok(mlua::Value::Nil); }
-                unsafe { ffi::map_id2sd(id as u32) }
+                crate::game::map_server::map_id2sd_pc(id as u32).map(|sd| sd.bl.id)
             }
             mlua::Value::Number(f) => {
                 if !f.is_finite() || f < 0.0 || f > u32::MAX as f64 { return Ok(mlua::Value::Nil); }
-                unsafe { ffi::map_id2sd(f as u32) }
+                crate::game::map_server::map_id2sd_pc(f as u32).map(|sd| sd.bl.id)
             }
             mlua::Value::String(ref s) => {
                 let cs = CString::new(s.as_bytes().to_vec()).map_err(mlua::Error::external)?;
-                unsafe { ffi::map_name2sd(cs.as_ptr()) }
+                let ptr = unsafe { ffi::map_name2sd(cs.as_ptr()) };
+                if ptr.is_null() { None }
+                else { Some(unsafe { (*(ptr as *const crate::game::pc::MapSessionData)).bl.id }) }
             }
-            _ => std::ptr::null_mut(),
+            _ => None,
         };
-        if ptr.is_null() { return Ok(mlua::Value::Nil); }
-        Ok(mlua::Value::UserData(lua.create_userdata(PcObject { ptr: ptr as *mut crate::game::pc::MapSessionData })?))
+        let id = match bl_id { Some(id) => id, None => return Ok(mlua::Value::Nil) };
+        Ok(mlua::Value::UserData(lua.create_userdata(PcObject { id })?))
     })?)?;
     player_tbl.set_metatable(Some(player_mt));
     g.set("Player", player_tbl)?;
@@ -153,19 +161,20 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     let mob_tbl = lua.create_table()?;
     let mob_mt  = lua.create_table()?;
     mob_mt.set("__call", lua.create_function(|lua, (_tbl, v): (mlua::Value, mlua::Value)| -> mlua::Result<mlua::Value> {
-        let ptr = match v {
+        let id: u32 = match v {
             mlua::Value::Integer(id) => {
                 if id < 0 || id > u32::MAX as i64 { return Ok(mlua::Value::Nil); }
-                unsafe { ffi::map_id2mob(id as u32) }
+                id as u32
             }
             mlua::Value::Number(f) => {
                 if !f.is_finite() || f < 0.0 || f > u32::MAX as f64 { return Ok(mlua::Value::Nil); }
-                unsafe { ffi::map_id2mob(f as u32) }
+                f as u32
             }
-            _ => std::ptr::null_mut(),
+            _ => return Ok(mlua::Value::Nil),
         };
-        if ptr.is_null() { return Ok(mlua::Value::Nil); }
-        Ok(mlua::Value::UserData(lua.create_userdata(MobObject { ptr, deleted: Arc::new(AtomicBool::new(false)) })?))
+        // Verify the mob exists before creating a MobObject
+        if crate::game::map_server::map_id2mob_ref(id).is_none() { return Ok(mlua::Value::Nil); }
+        Ok(mlua::Value::UserData(lua.create_userdata(MobObject { id })?))
     })?)?;
     mob_tbl.set_metatable(Some(mob_mt));
     g.set("Mob", mob_tbl)?;
@@ -304,16 +313,34 @@ pub unsafe fn sl_luasize() -> i32 {
 pub(crate) unsafe fn bl_to_lua(lua: &Lua, bl: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
     debug_assert!(!bl.is_null(), "bl_to_lua: caller must not pass a null pointer");
     if bl.is_null() { return Ok(mlua::Value::Nil); }
-    let bl_type = (*(bl as *const BlockList)).bl_type as i32;
+    let bl_ref = &*(bl as *const BlockList);
+    let bl_type = bl_ref.bl_type as i32;
     match bl_type {
-        ffi::BL_PC   => lua.pack(PcObject       { ptr: bl as *mut crate::game::pc::MapSessionData }),
-        ffi::BL_MOB  => lua.pack(MobObject      { ptr: bl, deleted: Arc::new(AtomicBool::new(false)) }),
-        ffi::BL_NPC  => lua.pack(NpcObject      { ptr: bl }),
+        ffi::BL_PC   => lua.pack(PcObject  { id: bl_ref.id }),
+        ffi::BL_MOB  => lua.pack(MobObject { id: bl_ref.id }),
+        ffi::BL_NPC  => lua.pack(NpcObject { ptr: bl }),
         ffi::BL_ITEM => lua.pack(FloorListObject::new(bl)),
         other => {
             tracing::warn!("[scripting] bl_to_lua: unhandled bl_type={other:#04x}, returning nil");
             Ok(mlua::Value::Nil)
         }
+    }
+}
+
+/// Safe dispatch: look up entity by id and wrap in appropriate Lua userdata.
+/// Returns Nil if the entity no longer exists (killed, picked up, etc.).
+pub fn entity_to_lua(lua: &mlua::Lua, id: u32) -> mlua::Result<mlua::Value> {
+    use crate::game::map_server::GameEntity;
+    match crate::game::map_server::map_id2entity(id) {
+        Some(GameEntity::Player(sd)) => lua.pack(PcObject  { id: sd.bl.id }),
+        Some(GameEntity::Mob(mob))   => lua.pack(MobObject { id: mob.bl.id }),
+        Some(GameEntity::Npc(npc)) => lua.pack(
+            NpcObject { ptr: npc as *mut _ as *mut std::ffi::c_void }
+        ),
+        Some(GameEntity::Item(item)) => lua.pack(
+            FloorListObject::new(item as *mut _ as *mut std::ffi::c_void)
+        ),
+        None => Ok(mlua::Value::Nil),
     }
 }
 
@@ -371,6 +398,83 @@ pub unsafe fn doscript_blargs(
         mv.push_back(val);
     }
     call_lua(root, method, mv) as i32
+}
+
+/// Coroutine dispatch for NPC interactions.
+///
+/// Creates a Lua coroutine thread, wraps the first BL_PC argument through
+/// `_wrap_player()` so yielding methods (dialog, menu, input, etc.) work,
+/// and resumes the thread.  If the script yields (waiting for client
+/// response), the thread is stored in `thread_registry` keyed by the
+/// player's `MapSessionData` pointer.
+///
+/// # Safety
+/// Same requirements as `doscript_blargs`.
+pub unsafe fn doscript_coro(
+    root: *const i8,
+    method: *const i8,
+    args: &[*mut BlockList],
+) -> i32 {
+    if root.is_null() { return 0; }
+    let lua = sl_state();
+    let root_s = match CStr::from_ptr(root).to_str() { Ok(s) => s, Err(_) => return 0 };
+
+    let func = if method.is_null() {
+        match lua.globals().get::<mlua::Function>(root_s) { Ok(f) => f, Err(_) => return 0 }
+    } else {
+        let method_s = match CStr::from_ptr(method).to_str() { Ok(s) => s, Err(_) => return 0 };
+        let tbl: mlua::Table = match lua.globals().get(root_s) { Ok(t) => t, Err(_) => return 0 };
+        match tbl.get::<mlua::Function>(method_s) { Ok(f) => f, Err(_) => return 0 }
+    };
+
+    let thread = match lua.create_thread(func) {
+        Ok(t) => t,
+        Err(e) => { tracing::warn!("[scripting] create_thread failed: {e}"); return 0; }
+    };
+
+    // Build args, wrapping the first BL_PC argument through _wrap_player.
+    let wrap_fn: Option<mlua::Function> = lua.globals().get("_wrap_player").ok();
+    let mut mv = mlua::MultiValue::new();
+    let mut user_key: Option<usize> = None;
+    for (i, &bl) in args.iter().enumerate() {
+        let val = if bl.is_null() {
+            mlua::Value::Nil
+        } else {
+            let bl_ref = &*(bl as *const BlockList);
+            // Wrap the first player arg through _wrap_player for yielding method support.
+            if i == 0 && bl_ref.bl_type as i32 == ffi::BL_PC {
+                // Derive the user key (MapSessionData pointer) for thread registry.
+                if let Some(sd) = crate::game::map_server::map_id2sd_pc(bl_ref.id) {
+                    user_key = Some(sd as *mut crate::game::pc::MapSessionData as usize);
+                }
+                let pc_val = bl_to_lua(lua, bl as *mut std::ffi::c_void).unwrap_or(mlua::Value::Nil);
+                if let Some(ref wf) = wrap_fn {
+                    wf.call::<mlua::Value>(pc_val).unwrap_or(mlua::Value::Nil)
+                } else {
+                    pc_val
+                }
+            } else {
+                bl_to_lua(lua, bl as *mut std::ffi::c_void).unwrap_or(mlua::Value::Nil)
+            }
+        };
+        mv.push_back(val);
+    }
+
+    match thread.resume::<mlua::MultiValue>(mv) {
+        Ok(_) => {
+            if thread.status() == mlua::ThreadStatus::Resumable {
+                if let Some(uk) = user_key {
+                    thread_registry::store(lua, uk, &thread);
+                } else {
+                    tracing::warn!("[scripting] {root_s}: thread yielded but no user_key to store it");
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("[scripting] {root_s}: {e}");
+        }
+    }
+    1
 }
 
 /// Dispatch a Lua script call with C string arguments (slice API).
@@ -552,6 +656,6 @@ pub unsafe fn rust_sl_exec(user: *mut std::ffi::c_void, code: *mut i8) {
 }
 
 pub unsafe fn rust_sl_async_freeco(user: *mut std::ffi::c_void) {
-    pending::cancel(user);
+    thread_registry::cancel(user as usize);
     async_coro::clear_menu_opts(user);
 }

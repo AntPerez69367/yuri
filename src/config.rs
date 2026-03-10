@@ -724,7 +724,6 @@ pub unsafe fn rust_config_read(cfg_file: *const i8) -> i32 {
                 return -1;
             }
 
-            #[cfg(not(test))]
             unsafe { rust_config_populate_c_globals(); }
             0
         }
@@ -884,7 +883,6 @@ pub unsafe fn rust_config_free_string(ptr: *mut i8) {
     }
 }
 
-#[cfg(not(test))]
 pub unsafe fn rust_config_populate_c_globals() {
     use crate::config_globals::{GlobalConfig, TownData, set_global_config, XP_RATE, D_RATE};
     use std::sync::atomic::Ordering;

@@ -26,7 +26,7 @@ use super::packet::{
 
 
 
-use crate::game::map_server::{map_id2npc, map_id2bl as map_id2bl_ms};
+use crate::game::map_server::{map_id2bl as map_id2bl_ms};
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::client::visual::clif_clickonplayer;
 use crate::game::scripting::{
@@ -39,10 +39,19 @@ use crate::database::item_db::{
 };
 use crate::database::class_db::rust_classdb_name;
 
-// map_id2sd/map_id2bl return *mut std::ffi::c_void in map_server — wrap with casts.
+// map_id2sd_local: typed lookup returning raw pointer for use in unsafe context.
 #[inline]
-unsafe fn map_id2sd(id: u32) -> *mut MapSessionData {
-    crate::game::map_server::map_id2sd(id) as *mut MapSessionData
+fn map_id2sd_local(id: u32) -> *mut MapSessionData {
+    crate::game::map_server::map_id2sd_pc(id)
+        .map(|r| r as *mut MapSessionData)
+        .unwrap_or(std::ptr::null_mut())
+}
+// map_id2npc_local: typed lookup returning raw pointer for use in unsafe context.
+#[inline]
+fn map_id2npc_local(id: u32) -> *mut crate::game::npc::NpcData {
+    crate::game::map_server::map_id2npc_ref(id)
+        .map(|r| r as *mut crate::game::npc::NpcData)
+        .unwrap_or(std::ptr::null_mut())
 }
 #[inline]
 unsafe fn map_id2bl(id: u32) -> *mut BlockList {
@@ -50,17 +59,28 @@ unsafe fn map_id2bl(id: u32) -> *mut BlockList {
 }
 
 /// Dispatch a Lua event with a single block_list argument.
-#[cfg(not(test))]
 #[allow(dead_code)]
 unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
 }
 
 /// Dispatch a Lua event with two block_list arguments.
-#[cfg(not(test))]
 #[allow(dead_code)]
 unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
+}
+
+/// Coroutine dispatch: wraps the first BL_PC arg and runs in a Lua coroutine.
+/// Use for NPC click/dialog/menu interactions that may yield.
+#[allow(dead_code)]
+unsafe fn sl_doscript_coro(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
+    crate::game::scripting::doscript_coro(root, method, &[bl as *mut _])
+}
+
+/// Coroutine dispatch with two block_list arguments.
+#[allow(dead_code)]
+unsafe fn sl_doscript_coro_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
+    crate::game::scripting::doscript_coro(root, method, &[bl1 as *mut _, bl2 as *mut _])
 }
 
 
@@ -432,7 +452,7 @@ pub unsafe fn clif_scriptmes(
     let fd       = (*sd).fd;
     let graphic_id = (*sd).npc_g;
     let color    = (*sd).npc_gc;
-    let nd       = map_id2npc(id as u32) as *mut NpcData;
+    let nd       = map_id2npc_local(id as u32) as *mut NpcData;
     let dialog_type = (*sd).dialogtype;
 
     if !nd.is_null() {
@@ -535,7 +555,7 @@ pub unsafe fn clif_scriptmenu(
     let fd      = (*sd).fd;
     let graphic = (*sd).npc_g;
     let color   = (*sd).npc_gc;
-    let nd      = map_id2npc(id as u32) as *mut NpcData;
+    let nd      = map_id2npc_local(id as u32) as *mut NpcData;
     let dialog_type = (*sd).dialogtype;
 
     if !nd.is_null() {
@@ -667,7 +687,7 @@ pub unsafe fn clif_scriptmenuseq(
     let fd         = (*sd).fd;
     let graphic_id = (*sd).npc_g;
     let color      = (*sd).npc_gc;
-    let nd         = map_id2npc(id as u32) as *mut NpcData;
+    let nd         = map_id2npc_local(id as u32) as *mut NpcData;
     let dialog_type = (*sd).dialogtype;
 
     if !nd.is_null() {
@@ -870,7 +890,7 @@ pub unsafe fn clif_inputseq(
     let fd         = (*sd).fd;
     let graphic_id = (*sd).npc_g;
     let color      = (*sd).npc_gc;
-    let nd         = map_id2npc(id as u32) as *mut NpcData;
+    let nd         = map_id2npc_local(id as u32) as *mut NpcData;
 
     if !nd.is_null() {
         (*nd).lastaction = libc::time(std::ptr::null_mut()) as u32;
@@ -975,7 +995,7 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
     let bl_type = (*bl).bl_type as i32;
 
     if bl_type == BL_PC {
-        let tsd = map_id2sd((*bl).id);
+        let tsd = map_id2sd_local((*bl).id);
         if !tsd.is_null() {
             let tsd_ref = &*tsd;
             // CheckProximity: same map, within 21 tiles
@@ -987,7 +1007,7 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
                     || (tsd_ref.optFlags & 64 == 0      // !optFlag_noclick
                         && tsd_ref.optFlags & 32 == 0)  // !optFlag_stealth
                 {
-                    sl_doscript_simple(b"onClick\0".as_ptr() as *const i8, std::ptr::null(), &sd_ref.bl as *const _ as *mut BlockList);
+                    sl_doscript_coro(b"onClick\0".as_ptr() as *const i8, std::ptr::null(), &sd_ref.bl as *const _ as *mut BlockList);
                 }
             }
         }
@@ -1017,7 +1037,7 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
                 }
             }
 
-            sl_doscript_2((*nd).name.as_ptr() as *const i8, b"click\0".as_ptr() as *const i8, &sd_ref.bl as *const _ as *mut BlockList, bl);
+            sl_doscript_coro_2((*nd).name.as_ptr() as *const i8, b"click\0".as_ptr() as *const i8, &sd_ref.bl as *const _ as *mut BlockList, bl);
         }
     } else if bl_type == BL_MOB {
         // cast block_list* → MobSpawnData* (bl is always first field)
@@ -1035,9 +1055,9 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
         {
             (*sd).last_click = (*bl).id;
             rust_sl_async_freeco(sd as *mut std::ffi::c_void);
-            sl_doscript_2(b"onLook\0".as_ptr() as *const i8, std::ptr::null(), &sd_ref.bl as *const _ as *mut BlockList, bl);
+            sl_doscript_coro_2(b"onLook\0".as_ptr() as *const i8, std::ptr::null(), &sd_ref.bl as *const _ as *mut BlockList, bl);
             if !(*mob).data.is_null() {
-                sl_doscript_2((*(*mob).data).yname.as_ptr() as *const i8, b"click\0".as_ptr() as *const i8, &sd_ref.bl as *const _ as *mut BlockList, bl);
+                sl_doscript_coro_2((*(*mob).data).yname.as_ptr() as *const i8, b"click\0".as_ptr() as *const i8, &sd_ref.bl as *const _ as *mut BlockList, bl);
             }
         }
     }
@@ -1062,7 +1082,7 @@ pub unsafe fn clif_buydialog(
 
     if rust_session_exists(fd) == 0 {
         rust_session_set_eof(fd, 8);
-        libc::free(item as *mut libc::c_void);
+        // item points into caller's Vec — do not free here.
         return 0;
     }
 
@@ -1185,9 +1205,9 @@ pub unsafe fn clif_buydialog(
         wfifoset(fd, encrypt(fd) as usize);
     } else {
         // graphic == 0: show NPC equip look
-        let nd = map_id2npc(id) as *mut NpcData;
+        let nd = map_id2npc_local(id) as *mut NpcData;
         if nd.is_null() {
-            libc::free(item as *mut libc::c_void);
+            // item points into caller's Vec — do not free here.
             return 0;
         }
         write_npc_equip_look(fd, nd, 11);
@@ -1286,7 +1306,7 @@ pub unsafe fn clif_buydialog(
         wfifoset(fd, encrypt(fd) as usize);
     }
 
-    libc::free(item as *mut libc::c_void);
+    // item points into caller's Vec — do not free here.
     0
 }
 
@@ -1367,7 +1387,7 @@ pub unsafe fn clif_selldialog(
         wfifow(fd, 1, swap16((len + 17) as u16));
         wfifoset(fd, encrypt(fd) as usize);
     } else {
-        let nd = map_id2npc(id) as *mut NpcData;
+        let nd = map_id2npc_local(id) as *mut NpcData;
         if nd.is_null() { return 0; }
         write_npc_equip_look(fd, nd, 11);
 
@@ -1417,7 +1437,7 @@ pub unsafe fn clif_input(
     let fd      = (*sd).fd;
     let graphic = (*sd).npc_g;
     let color   = (*sd).npc_gc;
-    let nd      = map_id2npc(id as u32) as *mut NpcData;
+    let nd      = map_id2npc_local(id as u32) as *mut NpcData;
     let dialog_type = (*sd).dialogtype;
 
     if !nd.is_null() {

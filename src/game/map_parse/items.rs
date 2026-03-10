@@ -78,14 +78,12 @@ use crate::game::map_parse::visual::clif_object_look_sub2_inner;
 // ─── Lua dispatch helpers ─────────────────────────────────────────────────────
 
 /// Dispatch a Lua event with a single block_list argument.
-#[cfg(not(test))]
 #[allow(dead_code)]
 unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
 }
 
 /// Dispatch a Lua event with two block_list arguments.
-#[cfg(not(test))]
 #[allow(dead_code)]
 unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut BlockList, bl2: *mut BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
@@ -387,35 +385,19 @@ pub unsafe fn clif_sendadditem(sd: *mut MapSessionData, num: i32) -> i32 {
     // owner name
     if (*sd).status.inventory[n].owner != 0 {
         let owner_id = (*sd).status.inventory[n].owner;
-        // map_id2name returns a libc-allocated *mut i8 which is !Send.
-        // Convert to Vec<u8> inside the async block so only a Send type crosses the thread.
-        let owner_bytes: Option<Vec<u8>> = crate::database::blocking_run_async(async move {
-            // Cast *mut i8 to usize immediately so the async block's state is Send.
-            let ptr_usize = unsafe { map_id2name(owner_id).await } as usize;
-            if ptr_usize == 0 {
-                None
-            } else {
-                let ptr = ptr_usize as *mut i8;
-                let len = unsafe { libc::strlen(ptr as *const libc::c_char) };
-                let bytes = unsafe { std::slice::from_raw_parts(ptr as *const u8, len).to_vec() };
-                unsafe { libc::free(ptr as *mut libc::c_void) };
-                Some(bytes)
-            }
+        let owner_name: String = crate::database::blocking_run_async(async move {
+            map_id2name(owner_id).await
         });
-        if let Some(bytes) = owner_bytes {
-            let owner_len = bytes.len();
-            wfifob(fd, len, owner_len as u8);
-            {
-                let dst = rust_session_wdata_ptr(fd, len + 1);
-                if !dst.is_null() {
-                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, owner_len);
-                }
+        let bytes = owner_name.as_bytes();
+        let owner_len = bytes.len();
+        wfifob(fd, len, owner_len as u8);
+        {
+            let dst = rust_session_wdata_ptr(fd, len + 1);
+            if !dst.is_null() {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, owner_len);
             }
-            len += owner_len + 1;
-        } else {
-            wfifob(fd, len, 0);
-            len += 1;
         }
+        len += owner_len + 1;
     } else {
         wfifob(fd, len, 0);
         len += 1;
@@ -430,10 +412,6 @@ pub unsafe fn clif_sendadditem(sd: *mut MapSessionData, num: i32) -> i32 {
     wfifoset(fd, encrypt(fd) as usize);
 
     0
-}
-
-unsafe fn libc_free(p: *mut std::ffi::c_void) {
-    libc::free(p);
 }
 
 // ─── clif_equipit ─────────────────────────────────────────────────────────────
@@ -592,7 +570,7 @@ pub unsafe fn clif_parsegetitem(sd: *mut MapSessionData) -> i32 {
         broadcast_update_state(sd);
     }
 
-    clif_sendaction(&raw mut (*sd).bl, 4, 40, 0);
+    clif_sendaction(&mut (*sd).bl, 4, 40, 0);
 
     (*sd).pickuptype = rfifob((*sd).fd, 5);
 
@@ -745,9 +723,9 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
 
     let mut amount = amounts;
 
-    clif_sendaction(&raw mut (*sd).bl, 5, 20, 0);
+    clif_sendaction(&mut (*sd).bl, 5, 20, 0);
 
-    let fl = libc::calloc(1, std::mem::size_of::<FloorItemData>()) as *mut FloorItemData;
+    let mut fl = Box::new(unsafe { std::mem::zeroed::<FloorItemData>() });
     (*fl).bl.m = (*sd).bl.m;
     (*fl).bl.x = (*sd).bl.x;
     (*fl).bl.y = (*sd).bl.y;
@@ -805,15 +783,16 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
     );
 
     if def[0] == 0 {
-        map_additem(&raw mut (*fl).bl);
+        let fl_raw = Box::into_raw(fl);
+        map_additem(&raw mut (*fl_raw).bl);
 
-        sl_doscript_2(b"after_drop_gold\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl, &raw mut (*fl).bl);
+        sl_doscript_2(b"after_drop_gold\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl, &raw mut (*fl_raw).bl);
 
         for x in 0..MAX_MAGIC_TIMERS {
             if (*sd).status.dura_aether[x].id > 0
                 && (*sd).status.dura_aether[x].duration > 0
             {
-                sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), b"after_drop_gold_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
+                sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), b"after_drop_gold_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl_raw).bl);
             }
         }
 
@@ -821,20 +800,20 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
             if (*sd).status.dura_aether[x].id > 0
                 && (*sd).status.dura_aether[x].aether > 0
             {
-                sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), b"after_drop_gold_while_aether\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
+                sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), b"after_drop_gold_while_aether\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl_raw).bl);
             }
         }
 
-        sl_doscript_2(b"characterLog\0".as_ptr().cast(), b"dropWrite\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
+        sl_doscript_2(b"characterLog\0".as_ptr().cast(), b"dropWrite\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl_raw).bl);
 
-        let fl_bl = &raw mut (*fl).bl;
+        let fl_bl = &raw mut (*fl_raw).bl;
         foreach_in_area(
             (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
             AreaType::Area, BL_PC,
             |bl| clif_object_look_sub2_inner(bl, LOOK_SEND, fl_bl),
         );
     } else {
-        libc::free(fl.cast());
+        drop(fl);
     }
 
     clif_sendstatus(sd, SFLAG_XPMONEY);
@@ -915,7 +894,7 @@ pub unsafe fn clif_throwitem_sub(
         return 0;
     }
 
-    let fl = libc::calloc(1, std::mem::size_of::<FloorItemData>()) as *mut FloorItemData;
+    let mut fl = Box::new(unsafe { std::mem::zeroed::<FloorItemData>() });
     (*fl).bl.m = (*sd).bl.m;
     (*fl).bl.x = x as u16;
     (*fl).bl.y = y as u16;
@@ -933,6 +912,8 @@ pub unsafe fn clif_throwitem_sub(
 
     sl_doscript_2(b"onThrow\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl, &raw mut (*fl).bl);
 
+    // fl is dropped here — it was a temporary used only to pass data to the script.
+    drop(fl);
     0
 }
 
@@ -946,7 +927,7 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
     let y    = (*sd).throwy as i32;
     let item_type = 0i32;
 
-    let fl = libc::calloc(1, std::mem::size_of::<FloorItemData>()) as *mut FloorItemData;
+    let mut fl = Box::new(unsafe { std::mem::zeroed::<FloorItemData>() });
     (*fl).bl.m = (*sd).bl.m;
     (*fl).bl.x = x as u16;
     (*fl).bl.y = y as u16;
@@ -1029,19 +1010,20 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
 
         clif_send(sndbuf.as_ptr(), 48, &raw mut (*sd).bl, SAMEAREA);
     } else {
-        clif_sendaction(&raw mut (*sd).bl, 2, 30, 0);
+        clif_sendaction(&mut (*sd).bl, 2, 30, 0);
     }
 
     if def[0] == 0 {
-        map_additem(&raw mut (*fl).bl);
-        let fl_bl = &raw mut (*fl).bl;
+        let fl_raw = Box::into_raw(fl);
+        map_additem(&raw mut (*fl_raw).bl);
+        let fl_bl = &raw mut (*fl_raw).bl;
         foreach_in_area(
             (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
             AreaType::Area, BL_PC,
             |bl| clif_object_look_sub2_inner(bl, LOOK_SEND, fl_bl),
         );
     } else {
-        libc::free(fl.cast());
+        drop(fl);
     }
 
     0

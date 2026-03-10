@@ -21,7 +21,6 @@ macro_rules! ffi_catch {
 /// Server configuration (replaces config.c)
 pub mod config;
 /// C-compatible global variables from config.c (replaces config.c globals)
-#[cfg(not(test))]
 pub mod config_globals;
 /// Core utilities and server lifecycle (replaces core.c)
 pub mod core;

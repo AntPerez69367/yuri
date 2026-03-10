@@ -134,8 +134,8 @@ type SD = *mut crate::game::pc::MapSessionData;
 #[inline] unsafe fn clif_postitem(sd: *mut std::ffi::c_void) { crate::game::client::handlers::clif_postitem(sd as SD); }
 #[inline] unsafe fn clif_handitem(sd: *mut std::ffi::c_void) { crate::game::map_parse::trading::clif_handitem(sd as SD); }
 #[inline] unsafe fn clif_handgold(sd: *mut std::ffi::c_void) { crate::game::map_parse::trading::clif_handgold(sd as SD); }
-#[inline] unsafe fn clif_parsemagic(sd: *mut std::ffi::c_void) { crate::game::map_parse::combat::clif_parsemagic(sd as SD); }
-#[inline] unsafe fn clif_parseattack(sd: *mut std::ffi::c_void) { crate::game::map_parse::combat::clif_parseattack(sd as SD); }
+#[inline] unsafe fn clif_parsemagic(sd: *mut std::ffi::c_void) { crate::game::map_parse::combat::clif_parsemagic(&mut *(sd as SD)); }
+#[inline] unsafe fn clif_parseattack(sd: *mut std::ffi::c_void) { crate::game::map_parse::combat::clif_parseattack(&mut *(sd as SD)); }
 #[inline] unsafe fn clif_sendminitext(sd: *mut std::ffi::c_void, msg: *const i8) { crate::game::map_parse::chat::clif_sendminitext(sd as SD, msg); }
 #[inline] unsafe fn clif_parsenpcdialog(sd: *mut std::ffi::c_void) { crate::game::map_parse::dialogs::clif_parsenpcdialog(sd as SD); }
 #[inline] unsafe fn clif_handle_menuinput(sd: *mut std::ffi::c_void) { crate::game::client::handlers::clif_handle_menuinput(sd as SD); }
@@ -565,6 +565,7 @@ unsafe fn send_to_area(
     // Determine if this is a channel packet: opcode 0x0D (byte 3) and channel byte (byte 5) >= 10.
     let is_channel_pkt = len >= 6 && *buf.add(3) == 0x0D && *buf.add(5) >= 10;
 
+    let mut _send_count = 0i32;
     foreach_in_area(m, x, y, area, BL_PC_I32, |bl| {
         let sd = bl as *mut MapSessionData;
         if !should_send_to(sd, src_bl, send_type, buf as *const u8, len) {
@@ -572,6 +573,10 @@ unsafe fn send_to_area(
         }
 
         let fd = (*sd).fd;
+        if len >= 4 && *buf.add(3) == 0x1A {
+            _send_count += 1;
+            tracing::debug!("[attack] send_to_area: sending 0x1A action to fd={} (player bl.id={})", fd, (*bl).id);
+        }
 
         if is_channel_pkt {
             // Channel packet: check if the player has the matching channel reg.
@@ -662,12 +667,12 @@ pub unsafe fn clif_send_area(
 ///
 /// Uses the session manager's fd map directly — no fixed-size buffer needed.
 unsafe fn check_dual_login(fd: i32, sd: *mut crate::game::pc::MapSessionData) -> bool {
-    let my_id = sl_pc_status_id(sd);
+    let my_id = unsafe { sl_pc_status_id(&mut *sd) };
     let mut login_count = 0i32;
     for i_fd in get_session_manager().get_all_fds() {
         let tsd = rust_session_get_data(i_fd) as *mut crate::game::pc::MapSessionData;
         if tsd.is_null() { continue; }
-        if sl_pc_status_id(tsd) == my_id {
+        if unsafe { sl_pc_status_id(&mut *tsd) } == my_id {
             login_count += 1;
         }
         if login_count >= 2 {
@@ -738,7 +743,8 @@ pub async fn rust_clif_parse(fd: i32) -> i32 {
         decrypt(fd);
 
         // Typed pointer for sl_pc_* accessors (sd is *mut c_void from session layer).
-        let sd_pc = sd as *mut crate::game::pc::MapSessionData;
+        // SAFETY: sd points to a valid MapSessionData for the lifetime of this call.
+        let sd_pc = &mut *(sd as *mut crate::game::pc::MapSessionData);
         tracing::debug!("[map] [parse] fd={} op={:#04X} pkt_len={}", fd, rbyte(fd, 3), pkt_len);
         match rbyte(fd, 3) {
             0x05 => {
@@ -750,7 +756,7 @@ pub async fn rust_clif_parse(fd: i32) -> i32 {
             }
             0x07 => {
                 clif_cancelafk(sd);
-                sl_pc_set_time(sd_pc, sl_pc_time(sd_pc) + 1);
+                { let _t = sl_pc_time(sd_pc); sl_pc_set_time(sd_pc, _t + 1); }
                 if sl_pc_time(sd_pc) < 4 {
                     clif_parsegetitem(sd);
                 }
@@ -782,7 +788,7 @@ pub async fn rust_clif_parse(fd: i32) -> i32 {
                 if sl_pc_status_gm_level(sd_pc) != 0 {
                     clif_parsesay(sd);
                 } else {
-                    sl_pc_set_chat_timer(sd_pc, sl_pc_chat_timer(sd_pc) + 1);
+                    { let _t = sl_pc_chat_timer(sd_pc); sl_pc_set_chat_timer(sd_pc, _t + 1); }
                     if sl_pc_chat_timer(sd_pc) < 2 && sl_pc_status_mute(sd_pc) == 0 {
                         clif_parsesay(sd);
                     }
@@ -790,7 +796,7 @@ pub async fn rust_clif_parse(fd: i32) -> i32 {
             }
             0x0F => {
                 clif_cancelafk(sd);
-                sl_pc_set_time(sd_pc, sl_pc_time(sd_pc) + 1);
+                { let _t = sl_pc_time(sd_pc); sl_pc_set_time(sd_pc, _t + 1); }
                 if sl_pc_paralyzed(sd_pc) == 0 && sl_pc_sleep(sd_pc) == 1 {
                     if sl_pc_time(sd_pc) < 4 {
                         if sl_map_spell(sl_pc_bl_m(sd_pc)) != 0 || sl_pc_status_gm_level(sd_pc) != 0 {
@@ -814,18 +820,20 @@ pub async fn rust_clif_parse(fd: i32) -> i32 {
             }
             0x13 => {
                 clif_cancelafk(sd);
-                sl_pc_set_time(sd_pc, sl_pc_time(sd_pc) + 1);
+                { let _t = sl_pc_time(sd_pc); sl_pc_set_time(sd_pc, _t + 1); }
                 let attacked_val = sl_pc_attacked(sd_pc);
                 let spd_val = sl_pc_attack_speed(sd_pc);
-                tracing::info!("[attack] 0x13 bl_id={} attacked={} spd={}", (*sd_pc).bl.id, attacked_val, spd_val);
+                tracing::debug!("[attack] id={} attacked={} spd={}", sd_pc.bl.id, attacked_val, spd_val);
                 if attacked_val != 1 && spd_val > 0 {
                     sl_pc_set_attacked(sd_pc, 1);
                     let delay = ((spd_val * 1000) / 60) as u32;
-                    tracing::info!("[attack] registering timer delay={}ms bl_id={}", delay, (*sd_pc).bl.id);
+                    tracing::debug!("[attack] id={} delay={}ms — entering clif_parseattack", sd_pc.bl.id, delay);
                     timer_insert(
-                        delay, delay, Some(rust_pc_atkspeed), (*sd_pc).bl.id as i32, 0,
+                        delay, delay, Some(rust_pc_atkspeed), sd_pc.bl.id as i32, 0,
                     );
                     clif_parseattack(sd);
+                } else {
+                    tracing::warn!("[attack] id={} BLOCKED: attacked={} spd={}", sd_pc.bl.id, attacked_val, spd_val);
                 }
             }
             0x17 => {
@@ -861,14 +869,14 @@ pub async fn rust_clif_parse(fd: i32) -> i32 {
             }
             0x1D => {
                 clif_cancelafk(sd);
-                sl_pc_set_time(sd_pc, sl_pc_time(sd_pc) + 1);
+                { let _t = sl_pc_time(sd_pc); sl_pc_set_time(sd_pc, _t + 1); }
                 if sl_pc_time(sd_pc) < 4 {
                     clif_parseemotion(sd);
                 }
             }
             0x1E => {
                 clif_cancelafk(sd);
-                sl_pc_set_time(sd_pc, sl_pc_time(sd_pc) + 1);
+                { let _t = sl_pc_time(sd_pc); sl_pc_set_time(sd_pc, _t + 1); }
                 if sl_pc_time(sd_pc) < 4 {
                     clif_parsewield(sd);
                 }

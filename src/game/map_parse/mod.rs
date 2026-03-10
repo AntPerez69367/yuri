@@ -218,7 +218,7 @@ pub async unsafe fn clif_parse(fd: i32) -> i32 {
             if (*sd).paralyzed == 0 && (*sd).sleep == 1.0f32 {
                 if (*sd).time < 4 {
                     if (*raw_map_ptr().add((*sd).bl.m as usize)).spell != 0 || (*sd).status.gm_level != 0 {
-                        clif_parsemagic(sd);
+                        clif_parsemagic(&mut *sd);
                     } else {
                         clif_sendminitext(sd, b"That doesn't work here.\0".as_ptr() as *const i8);
                     }
@@ -246,7 +246,7 @@ pub async unsafe fn clif_parse(fd: i32) -> i32 {
                     (*sd).bl.id as i32,
                     0,
                 );
-                clif_parseattack(sd);
+                clif_parseattack(&mut *sd);
             }
         }
         0x17 => {

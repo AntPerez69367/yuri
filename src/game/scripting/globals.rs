@@ -737,14 +737,11 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("removeClanMember", lua.create_async_function(|_, id: i32| async move {
         // Mutate in-memory session data synchronously before any await point.
-        let sd = unsafe { sffi::map_id2sd(id as u32) as *mut crate::game::pc::MapSessionData };
-        if !sd.is_null() {
-            unsafe {
-                (*sd).status.clan = 0;
-                (*sd).status.clan_title[0] = 0;
-                (*sd).status.clan_rank = 0;
-                sffi::clif_mystaytus(sd as *mut std::ffi::c_void);
-            }
+        if let Some(sd) = crate::game::map_server::map_id2sd_pc(id as u32) {
+            sd.status.clan = 0;
+            sd.status.clan_title[0] = 0;
+            sd.status.clan_rank = 0;
+            unsafe { sffi::clif_mystaytus(sd as *mut _ as *mut std::ffi::c_void); }
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaClnId`='0',`ChaClanTitle`='',`ChaClnRank`='0' WHERE `ChaId`=?",
@@ -755,14 +752,11 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("addClanMember", lua.create_async_function(|_, (id, clan): (i32, i32)| async move {
         // Mutate in-memory session data synchronously before any await point.
-        let sd = unsafe { sffi::map_id2sd(id as u32) as *mut crate::game::pc::MapSessionData };
-        if !sd.is_null() {
-            unsafe {
-                (*sd).status.clan = clan as u32;
-                (*sd).status.clan_title[0] = 0;
-                (*sd).status.clan_rank = 1;
-                sffi::clif_mystaytus(sd as *mut std::ffi::c_void);
-            }
+        if let Some(sd) = crate::game::map_server::map_id2sd_pc(id as u32) {
+            sd.status.clan = clan as u32;
+            sd.status.clan_title[0] = 0;
+            sd.status.clan_rank = 1;
+            unsafe { sffi::clif_mystaytus(sd as *mut _ as *mut std::ffi::c_void); }
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaClnId`=?,`ChaClanTitle`='',`ChaClnRank`='1' WHERE `ChaId`=?",
@@ -773,9 +767,8 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("updateClanMemberRank", lua.create_async_function(|_, (id, rank): (i32, i32)| async move {
         // Mutate in-memory session data synchronously before any await point.
-        let sd = unsafe { sffi::map_id2sd(id as u32) as *mut crate::game::pc::MapSessionData };
-        if !sd.is_null() {
-            unsafe { (*sd).status.clan_rank = rank; }
+        if let Some(sd) = crate::game::map_server::map_id2sd_pc(id as u32) {
+            sd.status.clan_rank = rank;
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaClnRank`=? WHERE `ChaId`=?", rank, id as u32
@@ -785,16 +778,13 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("updateClanMemberTitle", lua.create_async_function(|_, (id, title): (i32, String)| async move {
         // Mutate in-memory session data synchronously before any await point.
-        let sd = unsafe { sffi::map_id2sd(id as u32) as *mut crate::game::pc::MapSessionData };
-        if !sd.is_null() {
-            unsafe {
-                let dst = &mut (*sd).status.clan_title;
-                let bytes = title.as_bytes();
-                let copy_len = bytes.len().min(dst.len() - 1);
-                for (i, &b) in bytes.iter().take(copy_len).enumerate() { dst[i] = b as i8; }
-                dst[copy_len] = 0;
-                sffi::clif_mystaytus(sd as *mut std::ffi::c_void);
-            }
+        if let Some(sd) = crate::game::map_server::map_id2sd_pc(id as u32) {
+            let dst = &mut sd.status.clan_title;
+            let bytes = title.as_bytes();
+            let copy_len = bytes.len().min(dst.len() - 1);
+            for (i, &b) in bytes.iter().take(copy_len).enumerate() { dst[i] = b as i8; }
+            dst[copy_len] = 0;
+            unsafe { sffi::clif_mystaytus(sd as *mut _ as *mut std::ffi::c_void); }
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaClanTitle`=? WHERE `ChaId`=?", title, id as u32
@@ -807,16 +797,11 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("removePathMember", lua.create_async_function(|_, id: i32| async move {
         // Online path: mutate session data synchronously before any await point.
-        let sd = unsafe { sffi::map_id2sd(id as u32) as *mut crate::game::pc::MapSessionData };
-        if !sd.is_null() {
-            let new_class = unsafe {
-                crate::database::class_db::path((*sd).status.class as i32) as u8
-            };
-            unsafe {
-                (*sd).status.class = new_class;
-                (*sd).status.class_rank = 0;
-                sffi::clif_mystaytus(sd as *mut std::ffi::c_void);
-            }
+        if let Some(sd) = crate::game::map_server::map_id2sd_pc(id as u32) {
+            let new_class = crate::database::class_db::path(sd.status.class as i32) as u8;
+            sd.status.class = new_class;
+            sd.status.class_rank = 0;
+            unsafe { sffi::clif_mystaytus(sd as *mut _ as *mut std::ffi::c_void); }
             let ok = sqlx::query!(
                 "UPDATE `Character` SET `ChaPthId`=?,`ChaPthRank`='0' WHERE `ChaId`=?",
                 new_class as u32, id as u32
@@ -837,13 +822,10 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("addPathMember", lua.create_async_function(|_, (id, cls): (i32, i32)| async move {
         // Mutate in-memory session data synchronously before any await point.
-        let sd = unsafe { sffi::map_id2sd(id as u32) as *mut crate::game::pc::MapSessionData };
-        if !sd.is_null() {
-            unsafe {
-                (*sd).status.class = cls as u8;
-                (*sd).status.class_rank = 0;
-                sffi::clif_mystaytus(sd as *mut std::ffi::c_void);
-            }
+        if let Some(sd) = crate::game::map_server::map_id2sd_pc(id as u32) {
+            sd.status.class = cls as u8;
+            sd.status.class_rank = 0;
+            unsafe { sffi::clif_mystaytus(sd as *mut _ as *mut std::ffi::c_void); }
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaPthId`=?,`ChaPthRank`='0' WHERE `ChaId`=?",

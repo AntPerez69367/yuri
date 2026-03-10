@@ -21,7 +21,7 @@ use crate::game::scripting::rust_sl_resumemenu;
 use crate::session::rust_session_rdata_ptr;
 use crate::game::map_server::{
     boards_delete, boards_post, boards_readpost, boards_showposts, hasCoref,
-    map_changepostcolor, map_deliddb, map_getpostcolor, map_id2bl, map_id2sd,
+    map_changepostcolor, map_deliddb, map_getpostcolor, map_id2bl, map_id2sd_pc,
     nmail_sendmessage, nmail_write,
 };
 use crate::game::map_parse::chat::clif_sendminitext;
@@ -55,14 +55,12 @@ use crate::game::block::{foreach_in_area, AreaType};
 use crate::game::map_parse::visual::clif_object_look_sub_inner;
 
 /// Dispatch a Lua event with a single block_list argument.
-#[cfg(not(test))]
 #[allow(dead_code)]
 unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
 }
 
 /// Dispatch a Lua event with two block_list arguments.
-#[cfg(not(test))]
 #[allow(dead_code)]
 unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
@@ -136,7 +134,8 @@ pub unsafe fn clif_stoptimers(sd: *mut MapSessionData) -> i32 {
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 pub async unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
     if (*sd).exchange.target != 0 {
-        let tsd = map_id2sd((*sd).exchange.target) as *mut MapSessionData;
+        let tsd = map_id2sd_pc((*sd).exchange.target)
+            .map(|r| r as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
         clif_exchange_close(sd);
         if !tsd.is_null() && (*tsd).exchange.target == (*sd).bl.id {
             clif_exchange_message(tsd, c"Exchange cancelled.".as_ptr(), 4, 0);
@@ -150,10 +149,14 @@ pub async unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
     clif_stoptimers(sd);
     sl_doscript_simple(c"logout".as_ptr(), std::ptr::null::<i8>(), &raw mut (*sd).bl);
     sl_intif_savequit(sd as *mut std::ffi::c_void);
+
+    // Capture fields before map_deliddb drops the Box.
+    let id = (*sd).status.id;
+    let name = CStr::from_ptr((*sd).status.name.as_ptr() as *const i8).to_string_lossy().into_owned();
+
     clif_quit(sd);
     map_deliddb(&raw mut (*sd).bl);
 
-    let id = (*sd).status.id;
     if let Err(e) = sqlx::query("UPDATE `Character` SET `ChaOnline` = '0' WHERE `ChaId` = ?")
         .bind(id)
         .execute(get_pool())
@@ -162,7 +165,6 @@ pub async unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
         tracing::error!("[handle_disconnect] ChaOnline update failed: {e}");
     }
 
-    let name = CStr::from_ptr((*sd).status.name.as_ptr() as *const i8).to_string_lossy();
     tracing::info!("[map] [handle_disconnect] name={name}");
     0
 }
@@ -209,7 +211,8 @@ pub unsafe fn clif_handle_menuinput(sd: *mut MapSessionData) -> i32 {
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 pub unsafe fn clif_handle_powerboards(sd: *mut MapSessionData) -> i32 {
-    let tsd = map_id2sd(rlong_be((*sd).fd, 11)) as *mut MapSessionData;
+    let tsd = map_id2sd_pc(rlong_be((*sd).fd, 11))
+        .map(|r| r as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
     if !tsd.is_null() {
         (*sd).pbColor = rbyte((*sd).fd, 15) as i32;
     } else {
@@ -491,8 +494,7 @@ pub unsafe fn clif_delay(milliseconds: i32) {
 /// Send a heartbeat packet (opcode 0x3B) to the player with id `id`.
 pub unsafe fn clif_sendheartbeat(id: i32, _none: i32) -> i32 {
     use crate::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
-    use crate::game::map_server::map_id2sd;
-    let sd = map_id2sd(id as u32) as *mut MapSessionData;
+    let sd = map_id2sd_pc(id as u32).map(|r| r as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
     if sd.is_null() { return 1; }
     if rust_session_exists((*sd).fd) == 0 {
         rust_session_set_eof((*sd).fd, 8);
@@ -515,7 +517,6 @@ pub unsafe fn clif_sendheartbeat(id: i32, _none: i32) -> i32 {
 }
 
 /// `foreach_in_cell` callback: run the floor NPC's "click2" script.
-#[cfg(not(test))]
 pub unsafe fn clif_runfloor_sub_inner(bl: *mut crate::database::map_db::BlockList, sd: *mut MapSessionData) -> i32 {
     use crate::game::pc::FLOOR;
     if bl.is_null() || sd.is_null() { return 0; }
@@ -533,11 +534,10 @@ pub unsafe fn clif_runfloor_sub_inner(bl: *mut crate::database::map_db::BlockLis
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 pub unsafe fn clif_addtokillreg(sd: *mut MapSessionData, mob: i32) -> i32 {
     use crate::game::pc::{groups, MAX_GROUP_MEMBERS};
-    use crate::game::map_server::map_id2sd;
     if sd.is_null() { return 0; }
     for x in 0..(*sd).group_count as usize {
         let member_id = groups[(*sd).groupid as usize * MAX_GROUP_MEMBERS + x];
-        let tsd = map_id2sd(member_id) as *mut MapSessionData;
+        let tsd = map_id2sd_pc(member_id).map(|r| r as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
         if tsd.is_null() { continue; }
         if (*tsd).bl.m == (*sd).bl.m {
             addtokillreg(tsd, mob);
@@ -550,7 +550,6 @@ pub unsafe fn clif_addtokillreg(sd: *mut MapSessionData, mob: i32) -> i32 {
 ////
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-#[cfg(not(test))]
 pub unsafe fn clif_parsedropitem(sd: *mut MapSessionData) -> i32 {
     if pc_readglobalreg(sd, c"goldbardupe".as_ptr()) != 0 { return 0; }
     if (*sd).status.gm_level == 0 {
@@ -573,7 +572,7 @@ pub unsafe fn clif_parsedropitem(sd: *mut MapSessionData) -> i32 {
             return 0;
         }
     }
-    clif_sendaction(&raw mut (*sd).bl, 5, 20, 0);
+    clif_sendaction(&mut (*sd).bl, 5, 20, 0);
     (*sd).invslot = id as u8;
     sl_doscript_simple(itemdb_yname((*sd).status.inventory[id as usize].id as u32), c"on_drop".as_ptr(), &raw mut (*sd).bl);
     for x in 0..MAX_MAGIC_TIMERS {
@@ -709,7 +708,6 @@ pub async unsafe fn clif_accept2(
 }
 
 /// Send a server-transfer packet to redirect the client to another map server.
-#[cfg(not(test))]
 pub unsafe fn clif_transfer(
     sd: *mut MapSessionData, serverid: i32,
     _m: i32, _x: i32, _y: i32,
@@ -754,7 +752,6 @@ pub unsafe fn clif_transfer(
 }
 
 /// Send a test server-transfer packet (hardcoded IP 192.88.99.100, port 2001).
-#[cfg(not(test))]
 pub unsafe fn clif_transfer_test(
     sd: *mut MapSessionData, _m: i32, _x: i32, _y: i32,
 ) -> i32 {
@@ -795,7 +792,6 @@ pub unsafe fn clif_transfer_test(
 }
 
 /// Send the board questionnaire dialog to `sd`.
-#[cfg(not(test))]
 pub unsafe fn clif_sendBoardQuestionaire(
     sd: *mut MapSessionData,
     q: *const BoardQuestionaire,
@@ -844,7 +840,6 @@ pub unsafe fn clif_sendBoardQuestionaire(
 }
 
 /// Handle client setting-toggle request (whisper, group, shout, etc.).
-#[cfg(not(test))]
 pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
     use crate::game::pc::{
         FLAG_WHISPER, FLAG_GROUP, FLAG_SHOUT, FLAG_ADVICE, FLAG_MAGIC,

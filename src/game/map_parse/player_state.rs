@@ -701,17 +701,15 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     if (*sd).status.partner != 0 {
         let pname = map_id2name((*sd).status.partner).await;
         let mut buf = [0i8; 128];
-        if !pname.is_null() {
+        if !pname.is_empty() {
             // sprintf(buf, "Partner: %s", pname)
             let prefix = b"Partner: ";
             for (i, &b) in prefix.iter().enumerate() {
                 buf[i] = b as i8;
             }
-            let pname_len = cstr_len(pname as *const u8).min(118);
-            ptr::copy_nonoverlapping(pname as *const i8, buf.as_mut_ptr().add(prefix.len()), pname_len);
-            // map_id2name returns a heap-allocated string in C — we must free it.
-            // C uses FREE() macro which is free().  Call libc free.
-            libc_free(pname as *mut _);
+            let pname_bytes = pname.as_bytes();
+            let pname_len = pname_bytes.len().min(118);
+            ptr::copy_nonoverlapping(pname_bytes.as_ptr() as *const i8, buf.as_mut_ptr().add(prefix.len()), pname_len);
         }
         let buf_len = cstr_len(buf.as_ptr() as *const u8);
         wfifob(fd, 8 + len, buf_len as u8);
@@ -1034,11 +1032,4 @@ unsafe fn copy_cstr_to_wfifo(fd: i32, pos: usize, src: *const u8, len: usize) {
     }
 }
 
-/// Thin wrapper around libc `free` for pointers returned by C heap allocators.
-///
-/// Safety: `ptr` must have been allocated by C's `malloc`/`calloc` and must
-/// not be used after this call.
-#[inline]
-unsafe fn libc_free(ptr: *mut std::ffi::c_void) {
-    if !ptr.is_null() { libc::free(ptr); }
-}
+

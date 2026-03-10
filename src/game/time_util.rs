@@ -117,6 +117,7 @@ struct TimerData {
     interval: u32,
     id: i32,
     data1: i32,
+    #[allow(dead_code)]
     data2: i32,
 }
 

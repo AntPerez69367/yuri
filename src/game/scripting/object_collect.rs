@@ -72,7 +72,6 @@ pub unsafe fn sl_g_getobjectscellwithtraps(
 ///
 /// # Safety
 /// Same as `sl_g_getobjectscell`.
-#[cfg(not(test))]
 pub unsafe fn sl_g_getaliveobjectscell(
     m: i32,
     x: i32,
@@ -145,7 +144,6 @@ pub unsafe fn sl_g_getobjectsarea(
 ///
 /// # Safety
 /// Same as `sl_g_getobjectsarea`.
-#[cfg(not(test))]
 pub unsafe fn sl_g_getaliveobjectsarea(
     bl_ptr: *mut std::ffi::c_void,
     bl_type: i32,
@@ -195,7 +193,6 @@ pub unsafe fn sl_g_getobjectssamemap(
 ///
 /// # Safety
 /// Same as `sl_g_getobjectsarea`.
-#[cfg(not(test))]
 pub unsafe fn sl_g_getaliveobjectssamemap(
     bl_ptr: *mut std::ffi::c_void,
     bl_type: i32,

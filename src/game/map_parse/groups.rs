@@ -45,10 +45,12 @@ use crate::database::item_db::{
     rust_itemdb_look as itemdb_look, rust_itemdb_lookcolor as itemdb_lookcolor,
 };
 
-// map_id2sd in map_server returns *mut std::ffi::c_void — wrap with cast.
+// map_id2sd_local: typed lookup returning raw pointer for use in unsafe context.
 #[inline]
-unsafe fn map_id2sd(id: u32) -> *mut MapSessionData {
-    crate::game::map_server::map_id2sd(id) as *mut MapSessionData
+fn map_id2sd_local(id: u32) -> *mut MapSessionData {
+    crate::game::map_server::map_id2sd_pc(id)
+        .map(|r| r as *mut MapSessionData)
+        .unwrap_or(std::ptr::null_mut())
 }
 
 // pc_isequip returns i32; usage here expects u32 — wrap with cast.
@@ -58,7 +60,6 @@ unsafe fn pc_isequip(sd: *mut MapSessionData, slot: i32) -> u32 {
 }
 
 /// Dispatch a Lua event with two block_list arguments.
-#[cfg(not(test))]
 #[allow(dead_code)]
 unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
@@ -137,7 +138,7 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
     while (n + w + r + m + p + g) < group_count {
         let member_id = groups_get(groupid, x);
         x += 1;
-        let tsd = map_id2sd(member_id);
+        let tsd = map_id2sd_local(member_id);
         if tsd.is_null() { continue; }
 
         // TNL calculation mirrors C exactly
@@ -176,17 +177,17 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
     let mut len = 0usize;
     while (n + w + r + m + p + g) < group_count {
         let tsd = if rogue[r] != 0 {
-            let t = map_id2sd(rogue[r]); r += 1; t
+            let t = map_id2sd_local(rogue[r]); r += 1; t
         } else if warrior[w] != 0 {
-            let t = map_id2sd(warrior[w]); w += 1; t
+            let t = map_id2sd_local(warrior[w]); w += 1; t
         } else if mage[m] != 0 {
-            let t = map_id2sd(mage[m]); m += 1; t
+            let t = map_id2sd_local(mage[m]); m += 1; t
         } else if poet[p] != 0 {
-            let t = map_id2sd(poet[p]); p += 1; t
+            let t = map_id2sd_local(poet[p]); p += 1; t
         } else if peasant[n] != 0 {
-            let t = map_id2sd(peasant[n]); n += 1; t
+            let t = map_id2sd_local(peasant[n]); n += 1; t
         } else if gm_arr[g] != 0 {
-            let t = map_id2sd(gm_arr[g]); g += 1; t
+            let t = map_id2sd_local(gm_arr[g]); g += 1; t
         } else {
             break;
         };
@@ -305,7 +306,7 @@ pub unsafe fn clif_grouphealth_update(sd: *mut MapSessionData) -> i32 {
     let groupid     = (*sd).groupid as usize;
 
     for x in 0..group_count {
-        let tsd = map_id2sd(groups_get(groupid, x));
+        let tsd = map_id2sd_local(groups_get(groupid, x));
         if tsd.is_null() { continue; }
 
         if rust_session_exists((*sd).fd) == 0 {
@@ -463,7 +464,7 @@ pub unsafe fn clif_updategroup(
     let groupid     = (*sd).groupid as usize;
 
     for x in 0..group_count {
-        let tsd = map_id2sd(groups_get(groupid, x));
+        let tsd = map_id2sd_local(groups_get(groupid, x));
         if tsd.is_null() { continue; }
 
         (*tsd).group_count  = (*sd).group_count;

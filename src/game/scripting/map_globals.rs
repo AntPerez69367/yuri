@@ -7,7 +7,7 @@ use crate::database::map_db::get_map_ptr;
 use crate::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof};
 use crate::game::block::{map_is_loaded, foreach_in_area, foreach_in_cell, AreaType};
 use crate::game::client::visual::clif_sendweather;
-use crate::game::map_server::{map_deliddb, map_id2sd, map_readglobalreg, map_setglobalreg};
+use crate::game::map_server::{map_deliddb, map_id2sd_pc, map_readglobalreg, map_setglobalreg};
 use crate::game::pc::MapSessionData;
 
 use crate::game::map_parse::chat::{clif_sendmsg, clif_playsound, clif_speak_inner};
@@ -164,8 +164,9 @@ pub unsafe fn sl_g_getmaptitle(m: i32, buf: *mut i8, buflen: i32) -> i32 {
 /// `target == 0` is a no-op (area broadcast not implemented here).
 pub unsafe fn sl_g_msg(bl: *mut std::ffi::c_void, color: i32, msg: *const i8, target: i32) {
     if bl.is_null() || msg.is_null() || target == 0 { return; }
-    let tsd = map_id2sd(target as u32) as *mut MapSessionData;
-    if !tsd.is_null() { clif_sendmsg(tsd, color, msg); }
+    if let Some(tsd) = map_id2sd_pc(target as u32) {
+        clif_sendmsg(tsd, color, msg);
+    }
 }
 
 /// Return 1 if cell (x, y) on bl's map is passable from `side`, else 0.
@@ -193,15 +194,17 @@ pub unsafe fn sl_fl_delete(bl_ptr: *mut std::ffi::c_void) {
     let bl = bl_ptr as *mut BlockList;
     if (*bl).bl_type as i32 == BL_PC { return; }
     map_delblock(bl);
-    map_deliddb(bl);
     if (*bl).id > 0 { clif_lookgone(bl); }
+    map_deliddb(bl);
 }
 
-/// Remove block from the map ID database only (no grid, no broadcast, no free).
+/// Remove block from the grid and the map ID database.
 ///
 pub unsafe fn sl_g_deliddb(bl_ptr: *mut std::ffi::c_void) {
     if bl_ptr.is_null() { return; }
-    map_deliddb(bl_ptr as *mut BlockList);
+    let bl = bl_ptr as *mut BlockList;
+    map_delblock(bl);
+    map_deliddb(bl);
 }
 
 /// No-op — permanent spawn tracking is handled in Lua.
@@ -224,25 +227,26 @@ pub unsafe fn sl_g_playsound(bl: *mut std::ffi::c_void, sound: i32) {
 
 /// Delete a non-PC block from the world and free its memory.
 ///
-/// Unlike `sl_fl_delete`, this frees the block — callers guarantee no Lua reference remains.
+/// Unlike `sl_fl_delete`, this removes the block from the world.
+/// Deallocation is handled by `map_deliddb` (drops the Box from the typed map).
 pub unsafe fn sl_g_delete_bl(bl_ptr: *mut std::ffi::c_void) {
     use crate::game::pc::BL_PC;
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
     if (*bl).bl_type as i32 == BL_PC { return; }
     map_delblock(bl);
-    map_deliddb(bl);
     if (*bl).id > 0 {
         clif_lookgone(bl);
-        libc::free(bl_ptr);
     }
+    // map_deliddb drops the Box from the typed entity map — no libc::free needed.
+    map_deliddb(bl);
 }
 
 /// Broadcast an action animation at bl's position.
 ///
 pub unsafe fn sl_g_sendaction(bl_ptr: *mut std::ffi::c_void, action: i32, speed: i32) {
     if bl_ptr.is_null() { return; }
-    clif_sendaction(bl_ptr as *mut BlockList, action, speed, 0);
+    clif_sendaction(&mut *(bl_ptr as *mut BlockList), action, speed, 0);
 }
 
 /// Send a throw animation packet from bl's position toward (x, y).
@@ -279,7 +283,11 @@ pub unsafe fn sl_g_dropitem(bl_ptr: *mut std::ffi::c_void, item_id: i32, amount:
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
     let id = item_id as u32;
-    let sd = if owner != 0 { map_id2sd(owner as u32) as *mut MapSessionData } else { std::ptr::null_mut() };
+    let sd = if owner != 0 {
+        map_id2sd_pc(owner as u32).map(|r| r as *mut MapSessionData).unwrap_or(std::ptr::null_mut())
+    } else {
+        std::ptr::null_mut()
+    };
     let dura = crate::database::item_db::rust_itemdb_dura(id);
     let prot = crate::database::item_db::rust_itemdb_protected(id);
     crate::game::mob::rust_mob_dropitem(
@@ -297,7 +305,11 @@ pub unsafe fn sl_g_dropitemxy(
     owner: i32,
 ) {
     let id = item_id as u32;
-    let sd = if owner != 0 { map_id2sd(owner as u32) as *mut MapSessionData } else { std::ptr::null_mut() };
+    let sd = if owner != 0 {
+        map_id2sd_pc(owner as u32).map(|r| r as *mut MapSessionData).unwrap_or(std::ptr::null_mut())
+    } else {
+        std::ptr::null_mut()
+    };
     let dura = crate::database::item_db::rust_itemdb_dura(id);
     let prot = crate::database::item_db::rust_itemdb_protected(id);
     crate::game::mob::rust_mob_dropitem(0, id, amount, dura, prot, 0, m, x, y, sd);
@@ -364,7 +376,7 @@ pub unsafe fn sl_g_sendanimation(bl_ptr: *mut std::ffi::c_void, anim: i32, times
     let x  = (*bl).x as i32;
     let y  = (*bl).y as i32;
     foreach_in_area(m, x, y, AreaType::Area, BL_PC_TYPE, |target_bl| {
-        clif_sendanimation_inner(target_bl, anim, bl, times)
+        clif_sendanimation_inner(unsafe { &mut *target_bl }, anim, bl, times)
     });
 }
 
@@ -383,7 +395,7 @@ pub unsafe fn sl_g_sendanimxy(
     let bx = (*bl).x as i32;
     let by = (*bl).y as i32;
     foreach_in_area(m, bx, by, AreaType::Area, BL_PC_TYPE, |target_bl| {
-        clif_sendanimation_xy_inner(target_bl, anim, times, x, y)
+        clif_sendanimation_xy_inner(unsafe { &mut *target_bl }, anim, times, x, y)
     });
 }
 
@@ -400,7 +412,7 @@ pub unsafe fn sl_g_repeatanimation(bl_ptr: *mut std::ffi::c_void, anim: i32, dur
     // same as the C original. Callers should pass multiples of 1000.
     let wire_dur = if duration > 0 { duration / 1000 } else { duration };
     foreach_in_area(m, x, y, AreaType::Area, BL_PC_TYPE, |target_bl| {
-        clif_sendanimation_inner(target_bl, anim, bl, wire_dur)
+        clif_sendanimation_inner(unsafe { &mut *target_bl }, anim, bl, wire_dur)
     });
 }
 
@@ -416,13 +428,12 @@ pub unsafe fn sl_g_selfanimation(
 ) {
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
-    let sd = map_id2sd(target_id as u32) as *mut MapSessionData;
-    if sd.is_null() { return; }
-    let m  = (*sd).bl.m as i32;
-    let x  = (*sd).bl.x as i32;
-    let y  = (*sd).bl.y as i32;
+    let Some(sd) = map_id2sd_pc(target_id as u32) else { return; };
+    let m  = sd.bl.m as i32;
+    let x  = sd.bl.x as i32;
+    let y  = sd.bl.y as i32;
     foreach_in_cell(m, x, y, BL_PC_TYPE, |target_bl| {
-        clif_sendanimation_inner(target_bl, anim, bl, times)
+        clif_sendanimation_inner(unsafe { &mut *target_bl }, anim, bl, times)
     });
 }
 
@@ -438,13 +449,12 @@ pub unsafe fn sl_g_selfanimationxy(
     y: i32,
     times: i32,
 ) {
-    let sd = map_id2sd(target_id as u32) as *mut MapSessionData;
-    if sd.is_null() { return; }
-    let m  = (*sd).bl.m as i32;
-    let sx = (*sd).bl.x as i32;
-    let sy = (*sd).bl.y as i32;
+    let Some(sd) = map_id2sd_pc(target_id as u32) else { return; };
+    let m  = sd.bl.m as i32;
+    let sx = sd.bl.x as i32;
+    let sy = sd.bl.y as i32;
     foreach_in_cell(m, sx, sy, BL_PC_TYPE, |target_bl| {
-        clif_sendanimation_xy_inner(target_bl, anim, times, x, y)
+        clif_sendanimation_xy_inner(unsafe { &mut *target_bl }, anim, times, x, y)
     });
 }
 
@@ -558,7 +568,7 @@ pub unsafe fn sl_g_addnpc(
     npc_yname: *const i8,
 ) {
     use crate::game::npc::{NpcData, BL_NPC, npc_get_new_npctempid};
-    use crate::game::map_server::map_addiddb;
+    use crate::game::map_server::map_addiddb_npc;
 
     // CALLOC — allocate zeroed NpcData on the heap.
     let layout = std::alloc::Layout::new::<NpcData>();
@@ -607,7 +617,10 @@ pub unsafe fn sl_g_addnpc(
 
     // Register in spatial grid and ID database.
     map_addblock(&mut (*raw).bl);
-    map_addiddb(&mut (*raw).bl);
+    let id = (*raw).bl.id;
+    // SAFETY: raw was allocated via alloc_zeroed (system allocator = same as Box on Linux/glibc).
+    map_addiddb_npc(id, Box::from_raw(raw));
+    // raw is still valid — Box is now owned by NPC_MAP (not dropped).
 
     // Fire on_spawn Lua event: npc.on_spawn(nd).
     crate::game::scripting::doscript_blargs(

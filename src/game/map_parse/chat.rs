@@ -43,17 +43,21 @@ unsafe fn sl_async_freeco(sd: *mut std::ffi::c_void) {
 }
 
 /// Dispatch a Lua event with a single block_list argument.
-#[cfg(not(test))]
 #[allow(dead_code)]
 unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
 }
 
 /// Dispatch a Lua event with two block_list arguments.
-#[cfg(not(test))]
 #[allow(dead_code)]
 unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
+}
+
+/// Coroutine dispatch with two block_list arguments (for yielding handlers like onSayClick).
+#[allow(dead_code)]
+unsafe fn sl_doscript_coro_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
+    crate::game::scripting::doscript_coro(root, method, &[bl1 as *mut _, bl2 as *mut _])
 }
 
 
@@ -321,7 +325,7 @@ pub unsafe fn clif_parseemotion(sd: *mut MapSessionData) -> i32 {
     use super::packet::rfifob;
     if (*sd).status.state == 0 {
         clif_sendaction(
-            &raw mut (*sd).bl,
+            &mut (*sd).bl,
             rfifob((*sd).fd, 5) as i32 + 11,
             0x4E,
             0,
@@ -536,8 +540,7 @@ pub unsafe fn ignorelist_add(sd: *mut MapSessionData, name: *const i8) -> i32 {
     }
 
     // Allocate new node
-    let new_node = libc::calloc(1, std::mem::size_of::<SdIgnoreList>()) as *mut SdIgnoreList;
-    if new_node.is_null() { return 0; }
+    let new_node = Box::into_raw(Box::new(std::mem::zeroed::<SdIgnoreList>()));
 
     // Copy name (field is [i8; 100])
     let src = std::slice::from_raw_parts(name as *const u8, libc_strlen(name).min(99));
@@ -568,12 +571,13 @@ pub unsafe fn ignorelist_remove(sd: *mut MapSessionData, name: *const i8) -> i32
             // Found: unlink
             if !prev.is_null() {
                 (*prev).Next = (*current).Next;
-                libc::free(current as *mut std::ffi::c_void);
             } else {
                 // Head-node removal: advance list pointer before freeing
                 (*sd).IgnoreList = (*current).Next;
-                libc::free(current as *mut std::ffi::c_void);
             }
+            // Re-establish Box ownership and drop.
+            // SAFETY: current was allocated via Box::into_raw in ignorelist_add.
+            drop(Box::from_raw(current));
             return 0;
         }
         prev = current;
@@ -1131,7 +1135,7 @@ pub unsafe fn clif_sendnpcsay_inner(bl: *mut BlockList, _msg: *const i8, sd_arg:
     if clif_distance(bl, &raw mut (*sd_arg).bl) <= 10 {
         (*sd_arg).last_click = (*bl).id;
         sl_async_freeco(sd_arg as *mut std::ffi::c_void);
-        sl_doscript_2((*nd).name.as_ptr() as *const i8, b"onSayClick\0".as_ptr() as *const i8, &raw mut (*sd_arg).bl, bl);
+        sl_doscript_coro_2((*nd).name.as_ptr() as *const i8, b"onSayClick\0".as_ptr() as *const i8, &raw mut (*sd_arg).bl, bl);
     }
     0
 }
@@ -1159,7 +1163,7 @@ pub unsafe fn clif_sendnpcyell_inner(bl: *mut BlockList, _msg: *const i8, sd_arg
     if clif_distance(bl, &raw mut (*sd_arg).bl) <= 20 {
         (*sd_arg).last_click = (*bl).id;
         sl_async_freeco(sd_arg as *mut std::ffi::c_void);
-        sl_doscript_2((*nd).name.as_ptr() as *const i8, b"onSayClick\0".as_ptr() as *const i8, &raw mut (*sd_arg).bl, bl);
+        sl_doscript_coro_2((*nd).name.as_ptr() as *const i8, b"onSayClick\0".as_ptr() as *const i8, &raw mut (*sd_arg).bl, bl);
     }
     0
 }

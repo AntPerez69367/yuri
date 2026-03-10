@@ -103,7 +103,6 @@ use crate::game::time_util::{timer_insert, timer_remove};
 use libc::printf;
 
 /// Dispatch a Lua event with a single block_list argument.
-#[cfg(not(test))]
 #[allow(dead_code)]
 unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
@@ -423,7 +422,7 @@ unsafe fn command_spell(sd: *mut MapSessionData, line: *mut i8, _s: *mut LuaStat
     foreach_in_area(
         (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
         AreaType::Area, BL_PC,
-        |target_bl| clif_sendanimation_inner(target_bl, anim, sd_bl, times),
+        |target_bl| clif_sendanimation_inner(unsafe { &mut *target_bl }, anim, sd_bl, times),
     );
     0
 }
@@ -1098,7 +1097,7 @@ unsafe fn command_nspell(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaSt
     foreach_in_area(
         (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
         AreaType::Area, BL_PC,
-        |target_bl| clif_sendanimation_inner(target_bl, anim, sd_bl, times),
+        |target_bl| clif_sendanimation_inner(unsafe { &mut *target_bl }, anim, sd_bl, times),
     );
     0
 }
@@ -1112,7 +1111,7 @@ unsafe fn command_pspell(sd: *mut MapSessionData, _line: *mut i8, _s: *mut LuaSt
     foreach_in_area(
         (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32,
         AreaType::Area, BL_PC,
-        |target_bl| clif_sendanimation_inner(target_bl, anim, sd_bl, times),
+        |target_bl| clif_sendanimation_inner(unsafe { &mut *target_bl }, anim, sd_bl, times),
     );
     0
 }

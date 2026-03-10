@@ -1403,13 +1403,13 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         let final_len = if visible && !gfx_name_empty { gfx_name_len } else { 1 };
         wfifow((*src_sd).fd, 1, (final_len as u16 + 60 + 3).swap_bytes());
         wfifoset((*src_sd).fd, encrypt((*src_sd).fd) as usize);
-        clif_sendanimations(src_sd, sd);
+        clif_sendanimations(&mut *src_sd, &mut *sd);
         return 0;
     }
 
     wfifow((*src_sd).fd, 1, (len as u16 + 60 + 3).swap_bytes());
     wfifoset((*src_sd).fd, encrypt((*src_sd).fd) as usize);
-    clif_sendanimations(src_sd, sd);
+    clif_sendanimations(&mut *src_sd, &mut *sd);
     0
 }
 

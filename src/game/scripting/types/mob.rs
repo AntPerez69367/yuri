@@ -1,6 +1,6 @@
 use mlua::{MetaMethod, UserData, UserDataMethods};
 use std::ffi::CString;
-use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
+
 
 use crate::database::map_db::{BlockList, MapData};
 use crate::database::map_db::get_map_ptr;
@@ -14,18 +14,9 @@ use crate::game::scripting::types::registry::{GameRegObject, MapRegObject, MobRe
 use crate::game::scripting::types::shared;
 
 pub struct MobObject {
-    pub ptr: *mut std::ffi::c_void,
-    /// Set to `true` by the `delete` Lua method after the C object is freed.
-    /// Future `__index` / `__newindex` calls check this flag and return early.
-    pub deleted: Arc<AtomicBool>,
+    pub id: u32,
 }
-// SAFETY: MobObject.ptr points to a MobSpawnData owned by the single-threaded Lua
-// scripting runtime. All Lua callbacks are invoked on the same game-server thread,
-// and the pointee's lifetime is managed by the C game loop, which guarantees it
-// outlives any cross-thread transfer. No concurrent access to the underlying C
-// structure occurs; the game server's event loop fully serializes all access before
-// MobObject values are created or used.
-unsafe impl Send for MobObject {}
+// u32 is Send — no unsafe impl needed.
 
 use crate::game::mob::{
     rust_mob_attack, sl_mob_addhealth, sl_mob_callbase, sl_mob_checkmove, sl_mob_checkthreat,
@@ -79,13 +70,12 @@ impl UserData for MobObject {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         // ── __index ─────────────────────────────────────────────────────────
         methods.add_meta_method(MetaMethod::Index, |lua, this, key: String| {
-            if this.ptr.is_null() || this.deleted.load(Ordering::Acquire) {
-                return Ok(mlua::Value::Nil);
-            }
-            let mob = unsafe { &*(this.ptr as *const MobSpawnData) };
+            let mob = match crate::game::map_server::map_id2mob_ref(this.id) {
+                Some(m) => m,
+                None => return Ok(mlua::Value::Nil),
+            };
             let bl = &mob.bl;
-            let ptr = this.ptr;
-            let deleted = Arc::clone(&this.deleted);
+            let mob_id = this.id;
 
             macro_rules! int {
                 ($e:expr) => {
@@ -133,24 +123,23 @@ impl UserData for MobObject {
             // ── named methods ────────────────────────────────────────────────
             match key.as_str() {
                 "attack" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, id): (mlua::Value, i32)| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(0i32);
-                            }
-                            Ok(unsafe { rust_mob_attack(ptr as *mut MobSpawnData, id) })
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(0i32),
+                            };                            Ok(unsafe { rust_mob_attack(mob as *mut MobSpawnData, id) })
                         },
                     )?))
                 }
                 "addHealth" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, damage): (mlua::Value, i32)| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(());
-                            }
-                            let ptr_usize = ptr as usize;
+                            let m = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(()),
+                            };
+                            let ptr_usize = m as *mut MobSpawnData as usize;
                             // Fire-and-forget from LocalSet: spawn_local avoids Send requirement.
                             tokio::task::spawn_local(async move {
                                 unsafe { sl_mob_addhealth(ptr_usize as *mut MobSpawnData, damage).await; }
@@ -160,13 +149,13 @@ impl UserData for MobObject {
                     )?))
                 }
                 "removeHealth" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, damage, caster_id): (mlua::Value, i32, u32)| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(());
-                            }
-                            let ptr_usize = ptr as usize;
+                            let m = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(()),
+                            };
+                            let ptr_usize = m as *mut MobSpawnData as usize;
                             tokio::task::spawn_local(async move {
                                 unsafe { sl_mob_removehealth(ptr_usize as *mut MobSpawnData, damage, caster_id).await; }
                             });
@@ -175,74 +164,66 @@ impl UserData for MobObject {
                     )?))
                 }
                 "move" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(false);
-                            }
-                            Ok(unsafe { move_mob(ptr as *mut MobSpawnData) } != 0)
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(false),
+                            };                            Ok(unsafe { move_mob(mob as *mut MobSpawnData) } != 0)
                         },
                     )?))
                 }
                 "moveIgnoreObject" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(false);
-                            }
-                            Ok(unsafe { move_mob_ignore_object(ptr as *mut MobSpawnData) } != 0)
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(false),
+                            };                            Ok(unsafe { move_mob_ignore_object(mob as *mut MobSpawnData) } != 0)
                         },
                     )?))
                 }
                 "moveGhost" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(0i32);
-                            }
-                            Ok(unsafe { moveghost_mob(ptr as *mut MobSpawnData) })
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(0i32),
+                            };                            Ok(unsafe { moveghost_mob(mob as *mut MobSpawnData) })
                         },
                     )?))
                 }
                 "moveIntent" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, target_id): (mlua::Value, u32)| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(0i32);
-                            }
-                            let bl = unsafe { map_id2bl_mob(target_id) };
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(0i32),
+                            };                            let bl = unsafe { map_id2bl_mob(target_id) };
                             if bl.is_null() {
                                 return Ok(0i32);
                             }
-                            Ok(unsafe { move_mob_intent(ptr as *mut MobSpawnData, bl) })
+                            Ok(unsafe { move_mob_intent(mob as *mut MobSpawnData, bl) })
                         },
                     )?))
                 }
                 "warp" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, m, x, y): (mlua::Value, i32, i32, i32)| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(());
-                            }
-                            unsafe {
-                                mob_warp(ptr as *mut MobSpawnData, m, x, y);
+                            if let Some(mob) = crate::game::map_server::map_id2mob_ref(mob_id) {
+                                unsafe { mob_warp(mob as *mut MobSpawnData, m, x, y); }
                             }
                             Ok(())
                         },
                     )?))
                 }
                 "sendHealth" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, dmg, critical): (mlua::Value, f32, i32)| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(());
-                            }
+                            let m = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(()),
+                            };
                             let damage = if dmg > 0.0 {
                                 (dmg + 0.5) as i32
                             } else if dmg < 0.0 {
@@ -255,16 +236,15 @@ impl UserData for MobObject {
                                 2 => 255,
                                 c => c,
                             };
-                            let ptr_usize = ptr as usize;
+                            let ptr_usize = m as *mut MobSpawnData as usize;
                             tokio::task::spawn_local(async move {
-                                unsafe { clif_send_mob_healthscript(ptr_usize as *mut MobSpawnData, damage, crit).await; }
+                                unsafe { clif_send_mob_healthscript(&mut *(ptr_usize as *mut MobSpawnData), damage, crit).await; }
                             });
                             Ok(())
                         },
                     )?))
                 }
                 "setDuration" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(
                         lua.create_function(
                             move |_,
@@ -275,13 +255,14 @@ impl UserData for MobObject {
                                 u32,
                                 i32,
                             )| {
-                                if ptr.is_null() || df.load(Ordering::Acquire) {
-                                    return Ok(());
-                                }
+                                let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                    Some(m) => m,
+                                    None => return Ok(()),
+                                };
                                 let cs =
                                     CString::new(name.as_bytes()).map_err(mlua::Error::external)?;
                                 unsafe {
-                                    sl_mob_setduration(ptr as *mut MobSpawnData, cs.as_ptr(), time, caster_id, recast);
+                                    sl_mob_setduration(mob as *mut MobSpawnData, cs.as_ptr(), time, caster_id, recast);
                                 }
                                 Ok(())
                             },
@@ -289,60 +270,56 @@ impl UserData for MobObject {
                     ))
                 }
                 "flushDuration" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, dis, minid, maxid): (mlua::Value, i32, i32, i32)| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(());
-                            }
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(()),
+                            };
                             unsafe {
-                                sl_mob_flushduration(ptr as *mut MobSpawnData, dis, minid, maxid);
+                                sl_mob_flushduration(mob as *mut MobSpawnData, dis, minid, maxid);
                             }
                             Ok(())
                         },
                     )?))
                 }
                 "flushDurationNoUncast" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, dis, minid, maxid): (mlua::Value, i32, i32, i32)| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(());
-                            }
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(()),
+                            };
                             unsafe {
-                                sl_mob_flushdurationnouncast(ptr as *mut MobSpawnData, dis, minid, maxid);
+                                sl_mob_flushdurationnouncast(mob as *mut MobSpawnData, dis, minid, maxid);
                             }
                             Ok(())
                         },
                     )?))
                 }
                 "hasDuration" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, name): (mlua::Value, String)| -> mlua::Result<bool> {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(false);
-                            }
-                            let cs =
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(false),
+                            };                            let cs =
                                 CString::new(name.as_bytes()).map_err(mlua::Error::external)?;
                             let id = unsafe { rust_magicdb_id(cs.as_ptr()) };
-                            let mob = unsafe { &*(ptr as *const MobSpawnData) };
                             Ok((0..MAX_MAGIC_TIMERS)
                                 .any(|x| mob.da[x].id as i32 == id && mob.da[x].duration > 0))
                         },
                     )?))
                 }
                 "hasDurationID" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, name, caster_id): (mlua::Value, String, u32)| -> mlua::Result<bool> {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(false);
-                            }
-                            let cs =
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(false),
+                            };                            let cs =
                                 CString::new(name.as_bytes()).map_err(mlua::Error::external)?;
                             let id = unsafe { rust_magicdb_id(cs.as_ptr()) };
-                            let mob = unsafe { &*(ptr as *const MobSpawnData) };
                             Ok((0..MAX_MAGIC_TIMERS).any(|x| {
                                 mob.da[x].id as i32 == id
                                     && mob.da[x].caster_id == caster_id
@@ -352,16 +329,14 @@ impl UserData for MobObject {
                     )?))
                 }
                 "getDuration" | "durationAmount" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, name): (mlua::Value, String)| -> mlua::Result<i32> {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(0);
-                            }
-                            let cs =
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(0),
+                            };                            let cs =
                                 CString::new(name.as_bytes()).map_err(mlua::Error::external)?;
                             let id = unsafe { rust_magicdb_id(cs.as_ptr()) };
-                            let mob = unsafe { &*(ptr as *const MobSpawnData) };
                             for x in 0..MAX_MAGIC_TIMERS {
                                 if mob.da[x].id as i32 == id && mob.da[x].duration > 0 {
                                     return Ok(mob.da[x].duration);
@@ -372,16 +347,14 @@ impl UserData for MobObject {
                     )?))
                 }
                 "getDurationID" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, name, caster_id): (mlua::Value, String, u32)| -> mlua::Result<i32> {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(0);
-                            }
-                            let cs =
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(0),
+                            };                            let cs =
                                 CString::new(name.as_bytes()).map_err(mlua::Error::external)?;
                             let id = unsafe { rust_magicdb_id(cs.as_ptr()) };
-                            let mob = unsafe { &*(ptr as *const MobSpawnData) };
                             for x in 0..MAX_MAGIC_TIMERS {
                                 if mob.da[x].id as i32 == id
                                     && mob.da[x].caster_id == caster_id
@@ -395,71 +368,65 @@ impl UserData for MobObject {
                     )?))
                 }
                 "checkThreat" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, player_id): (mlua::Value, u32)| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(0i32);
-                            }
-                            Ok(unsafe { sl_mob_checkthreat(ptr as *mut MobSpawnData, player_id) })
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(0i32),
+                            };                            Ok(unsafe { sl_mob_checkthreat(mob as *mut MobSpawnData, player_id) })
                         },
                     )?))
                 }
                 "callBase" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, script): (mlua::Value, String)| -> mlua::Result<bool> {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(false);
-                            }
-                            let cs =
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(false),
+                            };                            let cs =
                                 CString::new(script.as_bytes()).map_err(mlua::Error::external)?;
-                            Ok(unsafe { sl_mob_callbase(ptr as *mut MobSpawnData, cs.as_ptr()) } != 0)
+                            Ok(unsafe { sl_mob_callbase(mob as *mut MobSpawnData, cs.as_ptr()) } != 0)
                         },
                     )?))
                 }
                 "checkMove" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(false);
-                            }
-                            Ok(unsafe { sl_mob_checkmove(ptr as *mut MobSpawnData) } != 0)
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(false),
+                            };                            Ok(unsafe { sl_mob_checkmove(mob as *mut MobSpawnData) } != 0)
                         },
                     )?))
                 }
                 "setIndDmg" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, player_id, dmg): (mlua::Value, u32, f32)| -> mlua::Result<bool> {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(false);
-                            }
-                            Ok(unsafe { sl_mob_setinddmg(ptr as *mut MobSpawnData, player_id, dmg) } != 0)
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(false),
+                            };                            Ok(unsafe { sl_mob_setinddmg(mob as *mut MobSpawnData, player_id, dmg) } != 0)
                         },
                     )?))
                 }
                 "setGrpDmg" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, player_id, dmg): (mlua::Value, u32, f32)| -> mlua::Result<bool> {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(false);
-                            }
-                            Ok(unsafe { sl_mob_setgrpdmg(ptr as *mut MobSpawnData, player_id, dmg) } != 0)
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(false),
+                            };                            Ok(unsafe { sl_mob_setgrpdmg(mob as *mut MobSpawnData, player_id, dmg) } != 0)
                         },
                     )?))
                 }
                 "getIndDmg" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |lua, _: mlua::MultiValue| -> mlua::Result<mlua::Value> {
                             let tbl = lua.create_table()?;
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(mlua::Value::Table(tbl));
-                            }
-                            let mob = unsafe { &*(ptr as *const MobSpawnData) };
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(mlua::Value::Table(tbl)),
+                            };
                             let mut y = 1i64;
                             for x in 0..MAX_THREATCOUNT {
                                 if mob.dmgindtable[x][0] > 0.0 {
@@ -474,14 +441,13 @@ impl UserData for MobObject {
                     )?))
                 }
                 "getGrpDmg" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |lua, _: mlua::MultiValue| -> mlua::Result<mlua::Value> {
                             let tbl = lua.create_table()?;
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(mlua::Value::Table(tbl));
-                            }
-                            let mob = unsafe { &*(ptr as *const MobSpawnData) };
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(mlua::Value::Table(tbl)),
+                            };
                             let mut y = 1i64;
                             for x in 0..MAX_THREATCOUNT {
                                 if mob.dmggrptable[x][0] > 0.0 {
@@ -496,13 +462,12 @@ impl UserData for MobObject {
                     )?))
                 }
                 "getEquippedItem" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |lua, (_, num): (mlua::Value, usize)| -> mlua::Result<mlua::Value> {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(mlua::Value::Nil);
-                            }
-                            let mob = unsafe { &*(ptr as *const MobSpawnData) };
+                            let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(mlua::Value::Nil),
+                            };
                             if mob.data.is_null() || num >= 15 {
                                 return Ok(mlua::Value::Nil);
                             }
@@ -518,14 +483,10 @@ impl UserData for MobObject {
                     )?))
                 }
                 "calcStat" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(());
-                            }
-                            unsafe {
-                                mob_calcstat(ptr as *mut MobSpawnData);
+                            if let Some(m) = crate::game::map_server::map_id2mob_ref(mob_id) {
+                                unsafe { mob_calcstat(m as *mut MobSpawnData); }
                             }
                             Ok(())
                         },
@@ -543,39 +504,35 @@ impl UserData for MobObject {
                 }
                 // sendSide() — send a side-update to nearby players.
                 "sendSide" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(());
+                            if let Some(m) = crate::game::map_server::map_id2mob_ref(mob_id) {
+                                unsafe { sffi::sl_g_sendside(m as *mut _ as *mut std::ffi::c_void); }
                             }
-                            unsafe { sffi::sl_g_sendside(ptr); }
                             Ok(())
                         }
                     )?));
                 }
                 // delete() — remove mob from world and free its memory.
                 "delete" => {
-                    let deleted_flag = Arc::clone(&this.deleted);
+                    let capture_id = mob_id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if ptr.is_null() {
-                                return Ok(());
+                            if let Some(m) = crate::game::map_server::map_id2mob_ref(capture_id) {
+                                unsafe { sffi::sl_g_delete_bl(m as *mut _ as *mut std::ffi::c_void); }
                             }
-                            unsafe { sffi::sl_g_delete_bl(ptr); }
-                            deleted_flag.store(true, Ordering::Release);
                             Ok(())
                         }
                     )?));
                 }
                 // talk(type, msg) — speak in the surrounding area.
                 "talk" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, args: mlua::MultiValue| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(());
-                            }
+                            let m = match crate::game::map_server::map_id2mob_ref(mob_id) {
+                                Some(m) => m,
+                                None => return Ok(()),
+                            };
                             let a: Vec<mlua::Value> = args.into_iter().collect();
                             let talk_type = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
                             let msg = match a.get(2) {
@@ -585,15 +542,15 @@ impl UserData for MobObject {
                                 _ => String::new(),
                             };
                             if let Ok(cs) = CString::new(msg.as_bytes()) {
-                                unsafe { sffi::sl_g_talk(ptr, talk_type, cs.as_ptr()); }
+                                unsafe { sffi::sl_g_talk(m as *mut _ as *mut std::ffi::c_void, talk_type, cs.as_ptr()); }
                             }
                             Ok(())
                         }
                     )?));
                 }
                 // Registry sub-objects (set during mobl_init; exposed via __index here)
-                "registry" => return lua.pack(MobRegObject { ptr }),
-                "mapRegistry" => return lua.pack(MapRegObject { ptr }),
+                "registry" => return lua.pack(MobRegObject { ptr: mob as *mut _ as *mut std::ffi::c_void }),
+                "mapRegistry" => return lua.pack(MapRegObject { ptr: mob as *mut _ as *mut std::ffi::c_void }),
                 "gameRegistry" => {
                     return lua.pack(GameRegObject {
                         ptr: std::ptr::null_mut(),
@@ -721,42 +678,38 @@ impl UserData for MobObject {
                     return shared::make_cell_query_fn(lua, key.as_str()),
                 "getObjectsInArea" | "getAliveObjectsInArea"
                 | "getObjectsInSameMap" | "getAliveObjectsInSameMap" =>
-                    return shared::make_area_query_fn(lua, key.as_str(), ptr),
+                    return shared::make_area_query_fn(lua, key.as_str(), mob as *mut _ as *mut std::ffi::c_void),
                 "getObjectsInMap" =>
                     return shared::make_map_query_fn(lua),
-                "sendAnimation"     => return shared::make_sendanimation_fn(lua, ptr),
-                "playSound"         => return shared::make_playsound_fn(lua, ptr),
-                "sendAction"        => return shared::make_sendaction_fn(lua, ptr),
-                "msg"               => return shared::make_msg_fn(lua, ptr),
-                "dropItem"          => return shared::make_dropitem_fn(lua, ptr),
-                "dropItemXY"        => return shared::make_dropitemxy_fn(lua, ptr),
-                "objectCanMove"     => return shared::make_objectcanmove_fn(lua, ptr),
-                "objectCanMoveFrom" => return shared::make_objectcanmovefrom_fn(lua, ptr),
-                "repeatAnimation"   => return shared::make_repeatanimation_fn(lua, ptr),
-                "selfAnimation"     => return shared::make_selfanimation_fn(lua, ptr),
-                "selfAnimationXY"   => return shared::make_selfanimationxy_fn(lua, ptr),
-                "sendParcel"        => return shared::make_sendparcel_fn(lua, ptr),
-                "throw"             => return shared::make_throwblock_fn(lua, ptr),
+                "sendAnimation"     => return shared::make_sendanimation_fn(lua, mob as *mut _ as *mut std::ffi::c_void),
+                "playSound"         => return shared::make_playsound_fn(lua, mob as *mut _ as *mut std::ffi::c_void),
+                "sendAction"        => return shared::make_sendaction_fn(lua, mob as *mut _ as *mut std::ffi::c_void),
+                "msg"               => return shared::make_msg_fn(lua, mob as *mut _ as *mut std::ffi::c_void),
+                "dropItem"          => return shared::make_dropitem_fn(lua, mob as *mut _ as *mut std::ffi::c_void),
+                "dropItemXY"        => return shared::make_dropitemxy_fn(lua, mob as *mut _ as *mut std::ffi::c_void),
+                "objectCanMove"     => return shared::make_objectcanmove_fn(lua, mob as *mut _ as *mut std::ffi::c_void),
+                "objectCanMoveFrom" => return shared::make_objectcanmovefrom_fn(lua, mob as *mut _ as *mut std::ffi::c_void),
+                "repeatAnimation"   => return shared::make_repeatanimation_fn(lua, mob as *mut _ as *mut std::ffi::c_void),
+                "selfAnimation"     => return shared::make_selfanimation_fn(lua, mob as *mut _ as *mut std::ffi::c_void),
+                "selfAnimationXY"   => return shared::make_selfanimationxy_fn(lua, mob as *mut _ as *mut std::ffi::c_void),
+                "sendParcel"        => return shared::make_sendparcel_fn(lua, mob as *mut _ as *mut std::ffi::c_void),
+                "throw"             => return shared::make_throwblock_fn(lua, mob as *mut _ as *mut std::ffi::c_void),
                 "delFromIDDB" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(());
+                            if let Some(m) = crate::game::map_server::map_id2mob_ref(mob_id) {
+                                unsafe { sffi::sl_g_deliddb(m as *mut _ as *mut std::ffi::c_void); }
                             }
-                            unsafe { sffi::sl_g_deliddb(ptr); }
                             Ok(())
                         }
                     )?));
                 }
                 "addPermanentSpawn" => {
-                    let df = Arc::clone(&deleted);
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(());
+                            if let Some(m) = crate::game::map_server::map_id2mob_ref(mob_id) {
+                                unsafe { sffi::sl_g_addpermanentspawn(m as *mut _ as *mut std::ffi::c_void); }
                             }
-                            unsafe { sffi::sl_g_addpermanentspawn(ptr); }
                             Ok(())
                         }
                     )?));
@@ -764,14 +717,12 @@ impl UserData for MobObject {
                 // spawn(mob_name_or_id, x, y, amount [,m [,owner]])
                 // Spawn behavior for a mob's own map context (mirrors npc:spawn).
                 "spawn" => {
-                    let df = Arc::clone(&deleted);
+                    // Capture the spawner mob's id to look up its map if needed.
+                    let spawner_mob_id = mob_id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |lua, args: mlua::MultiValue| -> mlua::Result<mlua::Value> {
-                            if ptr.is_null() || df.load(Ordering::Acquire) {
-                                return Ok(mlua::Value::Table(lua.create_table()?));
-                            }
                             let args: Vec<mlua::Value> = args.into_iter().collect();
-                            let mob_id: u32 = match args.get(1) {
+                            let spawn_mob_id: u32 = match args.get(1) {
                                 Some(mlua::Value::String(s)) => {
                                     let cs = CString::new(&*s.as_bytes()).map_err(mlua::Error::external)?;
                                     unsafe { sffi::rust_mobdb_id(cs.as_ptr()) as u32 }
@@ -790,27 +741,20 @@ impl UserData for MobObject {
                             let amount = vi(4);
                             let owner  = vi(6) as u32;
                             let mut m  = vi(5);
-                            if m == 0 && !ptr.is_null() {
-                                m = unsafe { (*(ptr as *const crate::game::mob::MobSpawnData)).bl.m as i32 };
+                            if m == 0 {
+                                if let Some(spawner) = crate::game::map_server::map_id2mob_ref(spawner_mob_id) {
+                                    m = spawner.bl.m as i32;
+                                }
                             }
                             let tbl = lua.create_table()?;
                             if amount <= 0 { return Ok(mlua::Value::Table(tbl)); }
                             let spawned = unsafe {
-                                sffi::rust_mobspawn_onetime(mob_id, m, x, y, amount, 0, 0, 0, owner)
+                                sffi::rust_mobspawn_onetime(spawn_mob_id, m, x, y, amount, 0, 0, 0, owner)
                             };
-                            if spawned.is_null() { return Ok(mlua::Value::Table(tbl)); }
-                            let fill_result = (|| -> mlua::Result<()> {
-                                for i in 0..amount as usize {
-                                    let id = unsafe { *spawned.add(i) };
-                                    let bl = unsafe { sffi::map_id2bl(id) };
-                                    if !bl.is_null() {
-                                        tbl.set(i + 1, lua.create_userdata(crate::game::scripting::types::mob::MobObject { ptr: bl, deleted: Arc::new(AtomicBool::new(false)) })?)?;
-                                    }
-                                }
-                                Ok(())
-                            })();
-                            unsafe { libc::free(spawned as *mut std::ffi::c_void) };
-                            fill_result?;
+                            if spawned.is_empty() { return Ok(mlua::Value::Table(tbl)); }
+                            for (i, spawned_id) in spawned.into_iter().enumerate() {
+                                tbl.set(i + 1, lua.create_userdata(crate::game::scripting::types::mob::MobObject { id: spawned_id })?)?;
+                            }
                             Ok(mlua::Value::Table(tbl))
                         }
                     )?));
@@ -854,10 +798,10 @@ impl UserData for MobObject {
         methods.add_meta_method(
             MetaMethod::NewIndex,
             |_, this, (key, val): (String, mlua::Value)| {
-                if this.ptr.is_null() || this.deleted.load(Ordering::Acquire) {
-                    return Ok(());
-                }
-                let mob = unsafe { &mut *(this.ptr as *mut MobSpawnData) };
+                let mob = match crate::game::map_server::map_id2mob_ref(this.id) {
+                    Some(m) => m,
+                    None => return Ok(()),
+                };
                 let mp = unsafe { mob_map(mob as *const MobSpawnData) };
 
                 macro_rules! map_set {

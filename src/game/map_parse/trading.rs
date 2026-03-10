@@ -38,7 +38,6 @@ const OPT_FLAG_STEALTH: u64 = 32;
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::map_parse::player_state::clif_sendstatus;
 use crate::game::block::map_firstincell;
-use crate::game::map_server::{map_id2mob, map_id2npc};
 use crate::game::pc::{
     rust_pc_additem as pc_additem, rust_pc_additemnolog as pc_additemnolog,
     rust_pc_delitem as pc_delitem, rust_pc_isinvenspace as pc_isinvenspace,
@@ -52,17 +51,40 @@ use crate::database::item_db::{
 };
 use crate::database::class_db::rust_classdb_name as classdb_name;
 
-// map_id2sd in map_server returns *mut std::ffi::c_void — wrap with cast.
+// map_id2sd_local: typed lookup returning raw pointer for use in unsafe context.
 #[inline]
-unsafe fn map_id2sd(id: u32) -> *mut MapSessionData {
-    crate::game::map_server::map_id2sd(id) as *mut MapSessionData
+fn map_id2sd_local(id: u32) -> *mut MapSessionData {
+    crate::game::map_server::map_id2sd_pc(id)
+        .map(|r| r as *mut MapSessionData)
+        .unwrap_or(std::ptr::null_mut())
+}
+
+// map_id2mob_local: typed lookup returning raw pointer for use in unsafe context.
+#[inline]
+fn map_id2mob_local(id: u32) -> *mut crate::game::mob::MobSpawnData {
+    crate::game::map_server::map_id2mob_ref(id)
+        .map(|r| r as *mut crate::game::mob::MobSpawnData)
+        .unwrap_or(std::ptr::null_mut())
+}
+
+// map_id2npc_local: typed lookup returning raw pointer for use in unsafe context.
+#[inline]
+fn map_id2npc_local(id: u32) -> *mut crate::game::npc::NpcData {
+    crate::game::map_server::map_id2npc_ref(id)
+        .map(|r| r as *mut crate::game::npc::NpcData)
+        .unwrap_or(std::ptr::null_mut())
 }
 
 /// Dispatch a Lua event with two block_list arguments.
-#[cfg(not(test))]
 #[allow(dead_code)]
 unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
+}
+
+/// Coroutine dispatch with two block_list arguments.
+#[allow(dead_code)]
+unsafe fn sl_doscript_coro_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
+    crate::game::scripting::doscript_coro(root, method, &[bl1 as *mut _, bl2 as *mut _])
 }
 
 
@@ -219,7 +241,7 @@ pub unsafe fn clif_startexchange(
         return 0;
     }
 
-    let tsd = map_id2sd(target);
+    let tsd = map_id2sd_local(target);
     if tsd.is_null() { return 0; }
 
     (*sd).exchange.target  = target;
@@ -778,7 +800,7 @@ pub unsafe fn clif_handgold(sd: *mut MapSessionData) -> i32 {
 
     if !bl.is_null() {
         if (*bl).bl_type as i32 == BL_PC {
-            let tsd = map_id2sd((*bl).id);
+            let tsd = map_id2sd_local((*bl).id);
             if !tsd.is_null() && (*tsd).status.setting_flags as u32 & FLAG_EXCHANGE != 0 {
                 clif_startexchange(sd, (*bl).id);
                 clif_exchange_money(sd, tsd);
@@ -814,7 +836,7 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
     if bl.is_null() { return 0; }
 
     if (*bl).bl_type as i32 == BL_PC {
-        let tsd = map_id2sd((*bl).id);
+        let tsd = map_id2sd_local((*bl).id);
         if !tsd.is_null() && (*tsd).status.setting_flags as u32 & FLAG_EXCHANGE != 0 {
             clif_startexchange(sd, (*bl).id);
             clif_exchange_additem(sd, tsd, slot as i32, amount);
@@ -825,7 +847,7 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
     }
 
     if (*bl).bl_type as i32 == BL_MOB {
-        let mob = map_id2mob((*bl).id);
+        let mob = map_id2mob_local((*bl).id);
         if mob.is_null() { return 0; }
 
         if itemdb_exchangeable((*sd).status.inventory[slot].id) == 1 { return 0; }
@@ -861,7 +883,7 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
     }
 
     if (*bl).bl_type as i32 == BL_NPC {
-        let nd = map_id2npc((*bl).id);
+        let nd = map_id2npc_local((*bl).id);
         if nd.is_null() { return 0; }
 
         // Cast to a minimal NPC view to read receiveItem
@@ -880,7 +902,7 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
 
         if (*nd_min).receive_item == 1 {
             let func = b"handItem\0".as_ptr() as *const i8;
-            sl_doscript_2((*nd_min).name.as_ptr(), func, &mut (*sd).bl as *mut BlockList, &mut (*nd_min).bl as *mut BlockList);
+            sl_doscript_coro_2((*nd_min).name.as_ptr(), func, &mut (*sd).bl as *mut BlockList, &mut (*nd_min).bl as *mut BlockList);
         } else {
             let item_name = itemdb_name(inv_id);
             let mut msg = [0i8; 128];
@@ -937,7 +959,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             // Initiation: type 0
             let raw = rfifol((*sd).fd, 6);
             let target_id = u32::from_be_bytes(raw.to_le_bytes());
-            let tsd = map_id2sd(target_id);
+            let tsd = map_id2sd_local(target_id);
             if tsd.is_null()
                 || (*sd).bl.m != (*tsd).bl.m
                 || (*tsd).bl.bl_type as i32 != BL_PC
@@ -973,7 +995,8 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             } else if (*sd).status.inventory[id].id != 0 {
                 let raw = rfifol((*sd).fd, 6);
                 let target_id = u32::from_be_bytes(raw.to_le_bytes());
-                let tsd = map_id2sd(target_id);
+                let tsd = map_id2sd_local(target_id);
+                if tsd.is_null() { return 0; }
                 clif_exchange_additem(sd, tsd, id as i32, 1);
             }
             // else: blank slot hack attempt — do nothing (matching C)
@@ -987,7 +1010,8 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             let amount = rfifob((*sd).fd, 11) as i32;
             let raw = rfifol((*sd).fd, 6);
             let target_id = u32::from_be_bytes(raw.to_le_bytes());
-            let tsd = map_id2sd(target_id);
+            let tsd = map_id2sd_local(target_id);
+            if tsd.is_null() { return 0; }
             if amount > 0
                 && (*sd).status.inventory[id].id != 0
                 && amount <= (*sd).status.inventory[id].amount
@@ -1002,7 +1026,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             let target_id  = u32::from_be_bytes(raw_target.to_le_bytes());
             let raw_amount = rfifol((*sd).fd, 10);
             let amount     = u32::from_be_bytes(raw_amount.to_le_bytes());
-            let tsd = map_id2sd(target_id);
+            let tsd = map_id2sd_local(target_id);
             if amount > (*sd).status.money {
                 clif_exchange_money(sd, tsd);
             } else {
@@ -1014,7 +1038,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             // Quit exchange
             let raw = rfifol((*sd).fd, 6);
             let target_id = u32::from_be_bytes(raw.to_le_bytes());
-            let tsd = map_id2sd(target_id);
+            let tsd = map_id2sd_local(target_id);
             let msg = b"Exchange cancelled.\0".as_ptr() as *const i8;
             clif_exchange_message(sd, msg, 4, 0);
             if !tsd.is_null() {
@@ -1029,7 +1053,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             // Finish exchange
             let raw = rfifol((*sd).fd, 6);
             let target_id = u32::from_be_bytes(raw.to_le_bytes());
-            let tsd = map_id2sd(target_id);
+            let tsd = map_id2sd_local(target_id);
 
             if (*sd).exchange.target != target_id {
                 clif_exchange_close(sd);

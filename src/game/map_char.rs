@@ -6,7 +6,6 @@
 
 #![allow(non_snake_case, dead_code, unused_variables)]
 
-use std::alloc::{alloc_zeroed, Layout};
 use std::ptr;
 
 use crate::database::{blocking_run_async, get_pool};
@@ -69,14 +68,11 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
         return 0;
     }
 
-    // Allocate a zero-initialised MapSessionData directly on the heap (mirrors C
-    // CALLOC). Using alloc_zeroed instead of Box::new(zeroed()) avoids creating
-    // the ~3 MB zeroed struct as a stack temporary, which would overflow the stack.
-    let sd: *mut MapSessionData = alloc_zeroed(Layout::new::<MapSessionData>()) as *mut MapSessionData;
-    if sd.is_null() {
-        rust_session_set_eof(fd, 7);
-        return 0;
-    }
+    // SAFETY: Box::new_zeroed allocates MapSessionData (~3MB) on the heap without
+    // a stack intermediary. assume_init is safe because all-zero is valid for MapSessionData
+    // (every field is a numeric type or array of numerics/pointers initialized to null).
+    let mut sd_box: Box<MapSessionData> = unsafe { Box::new_zeroed().assume_init() };
+    let sd: *mut MapSessionData = sd_box.as_mut() as *mut MapSessionData;
 
     // Copy MmoCharStatus into sd->status.
     ptr::copy_nonoverlapping(p, ptr::addr_of_mut!((*sd).status), 1);
@@ -214,7 +210,9 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
 
     // Register the player in the global ID database and mark online.
     tracing::info!("[map] [login] fd={} step=addiddb", fd);
-    crate::game::map_server::map_addiddb(ptr::addr_of_mut!((*sd).bl));
+    // Store player in typed map — moves sd_box ownership to PLAYER_MAP.
+    // The raw pointer sd remains valid because Box heap-allocates and never moves.
+    crate::game::map_server::map_addiddb_player((*sd).bl.id, sd_box);
     // mmo_setonline returns true when the "login" Lua hook should fire.
     // We capture that here and fire the hook AFTER blocking_run_async returns so
     // Lua's DB calls (which also use blocking_run_async) don't deadlock on DB_RUNTIME.

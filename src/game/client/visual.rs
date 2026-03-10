@@ -1892,10 +1892,12 @@ use crate::database::item_db::{
 };
 use crate::game::client::handlers::{clif_getName, clif_isregistered};
 
-// map_id2sd in map_server returns *mut std::ffi::c_void — wrap with cast.
+// map_id2sd_cop: typed lookup returning raw pointer for use in unsafe context.
 #[inline]
-unsafe fn map_id2sd_cop(id: u32) -> *mut MapSessionData {
-    crate::game::map_server::map_id2sd(id) as *mut MapSessionData
+fn map_id2sd_cop(id: u32) -> *mut MapSessionData {
+    crate::game::map_server::map_id2sd_pc(id)
+        .map(|r| r as *mut MapSessionData)
+        .unwrap_or(std::ptr::null_mut())
 }
 
 /// Replace first occurrence of `orig` in `src` with `rep`. Returns a pointer into

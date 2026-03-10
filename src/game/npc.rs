@@ -7,11 +7,8 @@ use crate::database::map_db::{BlockList, GlobalReg};
 use crate::servers::char::charstatus::{Item, MAX_EQUIP};
 use crate::game::types::GfxViewer;
 
-#[cfg(not(test))]
 use crate::database::map_db::{WarpList, BLOCK_SIZE};
-#[cfg(not(test))]
 use crate::database::{blocking_run_async, get_pool};
-#[cfg(not(test))]
 use crate::database::map_db::{get_map_ptr, map_is_loaded};
 
 // MAX_EQUIP is defined in charstatus::MAX_EQUIP (imported above) — same slot count.
@@ -110,30 +107,16 @@ pub struct NpcData {
 pub static NPC_ID: AtomicU32 = AtomicU32::new(NPC_START_NUM);
 pub static NPCTEMP_ID: AtomicU32 = AtomicU32::new(NPCT_START_NUM);
 
-#[cfg(not(test))]
-use crate::game::map_server::{
-    map_addiddb, map_deliddb, map_canmove, map_id2npc,
-};
-#[cfg(not(test))]
+use crate::game::map_server::map_canmove;
 use crate::game::block::{map_addblock, map_delblock, map_moveblock};
-#[cfg(not(test))]
 use crate::game::map_parse::visual::clif_lookgone;
-#[cfg(not(test))]
 use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from};
 
 // map_id2bl returns *mut std::ffi::c_void; wrap for std::ffi::c_void usage (npc uses it as void pointer)
-#[cfg(not(test))]
 unsafe fn map_id2bl(id: u32) -> *mut std::ffi::c_void {
     crate::game::map_server::map_id2bl(id)
 }
 
-// map_id2sd returns *mut std::ffi::c_void — pass through
-#[cfg(not(test))]
-unsafe fn map_id2sd(id: u32) -> *mut std::ffi::c_void {
-    crate::game::map_server::map_id2sd(id)
-}
-
-#[cfg(not(test))]
 use crate::game::block::{foreach_in_area, foreach_in_cell, foreach_in_rect, AreaType};
 use crate::game::map_parse::visual::{
     clif_cnpclook_inner, clif_mob_look_start_func_inner, clif_mob_look_close_func_inner,
@@ -371,19 +354,17 @@ pub unsafe fn npc_action(nd: *mut NpcData) -> i32 {
 
     nd.time = nd.time.wrapping_add(100);
 
-    let tsd: *mut std::ffi::c_void = if nd.owner != 0 {
-        map_id2sd(nd.owner)
+    let tsd_bl: Option<*mut BlockList> = if nd.owner != 0 {
+        crate::game::map_server::map_id2sd_pc(nd.owner)
+            .map(|sd| &raw mut sd.bl)
     } else {
-        std::ptr::null_mut()
+        None
     };
 
     if nd.time >= nd.actiontime {
         nd.time = 0;
-        if !tsd.is_null() {
-            // SAFETY: map_id2sd returns *mut map_sessiondata whose first field `bl`
-            // (struct block_list) is at byte offset 0. Casting to *mut BlockList is
-            // equivalent to &tsd->bl as used in C npc_action.
-            sl_doscript_2(nd.name.as_ptr(), b"action\0".as_ptr() as *const i8, &raw mut nd.bl, tsd as *mut BlockList);
+        if let Some(tsd_bl) = tsd_bl {
+            sl_doscript_2(nd.name.as_ptr(), b"action\0".as_ptr() as *const i8, &raw mut nd.bl, tsd_bl);
         } else {
             sl_doscript_simple(nd.name.as_ptr(), b"action\0".as_ptr() as *const i8, &raw mut nd.bl);
         }
@@ -404,17 +385,17 @@ pub unsafe fn npc_movetime(nd: *mut NpcData) -> i32 {
 
     nd.movetimer = nd.movetimer.wrapping_add(100);
 
-    let tsd: *mut std::ffi::c_void = if nd.owner != 0 {
-        map_id2sd(nd.owner)
+    let tsd_bl: Option<*mut BlockList> = if nd.owner != 0 {
+        crate::game::map_server::map_id2sd_pc(nd.owner)
+            .map(|sd| &raw mut sd.bl)
     } else {
-        std::ptr::null_mut()
+        None
     };
 
     if nd.movetimer >= nd.movetime {
         nd.movetimer = 0;
-        if !tsd.is_null() {
-            // SAFETY: see npc_action — map_sessiondata.bl is at offset 0.
-            sl_doscript_2(nd.name.as_ptr(), b"move\0".as_ptr() as *const i8, &raw mut nd.bl, tsd as *mut BlockList);
+        if let Some(tsd_bl) = tsd_bl {
+            sl_doscript_2(nd.name.as_ptr(), b"move\0".as_ptr() as *const i8, &raw mut nd.bl, tsd_bl);
         } else {
             sl_doscript_simple(nd.name.as_ptr(), b"move\0".as_ptr() as *const i8, &raw mut nd.bl);
         }
@@ -435,17 +416,17 @@ pub unsafe fn npc_duration(nd: *mut NpcData) -> i32 {
 
     nd.duratime = nd.duratime.wrapping_add(100);
 
-    let tsd: *mut std::ffi::c_void = if nd.owner != 0 {
-        map_id2sd(nd.owner)
+    let tsd_bl: Option<*mut BlockList> = if nd.owner != 0 {
+        crate::game::map_server::map_id2sd_pc(nd.owner)
+            .map(|sd| &raw mut sd.bl)
     } else {
-        std::ptr::null_mut()
+        None
     };
 
     if nd.duratime >= nd.duration {
         nd.duratime = 0;
-        if !tsd.is_null() {
-            // SAFETY: see npc_action — map_sessiondata.bl is at offset 0.
-            sl_doscript_2(nd.name.as_ptr(), b"endAction\0".as_ptr() as *const i8, &raw mut nd.bl, tsd as *mut BlockList);
+        if let Some(tsd_bl) = tsd_bl {
+            sl_doscript_2(nd.name.as_ptr(), b"endAction\0".as_ptr() as *const i8, &raw mut nd.bl, tsd_bl);
         } else {
             sl_doscript_simple(nd.name.as_ptr(), b"endAction\0".as_ptr() as *const i8, &raw mut nd.bl);
         }
@@ -470,16 +451,16 @@ pub unsafe fn npc_runtimers() {
     let mut x = NPC_START_NUM;
     let npc_hi = NPC_ID.load(Ordering::Relaxed);
     while x <= npc_hi {
-        let nd = map_id2npc(x);
-        if !nd.is_null() {
-            if (*nd).actiontime > 0 {
-                npc_action(nd);
+        if let Some(nd) = crate::game::map_server::map_id2npc_ref(x) {
+            let nd_ptr = nd as *mut NpcData;
+            if nd.actiontime > 0 {
+                npc_action(nd_ptr);
             }
-            if (*nd).movetime > 0 {
-                npc_movetime(nd);
+            if nd.movetime > 0 {
+                npc_movetime(nd_ptr);
             }
-            if (*nd).duration > 0 {
-                npc_duration(nd);
+            if nd.duration > 0 {
+                npc_duration(nd_ptr);
             }
         }
         x += 1;
@@ -489,16 +470,16 @@ pub unsafe fn npc_runtimers() {
     let mut x = NPCT_START_NUM;
     let npct_hi = NPCTEMP_ID.load(Ordering::Relaxed);
     while x <= npct_hi {
-        let nd = map_id2npc(x);
-        if !nd.is_null() {
-            if (*nd).actiontime > 0 {
-                npc_action(nd);
+        if let Some(nd) = crate::game::map_server::map_id2npc_ref(x) {
+            let nd_ptr = nd as *mut NpcData;
+            if nd.actiontime > 0 {
+                npc_action(nd_ptr);
             }
-            if (*nd).movetime > 0 {
-                npc_movetime(nd);
+            if nd.movetime > 0 {
+                npc_movetime(nd_ptr);
             }
-            if (*nd).duration > 0 {
-                npc_duration(nd);
+            if nd.duration > 0 {
+                npc_duration(nd_ptr);
             }
         }
         x += 1;
@@ -524,7 +505,6 @@ pub fn npc_warp_add(_file: *const i8) -> i32 { 0 }
 // ---------------------------------------------------------------------------
 
 /// Loads warp data from the `Warps` table into the map grid.
-#[cfg(not(test))]
 pub async unsafe fn warp_init_async() -> i32 {
     let p = get_pool();
 
@@ -608,7 +588,6 @@ pub async unsafe fn warp_init_async() -> i32 {
 }
 
 /// Blocking wrapper. Must be called after the sqlx pool is initialized.
-#[cfg(not(test))]
 pub unsafe fn warp_init() -> i32 {
     blocking_run_async(crate::database::assert_send(async { unsafe { warp_init_async().await } }))
 }
@@ -617,12 +596,10 @@ pub unsafe fn warp_init() -> i32 {
 // npc_init — load NPCs from DB into the map block grid
 // ---------------------------------------------------------------------------
 
-#[cfg(not(test))]
 fn server_id() -> u32 {
     crate::config_globals::global_config().serverid as u32
 }
 
-#[cfg(not(test))]
 fn copy_str_to_array<const N: usize>(s: &str, dst: &mut [i8; N]) {
     let copy_len = s.len().min(N - 1);
     for (d, b) in dst.iter_mut().zip(s.bytes().take(copy_len)) {
@@ -634,7 +611,6 @@ fn copy_str_to_array<const N: usize>(s: &str, dst: &mut [i8; N]) {
 /// Async implementation of npc_init. Loads all NPCs from DB, allocates NpcData
 /// structs, registers them in the block grid, then loads equipment for npctype==1.
 ///
-#[cfg(not(test))]
 pub async unsafe fn npc_init_async() -> i32 {
     let p = get_pool();
     let sid = server_id();
@@ -694,24 +670,30 @@ pub async unsafe fn npc_init_async() -> i32 {
 
     for row in &rows {
         // Check if an NPC with this DB id already exists (reload case)
-        let mut nd: *mut NpcData = map_id2npc(row.row_npc_id);
+        let mut nd: *mut NpcData = crate::game::map_server::map_id2npc_ref(row.row_npc_id)
+            .map(|r| r as *mut NpcData)
+            .unwrap_or(std::ptr::null_mut());
 
+        let mut is_new_alloc = false;
         if row.npc_is_f1npc == 1 {
             // This is the F1 (special) NPC — use F1_NPC id
-            nd = map_id2npc(F1_NPC);
+            nd = crate::game::map_server::map_id2npc_ref(F1_NPC)
+                .map(|r| r as *mut NpcData)
+                .unwrap_or(std::ptr::null_mut());
             if nd.is_null() {
-                // Allocate new zeroed NpcData
                 nd = Box::into_raw(Box::new(std::mem::zeroed::<NpcData>()));
+                is_new_alloc = true;
             } else {
-                map_deliddb(&raw mut (*nd).bl);
+                // Reload: unlink from block grid for re-add below; stay in NPC_MAP.
+                map_delblock(&raw mut (*nd).bl);
             }
         } else if nd.is_null() {
             // New NPC — allocate
             nd = Box::into_raw(Box::new(std::mem::zeroed::<NpcData>()));
+            is_new_alloc = true;
         } else {
-            // Reload — remove from grid
+            // Reload: unlink from block grid for re-add below; stay in NPC_MAP.
             map_delblock(&raw mut (*nd).bl);
-            map_deliddb(&raw mut (*nd).bl);
         }
 
         // Copy name strings (C uses memcpy with sizeof(name) = 45 into nd->name[64])
@@ -775,8 +757,13 @@ pub async unsafe fn npc_init_async() -> i32 {
             map_addblock(&raw mut (*nd).bl);
         }
 
-        // Always add to ID database
-        map_addiddb(&raw mut (*nd).bl);
+        // New NPCs: transfer Box ownership to NPC_MAP.
+        // Reloads: NPC was already in NPC_MAP and stays there (no re-insert).
+        if is_new_alloc {
+            let id = (*nd).bl.id;
+            crate::game::map_server::map_addiddb_npc(id, Box::from_raw(nd));
+            // nd is now owned by NPC_MAP; do not use nd after this point.
+        }
     }
 
     // Equipment loading: loop from NPC_START_NUM to NPC_ID
@@ -784,7 +771,9 @@ pub async unsafe fn npc_init_async() -> i32 {
     let mut x = NPC_START_NUM;
     let npc_hi = NPC_ID.load(Ordering::Relaxed);
     while x <= npc_hi {
-        let nd: *mut NpcData = map_id2npc(x);
+        let nd: *mut NpcData = crate::game::map_server::map_id2npc_ref(x)
+            .map(|r| r as *mut NpcData)
+            .unwrap_or(std::ptr::null_mut());
         if !nd.is_null() && (*nd).npctype == 1 {
             let nd_id = (*nd).id;
 
@@ -835,7 +824,6 @@ pub async unsafe fn npc_init_async() -> i32 {
 }
 
 /// Blocking wrapper. Must be called after the sqlx pool is initialized.
-#[cfg(not(test))]
 pub unsafe fn npc_init() -> i32 {
     blocking_run_async(crate::database::assert_send(async { unsafe { npc_init_async().await } }))
 }
@@ -861,7 +849,6 @@ pub unsafe fn npc_helper_mob_is_dead(bl: *mut BlockList) -> i32 {
 /// # Safety
 /// `bl` must point to a valid `MapSessionData` and `npc_bl` to a valid `BlockList`
 /// whose `.m` field is a loaded map ID.
-#[cfg(not(test))]
 pub unsafe fn npc_helper_pc_is_skip(bl: *mut BlockList, npc_bl: *mut BlockList) -> i32 {
     use crate::game::pc::{MapSessionData, PC_DIE};
     if bl.is_null() || npc_bl.is_null() { return 0; }
@@ -883,11 +870,6 @@ pub unsafe fn npc_helper_pc_is_skip(bl: *mut BlockList, npc_bl: *mut BlockList) 
     }
 }
 
-/// Test stub — map access is not available in unit tests.
-#[cfg(test)]
-pub unsafe fn npc_helper_pc_is_skip(_bl: *mut BlockList, _npc_bl: *mut BlockList) -> i32 {
-    0
-}
 
 // ---------------------------------------------------------------------------
 // npc_move_sub — callback for map_foreachincell during NPC movement
@@ -949,7 +931,6 @@ pub unsafe fn npc_move_sub_inner(bl: *mut BlockList, nd: *mut NpcData) -> i32 {
 ///
 /// `nd` must be a valid, aligned, non-null pointer to a live `NpcData`.
 /// Caller must hold the server-wide lock.
-#[cfg(not(test))]
 pub unsafe fn npc_move(nd: *mut NpcData) -> i32 {
     if nd.is_null() { return 0; }
     let nd = &mut *nd;

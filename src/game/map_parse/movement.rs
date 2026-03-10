@@ -144,20 +144,20 @@ use crate::database::item_db::{
 };
 use crate::database::magic_db::rust_magicdb_yname as magicdb_yname;
 
-// map_id2sd returns *mut std::ffi::c_void but movement.rs uses it as *mut MapSessionData — wrap.
-unsafe fn map_id2sd(id: u32) -> *mut MapSessionData {
-    crate::game::map_server::map_id2sd(id) as *mut MapSessionData
+// map_id2sd_local: typed lookup returning raw pointer for use in unsafe context.
+fn map_id2sd_local(id: u32) -> *mut MapSessionData {
+    crate::game::map_server::map_id2sd_pc(id)
+        .map(|r| r as *mut MapSessionData)
+        .unwrap_or(std::ptr::null_mut())
 }
 
 /// Dispatch a Lua event with a single block_list argument.
-#[cfg(not(test))]
 #[allow(dead_code)]
 unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
 }
 
 /// Dispatch a Lua event with two block_list arguments.
-#[cfg(not(test))]
 #[allow(dead_code)]
 unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
     crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
@@ -256,9 +256,9 @@ pub unsafe fn clif_sendchararea(sd: *mut MapSessionData) -> i32 {
 /// Applies visibility rules (stealth, ghost, GFX override).
 ///
 pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
-    let sd = map_id2sd(sender as u32);
+    let sd = map_id2sd_local(sender as u32);
     if sd.is_null() { return 0; }
-    let src_sd = map_id2sd(id as u32);
+    let src_sd = map_id2sd_local(id as u32);
     if src_sd.is_null() { return 0; }
 
     // Stealth: hide from non-GM viewers (except from self)
@@ -1459,7 +1459,6 @@ pub unsafe fn clif_parseviewchange(sd: *mut MapSessionData) -> i32 {
 ///
 /// Fires the "onLook" Lua event when player looks at a cell.
 /// Args: `bl` = the object being looked at, `sd` = the looking player.
-#[cfg(not(test))]
 pub unsafe fn clif_parselookat_sub_inner(bl: *mut BlockList, sd: *mut MapSessionData) -> i32 {
     if bl.is_null() || sd.is_null() { return 0; }
     sl_doscript_2(c"onLook".as_ptr(), std::ptr::null(), &raw mut (*sd).bl, bl);
@@ -1478,7 +1477,6 @@ pub unsafe fn clif_parselookat_scriptsub(
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-#[cfg(not(test))]
 pub unsafe fn clif_parselookat_2(sd: *mut MapSessionData) -> i32 {
     use crate::game::mob::BL_ITEM;
     let mut dx = (*sd).bl.x as i32;
@@ -1502,7 +1500,6 @@ pub unsafe fn clif_parselookat_2(sd: *mut MapSessionData) -> i32 {
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-#[cfg(not(test))]
 pub unsafe fn clif_parselookat(sd: *mut MapSessionData) -> i32 {
     use crate::game::mob::BL_ITEM;
     let fd = (*sd).fd;
@@ -1529,7 +1526,6 @@ pub unsafe fn clif_parselookat(sd: *mut MapSessionData) -> i32 {
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-#[cfg(not(test))]
 pub unsafe fn clif_refreshnoclick(sd: *mut MapSessionData) -> i32 {
     use crate::database::map_db::raw_map_ptr;
     use crate::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
@@ -1588,7 +1584,6 @@ pub unsafe fn clif_refreshnoclick(sd: *mut MapSessionData) -> i32 {
 /// Broadcast an NPC position packet to a nearby player.
 /// `bl` is cast to `*mut MapSessionData` (the receiving player).
 /// Builds a 32-byte buffer and calls `clif_send(buf, 32, &nd->bl, AREA_WOS)`.
-#[cfg(not(test))]
 pub unsafe fn clif_npc_move_inner(bl: *mut BlockList, nd: *mut crate::game::npc::NpcData) -> i32 {
     let sd = bl as *mut MapSessionData;
     if sd.is_null() || nd.is_null() { return 0; }
@@ -1613,7 +1608,6 @@ pub unsafe fn clif_npc_move_inner(bl: *mut BlockList, nd: *mut crate::game::npc:
 ///
 /// Send a mob-position packet to a player.
 /// `bl` is the viewing player, `mob` is the mob to render.
-#[cfg(not(test))]
 pub unsafe fn clif_mob_move_inner(bl: *mut BlockList, mob: *mut crate::game::mob::MobSpawnData) -> i32 {
     use crate::game::mob::MOB_DEAD;
     let sd = bl as *mut MapSessionData;

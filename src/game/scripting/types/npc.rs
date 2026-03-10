@@ -1,5 +1,4 @@
 use std::ffi::CString;
-use std::sync::{Arc, atomic::AtomicBool};
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
 use crate::database::map_db::MapData;
@@ -279,21 +278,13 @@ impl UserData for NpcObject {
                             }
                             let tbl = lua.create_table()?;
                             if amount <= 0 { return Ok(mlua::Value::Table(tbl)); }
-                            let spawned_raw = unsafe {
+                            let spawned = unsafe {
                                 sffi::rust_mobspawn_onetime(mob_id, m, x, y, amount, 0, 0, 0, owner)
                             };
-                            if spawned_raw.is_null() { return Ok(mlua::Value::Table(tbl)); }
-                            // Collect the spawned IDs before any fallible Lua operations so
-                            // the C buffer is always freed, even if tbl.set returns an error.
-                            let ids: Vec<_> = (0..amount as usize)
-                                .map(|i| unsafe { *spawned_raw.add(i) })
-                                .collect();
-                            unsafe { libc::free(spawned_raw as *mut std::ffi::c_void) };
-                            for (i, id) in ids.into_iter().enumerate() {
-                                let bl = unsafe { sffi::map_id2bl(id) };
-                                if !bl.is_null() {
-                                    tbl.set(i + 1, lua.create_userdata(MobObject { ptr: bl, deleted: Arc::new(AtomicBool::new(false)) })?)?;
-                                }
+                            if spawned.is_empty() { return Ok(mlua::Value::Table(tbl)); }
+                            // Collect IDs before any fallible Lua operations.
+                            for (i, spawn_id) in spawned.into_iter().enumerate() {
+                                tbl.set(i + 1, lua.create_userdata(MobObject { id: spawn_id })?)?;
                             }
                             Ok(mlua::Value::Table(tbl))
                         }
