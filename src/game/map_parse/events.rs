@@ -9,7 +9,7 @@ use crate::game::pc::{
 };
 
 use super::packet::{
-    rfifob,
+    rfifob, wfifop,
     wfifob, wfifohead, wfifoset,
     encrypt,
 };
@@ -23,14 +23,14 @@ use crate::game::map_server::{nmail_sendmail, cur_year, cur_season};
 use std::sync::atomic::Ordering as AtomicOrd;
 use crate::game::pc::rust_pc_readglobalreg as pc_readglobalreg;
 use crate::game::map_parse::chat::clif_sendmsg;
-use crate::session::rust_session_wdata_ptr;
+use crate::session::SessionId;
 
 // ─── wfifop_copy helper ───────────────────────────────────────────────────────
 
 /// Copy `len` bytes from `src` into the send-buffer at `pos`.
 #[inline]
-unsafe fn wfifop_copy(fd: i32, pos: usize, src: *const u8, len: usize) {
-    let dst = rust_session_wdata_ptr(fd, pos);
+unsafe fn wfifop_copy(fd: SessionId, pos: usize, src: *const u8, len: usize) {
+    let dst = wfifop(fd, pos);
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(src, dst, len);
     }
@@ -38,15 +38,15 @@ unsafe fn wfifop_copy(fd: i32, pos: usize, src: *const u8, len: usize) {
 
 /// Write a big-endian u16 into the send buffer at `pos`.
 #[inline]
-unsafe fn wfifow_be(fd: i32, pos: usize, val: u16) {
-    let p = rust_session_wdata_ptr(fd, pos) as *mut u16;
+unsafe fn wfifow_be(fd: SessionId, pos: usize, val: u16) {
+    let p = wfifop(fd, pos) as *mut u16;
     if !p.is_null() { p.write_unaligned(val.to_be()); }
 }
 
 /// Write a big-endian u32 into the send buffer at `pos`.
 #[inline]
-unsafe fn wfifol_be(fd: i32, pos: usize, val: u32) {
-    let p = rust_session_wdata_ptr(fd, pos) as *mut u32;
+unsafe fn wfifol_be(fd: SessionId, pos: usize, val: u32) {
+    let p = wfifop(fd, pos) as *mut u32;
     if !p.is_null() { p.write_unaligned(val.to_be()); }
 }
 
@@ -147,7 +147,7 @@ struct EventDates {
 /// - otherwise: write four bytes (big-endian) at `field - 3`
 ///
 /// C line 4883.
-pub unsafe fn clif_intcheck(number: i32, field: i32, fd: i32) {
+pub unsafe fn clif_intcheck(number: i32, field: i32, fd: SessionId) {
     if field != 0 {
         if number > 254 {
             if number > 65535 {
@@ -253,7 +253,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 ///
 /// C line 4186.
 #[allow(unused_assignments)]
-pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: i32) -> i32 {
+pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: SessionId) -> i32 {
     let eventid = rfifob(fd, 7) as i32;
     let g_cur_year   = cur_year.load(AtomicOrd::Relaxed);
     let g_cur_season = cur_season.load(AtomicOrd::Relaxed);
@@ -593,7 +593,7 @@ You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewar
 /// Iterates `rewardranks` times, writing per-rank legend title, icon, and
 /// item reward information into the WFIFO.  C line 4561.
 #[allow(unused_assignments)]
-pub async unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: i32) -> i32 {
+pub async unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: SessionId) -> i32 {
     let g_cur_year = cur_year.load(AtomicOrd::Relaxed);
     wfifohead(fd, 0);
     wfifob(fd, 0, 0xAA);
@@ -836,7 +836,7 @@ pub async unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: i32) -> i32
 ///
 /// Writes 4 ints via `clif_intcheck` at `pos+7`, `pos+11`, `pos+15`, `pos+19`.
 /// C line 4900.
-pub async unsafe fn retrieveEventDates(eventid: i32, pos: i32, fd: i32) {
+pub async unsafe fn retrieveEventDates(eventid: i32, pos: i32, fd: SessionId) {
     let event_id_u = eventid as u32;
     let Some(dates) = sqlx::query_as::<_, EventDates>(
             "SELECT `FromDate`, `FromTime`, `ToDate`, `ToTime` FROM `RankingEvents` WHERE `EventId` = ?"
@@ -922,7 +922,7 @@ pub async unsafe fn checkPlayerRank(eventid: i32, sd: *mut MapSessionData) -> i3
 /// Returns the column value on success, or 2 if no row is found.
 ///
 /// SQL: SELECT EventClaim FROM RankingScores WHERE EventId=? AND ChaId=?
-pub async unsafe fn checkevent_claim(eventid: i32, _fd: i32, sd: *mut MapSessionData) -> i32 {
+pub async unsafe fn checkevent_claim(eventid: i32, _fd: SessionId, sd: *mut MapSessionData) -> i32 {
     // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
     let cha_id = (*sd).status.id as i32;
     // EventId is int(10) signed — i32 bind is correct
@@ -947,7 +947,7 @@ pub async unsafe fn checkevent_claim(eventid: i32, _fd: i32, sd: *mut MapSession
 /// Writes the event header bytes and delegates date fields to `retrieveEventDates`,
 /// then appends the claim byte at pos+20.
 ///
-pub async unsafe fn dateevent_block(pos: i32, eventid: i32, fd: i32, sd: *mut MapSessionData) {
+pub async unsafe fn dateevent_block(pos: i32, eventid: i32, fd: SessionId, sd: *mut MapSessionData) {
     wfifob(fd, pos as usize,       0);
     wfifob(fd, pos as usize + 1,   eventid as u8);
     wfifob(fd, pos as usize + 2,   142);
@@ -961,7 +961,7 @@ pub async unsafe fn dateevent_block(pos: i32, eventid: i32, fd: i32, sd: *mut Ma
 /// Write the "filler" event block into the WFIFO at position `pos`.
 ///
 /// Writes player rank / score / claim bytes for the chosen event.
-pub async unsafe fn filler_block(pos: i32, eventid: i32, fd: i32, sd: *mut MapSessionData) {
+pub async unsafe fn filler_block(pos: i32, eventid: i32, fd: SessionId, sd: *mut MapSessionData) {
     let player_score = checkPlayerScore(eventid, sd).await;
     let player_rank  = checkPlayerRank(eventid, sd).await;
 
@@ -1011,7 +1011,7 @@ pub async unsafe fn getevents() -> i32 {
 ///
 /// Returns updated `pos` after writing all blocks.
 /// SQL: SELECT EventName FROM RankingEvents
-pub async unsafe fn getevent_name(mut pos: i32, fd: i32, sd: *mut MapSessionData) -> i32 {
+pub async unsafe fn getevent_name(mut pos: i32, fd: SessionId, sd: *mut MapSessionData) -> i32 {
     // EventId is int(10) signed — i32 bind is correct
     struct EventRow { event_id: i32, name: String }
     impl sqlx::FromRow<'_, sqlx::mysql::MySqlRow> for EventRow {
@@ -1053,7 +1053,7 @@ pub async unsafe fn getevent_playerscores(
     eventid:     i32,
     totalscores: i32,
     mut pos:     i32,
-    fd:          i32,
+    fd:          SessionId,
 ) -> i32 {
     // The C code reads an offset byte from RFIFO position 17 and subtracts 10.
     let offset: i64 = rfifob(fd, 17) as i64 - 10;
@@ -1121,7 +1121,7 @@ pub async unsafe fn getevent_playerscores(
 /// Assembles: event count, event name/date blocks, filler block, score list,
 /// total score count, encrypts and sends.
 ///
-pub async unsafe fn clif_parseranking(sd: *mut MapSessionData, fd: i32) -> i32 {
+pub async unsafe fn clif_parseranking(sd: *mut MapSessionData, fd: SessionId) -> i32 {
     wfifohead(fd, 0);
     wfifob(fd, 0, 0xAA);
     wfifob(fd, 1, 0x02);

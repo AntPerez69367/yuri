@@ -2,9 +2,8 @@
 
 
 use crate::session::{
-    rust_session_available, rust_session_commit, rust_session_increment,
-    rust_session_rdata_ptr, rust_session_skip, rust_session_wdata_ptr,
-    rust_session_wfifohead, rust_session_exists,
+    session_exists, session_increment,
+    get_session_manager, SessionId,
 };
 
 // ─── Send-target constants (enum in map_parse.h) ─────────────────────────────
@@ -33,98 +32,194 @@ pub fn swap32(x: u32) -> u32 { x.swap_bytes() }
 
 /// Read one byte from the session recv buffer at `pos`. Mirrors `RFIFOB`.
 #[inline]
-pub unsafe fn rfifob(fd: i32, pos: usize) -> u8 {
-    let p = rust_session_rdata_ptr(fd, pos);
-    if p.is_null() { 0 } else { *p }
+pub fn rfifob(fd: SessionId, pos: usize) -> u8 {
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(session) = s.try_lock() {
+            let bytes = session.rdata_bytes();
+            if pos < bytes.len() { return bytes[pos]; }
+        }
+    }
+    0
 }
 
 /// Read two bytes (little-endian u16) from recv buffer at `pos`. Mirrors `RFIFOW`.
 #[inline]
-pub unsafe fn rfifow(fd: i32, pos: usize) -> u16 {
-    let p = rust_session_rdata_ptr(fd, pos);
-    if p.is_null() { return 0; }
-    u16::from_le_bytes([*p, *p.add(1)])
+pub fn rfifow(fd: SessionId, pos: usize) -> u16 {
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(session) = s.try_lock() {
+            let bytes = session.rdata_bytes();
+            if pos + 1 < bytes.len() {
+                return u16::from_le_bytes([bytes[pos], bytes[pos + 1]]);
+            }
+        }
+    }
+    0
 }
 
 /// Read four bytes (little-endian u32) from recv buffer at `pos`. Mirrors `RFIFOL`.
 #[inline]
-pub unsafe fn rfifol(fd: i32, pos: usize) -> u32 {
-    let p = rust_session_rdata_ptr(fd, pos);
-    if p.is_null() { return 0; }
-    u32::from_le_bytes([*p, *p.add(1), *p.add(2), *p.add(3)])
+pub fn rfifol(fd: SessionId, pos: usize) -> u32 {
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(session) = s.try_lock() {
+            let bytes = session.rdata_bytes();
+            if pos + 3 < bytes.len() {
+                return u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]);
+            }
+        }
+    }
+    0
 }
 
 /// Raw pointer into recv buffer at `pos`. Mirrors `RFIFOP`.
+///
+/// # Safety
+/// The returned pointer is only valid while no other code modifies the session.
 #[inline]
-pub unsafe fn rfifop(fd: i32, pos: usize) -> *const u8 {
-    rust_session_rdata_ptr(fd, pos)
+pub unsafe fn rfifop(fd: SessionId, pos: usize) -> *const u8 {
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(session) = s.try_lock() {
+            let bytes = session.rdata_bytes();
+            if pos < bytes.len() { return bytes.as_ptr().add(pos); }
+        }
+    }
+    std::ptr::null()
 }
 
 /// Number of unprocessed bytes in recv buffer. Mirrors `RFIFOREST`.
 #[inline]
-pub unsafe fn rfiforest(fd: i32) -> i32 {
-    rust_session_available(fd) as i32
+pub fn rfiforest(fd: SessionId) -> i32 {
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(session) = s.try_lock() {
+            return session.available() as i32;
+        }
+    }
+    0
 }
 
 /// Consume `len` bytes from recv buffer. Mirrors `RFIFOSKIP`.
 #[inline]
-pub unsafe fn rfifoskip(fd: i32, len: usize) {
-    rust_session_skip(fd, len);
+pub fn rfifoskip(fd: SessionId, len: usize) {
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(mut session) = s.try_lock() {
+            if let Err(e) = session.skip(len) {
+                tracing::error!("[session] skip error: {}", e);
+            }
+        }
+    }
 }
 
 // ─── Send-buffer (WFIFO) helpers ─────────────────────────────────────────────
 
 /// Reserve `size` bytes in send buffer. Mirrors `WFIFOHEAD`.
 #[inline]
-pub unsafe fn wfifohead(fd: i32, size: usize) {
-    rust_session_wfifohead(fd, size);
+pub fn wfifohead(fd: SessionId, size: usize) {
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(mut session) = s.try_lock() {
+            if let Err(e) = session.ensure_wdata_capacity(size) {
+                tracing::error!("[session] wfifohead error: {}", e);
+            }
+        }
+    }
 }
 
 /// Write one byte to send buffer at `pos`. Mirrors `WFIFOB(fd, pos) = val`.
 #[inline]
-pub unsafe fn wfifob(fd: i32, pos: usize, val: u8) {
-    let p = rust_session_wdata_ptr(fd, pos);
-    if !p.is_null() { *p = val; }
+pub fn wfifob(fd: SessionId, pos: usize, val: u8) {
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(mut session) = s.try_lock() {
+            if let Err(e) = session.write_u8(pos, val) {
+                tracing::error!("[session] wfifob error: {}", e);
+            }
+        }
+    }
 }
 
 /// Write two bytes (little-endian) to send buffer at `pos`. Mirrors `WFIFOW(fd, pos) = val`.
 #[inline]
-pub unsafe fn wfifow(fd: i32, pos: usize, val: u16) {
-    let p = rust_session_wdata_ptr(fd, pos) as *mut u16;
-    if !p.is_null() { p.write_unaligned(val.to_le()); }
+pub fn wfifow(fd: SessionId, pos: usize, val: u16) {
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(mut session) = s.try_lock() {
+            let actual = session.wdata_size + pos;
+            if actual + 1 < session.wdata.len() {
+                let bytes = val.to_le_bytes();
+                session.wdata[actual] = bytes[0];
+                session.wdata[actual + 1] = bytes[1];
+            }
+        }
+    }
 }
 
 /// Write four bytes (little-endian) to send buffer at `pos`. Mirrors `WFIFOL(fd, pos) = val`.
 #[inline]
-pub unsafe fn wfifol(fd: i32, pos: usize, val: u32) {
-    let p = rust_session_wdata_ptr(fd, pos) as *mut u32;
-    if !p.is_null() { p.write_unaligned(val.to_le()); }
+pub fn wfifol(fd: SessionId, pos: usize, val: u32) {
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(mut session) = s.try_lock() {
+            let actual = session.wdata_size + pos;
+            if actual + 3 < session.wdata.len() {
+                let bytes = val.to_le_bytes();
+                session.wdata[actual] = bytes[0];
+                session.wdata[actual + 1] = bytes[1];
+                session.wdata[actual + 2] = bytes[2];
+                session.wdata[actual + 3] = bytes[3];
+            }
+        }
+    }
+}
+
+/// Raw mutable pointer into send buffer at `pos`. Mirrors `WFIFOP`.
+///
+/// # Safety
+/// The returned pointer is only valid while no other code modifies the session.
+#[inline]
+pub unsafe fn wfifop(fd: SessionId, pos: usize) -> *mut u8 {
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(mut session) = s.try_lock() {
+            match session.wdata_ptr(pos) {
+                Ok(p) => return p,
+                Err(e) => { tracing::error!("[session] wfifop error: {}", e); }
+            }
+        }
+    }
+    std::ptr::null_mut()
 }
 
 /// Commit `size` bytes from send buffer to the wire. Mirrors `WFIFOSET`.
 #[inline]
-pub unsafe fn wfifoset(fd: i32, size: usize) {
-    rust_session_commit(fd, size);
+pub fn wfifoset(fd: SessionId, size: usize) {
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(mut session) = s.try_lock() {
+            if let Err(e) = session.commit_write(size) {
+                tracing::error!("[session] wfifoset error: {}", e);
+            }
+        }
+    }
 }
 
 /// Write the standard 5-byte packet header and reserve `packet_size` additional bytes.
-/// Header layout (from `WFIFOHEADER` in session.h):
+/// Header layout:
 ///   [0]   = 0xAA magic
 ///   [1..2] = packet_size as big-endian u16
 ///   [3]   = packet_id
 ///   [4]   = per-session increment byte
-/// Mirrors the C `static inline int WFIFOHEADER(fd, packetID, packetSize)`.
 #[inline]
-pub unsafe fn wfifoheader(fd: i32, packet_id: u8, packet_size: u16) {
+pub fn wfifoheader(fd: SessionId, packet_id: u8, packet_size: u16) {
     debug_assert!(packet_size >= 2, "wfifoheader: packet_size must be >= 2 (header needs 5 bytes, reserves packet_size+3)");
-    if rust_session_exists(fd) == 0 { return; }
-    rust_session_wfifohead(fd, packet_size as usize + 3);
+    if !session_exists(fd) { return; }
+    wfifohead(fd, packet_size as usize + 3);
     wfifob(fd, 0, 0xAA);
-    // packet_size stored big-endian (SWAP16 in C)
-    let p = rust_session_wdata_ptr(fd, 1) as *mut u16;
-    if !p.is_null() { p.write_unaligned(packet_size.to_be()); }
+    // packet_size stored big-endian
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(mut session) = s.try_lock() {
+            let actual = session.wdata_size + 1;
+            if actual + 1 < session.wdata.len() {
+                let bytes = packet_size.to_be_bytes();
+                session.wdata[actual] = bytes[0];
+                session.wdata[actual + 1] = bytes[1];
+            }
+        }
+    }
     wfifob(fd, 3, packet_id);
-    wfifob(fd, 4, rust_session_increment(fd));
+    wfifob(fd, 4, session_increment(fd));
 }
 
 

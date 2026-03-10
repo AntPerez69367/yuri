@@ -7,7 +7,7 @@
 use crate::database::map_db::BlockList;
 use crate::database::mob_db::MobDbData;
 use crate::database::map_db::raw_map_ptr;
-use crate::session::{rust_session_exists, rust_session_set_eof};
+use crate::session::{session_exists, session_set_eof};
 use crate::game::mob::{MobSpawnData, MOB_DEAD, MAX_MAGIC_TIMERS, MAX_THREATCOUNT};
 use crate::game::pc::{
     MapSessionData,
@@ -20,7 +20,7 @@ use crate::game::pc::{
 use crate::servers::char::charstatus::MAX_SPELLS;
 
 use super::packet::{
-    encrypt, wfifob, wfifohead, wfifol, wfifoset, wfifow, wfifoheader,
+    encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow, wfifoheader,
     clif_send,
     AREA, SELF, SAMEAREA,
 };
@@ -326,8 +326,7 @@ pub fn clif_send_selfbar(sd: &mut MapSessionData) {
         percentage = 1.0f32;
     }
 
-    if rust_session_exists(sd.fd) == 0 {
-        rust_session_set_eof(sd.fd, 8);
+    if !session_exists(sd.fd) {
         return;
     }
 
@@ -360,8 +359,7 @@ pub fn clif_send_groupbars(sd: &mut MapSessionData, tsd: &mut MapSessionData) {
         percentage = 1.0f32;
     }
 
-    if rust_session_exists(sd.fd) == 0 {
-        rust_session_set_eof(sd.fd, 8);
+    if !session_exists(sd.fd) {
         return;
     }
 
@@ -408,8 +406,7 @@ pub fn clif_send_mobbars_inner(bl: &mut BlockList, sd: &mut MapSessionData) -> i
             percentage = 1.0f32;
         }
 
-        if rust_session_exists(sd.fd) == 0 {
-            rust_session_set_eof(sd.fd, 8);
+        if !session_exists(sd.fd) {
             return 1;
         }
 
@@ -550,8 +547,7 @@ pub fn clif_send_duration(
         }
     }
 
-    if rust_session_exists(sd.fd) == 0 {
-        rust_session_set_eof(sd.fd, 8);
+    if !session_exists(sd.fd) {
         return 0;
     }
 
@@ -563,8 +559,7 @@ pub fn clif_send_duration(
 
         // copy label bytes to WFIFOP(fd, 6)
         {
-            use crate::session::rust_session_wdata_ptr;
-            let dst = rust_session_wdata_ptr(fd, 6);
+            let dst = wfifop(fd, 6);
             if !dst.is_null() {
                 std::ptr::copy_nonoverlapping(label.as_ptr(), dst, label_len);
             }
@@ -586,8 +581,7 @@ pub fn clif_send_aether(sd: &mut MapSessionData, id: i32, time: i32) -> i32 {
     let pos = clif_findspell_pos(sd, id);
     if pos < 0 { return 0; }
 
-    if rust_session_exists(sd.fd) == 0 {
-        rust_session_set_eof(sd.fd, 8);
+    if !session_exists(sd.fd) {
         return 0;
     }
 
@@ -709,14 +703,13 @@ pub fn clif_send_mob_health_sub_inner(
             }
         }
 
-        if rust_session_exists(sd.fd) == 0 {
-            rust_session_set_eof(sd.fd, 8);
+        if !session_exists(sd.fd) {
             return 0;
         }
 
-        use crate::session::rust_session_get_eof;
-        if rust_session_exists((*tsd).fd) == 0 || rust_session_get_eof((*tsd).fd) != 0 {
-            rust_session_set_eof((*tsd).fd, 8);
+        use crate::session::session_get_eof;
+        if !session_exists((*tsd).fd) || session_get_eof((*tsd).fd) != 0 {
+            session_set_eof((*tsd).fd, 8);
             return 0;
         }
 
@@ -754,8 +747,7 @@ pub fn clif_send_mob_health_sub_nosd_inner(
     let sd = bl as *mut BlockList as *mut MapSessionData;
 
     unsafe {
-        if rust_session_exists((*sd).fd) == 0 {
-            rust_session_set_eof((*sd).fd, 8);
+        if !session_exists((*sd).fd) {
             return 0;
         }
 
@@ -987,9 +979,9 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
                 };
 
                 if !tsd2.is_null() {
-                    crate::game::mob::rust_mob_drops(mob as *mut MobSpawnData, tsd2 as *mut std::ffi::c_void);
+                    crate::game::mob::rust_mob_drops(mob as *mut MobSpawnData, tsd2);
                 } else {
-                    crate::game::mob::rust_mob_drops(mob as *mut MobSpawnData, sd as *mut std::ffi::c_void);
+                    crate::game::mob::rust_mob_drops(mob as *mut MobSpawnData, sd);
                 }
 
                 if (*sd).group_count == 0 {
@@ -1092,8 +1084,7 @@ pub fn clif_send_destroy_inner(bl: &mut BlockList, mob: *mut MobSpawnData) -> i3
     let sd = bl as *mut BlockList as *mut MapSessionData;
 
     unsafe {
-        if rust_session_exists((*sd).fd) == 0 {
-            rust_session_set_eof((*sd).fd, 8);
+        if !session_exists((*sd).fd) {
             return 0;
         }
 
@@ -1124,8 +1115,7 @@ pub fn clif_sendmagic(sd: &mut MapSessionData, pos: i32) -> i32 {
         let question = rust_magicdb_question(id);
         let spell_type = rust_magicdb_type(id);
 
-        if rust_session_exists(sd.fd) == 0 {
-            rust_session_set_eof(sd.fd, 8);
+        if !session_exists(sd.fd) {
             return 0;
         }
 
@@ -1140,14 +1130,13 @@ pub fn clif_sendmagic(sd: &mut MapSessionData, pos: i32) -> i32 {
         wfifob(fd, 6, spell_type as u8);
         wfifob(fd, 7, name_len as u8);
         {
-            use crate::session::rust_session_wdata_ptr;
-            let dst = rust_session_wdata_ptr(fd, 8);
+            let dst = wfifop(fd, 8);
             if !dst.is_null() && !name.is_null() {
                 std::ptr::copy_nonoverlapping(name as *const u8, dst, name_len);
             }
-            let dst2 = rust_session_wdata_ptr(fd, 8 + name_len);
+            let dst2 = wfifop(fd, 8 + name_len);
             if !dst2.is_null() { *dst2 = question_len as u8; }
-            let dst3 = rust_session_wdata_ptr(fd, 9 + name_len);
+            let dst3 = wfifop(fd, 9 + name_len);
             if !dst3.is_null() && !question.is_null() {
                 std::ptr::copy_nonoverlapping(question as *const u8, dst3, question_len);
             }
@@ -1167,7 +1156,7 @@ pub fn clif_sendmagic(sd: &mut MapSessionData, pos: i32) -> i32 {
 pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
     use crate::game::map_parse::packet::{rfifob, rfifol, rfifop};
 
-    let pos = unsafe { (rfifob(sd.fd, 5) as i32) - 1 };
+    let pos = (rfifob(sd.fd, 5) as i32) - 1;
 
     let i = clif_has_aethers(sd, sd.status.skill[pos as usize] as i32);
     if i > 0 {
@@ -1213,7 +1202,7 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
         }
         2 => {
             // target type
-            let raw_id = unsafe { rfifol(sd.fd, 6) };
+            let raw_id = rfifol(sd.fd, 6);
             let target_id = u32::from_be(raw_id); // SWAP32
             sd.target   = target_id as i32;
             sd.attacker = target_id;
@@ -1282,14 +1271,14 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
 
             unsafe {
                 if health > 0 || (*tbl).bl_type == BL_PC as u8 {
-                    rust_sl_async_freeco(sd as *mut MapSessionData as *mut std::ffi::c_void);
+                    rust_sl_async_freeco(sd as *mut MapSessionData);
                     sl_doscript_2(rust_magicdb_yname(sd.status.skill[pos as usize] as i32), b"cast\0".as_ptr() as *const i8, &raw mut sd.bl, tbl);
                 }
             }
         }
     } else {
         unsafe {
-            rust_sl_async_freeco(sd as *mut MapSessionData as *mut std::ffi::c_void);
+            rust_sl_async_freeco(sd as *mut MapSessionData);
             sl_doscript_2(rust_magicdb_yname(sd.status.skill[pos as usize] as i32), b"cast\0".as_ptr() as *const i8, &raw mut sd.bl, std::ptr::null_mut::<BlockList>());
         }
     }
@@ -1384,8 +1373,7 @@ pub fn clif_sendanimation_xy_inner(bl: &mut BlockList, anim: i32, times: i32, x:
     let src = bl as *mut BlockList as *mut MapSessionData;
 
     unsafe {
-        if rust_session_exists((*src).fd) == 0 {
-            rust_session_set_eof((*src).fd, 8);
+        if !session_exists((*src).fd) {
             return 0;
         }
 
@@ -1424,8 +1412,7 @@ pub fn clif_sendanimation_inner(bl: &mut BlockList, anim: i32, t: *mut BlockList
 
     unsafe {
         if (*sd).status.setting_flags as u32 & FLAG_MAGIC != 0 {
-            if rust_session_exists((*sd).fd) == 0 {
-                rust_session_set_eof((*sd).fd, 8);
+            if !session_exists((*sd).fd) {
                 return 0;
             }
 
@@ -1454,8 +1441,7 @@ pub fn clif_animation(
     animation: i32,
     duration: i32,
 ) -> i32 {
-    if rust_session_exists(sd.fd) == 0 {
-        rust_session_set_eof(sd.fd, 8);
+    if !session_exists(sd.fd) {
         return 0;
     }
 

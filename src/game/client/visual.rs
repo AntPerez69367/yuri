@@ -12,10 +12,11 @@
 
 use crate::database::{board_db, class_db};
 use crate::session::{
-    rust_session_available, rust_session_commit, rust_session_exists, rust_session_get_client_ip,
-    rust_session_get_data, rust_session_get_eof, rust_session_increment, rust_session_rdata_ptr,
-    rust_session_set_eof, rust_session_wdata_ptr, rust_session_wfifohead,
+    SessionId, session_exists, session_get_client_ip,
+    session_get_data, session_get_eof, session_increment,
+    session_set_eof,
 };
+use crate::game::map_parse::packet::{rfifop, rfiforest, wfifohead, wfifop, wfifoset};
 use crate::game::pc::MapSessionData;
 use crate::servers::char::charstatus::MAX_INVENTORY;
 
@@ -26,7 +27,7 @@ use crate::network::crypt::encrypt;
 /// Write a single byte into the write buffer at `pos`.
 ///
 /// # Safety
-/// `p` must be a valid non-null pointer from `rust_session_wdata_ptr`, and `pos`
+/// `p` must be a valid non-null pointer from `wfifop`, and `pos`
 /// must lie within the allocated buffer region.
 #[inline]
 unsafe fn wb(p: *mut u8, pos: usize, val: u8) {
@@ -153,13 +154,12 @@ pub unsafe fn clif_sendupdatestatus(sd: *mut MapSessionData) -> i32 {
     let sd = &*sd;
     let fd = sd.fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
-    rust_session_wfifohead(fd, 33);
-    let p = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, 33);
+    let p = wfifop(fd, 0);
     if p.is_null() {
         return 0;
     }
@@ -184,7 +184,7 @@ pub unsafe fn clif_sendupdatestatus(sd: *mut MapSessionData) -> i32 {
     wb(p, 32, 0x35);
 
     // encrypt() returns 1 on error or pkt_len (≥ 3) on success; never negative.
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -204,13 +204,12 @@ pub unsafe fn clif_sendupdatestatus2(sd: *mut MapSessionData) -> i32 {
     let sd = &*sd;
     let fd = sd.fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
-    rust_session_wfifohead(fd, 25);
-    let p = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, 25);
+    let p = wfifop(fd, 0);
     if p.is_null() {
         return 0;
     }
@@ -234,7 +233,7 @@ pub unsafe fn clif_sendupdatestatus2(sd: *mut MapSessionData) -> i32 {
     wl_be(p, 22, sd.status.setting_flags as u32);
 
     // encrypt() returns 1 on error or pkt_len (≥ 3) on success; never negative.
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -255,13 +254,12 @@ pub unsafe fn clif_sendupdatestatus_onkill(sd: *mut MapSessionData) -> i32 {
     let sdr = &*sd;
     let fd = sdr.fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
-    rust_session_wfifohead(fd, 33);
-    let p = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, 33);
+    let p = wfifop(fd, 0);
     if p.is_null() {
         return 0;
     }
@@ -290,7 +288,7 @@ pub unsafe fn clif_sendupdatestatus_onkill(sd: *mut MapSessionData) -> i32 {
     wb(p, 32, sdr.hit as u8);
 
     // encrypt() returns 1 on error or pkt_len (≥ 3) on success; never negative.
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -310,13 +308,12 @@ pub unsafe fn clif_sendupdatestatus_onequip(sd: *mut MapSessionData) -> i32 {
     let sdr = &*sd;
     let fd = sdr.fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
-    rust_session_wfifohead(fd, 62);
-    let p = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, 62);
+    let p = wfifop(fd, 0);
     if p.is_null() {
         return 0;
     }
@@ -368,7 +365,7 @@ pub unsafe fn clif_sendupdatestatus_onequip(sd: *mut MapSessionData) -> i32 {
     wb(p, 61, sdr.hit as u8);
 
     // encrypt() returns 1 on error or pkt_len (≥ 3) on success; never negative.
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -391,13 +388,12 @@ pub unsafe fn clif_sendupdatestatus_onunequip(sd: *mut MapSessionData) -> i32 {
     let sdr = &*sd;
     let fd = sdr.fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
-    rust_session_wfifohead(fd, 52);
-    let p = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, 52);
+    let p = wfifop(fd, 0);
     if p.is_null() {
         return 0;
     }
@@ -446,7 +442,7 @@ pub unsafe fn clif_sendupdatestatus_onunequip(sd: *mut MapSessionData) -> i32 {
     wl_le(p, 50, tnl as u32);
 
     // encrypt() returns 1 on error or pkt_len (≥ 3) on success; never negative.
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -483,15 +479,14 @@ pub unsafe fn clif_destroyold(sd: *mut MapSessionData) -> i32 {
     let sd = &*sd;
     let fd = sd.fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
     // Packet: [0xAA][len_hi][len_lo][0x58][0x03][0x00]
     // Length field = 3 (payload bytes after the 3-byte header).
-    rust_session_wfifohead(fd, 6);
-    let p = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, 6);
+    let p = wfifop(fd, 0);
     if p.is_null() {
         return 0;
     }
@@ -502,7 +497,7 @@ pub unsafe fn clif_destroyold(sd: *mut MapSessionData) -> i32 {
     wb(p, 4, 0x03);
     wb(p, 5, 0x00);
 
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -565,8 +560,7 @@ pub unsafe fn clif_popup(sd: *mut MapSessionData, buf: *const i8) -> i32 {
     let sd = &*sd;
     let fd = sd.fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
@@ -575,8 +569,8 @@ pub unsafe fn clif_popup(sd: *mut MapSessionData, buf: *const i8) -> i32 {
     let str_len = str_bytes.len();
 
     // C: WFIFOHEAD(sd->fd, strlen(buf) + 5 + 3) — total = str_len + 8.
-    rust_session_wfifohead(fd, str_len + 8);
-    let p = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, str_len + 8);
+    let p = wfifop(fd, 0);
     if p.is_null() {
         return 0;
     }
@@ -592,7 +586,7 @@ pub unsafe fn clif_popup(sd: *mut MapSessionData, buf: *const i8) -> i32 {
     // Copy string bytes (no null terminator needed in packet body).
     std::ptr::copy_nonoverlapping(buf as *const u8, p.add(8), str_len);
 
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -616,8 +610,7 @@ pub unsafe fn clif_sendprofile(sd: *mut MapSessionData) -> i32 {
     let sd = &*sd;
     let fd = sd.fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
@@ -626,8 +619,8 @@ pub unsafe fn clif_sendprofile(sd: *mut MapSessionData) -> i32 {
 
     // C has no WFIFOHEAD; add for safety.
     // Total packet = url_len + 7 (payload) + 3 (header overhead) = url_len + 10.
-    rust_session_wfifohead(fd, url_len + 10);
-    let p = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, url_len + 10);
+    let p = wfifop(fd, 0);
     if p.is_null() {
         return 0;
     }
@@ -642,7 +635,7 @@ pub unsafe fn clif_sendprofile(sd: *mut MapSessionData) -> i32 {
     // Length field = url_len + 7 (payload bytes after the 3-byte header).
     ww_be(p, 1, (url_len + 7) as u16);
 
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -671,8 +664,8 @@ pub unsafe fn clif_sendboard(sd: *mut MapSessionData) -> i32 {
     // Total payload = 6 + (url1_len+1) + (url2_len+1) + (url3_len+1).
     let total_payload = 6 + (url1.len() + 1) + (url2.len() + 1) + (url3.len() + 1);
     // C has no WFIFOHEAD; add for safety. Reserve total_payload + 3 bytes.
-    rust_session_wfifohead(fd, total_payload + 3);
-    let p = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, total_payload + 3);
+    let p = wfifop(fd, 0);
     if p.is_null() {
         return 0;
     }
@@ -693,7 +686,7 @@ pub unsafe fn clif_sendboard(sd: *mut MapSessionData) -> i32 {
     // Length field = total_payload (all payload bytes after the 3-byte header).
     ww_be(p, 1, total_payload as u16);
 
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -763,7 +756,7 @@ pub unsafe fn clif_getlvlxp(level: i32) -> u32 {
 /// [0xAA][len_hi][len_lo][0x1F][seq][weather_byte]
 /// ```
 /// `len = SWAP16(3)` (big-endian 3) — 3 payload bytes after the 3-byte header.
-/// `seq` is the per-session sequence counter from `rust_session_increment`.
+/// `seq` is the per-session sequence counter from `session_increment`.
 ///
 /// The weather byte is taken from `map[sd->bl.m].weather` only when
 /// `sd->status.setting_flags & FLAG_WEATHER` is set; otherwise 0.
@@ -781,8 +774,7 @@ pub unsafe fn clif_sendweather(
     let sdr = &*sd;
     let fd = sdr.fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
@@ -803,11 +795,11 @@ pub unsafe fn clif_sendweather(
     //   WFIFOB(fd, 0) = 0xAA
     //   WFIFOW(fd, 1) = SWAP16(3)              → big-endian 3
     //   WFIFOB(fd, 3) = 0x1F                   (opcode)
-    //   WFIFOB(fd, 4) = rust_session_increment(fd)
+    //   WFIFOB(fd, 4) = session_increment(fd)
     // Then: WFIFOB(fd, 5) = weather_byte
     // Total packet = 6 bytes (header 3 + payload 3).
-    rust_session_wfifohead(fd, 6);
-    let p = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, 6);
+    let p = wfifop(fd, 0);
     if p.is_null() {
         return 0;
     }
@@ -815,10 +807,10 @@ pub unsafe fn clif_sendweather(
     wb(p, 0, 0xAA);
     ww_be(p, 1, 3); // SWAP16(3) — payload length
     wb(p, 3, 0x1F); // opcode
-    wb(p, 4, rust_session_increment(fd));
+    wb(p, 4, session_increment(fd));
     wb(p, 5, weather_byte);
 
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -895,14 +887,13 @@ pub unsafe fn clif_user_list(
     }
     let sdr = &*sd;
 
-    if rust_session_exists(sdr.fd) == 0 {
-        rust_session_set_eof(sdr.fd, 8);
+    if !session_exists(sdr.fd) {
         return 0;
     }
 
     let mut pkt = Vec::with_capacity(4);
     pkt.extend_from_slice(&0x300Bu16.to_le_bytes());
-    pkt.extend_from_slice(&(sdr.fd as u16).to_le_bytes());
+    pkt.extend_from_slice(&(sdr.fd.raw() as u16).to_le_bytes());
     crate::game::map_char::send(pkt);
     0
 }
@@ -953,7 +944,7 @@ pub unsafe fn clif_sendurl(
 
     // C original had no session guard, but project convention adds one defensively.
     // No set_eof here — we just skip the send if the session is already gone.
-    if rust_session_exists(fd) == 0 {
+    if !session_exists(fd) {
         return 0;
     }
 
@@ -962,8 +953,8 @@ pub unsafe fn clif_sendurl(
 
     // C had no WFIFOHEAD — add one for safety.
     // Total packet = 3 (framing header) + url_len + 8 (payload before url) = url_len + 11.
-    rust_session_wfifohead(fd, url_len + 11);
-    let p = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, url_len + 11);
+    let p = wfifop(fd, 0);
     if p.is_null() {
         return 0;
     }
@@ -980,7 +971,7 @@ pub unsafe fn clif_sendurl(
     // Length = url_len + 8 (payload bytes after the 3-byte framing header).
     ww_be(p, 1, (url_len + 8) as u16);
 
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -991,7 +982,7 @@ pub unsafe fn clif_sendurl(
 /// - If `fd == char_fd` → return 0 (never time out the char-server link).
 /// - If `fd <= 1` → return 0 (reserved / stdin / stdout fds).
 /// - If session does not exist → return 0.
-/// - If `rust_session_get_data(fd)` is null → set eof=12 then return 0.
+/// - If `session_get_data(fd)` is null → set eof=12 then return 0.
 ///
 /// On a valid player session, logs `"<name> (IP: a.b.c.d) timed out!"` via
 /// `tracing::info!` and sets eof=1.
@@ -999,29 +990,29 @@ pub unsafe fn clif_sendurl(
 /// # Safety
 /// Safe to call with any fd value. No struct dereferences occur before `sd_ptr` is
 /// verified non-null. All pointer dereferences follow their respective null checks.
-pub unsafe fn clif_timeout(fd: i32) -> i32 {
-    if fd == crate::game::map_server::char_fd.load(std::sync::atomic::Ordering::Relaxed) {
+pub unsafe fn clif_timeout(fd: SessionId) -> i32 {
+    if fd.raw() == crate::game::map_server::char_fd.load(std::sync::atomic::Ordering::Relaxed) {
         return 0;
     }
-    if fd <= 1 {
+    if fd.raw() <= 1 {
         return 0;
     }
-    if rust_session_exists(fd) == 0 {
+    if !session_exists(fd) {
         return 0;
     }
 
     // Disconnect if the session is gone.
     // in C — set eof then fall through to the nullpo_ret which returns 0.
-    let sd_ptr = rust_session_get_data(fd) as *mut MapSessionData;
+    let sd_ptr = session_get_data(fd);
     if sd_ptr.is_null() {
-        rust_session_set_eof(fd, 12);
+        session_set_eof(fd, 12);
         return 0;
     }
 
     let sdr = &*sd_ptr;
 
     // Decompose IP into four octets (little-endian byte order in sin_addr).
-    let raw_ip = rust_session_get_client_ip(fd);
+    let raw_ip = session_get_client_ip(fd);
     let a = raw_ip & 0xff;
     let b = (raw_ip >> 8) & 0xff;
     let c = (raw_ip >> 16) & 0xff;
@@ -1036,7 +1027,7 @@ pub unsafe fn clif_timeout(fd: i32) -> i32 {
         "{} (IP: {}.{}.{}.{}) timed out!",
         name_display, a, b, c, d
     );
-    rust_session_set_eof(fd, 1);
+    session_set_eof(fd, 1);
     0
 }
 
@@ -1065,8 +1056,7 @@ pub unsafe fn clif_paperpopup(
     let sdr = &*sd;
     let fd = sdr.fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
@@ -1074,8 +1064,8 @@ pub unsafe fn clif_paperpopup(
     let str_len = str_bytes.len();
 
     // C: WFIFOHEAD(fd, strlen(buf) + 11 + 3) — total = str_len + 14.
-    rust_session_wfifohead(fd, str_len + 14);
-    let p = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, str_len + 14);
+    let p = wfifop(fd, 0);
     if p.is_null() {
         return 0;
     }
@@ -1094,7 +1084,7 @@ pub unsafe fn clif_paperpopup(
     // C uses strcpy which copies the null terminator; packet body excludes it.
     std::ptr::copy_nonoverlapping(buf as *const u8, p.add(11), str_len);
 
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -1122,8 +1112,7 @@ pub unsafe fn clif_paperpopupwrite(
     let sdr = &*sd;
     let fd = sdr.fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
@@ -1131,8 +1120,8 @@ pub unsafe fn clif_paperpopupwrite(
     let str_len = str_bytes.len();
 
     // C: WFIFOHEAD(fd, strlen(buf) + 11 + 3) — total = str_len + 14.
-    rust_session_wfifohead(fd, str_len + 14);
-    let p = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, str_len + 14);
+    let p = wfifop(fd, 0);
     if p.is_null() {
         return 0;
     }
@@ -1150,7 +1139,7 @@ pub unsafe fn clif_paperpopupwrite(
     ww_be(p, 9, str_len as u16);
     std::ptr::copy_nonoverlapping(buf as *const u8, p.add(11), str_len);
 
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -1178,13 +1167,12 @@ pub unsafe fn clif_sendtest(sd: *mut MapSessionData) -> i32 {
     let sdr = &*sd;
     let fd = sdr.fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
-    rust_session_wfifohead(fd, 7);
-    let p = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, 7);
+    let p = wfifop(fd, 0);
     if p.is_null() {
         return 0;
     }
@@ -1198,7 +1186,7 @@ pub unsafe fn clif_sendtest(sd: *mut MapSessionData) -> i32 {
     wb(p, 5, unsafe { SENDTEST_NUMBER });
     wb(p, 6, 0x00);
 
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     // Increment after send, matching C post-increment.
     unsafe { SENDTEST_NUMBER = SENDTEST_NUMBER.wrapping_add(1) };
     0
@@ -1211,9 +1199,9 @@ pub unsafe fn clif_sendtest(sd: *mut MapSessionData) -> i32 {
 /// also returns early in that case without printing.
 ///
 /// # Safety
-/// No pointer dereferences — reads only the eof flag via `rust_session_get_eof`.
-pub unsafe fn clif_print_disconnect(fd: i32) -> i32 {
-    let eof = rust_session_get_eof(fd);
+/// No pointer dereferences — reads only the eof flag via `session_get_eof`.
+pub unsafe fn clif_print_disconnect(fd: SessionId) -> i32 {
+    let eof = session_get_eof(fd);
     if eof == 4 {
         return 0;
     }
@@ -1265,13 +1253,12 @@ pub unsafe fn clif_paperpopupwrite_save(sd: *mut MapSessionData) -> i32 {
     }
     let fd = (*sd).fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
     // RFIFOB(fd, 5) — inventory slot index.
-    let rdata = rust_session_rdata_ptr(fd, 0);
+    let rdata = rfifop(fd, 0);
     if rdata.is_null() {
         return 0;
     }
@@ -1328,11 +1315,11 @@ pub unsafe fn clif_changeprofile(sd: *mut MapSessionData) -> i32 {
     let fd = (*sd).fd;
 
     // Project convention: guard against closed sessions (C original omitted this).
-    if rust_session_exists(fd) == 0 {
+    if !session_exists(fd) {
         return 0;
     }
 
-    let rdata = rust_session_rdata_ptr(fd, 0);
+    let rdata = rfifop(fd, 0);
     if rdata.is_null() {
         return 0;
     }
@@ -1376,26 +1363,26 @@ pub unsafe fn clif_changeprofile(sd: *mut MapSessionData) -> i32 {
 ///
 /// Logic:
 /// - If `RFIFOREST(fd) > len` and the byte at `fd[len]` is not `0xAA`, the
-///   session has framing corruption → `rust_session_set_eof(fd, 1)`, return 1.
+///   session has framing corruption → `session_set_eof(fd, 1)`, return 1.
 /// - Otherwise return 0 (either there is no next byte yet, or it is valid).
 ///
 /// # Safety
 /// Pure fd-based — no struct dereferences.
-pub unsafe fn check_packet_size(fd: i32, len: i32) -> i32 {
+pub unsafe fn check_packet_size(fd: SessionId, len: i32) -> i32 {
     if len < 0 {
         return 0;
     }
     let len_usize = len as usize;
 
     // RFIFOREST(fd) > (size_t)len
-    if rust_session_available(fd) > len_usize {
+    if rfiforest(fd) as usize > len_usize {
         // RFIFOB(fd, len) — byte immediately after the current packet.
-        let rdata = rust_session_rdata_ptr(fd, 0);
+        let rdata = rfifop(fd, 0);
         if rdata.is_null() {
             return 0;
         }
         if *rdata.add(len_usize) != 0xAA {
-            rust_session_set_eof(fd, 1);
+            session_set_eof(fd, 1);
             return 1;
         }
     }
@@ -1475,15 +1462,14 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
     let src_r = &*src_sd;
 
     // Guard: bail if broadcaster's session is gone (matches C clif_updatestate).
-    if rust_session_exists(sd_r.fd) == 0 {
-        rust_session_set_eof(sd_r.fd, 8);
+    if !session_exists(sd_r.fd) {
         return;
     }
 
     let src_fd = src_r.fd;
 
-    rust_session_wfifohead(src_fd, 512);
-    let p = rust_session_wdata_ptr(src_fd, 0);
+    wfifohead(src_fd, 512);
+    let p = wfifop(src_fd, 0);
     if p.is_null() {
         return;
     }
@@ -1508,14 +1494,14 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
         wb(p, 16, name_len as u8);
         // len += strlen(name) + 1
         let len = name_len + 1;
-        let dst = rust_session_wdata_ptr(src_fd, 17);
+        let dst = wfifop(src_fd, 17);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(name_ptr as *const u8, dst, name_len);
         }
 
         // WFIFOW(src_sd->fd, 1) = SWAP16(len + 13)
         ww_be(p, 1, (len + 13) as u16);
-        rust_session_commit(src_fd, encrypt(src_fd) as usize);
+        wfifoset(src_fd, encrypt(src_fd) as usize);
     } else {
         // Normal / stealth / invisible states.
 
@@ -1732,7 +1718,7 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
 
         let len = if sd_r.status.state != 5 && sd_r.status.state != 2 {
             wb(p, 54, name_len as u8);
-            let dst = rust_session_wdata_ptr(src_fd, 55);
+            let dst = wfifop(src_fd, 55);
             if !dst.is_null() {
                 std::ptr::copy_nonoverlapping(name_ptr as *const u8, dst, name_len);
             }
@@ -1791,7 +1777,7 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             let gfx_name_empty = gfx_name_len == 0;
             let final_len = if visible && !gfx_name_empty {
                 wb(p, 52, gfx_name_len as u8);
-                let dst = rust_session_wdata_ptr(src_fd, 53);
+                let dst = wfifop(src_fd, 53);
                 if !dst.is_null() {
                     std::ptr::copy_nonoverlapping(gfx_name_ptr as *const u8, dst, gfx_name_len);
                 }
@@ -1802,11 +1788,11 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             };
 
             ww_be(p, 1, (final_len + 55 + 3) as u16);
-            rust_session_commit(src_fd, encrypt(src_fd) as usize);
+            wfifoset(src_fd, encrypt(src_fd) as usize);
             // Fall through to ghost logic below.
         } else {
             ww_be(p, 1, (len + 55 + 3) as u16);
-            rust_session_commit(src_fd, encrypt(src_fd) as usize);
+            wfifoset(src_fd, encrypt(src_fd) as usize);
         }
     }
 
@@ -1826,8 +1812,8 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
                 {
                     // Send a 9-byte "ghost" packet to src_sd.
                     // C re-used committed WFIFO without a new WFIFOHEAD; this explicit head is safer.
-                    rust_session_wfifohead(src_fd, 9);
-                    let p2 = rust_session_wdata_ptr(src_fd, 0);
+                    wfifohead(src_fd, 9);
+                    let p2 = wfifop(src_fd, 0);
                     if !p2.is_null() {
                         wb(p2, 0, 0xAA);
                         wb(p2, 1, 0x00);
@@ -1835,7 +1821,7 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
                         wb(p2, 3, 0x0E);
                         wb(p2, 4, 0x03);
                         wl_be(p2, 5, sd_r.bl.id as u32);
-                        rust_session_commit(src_fd, encrypt(src_fd) as usize);
+                        wfifoset(src_fd, encrypt(src_fd) as usize);
                     }
                 } else {
                     clif_charspecific_us(src_r.bl.id as i32, sd_r.bl.id as i32);
@@ -1949,14 +1935,13 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
 
     let fd = (*sd).fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
     // Reserve worst-case buffer: equip_status up to 255 bytes, profile data, etc.
-    rust_session_wfifohead(fd, 65535);
-    let p = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, 65535);
+    let p = wfifop(fd, 0);
     if p.is_null() {
         return 0;
     }
@@ -2394,7 +2379,7 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
 
     // ── Packet size field ─────────────────────────────────────────────────────
     ww_be(p, 1, (len + 3) as u16);
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
 
     // ── Lua onClick hook ──────────────────────────────────────────────────────
     {
@@ -2441,13 +2426,12 @@ pub unsafe fn clif_showboards(sd: *mut MapSessionData) -> i32 {
     let sd_ref = &*sd;
     let fd = sd_ref.fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
-    rust_session_wfifohead(fd, 65535);
-    let p = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, 65535);
+    let p = wfifop(fd, 0);
     if p.is_null() {
         return 0;
     }
@@ -2502,6 +2486,6 @@ pub unsafe fn clif_showboards(sd: *mut MapSessionData) -> i32 {
     wb(p, 20, b_count);
     ww_be(p, 1, (len + 3) as u16);
 
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }

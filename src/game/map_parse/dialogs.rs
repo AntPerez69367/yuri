@@ -14,10 +14,10 @@ use crate::game::pc::{
     EQ_FACEACC, EQ_CROWN, EQ_FACEACCTWO, EQ_MANTLE, EQ_NECKLACE, EQ_BOOTS,
 };
 use crate::servers::char::charstatus::Item;
-use crate::session::{rust_session_exists, rust_session_set_eof};
+use crate::session::{SessionId, session_exists};
 
 use super::packet::{
-    encrypt, wfifob, wfifohead, wfifol, wfifoset, wfifow,
+    encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow,
     rfifob, rfifol, rfifop,
     swap16, swap32,
 };
@@ -106,7 +106,7 @@ unsafe fn copy_rfifo_bytes(dst: &mut [u8], src: *const u8, len: usize) {
 /// `clif_scriptmenuseq`, `clif_input`, and `clif_buydialog`.
 #[inline]
 #[allow(clippy::too_many_arguments)]
-unsafe fn write_npc_equip_look(fd: i32, nd: *const NpcData, base_off: usize) {
+unsafe fn write_npc_equip_look(fd: SessionId, nd: *const NpcData, base_off: usize) {
     let nd = &*nd;
     wfifob(fd, base_off,      1);
     wfifow(fd, base_off + 1,  swap16(nd.sex));
@@ -226,7 +226,7 @@ unsafe fn write_npc_equip_look(fd: i32, nd: *const NpcData, base_off: usize) {
 
 /// Write an NPC gfx-viewer look block (type 2) starting at `base_off`.
 #[inline]
-unsafe fn write_npc_gfx_look(fd: i32, nd: *const NpcData, base_off: usize) {
+unsafe fn write_npc_gfx_look(fd: SessionId, nd: *const NpcData, base_off: usize) {
     let nd = &*nd;
     let g = &nd.gfx;
     wfifob(fd, base_off,      1);
@@ -302,8 +302,7 @@ unsafe fn write_npc_gfx_look(fd: i32, nd: *const NpcData, base_off: usize) {
 pub unsafe fn clif_closeit(sd: *mut MapSessionData) -> i32 {
     let fd = (*sd).fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
@@ -317,7 +316,7 @@ pub unsafe fn clif_closeit(sd: *mut MapSessionData) -> i32 {
     wfifow(fd, 11, swap16(9));
     // copy xor_key (9 chars + null) into WFIFOP(sd->fd, 13)
     libc::strcpy(
-        crate::session::rust_session_wdata_ptr(fd, 13) as *mut i8,
+        wfifop(fd, 13) as *mut i8,
         gc.xor_key.as_ptr(),
     );
     let mut len = 11usize;
@@ -325,7 +324,7 @@ pub unsafe fn clif_closeit(sd: *mut MapSessionData) -> i32 {
     let name_len = cstrlen(name_ptr as *const i8);
     wfifob(fd, len + 11, name_len as u8);
     libc::strcpy(
-        crate::session::rust_session_wdata_ptr(fd, len + 12) as *mut i8,
+        wfifop(fd, len + 12) as *mut i8,
         name_ptr as *const i8,
     );
     len += name_len + 1;
@@ -343,8 +342,7 @@ pub unsafe fn clif_closeit(sd: *mut MapSessionData) -> i32 {
 pub unsafe fn clif_sendtowns(sd: *mut MapSessionData) -> i32 {
     let fd = (*sd).fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
@@ -366,7 +364,7 @@ pub unsafe fn clif_sendtowns(sd: *mut MapSessionData) -> i32 {
         wfifob(fd, len + 10, x as u8);
         wfifob(fd, len + 11, name_len as u8);
         libc::strcpy(
-            crate::session::rust_session_wdata_ptr(fd, len + 12) as *mut i8,
+            wfifop(fd, len + 12) as *mut i8,
             name_ptr as *const i8,
         );
         len += name_len + 2;
@@ -387,8 +385,7 @@ pub unsafe fn clif_send_timer(
 ) {
     let fd = (*sd).fd;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return;
     }
 
@@ -411,17 +408,17 @@ pub unsafe fn clif_parsenpcdialog(sd: *mut MapSessionData) -> i32 {
     match rfifob(fd, 5) {
         0x01 => {
             // Dialog
-            rust_sl_resumedialog(npc_choice, sd as *mut std::ffi::c_void);
+            rust_sl_resumedialog(npc_choice, sd);
         }
         0x02 => {
             // Special menu
             let npc_menu = rfifob(fd, 15) as i32;
-            rust_sl_resumemenuseq(npc_choice, npc_menu, sd as *mut std::ffi::c_void);
+            rust_sl_resumemenuseq(npc_choice, npc_menu, sd);
         }
         0x04 => {
             // inputSeq returned input
             if rfifob(fd, 13) != 0x02 {
-                rust_sl_async_freeco(sd as *mut std::ffi::c_void);
+                rust_sl_async_freeco(sd);
                 return 1;
             }
             let input_len = rfifob(fd, 15) as usize;
@@ -430,7 +427,7 @@ pub unsafe fn clif_parsenpcdialog(sd: *mut MapSessionData) -> i32 {
             rust_sl_resumeinputseq(
                 npc_choice,
                 input.as_mut_ptr() as *mut i8,
-                sd as *mut std::ffi::c_void,
+                sd,
             );
         }
         _ => {}
@@ -459,8 +456,7 @@ pub unsafe fn clif_scriptmes(
         (*nd).lastaction = libc::time(std::ptr::null_mut()) as u32;
     }
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
@@ -493,7 +489,7 @@ pub unsafe fn clif_scriptmes(
             wfifob(fd, 25, next as u8);
             wfifow(fd, 26, swap16(msg_len as u16));
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, 28) as *mut i8,
+                wfifop(fd, 28) as *mut i8,
                 msg,
             );
             wfifow(fd, 1, swap16((msg_len + 25) as u16));
@@ -512,7 +508,7 @@ pub unsafe fn clif_scriptmes(
             wfifob(fd, 63, next as u8);
             wfifow(fd, 64, swap16(msg_len as u16));
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, 66) as *mut i8,
+                wfifop(fd, 66) as *mut i8,
                 msg,
             );
             wfifow(fd, 1, swap16((msg_len + 63) as u16));
@@ -529,7 +525,7 @@ pub unsafe fn clif_scriptmes(
             wfifob(fd, 63, next as u8);
             wfifow(fd, 64, swap16(msg_len as u16));
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, 66) as *mut i8,
+                wfifop(fd, 66) as *mut i8,
                 msg,
             );
             wfifow(fd, 1, swap16((msg_len + 63) as u16));
@@ -562,8 +558,7 @@ pub unsafe fn clif_scriptmenu(
         (*nd).lastaction = libc::time(std::ptr::null_mut()) as u32;
     }
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
@@ -592,7 +587,7 @@ pub unsafe fn clif_scriptmenu(
             wfifob(fd, 19, color as u8);
             wfifow(fd, 20, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, 22) as *mut i8,
+                wfifop(fd, 22) as *mut i8,
                 dialog as *const i8,
             );
             wfifob(fd, dialog_len + 22, size as u8);
@@ -602,7 +597,7 @@ pub unsafe fn clif_scriptmenu(
                 let entry_len = cstrlen(entry as *const i8);
                 wfifob(fd, len + 23, entry_len as u8);
                 libc::strcpy(
-                    crate::session::rust_session_wdata_ptr(fd, len + 24) as *mut i8,
+                    wfifop(fd, len + 24) as *mut i8,
                     entry as *const i8,
                 );
                 len += entry_len + 1;
@@ -619,7 +614,7 @@ pub unsafe fn clif_scriptmenu(
             wfifob(fd, 57, color as u8);
             wfifow(fd, 58, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, 60) as *mut i8,
+                wfifop(fd, 60) as *mut i8,
                 dialog as *const i8,
             );
             wfifob(fd, dialog_len + 60, size as u8);
@@ -629,7 +624,7 @@ pub unsafe fn clif_scriptmenu(
                 let entry_len = cstrlen(entry as *const i8);
                 wfifob(fd, len + 61, entry_len as u8);
                 libc::strcpy(
-                    crate::session::rust_session_wdata_ptr(fd, len + 62) as *mut i8,
+                    wfifop(fd, len + 62) as *mut i8,
                     entry as *const i8,
                 );
                 len += entry_len + 1;
@@ -646,7 +641,7 @@ pub unsafe fn clif_scriptmenu(
             wfifob(fd, 57, color as u8);
             wfifow(fd, 58, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, 60) as *mut i8,
+                wfifop(fd, 60) as *mut i8,
                 dialog as *const i8,
             );
             wfifob(fd, dialog_len + 60, size as u8);
@@ -656,7 +651,7 @@ pub unsafe fn clif_scriptmenu(
                 let entry_len = cstrlen(entry as *const i8);
                 wfifob(fd, len + 61, entry_len as u8);
                 libc::strcpy(
-                    crate::session::rust_session_wdata_ptr(fd, len + 62) as *mut i8,
+                    wfifop(fd, len + 62) as *mut i8,
                     entry as *const i8,
                 );
                 len += entry_len + 1;
@@ -694,8 +689,7 @@ pub unsafe fn clif_scriptmenuseq(
         (*nd).lastaction = libc::time(std::ptr::null_mut()) as u32;
     }
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
@@ -729,7 +723,7 @@ pub unsafe fn clif_scriptmenuseq(
             wfifob(fd, 25, next as u8);
             wfifow(fd, 26, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, 28) as *mut i8,
+                wfifop(fd, 28) as *mut i8,
                 dialog,
             );
             let mut len = dialog_len + 1;
@@ -740,7 +734,7 @@ pub unsafe fn clif_scriptmenuseq(
                 let entry_len = cstrlen(entry);
                 wfifob(fd, len + 27, entry_len as u8);
                 libc::strcpy(
-                    crate::session::rust_session_wdata_ptr(fd, len + 28) as *mut i8,
+                    wfifop(fd, len + 28) as *mut i8,
                     entry,
                 );
                 len += entry_len + 1;
@@ -761,7 +755,7 @@ pub unsafe fn clif_scriptmenuseq(
             wfifob(fd, 65, next as u8);
             wfifow(fd, 66, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, 68) as *mut i8,
+                wfifop(fd, 68) as *mut i8,
                 dialog,
             );
             let mut len = dialog_len + 68;
@@ -772,7 +766,7 @@ pub unsafe fn clif_scriptmenuseq(
                 let entry_len = cstrlen(entry);
                 wfifob(fd, len, entry_len as u8);
                 libc::strcpy(
-                    crate::session::rust_session_wdata_ptr(fd, len + 1) as *mut i8,
+                    wfifop(fd, len + 1) as *mut i8,
                     entry,
                 );
                 len += entry_len + 1;
@@ -848,7 +842,7 @@ pub unsafe fn clif_scriptmenuseq(
             wfifob(fd, 65, next as u8);
             wfifow(fd, 66, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, 68) as *mut i8,
+                wfifop(fd, 68) as *mut i8,
                 dialog,
             );
             let mut len = dialog_len + 68;
@@ -859,7 +853,7 @@ pub unsafe fn clif_scriptmenuseq(
                 let entry_len = cstrlen(entry);
                 wfifob(fd, len, entry_len as u8);
                 libc::strcpy(
-                    crate::session::rust_session_wdata_ptr(fd, len + 1) as *mut i8,
+                    wfifop(fd, len + 1) as *mut i8,
                     entry,
                 );
                 len += entry_len + 1;
@@ -896,8 +890,7 @@ pub unsafe fn clif_inputseq(
         (*nd).lastaction = libc::time(std::ptr::null_mut()) as u32;
     }
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
@@ -934,14 +927,14 @@ pub unsafe fn clif_inputseq(
 
     wfifow(fd, 26, swap16(dialog_len as u16));
     libc::strcpy(
-        crate::session::rust_session_wdata_ptr(fd, 28) as *mut i8,
+        wfifop(fd, 28) as *mut i8,
         dialog,
     );
     let mut len = dialog_len + 28;
 
     wfifob(fd, len, dialog2_len as u8);
     libc::strcpy(
-        crate::session::rust_session_wdata_ptr(fd, len + 1) as *mut i8,
+        wfifop(fd, len + 1) as *mut i8,
         dialog2,
     );
     len += dialog2_len + 1;
@@ -950,7 +943,7 @@ pub unsafe fn clif_inputseq(
     len += 1;
     wfifob(fd, len, dialog3_len as u8);
     libc::strcpy(
-        crate::session::rust_session_wdata_ptr(fd, len + 1) as *mut i8,
+        wfifop(fd, len + 1) as *mut i8,
         dialog3,
     );
     len += dialog3_len + 3;
@@ -1025,7 +1018,7 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
 
         if same_map_or_f1 {
             (*sd).last_click = (*bl).id;
-            rust_sl_async_freeco(sd as *mut std::ffi::c_void);
+            rust_sl_async_freeco(sd);
 
             if (*sd).status.karma <= -3.0f32 {
                 let nd_name = (*nd).name.as_ptr();
@@ -1054,7 +1047,7 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
             && (sd_ref.bl.y as i32 - (*bl).y as i32).abs() <= radius
         {
             (*sd).last_click = (*bl).id;
-            rust_sl_async_freeco(sd as *mut std::ffi::c_void);
+            rust_sl_async_freeco(sd);
             sl_doscript_coro_2(b"onLook\0".as_ptr() as *const i8, std::ptr::null(), &sd_ref.bl as *const _ as *mut BlockList, bl);
             if !(*mob).data.is_null() {
                 sl_doscript_coro_2((*(*mob).data).yname.as_ptr() as *const i8, b"click\0".as_ptr() as *const i8, &sd_ref.bl as *const _ as *mut BlockList, bl);
@@ -1080,8 +1073,7 @@ pub unsafe fn clif_buydialog(
     let graphic = (*sd).npc_g;
     let color   = (*sd).npc_gc;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         // item points into caller's Vec — do not free here.
         return 0;
     }
@@ -1110,7 +1102,7 @@ pub unsafe fn clif_buydialog(
 
         wfifow(fd, 20, swap16(dialog_len as u16));
         libc::strcpy(
-            crate::session::rust_session_wdata_ptr(fd, 22) as *mut i8,
+            wfifop(fd, 22) as *mut i8,
             dialog,
         );
         let mut len = dialog_len;
@@ -1162,7 +1154,7 @@ pub unsafe fn clif_buydialog(
             let name_len = libc::strlen(name_buf.as_ptr() as *const i8);
             wfifob(fd, len + 22, name_len as u8);
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, len + 23) as *mut i8,
+                wfifop(fd, len + 23) as *mut i8,
                 name_buf.as_ptr() as *const i8,
             );
             len += name_len + 1;
@@ -1194,7 +1186,7 @@ pub unsafe fn clif_buydialog(
             let buff_len = libc::strlen(buff_buf.as_ptr() as *const i8);
             wfifob(fd, len + 22, buff_len as u8);
             libc::memcpy(
-                crate::session::rust_session_wdata_ptr(fd, len + 23) as *mut std::ffi::c_void,
+                wfifop(fd, len + 23) as *mut std::ffi::c_void,
                 buff_buf.as_ptr() as *const std::ffi::c_void,
                 buff_len,
             );
@@ -1218,7 +1210,7 @@ pub unsafe fn clif_buydialog(
 
         wfifow(fd, 60, swap16(dialog_len as u16));
         libc::strcpy(
-            crate::session::rust_session_wdata_ptr(fd, 62) as *mut i8,
+            wfifop(fd, 62) as *mut i8,
             dialog,
         );
         let mut len = dialog_len;
@@ -1265,7 +1257,7 @@ pub unsafe fn clif_buydialog(
             let name_len = libc::strlen(name_buf.as_ptr() as *const i8);
             wfifob(fd, len + 62, name_len as u8);
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, len + 63) as *mut i8,
+                wfifop(fd, len + 63) as *mut i8,
                 name_buf.as_ptr() as *const i8,
             );
             len += name_len + 1;
@@ -1296,7 +1288,7 @@ pub unsafe fn clif_buydialog(
             let buff_len = libc::strlen(buff_buf.as_ptr() as *const i8);
             wfifob(fd, len + 62, buff_len as u8);
             libc::memcpy(
-                crate::session::rust_session_wdata_ptr(fd, len + 63) as *mut std::ffi::c_void,
+                wfifop(fd, len + 63) as *mut std::ffi::c_void,
                 buff_buf.as_ptr() as *const std::ffi::c_void,
                 buff_len,
             );
@@ -1323,7 +1315,7 @@ pub unsafe fn clif_parsebuy(sd: *mut MapSessionData) -> i32 {
         item_name_len,
     );
     if itemname[0] != 0 {
-        rust_sl_resumebuy(itemname.as_mut_ptr() as *mut i8, sd as *mut std::ffi::c_void);
+        rust_sl_resumebuy(itemname.as_mut_ptr() as *mut i8, sd);
     }
     0
 }
@@ -1342,8 +1334,7 @@ pub unsafe fn clif_selldialog(
     let graphic = (*sd).npc_g;
     let color   = (*sd).npc_gc;
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
@@ -1372,7 +1363,7 @@ pub unsafe fn clif_selldialog(
 
         wfifow(fd, 20, swap16(dialog_len as u16));
         libc::strcpy(
-            crate::session::rust_session_wdata_ptr(fd, 22) as *mut i8,
+            wfifop(fd, 22) as *mut i8,
             dialog,
         );
         let mut len = dialog_len + 2;
@@ -1397,7 +1388,7 @@ pub unsafe fn clif_selldialog(
 
         wfifow(fd, 60, swap16(dialog_len as u16));
         libc::strcpy(
-            crate::session::rust_session_wdata_ptr(fd, 62) as *mut i8,
+            wfifop(fd, 62) as *mut i8,
             dialog,
         );
         let mut len = dialog_len;
@@ -1421,7 +1412,7 @@ pub unsafe fn clif_selldialog(
 /// Parse a sell response packet.  Mirrors `clif_parsesell` in
 pub unsafe fn clif_parsesell(sd: *mut MapSessionData) -> i32 {
     let fd = (*sd).fd;
-    rust_sl_resumesell(rfifob(fd, 12) as u32, sd as *mut std::ffi::c_void);
+    rust_sl_resumesell(rfifob(fd, 12) as u32, sd);
     0
 }
 
@@ -1444,8 +1435,7 @@ pub unsafe fn clif_input(
         (*nd).lastaction = libc::time(std::ptr::null_mut()) as u32;
     }
 
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
@@ -1477,14 +1467,14 @@ pub unsafe fn clif_input(
 
             wfifow(fd, 20, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, 22) as *mut i8,
+                wfifop(fd, 22) as *mut i8,
                 dialog,
             );
             let mut len = dialog_len;
             wfifob(fd, len + 22, item_len as u8);
             len += 1;
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, len + 23) as *mut i8,
+                wfifop(fd, len + 23) as *mut i8,
                 item,
             );
             len += item_len + 1;
@@ -1502,14 +1492,14 @@ pub unsafe fn clif_input(
             wfifob(fd, 57, color as u8);
             wfifow(fd, 58, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, 60) as *mut i8,
+                wfifop(fd, 60) as *mut i8,
                 dialog,
             );
             let mut len = dialog_len;
             wfifob(fd, len + 60, item_len as u8);
             len += 1;
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, len + 61) as *mut i8,
+                wfifop(fd, len + 61) as *mut i8,
                 item,
             );
             len += item_len + 1;
@@ -1527,14 +1517,14 @@ pub unsafe fn clif_input(
             wfifob(fd, 57, color as u8);
             wfifow(fd, 58, swap16(dialog_len as u16));
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, 60) as *mut i8,
+                wfifop(fd, 60) as *mut i8,
                 dialog,
             );
             let mut len = dialog_len;
             wfifob(fd, len + 60, item_len as u8);
             len += 1;
             libc::strcpy(
-                crate::session::rust_session_wdata_ptr(fd, len + 61) as *mut i8,
+                wfifop(fd, len + 61) as *mut i8,
                 item,
             );
             len += item_len + 1;
@@ -1575,7 +1565,7 @@ pub unsafe fn clif_parseinput(sd: *mut MapSessionData) -> i32 {
     rust_sl_resumeinput(
         output.as_mut_ptr() as *mut i8,
         output2.as_mut_ptr() as *mut i8,
-        sd as *mut std::ffi::c_void,
+        sd,
     );
     0
 }

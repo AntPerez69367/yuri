@@ -4,7 +4,7 @@
 use crate::database::map_db::{BlockList, WarpList, BLOCK_SIZE, MAX_MAPREG};
 use crate::game::block::map_delblock;
 use crate::database::map_db::get_map_ptr;
-use crate::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof};
+use crate::session::{session_exists, session_get_data, session_get_eof, SessionId};
 use crate::game::block::{map_is_loaded, AreaType};
 use crate::game::block_grid;
 use crate::game::client::visual::clif_sendweather;
@@ -30,8 +30,7 @@ pub unsafe fn sl_map_isloaded(m: i32) -> i32 {
 
 /// Extract `bl.m` from a `USER*` (= `MapSessionData*`) and call `map_readglobalreg`.
 /// before Rust knew the `MapSessionData` layout.
-pub unsafe fn map_readglobalreg_sd(sd: *mut std::ffi::c_void, attrname: *const i8) -> i32 {
-    let sd = sd as *const MapSessionData;
+pub unsafe fn map_readglobalreg_sd(sd: *mut MapSessionData, attrname: *const i8) -> i32 {
     map_readglobalreg((*sd).bl.m as i32, attrname)
 }
 
@@ -40,8 +39,8 @@ pub unsafe fn map_readglobalreg_sd(sd: *mut std::ffi::c_void, attrname: *const i
 /// Note: callers from Lua boundaries should use `map_setglobalreg_str` directly with
 /// the extracted `m` index to avoid non-Send futures. This function is kept for callers
 /// that already have an async context and a raw `attrname` pointer.
-pub async unsafe fn map_setglobalreg_sd(sd: *mut std::ffi::c_void, attrname: *const i8, val: i32) -> i32 {
-    let m = (*(sd as *const MapSessionData)).bl.m as i32;
+pub async unsafe fn map_setglobalreg_sd(sd: *mut MapSessionData, attrname: *const i8, val: i32) -> i32 {
+    let m = (*sd).bl.m as i32;
     map_setglobalreg(m, attrname, val).await
 }
 
@@ -74,9 +73,10 @@ pub async unsafe fn sl_g_setweather(region: u8, indoor: u8, weather: u8) {
             if ptr.is_null() || (*ptr).xs == 0 { continue; }
             (*ptr).weather = weather;
             for i in 1..crate::session::get_fd_max() {
-                if rust_session_exists(i) == 0 { continue; }
-                let tsd = rust_session_get_data(i) as *mut MapSessionData;
-                if tsd.is_null() || rust_session_get_eof(i) != 0 { continue; }
+                let sid = SessionId::from_raw(i);
+                if !session_exists(sid) { continue; }
+                let tsd = session_get_data(sid);
+                if tsd.is_null() || session_get_eof(sid) != 0 { continue; }
                 if (*tsd).bl.m == x { clif_sendweather(tsd); }
             }
         }
@@ -108,9 +108,10 @@ pub async unsafe fn sl_g_setweatherm(m: i32, weather: u8) {
     if ptr.is_null() || (*ptr).xs == 0 { return; }
     (*ptr).weather = weather;
     for i in 1..crate::session::get_fd_max() {
-        if rust_session_exists(i) == 0 { continue; }
-        let tsd = rust_session_get_data(i) as *mut MapSessionData;
-        if tsd.is_null() || rust_session_get_eof(i) != 0 { continue; }
+        let sid = SessionId::from_raw(i);
+        if !session_exists(sid) { continue; }
+        let tsd = session_get_data(sid);
+        if tsd.is_null() || session_get_eof(sid) != 0 { continue; }
         if (*tsd).bl.m == m as u16 { clif_sendweather(tsd); }
     }
 }
@@ -122,9 +123,10 @@ pub unsafe fn sl_g_getusers(out_ptrs: *mut *mut std::ffi::c_void, max_count: i32
     let mut count = 0i32;
     for i in 0..crate::session::get_fd_max() {
         if count >= max_count { break; }
-        if rust_session_exists(i) == 0 { continue; }
-        if rust_session_get_eof(i) != 0 { continue; }
-        let tsd = rust_session_get_data(i) as *mut MapSessionData;
+        let sid = SessionId::from_raw(i);
+        if !session_exists(sid) { continue; }
+        if session_get_eof(sid) != 0 { continue; }
+        let tsd = session_get_data(sid);
         if tsd.is_null() { continue; }
         *out_ptrs.add(count as usize) = &mut (*tsd).bl as *mut _ as *mut std::ffi::c_void;
         count += 1;
@@ -513,9 +515,10 @@ pub unsafe fn sl_g_talk(bl_ptr: *mut std::ffi::c_void, talk_type: i32, msg: *con
 ///
 pub unsafe fn sl_g_sendmeta() {
     for i in 0..crate::session::get_fd_max() {
-        if rust_session_exists(i) == 0 { continue; }
-        if rust_session_get_eof(i) != 0 { continue; }
-        let tsd = rust_session_get_data(i) as *mut MapSessionData;
+        let sid = SessionId::from_raw(i);
+        if !session_exists(sid) { continue; }
+        if session_get_eof(sid) != 0 { continue; }
+        let tsd = session_get_data(sid);
         if tsd.is_null() { continue; }
         send_metalist(tsd);
     }

@@ -18,7 +18,7 @@ use crate::database::get_pool;
 use crate::database::map_db::BlockList;
 use crate::game::block::map_delblock;
 use crate::game::scripting::rust_sl_resumemenu;
-use crate::session::rust_session_rdata_ptr;
+use crate::game::map_parse::packet::{rfifob, rfifop, wfifohead, wfifop, wfifoset};
 use crate::game::map_server::{
     boards_delete, boards_post, boards_readpost, boards_showposts, hasCoref,
     map_changepostcolor, map_deliddb, map_getpostcolor, map_id2bl, map_id2sd_pc,
@@ -49,7 +49,7 @@ use crate::database::board_db::rust_boarddb_yname;
 use crate::game::map_parse::combat::clif_sendaction;
 use crate::database::item_db::{rust_itemdb_droppable as itemdb_droppable, rust_itemdb_yname as itemdb_yname};
 use crate::database::magic_db::rust_magicdb_yname as magicdb_yname;
-use crate::session::{rust_session_exists, rust_session_set_eof};
+use crate::session::{session_exists, session_set_eof, SessionId};
 
 use crate::game::block::AreaType;
 use crate::game::block_grid;
@@ -81,21 +81,20 @@ unsafe fn read_obj(m: i32, x: i32, y: i32) -> u16 {
 // ─── Session buffer read helpers ─────────────────────────────────────────────
 
 #[inline]
-unsafe fn rbyte(fd: i32, pos: usize) -> u8 {
-    let p = rust_session_rdata_ptr(fd, pos);
-    if p.is_null() { 0 } else { *p }
+unsafe fn rbyte(fd: SessionId, pos: usize) -> u8 {
+    rfifob(fd, pos)
 }
 
 #[inline]
-unsafe fn rword_be(fd: i32, pos: usize) -> u16 {
-    let p = rust_session_rdata_ptr(fd, pos);
+unsafe fn rword_be(fd: SessionId, pos: usize) -> u16 {
+    let p = rfifop(fd, pos);
     if p.is_null() { return 0; }
     u16::from_be_bytes([*p, *p.add(1)])
 }
 
 #[inline]
-unsafe fn rlong_be(fd: i32, pos: usize) -> u32 {
-    let p = rust_session_rdata_ptr(fd, pos);
+unsafe fn rlong_be(fd: SessionId, pos: usize) -> u32 {
+    let p = rfifop(fd, pos);
     if p.is_null() { return 0; }
     u32::from_be_bytes([*p, *p.add(1), *p.add(2), *p.add(3)])
 }
@@ -145,11 +144,11 @@ pub async unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
     }
 
     rust_pc_stoptimer(sd);
-    sl_async_freeco(sd as *mut std::ffi::c_void);
+    sl_async_freeco(sd);
     clif_leavegroup(sd);
     clif_stoptimers(sd);
     sl_doscript_simple(c"logout".as_ptr(), std::ptr::null::<i8>(), &raw mut (*sd).bl);
-    sl_intif_savequit(sd as *mut std::ffi::c_void);
+    sl_intif_savequit(sd);
 
     // Capture fields before map_deliddb drops the Box.
     let id = (*sd).status.id;
@@ -197,12 +196,12 @@ pub unsafe fn clif_handle_menuinput(sd: *mut MapSessionData) -> i32 {
         return 0;
     }
     match rbyte((*sd).fd, 5) {
-        0 => sl_async_freeco(sd as *mut std::ffi::c_void),
+        0 => sl_async_freeco(sd),
         1 => { clif_parsemenu(sd); }
         2 => { clif_parsebuy(sd); }
         3 => { clif_parseinput(sd); }
         4 => { clif_parsesell(sd); }
-        _ => sl_async_freeco(sd as *mut std::ffi::c_void),
+        _ => sl_async_freeco(sd),
     }
     0
 }
@@ -326,7 +325,7 @@ pub unsafe fn clif_handle_obstruction(sd: *mut MapSessionData) -> i32 {
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 pub unsafe fn clif_parsemenu(sd: *mut MapSessionData) -> i32 {
     let selection = rword_be((*sd).fd, 10) as u32;
-    rust_sl_resumemenu(selection, sd as *mut std::ffi::c_void);
+    rust_sl_resumemenu(selection, sd);
     0
 }
 
@@ -494,17 +493,15 @@ pub unsafe fn clif_delay(milliseconds: i32) {
 
 /// Send a heartbeat packet (opcode 0x3B) to the player with id `id`.
 pub unsafe fn clif_sendheartbeat(id: i32, _none: i32) -> i32 {
-    use crate::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
     let sd = map_id2sd_pc(id as u32).map(|r| r as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
     if sd.is_null() { return 1; }
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
     let fd = (*sd).fd;
     // Payload length = 7 (bytes [3..9]); total_size = 7 + 6 = 13
-    rust_session_wfifohead(fd, 13);
-    let w = |off: usize| rust_session_wdata_ptr(fd, off);
+    wfifohead(fd, 13);
+    let w = |off: usize| wfifop(fd, off);
     *w(0) = 0xAA;
     *w(1) = 0x00; *w(2) = 0x07; // length = 7
     *w(3) = 0x3B;
@@ -513,7 +510,7 @@ pub unsafe fn clif_sendheartbeat(id: i32, _none: i32) -> i32 {
     *w(6) = 0x0A;
     use crate::network::crypt::encrypt;
     let n = encrypt(fd) as usize;
-    rust_session_commit(fd, n);
+    wfifoset(fd, n);
     0
 }
 
@@ -524,7 +521,7 @@ pub unsafe fn clif_runfloor_sub_inner(bl: *mut crate::database::map_db::BlockLis
     use crate::game::npc::NpcData;
     if (*bl).subtype as i32 != FLOOR as i32 { return 0; }
     let nd = bl as *mut NpcData;
-    sl_async_freeco(sd as *mut std::ffi::c_void);
+    sl_async_freeco(sd);
     sl_doscript_2((*nd).name.as_ptr(), c"click2".as_ptr(), &raw mut (*sd).bl, &raw mut (*nd).bl);
     0
 }
@@ -611,27 +608,24 @@ pub struct BoardQuestionaire {
 /// Write big-endian u16 at `pos` in the send-FIFO.
 #[allow(dead_code)]
 #[inline]
-unsafe fn wbe16(fd: i32, pos: usize, val: u16) {
-    use crate::session::rust_session_wdata_ptr;
-    let p = rust_session_wdata_ptr(fd, pos) as *mut u16;
+unsafe fn wbe16(fd: SessionId, pos: usize, val: u16) {
+    let p = wfifop(fd, pos) as *mut u16;
     if !p.is_null() { p.write_unaligned(val.to_be()); }
 }
 
 /// Write big-endian u32 at `pos` in the send-FIFO.
 #[allow(dead_code)]
 #[inline]
-unsafe fn wbe32(fd: i32, pos: usize, val: u32) {
-    use crate::session::rust_session_wdata_ptr;
-    let p = rust_session_wdata_ptr(fd, pos) as *mut u32;
+unsafe fn wbe32(fd: SessionId, pos: usize, val: u32) {
+    let p = wfifop(fd, pos) as *mut u32;
     if !p.is_null() { p.write_unaligned(val.to_be()); }
 }
 
 /// Copy null-terminated string bytes starting at `pos`.
 #[allow(dead_code)]
 #[inline]
-unsafe fn wfifo_strcpy(fd: i32, pos: usize, s: &[u8]) {
-    use crate::session::rust_session_wdata_ptr;
-    let p = rust_session_wdata_ptr(fd, pos);
+unsafe fn wfifo_strcpy(fd: SessionId, pos: usize, s: &[u8]) {
+    let p = wfifop(fd, pos);
     if !p.is_null() {
         std::ptr::copy_nonoverlapping(s.as_ptr(), p, s.len());
         *p.add(s.len()) = 0;
@@ -680,14 +674,14 @@ pub unsafe fn clif_Hacker(name: *mut i8, reason: *const i8) -> i32 {
 
 /// Accept a character-load request; look up ChaId by name, then call intif_load.
 pub async unsafe fn clif_accept2(
-    fd: i32, name: *mut i8, name_len: i32,
+    fd: SessionId, name: *mut i8, name_len: i32,
 ) -> i32 {
     if name_len <= 0 || name_len > 16 {
-        rust_session_set_eof(fd, 11);
+        session_set_eof(fd, 11);
         return 0;
     }
     if crate::core::rust_should_shutdown() != 0 {
-        rust_session_set_eof(fd, 1);
+        session_set_eof(fd, 1);
         return 0;
     }
     let mut n = [0u8; 16];
@@ -703,7 +697,7 @@ pub async unsafe fn clif_accept2(
     .ok()
     .flatten()
     .unwrap_or(0);
-    crate::game::map_char::rust_intif_load(fd, id, n.as_ptr() as *const i8);
+    crate::game::map_char::rust_intif_load(fd.raw(), id, n.as_ptr() as *const i8);
     0
 }
 
@@ -712,8 +706,7 @@ pub unsafe fn clif_transfer(
     sd: *mut MapSessionData, serverid: i32,
     _m: i32, _x: i32, _y: i32,
 ) -> i32 {
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
     let fd = (*sd).fd;
@@ -727,10 +720,9 @@ pub unsafe fn clif_transfer(
     let name_bytes = CStr::from_ptr((*sd).status.name.as_ptr() as *const i8).to_bytes();
     let name_len = name_bytes.len();
 
-    use crate::session::{rust_session_wdata_ptr, rust_session_wfifohead, rust_session_commit};
     use crate::network::crypt::encrypt;
-    rust_session_wfifohead(fd, 255);
-    let w = |off: usize| rust_session_wdata_ptr(fd, off);
+    wfifohead(fd, 255);
+    let w = |off: usize| wfifop(fd, off);
     *w(0) = 0xAA;
     *w(3) = 0x03;
     // SWAP32(map_ip) — network-order IP → host-order, then LE write = network bytes on wire
@@ -747,7 +739,7 @@ pub unsafe fn clif_transfer(
     len += 4;
     *w(10) = len as u8;
     (w(1) as *mut u16).write_unaligned((len as u16 + 8).to_be());
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -755,8 +747,7 @@ pub unsafe fn clif_transfer(
 pub unsafe fn clif_transfer_test(
     sd: *mut MapSessionData, _m: i32, _x: i32, _y: i32,
 ) -> i32 {
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
     let fd = (*sd).fd;
@@ -768,10 +759,9 @@ pub unsafe fn clif_transfer_test(
     const FAKE_NAME: &[u8] = b"FAKEUSERNAME";
     let name_len = FAKE_NAME.len();
 
-    use crate::session::{rust_session_wdata_ptr, rust_session_wfifohead, rust_session_commit};
     use crate::network::crypt::encrypt;
-    rust_session_wfifohead(fd, 255);
-    let w = |off: usize| rust_session_wdata_ptr(fd, off);
+    wfifohead(fd, 255);
+    let w = |off: usize| wfifop(fd, off);
     *w(0) = 0xAA;
     *w(3) = 0x03;
     (w(4) as *mut u32).write_unaligned(test_ip_net.swap_bytes());
@@ -787,7 +777,7 @@ pub unsafe fn clif_transfer_test(
     len += 4;
     *w(10) = len as u8;
     (w(1) as *mut u16).write_unaligned((len as u16 + 8).to_be());
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -797,15 +787,13 @@ pub unsafe fn clif_sendBoardQuestionaire(
     q: *const BoardQuestionaire,
     count: i32,
 ) -> i32 {
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
     let fd = (*sd).fd;
-    use crate::session::{rust_session_wdata_ptr, rust_session_wfifohead, rust_session_commit};
     use crate::network::crypt::encrypt;
-    rust_session_wfifohead(fd, 65535);
-    let w = |off: usize| rust_session_wdata_ptr(fd, off);
+    wfifohead(fd, 65535);
+    let w = |off: usize| wfifop(fd, off);
     *w(0) = 0xAA;
     *w(3) = 0x31;
     *w(5) = 0x09;
@@ -835,7 +823,7 @@ pub unsafe fn clif_sendBoardQuestionaire(
     *w(len + 1) = 0x6B;
     len += 2;
     (w(1) as *mut u16).write_unaligned(((len + 3) as u16).to_be());
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -1039,18 +1027,16 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
 // Opcode 0x6B — item creation system.
 // Reads ingredient items from the session buffer, builds a Lua `creationItems`
 // table, and dispatches `itemCreation(pc)` script.
-pub unsafe fn createdb_start(sd: *mut std::ffi::c_void) -> i32 {
+pub unsafe fn createdb_start(sd: *mut MapSessionData) -> i32 {
     use crate::database::item_db::rust_itemdb_stackamount;
-    use crate::session::rust_session_rdata_ptr;
     use crate::game::scripting::sl_state;
     use crate::database::map_db::BlockList;
 
     if sd.is_null() { return 0; }
-    let sd = sd as *mut crate::game::pc::MapSessionData;
     let fd = (*sd).fd;
 
     // RFIFOB(fd, 5) — number of ingredient slots in this packet.
-    let item_c = (*rust_session_rdata_ptr(fd, 5)) as usize;
+    let item_c = rfifob(fd, 5) as usize;
     let item_c = item_c.min(10);
 
     let mut items   = [0u32; 10];
@@ -1059,7 +1045,7 @@ pub unsafe fn createdb_start(sd: *mut std::ffi::c_void) -> i32 {
 
     for x in 0..item_c {
         // RFIFOB(fd, len) - 1 = inventory slot index.
-        let raw = (*rust_session_rdata_ptr(fd, len)) as usize;
+        let raw = rfifob(fd, len) as usize;
         if raw == 0 { len += 1; continue; }
         let curitem = raw - 1;
         let maxinv = (*sd).status.maxinv as usize;
@@ -1067,7 +1053,7 @@ pub unsafe fn createdb_start(sd: *mut std::ffi::c_void) -> i32 {
             items[x] = (*sd).status.inventory[curitem].id;
         }
         if rust_itemdb_stackamount(items[x]) > 1 {
-            amounts[x] = (*rust_session_rdata_ptr(fd, len + 1)) as u32;
+            amounts[x] = rfifob(fd, len + 1) as u32;
             len += 2;
         } else {
             amounts[x] = 1;
@@ -1091,7 +1077,7 @@ pub unsafe fn createdb_start(sd: *mut std::ffi::c_void) -> i32 {
         Ok(())
     })();
 
-    sl_async_freeco(sd as *mut std::ffi::c_void);
+    sl_async_freeco(sd);
 
     let bl_ptr = &mut (*sd).bl as *mut BlockList;
     crate::game::scripting::doscript_blargs(

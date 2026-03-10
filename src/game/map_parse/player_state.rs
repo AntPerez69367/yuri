@@ -8,9 +8,7 @@ use std::ptr;
 
 use crate::database::map_db::BlockList;
 use crate::database::map_db::raw_map_ptr;
-use crate::session::{
-    rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr,
-};
+use crate::session::{SessionId, session_exists};
 use crate::game::pc::{
     MapSessionData,
     // Setting-flags constants (from mmo.h)
@@ -22,7 +20,7 @@ use crate::game::pc::{
 use crate::servers::char::charstatus::MAX_LEGENDS;
 
 use super::packet::{
-    encrypt, wfifob, wfifohead, wfifol, wfifoset, wfifow,
+    encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow,
 };
 
 // Constants not in packet.rs — defined locally (from map_server.h / map_parse.h).
@@ -107,8 +105,7 @@ const OPT_WALKTHROUGH: u64 = 128;
 ///   [6]      = 0x00
 ///
 pub unsafe fn clif_sendack(sd: *mut MapSessionData) -> i32 {
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
     let fd = (*sd).fd;
@@ -119,7 +116,7 @@ pub unsafe fn clif_sendack(sd: *mut MapSessionData) -> i32 {
     wfifob(fd, 6, 0x00);
     // Write big-endian size 0x0006 at [1..2]
     {
-        let p = rust_session_wdata_ptr(fd, 1) as *mut u16;
+        let p = wfifop(fd, 1) as *mut u16;
         if !p.is_null() { p.write_unaligned(0x0006_u16.to_be()); }
     }
     wfifoset(fd, encrypt(fd) as usize);
@@ -147,8 +144,7 @@ pub unsafe fn clif_retrieveprofile(sd: *mut MapSessionData) -> i32 {
 /// Send the AFK / screensaver state packet.
 ///
 pub unsafe fn clif_screensaver(sd: *mut MapSessionData, screen: i32) -> i32 {
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
     let fd = (*sd).fd;
@@ -156,7 +152,7 @@ pub unsafe fn clif_screensaver(sd: *mut MapSessionData, screen: i32) -> i32 {
     wfifob(fd, 0, 0xAA);
     // big-endian size 0x0004
     {
-        let p = rust_session_wdata_ptr(fd, 1) as *mut u16;
+        let p = wfifop(fd, 1) as *mut u16;
         if !p.is_null() { p.write_unaligned(0x0004_u16.to_be()); }
     }
     wfifob(fd, 3, 0x5A);
@@ -180,8 +176,7 @@ pub unsafe fn clif_screensaver(sd: *mut MapSessionData, screen: i32) -> i32 {
 ///   [6]    = cur_year
 ///
 pub unsafe fn clif_sendtime(sd: *mut MapSessionData) -> i32 {
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
     let fd = (*sd).fd;
@@ -213,8 +208,7 @@ pub unsafe fn clif_sendtime(sd: *mut MapSessionData) -> i32 {
 ///   [14..15] = BE u16 0x0000
 ///
 pub unsafe fn clif_sendid(sd: *mut MapSessionData) -> i32 {
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
     let fd = (*sd).fd;
@@ -244,8 +238,7 @@ pub unsafe fn clif_sendid(sd: *mut MapSessionData) -> i32 {
 ///
 pub unsafe fn clif_sendmapinfo(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
     let fd = (*sd).fd;
@@ -282,7 +275,7 @@ pub unsafe fn clif_sendmapinfo(sd: *mut MapSessionData) -> i32 {
     // title length at [13], then title bytes at [14..14+len]
     wfifob(fd, 13, len);
     {
-        let dst = rust_session_wdata_ptr(fd, 14);
+        let dst = wfifop(fd, 14);
         if !dst.is_null() {
             ptr::copy_nonoverlapping(title_ptr as *const u8, dst, title_len);
         }
@@ -292,7 +285,7 @@ pub unsafe fn clif_sendmapinfo(sd: *mut MapSessionData) -> i32 {
     wfifow(fd, 14 + title_len, light_val.swap_bytes());
     // big-endian packet size at [1..2]: 18 + title_len
     {
-        let p = rust_session_wdata_ptr(fd, 1) as *mut u16;
+        let p = wfifop(fd, 1) as *mut u16;
         if !p.is_null() { p.write_unaligned(((18 + title_len) as u16).to_be()); }
     }
     wfifoset(fd, encrypt(fd) as usize);
@@ -328,8 +321,7 @@ pub unsafe fn clif_sendmapinfo(sd: *mut MapSessionData) -> i32 {
 /// whether the map is larger than the 16 × 14 client viewport.
 ///
 pub unsafe fn clif_sendxy(sd: *mut MapSessionData) -> i32 {
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
     let fd = (*sd).fd;
@@ -389,8 +381,7 @@ pub unsafe fn clif_sendxy(sd: *mut MapSessionData) -> i32 {
 /// variant (both write 0x00 at [13]).
 ///
 pub unsafe fn clif_sendxynoclick(sd: *mut MapSessionData) -> i32 {
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
     let fd = (*sd).fd;
@@ -440,8 +431,7 @@ pub unsafe fn clif_sendxynoclick(sd: *mut MapSessionData) -> i32 {
 ///
 pub unsafe fn clif_sendxychange(sd: *mut MapSessionData, dx: i32, dy: i32) -> i32 {
     if sd.is_null() { return 0; }
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
     let fd  = (*sd).fd;
@@ -502,8 +492,7 @@ pub unsafe fn clif_sendstatus(sd: *mut MapSessionData, flags: i32) -> i32 {
         f |= SFLAG_GMON;
     }
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
     let fd = (*sd).fd;
@@ -567,7 +556,7 @@ pub unsafe fn clif_sendstatus(sd: *mut MapSessionData, flags: i32) -> i32 {
 
     // Write big-endian packet size at [1..2]: len + 3
     {
-        let p = rust_session_wdata_ptr(fd, 1) as *mut u16;
+        let p = wfifop(fd, 1) as *mut u16;
         if !p.is_null() { p.write_unaligned(((len + 3) as u16).to_be()); }
     }
     wfifoset(fd, encrypt(fd) as usize);
@@ -584,8 +573,7 @@ pub unsafe fn clif_sendstatus(sd: *mut MapSessionData, flags: i32) -> i32 {
 /// helm, realm) to the player.
 ///
 pub unsafe fn clif_sendoptions(sd: *mut MapSessionData) -> i32 {
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
     let fd  = (*sd).fd;
@@ -624,8 +612,7 @@ pub unsafe fn clif_sendoptions(sd: *mut MapSessionData) -> i32 {
 pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 
@@ -643,8 +630,7 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
         (*sd).status.mark  as i32,
     );
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 
@@ -847,7 +833,7 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
 
     // ── Write big-endian packet size at [1..2] ────────────────────────────────
     {
-        let p = rust_session_wdata_ptr(fd, 1) as *mut u16;
+        let p = wfifop(fd, 1) as *mut u16;
         if !p.is_null() { p.write_unaligned(((len + 5) as u16).to_be()); }
     }
     wfifoset(fd, encrypt(fd) as usize);
@@ -961,8 +947,7 @@ pub unsafe fn clif_refresh(sd: *mut MapSessionData) -> i32 {
     clif_sendchararea(sd);
     clif_getchararea(sd);
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
     let fd = (*sd).fd;
@@ -974,7 +959,7 @@ pub unsafe fn clif_refresh(sd: *mut MapSessionData) -> i32 {
     wfifob(fd, 3, 0x22);
     wfifob(fd, 4, 0x03);
     // set_packet_indexes — shim for rust_crypt_set_packet_indexes
-    let pkt_ptr = rust_session_wdata_ptr(fd, 0);
+    let pkt_ptr = wfifop(fd, 0);
     if !pkt_ptr.is_null() {
         rust_crypt_set_packet_indexes(pkt_ptr);
     }
@@ -1037,9 +1022,9 @@ unsafe fn cstr_len(ptr: *const u8) -> usize {
 
 /// Copy `len` bytes from `src` into the WFIFO buffer at `pos`.
 #[inline]
-unsafe fn copy_cstr_to_wfifo(fd: i32, pos: usize, src: *const u8, len: usize) {
+unsafe fn copy_cstr_to_wfifo(fd: SessionId, pos: usize, src: *const u8, len: usize) {
     if len == 0 || src.is_null() { return; }
-    let dst = rust_session_wdata_ptr(fd, pos);
+    let dst = wfifop(fd, pos);
     if !dst.is_null() {
         ptr::copy_nonoverlapping(src, dst, len);
     }

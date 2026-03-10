@@ -1824,10 +1824,9 @@ pub unsafe fn rust_mob_dropitem(
     0
 }
 
-pub unsafe fn mobdb_drops(mob: *mut MobSpawnData, sd: *mut std::ffi::c_void) -> i32 {
+pub unsafe fn mobdb_drops(mob: *mut MobSpawnData, sd: *mut MapSessionData) -> i32 {
     // sd->bl is the first field — cast gives the block_list* for sl_doscript_blargs
     sl_doscript_2(c"mobDrops".as_ptr(), std::ptr::null(), sd as *mut BlockList, &raw mut (*mob).bl);
-    let sd_typed = sd as *mut MapSessionData;
     for i in 0..MAX_INVENTORY {
         let slot = &(*mob).inventory[i];
         if slot.id != 0 && slot.amount >= 1 {
@@ -1841,7 +1840,7 @@ pub unsafe fn mobdb_drops(mob: *mut MobSpawnData, sd: *mut std::ffi::c_void) -> 
                 (*mob).bl.m as i32,
                 (*mob).bl.x as i32,
                 (*mob).bl.y as i32,
-                sd_typed,
+                sd,
             );
             (*mob).inventory[i].id = 0;
             (*mob).inventory[i].amount = 0;
@@ -2427,7 +2426,7 @@ pub unsafe fn rust_mob_setglobalreg(mob: *mut MobSpawnData, reg: *const i8, val:
     mob_setglobalreg(mob, reg, val)
 }
 
-pub unsafe fn rust_mob_drops(mob: *mut MobSpawnData, sd: *mut std::ffi::c_void) -> i32 {
+pub unsafe fn rust_mob_drops(mob: *mut MobSpawnData, sd: *mut MapSessionData) -> i32 {
     mobdb_drops(mob, sd)
 }
 

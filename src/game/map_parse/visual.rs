@@ -17,10 +17,10 @@ use crate::game::pc::{
 };
 use crate::game::scripting::types::floor::FloorItemData;
 use super::packet::{
-    encrypt, wfifob, wfifohead, wfifol, wfifoset, wfifow, wfifoheader,
+    encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow, wfifoheader,
     AREA_WOS,
 };
-use crate::session::{rust_session_exists, rust_session_set_eof};
+use crate::session::session_exists;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -113,8 +113,7 @@ pub unsafe fn clif_mob_look_start_func_inner(bl: *mut BlockList) -> i32 {
     (*sd).mob_count = 0;
     (*sd).mob_item  = 0;
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 
@@ -283,8 +282,7 @@ pub unsafe fn clif_object_look_sub2_inner(bl: *mut BlockList, look_type: i32, ar
         (arg as *mut MapSessionData, bl)
     };
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 
@@ -478,8 +476,7 @@ pub unsafe fn clif_mob_look_start(sd: *mut MapSessionData) -> i32 {
     (*sd).mob_len   = 0;
     (*sd).mob_item  = 0;
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 
@@ -534,8 +531,7 @@ pub unsafe fn clif_cnpclook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         return 0;
     }
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 
@@ -689,7 +685,7 @@ pub unsafe fn clif_cnpclook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
 
     if (*nd).state != 2 {
         wfifob((*sd).fd, 59, name_len as u8);
-        let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 60);
+        let dst = wfifop((*sd).fd, 60);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(name_ptr as *const u8, dst, name_len);
         }
@@ -749,7 +745,7 @@ pub unsafe fn clif_cnpclook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         let gfx_name_empty = gfx_name_len == 0 || *gfx_name_ptr == 0;
         if !gfx_name_empty {
             wfifob((*sd).fd, 59, gfx_name_len as u8);
-            let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 60);
+            let dst = wfifop((*sd).fd, 60);
             if !dst.is_null() {
                 std::ptr::copy_nonoverlapping(gfx_name_ptr as *const u8, dst, gfx_name_len);
             }
@@ -797,8 +793,7 @@ pub unsafe fn clif_cmoblook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         return 0;
     }
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 
@@ -952,7 +947,7 @@ pub unsafe fn clif_cmoblook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
 
     if (*mob).state != 2 {
         wfifob((*sd).fd, 59, name_len as u8);
-        let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 60);
+        let dst = wfifop((*sd).fd, 60);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(name_ptr as *const u8, dst, name_len);
         }
@@ -1012,7 +1007,7 @@ pub unsafe fn clif_cmoblook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         let gfx_name_empty = gfx_name_len == 0 || *gfx_name_ptr == 0;
         if !gfx_name_empty {
             wfifob((*sd).fd, 59, gfx_name_len as u8);
-            let dst = crate::session::rust_session_wdata_ptr((*sd).fd, 60);
+            let dst = wfifop((*sd).fd, 60);
             if !dst.is_null() {
                 std::ptr::copy_nonoverlapping(gfx_name_ptr as *const u8, dst, gfx_name_len);
             }
@@ -1082,8 +1077,7 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         }
     }
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 
@@ -1323,7 +1317,7 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     // name field
     if (*sd).status.state != 2 && (*sd).status.state != 5 {
         wfifob((*src_sd).fd, 59, name_len as u8);
-        let dst = crate::session::rust_session_wdata_ptr((*src_sd).fd, 60);
+        let dst = wfifop((*src_sd).fd, 60);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(name_ptr as *const u8, dst, name_len);
         }
@@ -1393,7 +1387,7 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         let visible = (*sd).status.state != 2 && (*sd).status.state != 5;
         if visible && !gfx_name_empty {
             wfifob((*src_sd).fd, 59, gfx_name_len as u8);
-            let dst = crate::session::rust_session_wdata_ptr((*src_sd).fd, 60);
+            let dst = wfifop((*src_sd).fd, 60);
             if !dst.is_null() {
                 std::ptr::copy_nonoverlapping(gfx_name_ptr as *const u8, dst, gfx_name_len);
             }

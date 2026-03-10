@@ -2710,6 +2710,7 @@ dependencies = [
  "rayon",
  "serde",
  "serde_yaml",
+ "socket2",
  "sqlx",
  "thiserror",
  "tokio",

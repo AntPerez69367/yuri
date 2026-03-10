@@ -177,48 +177,52 @@ pub fn tk_crypt_static(buff: &mut [u8], xor_key: &[u8]) {
 /// 4. Return `new_payload_len + 3` = total bytes to commit (including the 3-byte framing header).
 ///
 /// # Safety
-/// `fd` must be a valid session fd with pending write data staged by `rust_session_wfifohead`.
-pub unsafe fn encrypt(fd: i32) -> i32 {
+/// `fd` must be a valid session fd with pending write data staged by `wfifohead`.
+pub unsafe fn encrypt(fd: SessionId) -> i32 {
     use crate::config::config;
-    use crate::session::{rust_session_get_data, rust_session_wdata_ptr};
-    use crate::game::pc::MapSessionData;
+    use crate::session::{session_get_data, get_session_manager};
 
-    let sd = rust_session_get_data(fd) as *const MapSessionData;
+    let sd = session_get_data(fd);
     if sd.is_null() {
         tracing::error!("[encrypt] sd is NULL for fd={}", fd);
         return 1;
     }
 
-    let buf = rust_session_wdata_ptr(fd, 0);
-    if buf.is_null() {
-        tracing::error!("[encrypt] write buffer NULL for fd={}", fd);
-        return 1;
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(mut session) = s.try_lock() {
+            let wpos = session.wdata_size;
+            if wpos >= session.wdata.len() {
+                tracing::error!("[encrypt] write buffer empty for fd={}", fd);
+                return 1;
+            }
+
+            // Original payload length from packet header bytes 1–2 (big-endian).
+            // After set_packet_indexes the header is updated; total slice = original + 6
+            // (3-byte framing header + 3 index bytes appended by set_packet_indexes).
+            let original_len = u16::from_be_bytes([session.wdata[wpos + 1], session.wdata[wpos + 2]]) as usize;
+            let total_size = original_len + 6;
+            let buf_slice = &mut session.wdata[wpos..wpos + total_size];
+
+            set_packet_indexes(buf_slice);
+
+            if is_key_server(buf_slice[3]) {
+                let enc_hash = std::slice::from_raw_parts(
+                    (*sd).EncHash.as_ptr() as *const u8,
+                    (*sd).EncHash.len(),
+                );
+                let mut key = [0u8; 10];
+                generate_key2(buf_slice, enc_hash, &mut key, false);
+                tk_crypt_dynamic(buf_slice, &key);
+            } else {
+                tk_crypt_static(buf_slice, config().xor_key.as_bytes());
+            }
+
+            return u16::from_be_bytes([buf_slice[1], buf_slice[2]]) as i32 + 3;
+        }
     }
 
-    // Original payload length from packet header bytes 1–2 (big-endian).
-    // After set_packet_indexes the header is updated; total slice = original + 6
-    // (3-byte framing header + 3 index bytes appended by set_packet_indexes).
-    let original_len = u16::from_be_bytes([*buf.add(1), *buf.add(2)]) as usize;
-    let total_size = original_len + 6;
-    let buf_slice = std::slice::from_raw_parts_mut(buf, total_size);
-
-    set_packet_indexes(buf_slice);
-
-    if is_key_server(buf_slice[3]) {
-        // Dynamic encryption: derive session key from EncHash lookup table.
-        let enc_hash = std::slice::from_raw_parts(
-            (*sd).EncHash.as_ptr() as *const u8,
-            (*sd).EncHash.len(),
-        );
-        let mut key = [0u8; 10];
-        generate_key2(buf_slice, enc_hash, &mut key, false);
-        tk_crypt_dynamic(buf_slice, &key);
-    } else {
-        tk_crypt_static(buf_slice, config().xor_key.as_bytes());
-    }
-
-    // [1..2] was updated by set_packet_indexes to the new payload length.
-    u16::from_be_bytes([buf_slice[1], buf_slice[2]]) as i32 + 3
+    tracing::error!("[encrypt] session not found for fd={}", fd);
+    1
 }
 
 /// Decrypts the incoming read buffer for `fd` in-place.
@@ -227,36 +231,35 @@ pub unsafe fn encrypt(fd: i32) -> i32 {
 /// `fd` must be a valid session fd with a complete incoming packet in the read buffer.
 /// The `*const u8 → *mut u8` cast for in-place XOR is safe here because
 /// packet dispatch is single-threaded and no other thread aliases this buffer.
-pub unsafe fn decrypt(fd: i32) -> i32 {
+pub unsafe fn decrypt(fd: SessionId) -> i32 {
     use crate::config::config;
-    use crate::session::{rust_session_available, rust_session_get_data, rust_session_rdata_ptr};
-    use crate::game::pc::MapSessionData;
+    use crate::session::{session_get_data, get_session_manager};
 
-    let sd = rust_session_get_data(fd) as *const MapSessionData;
+    let sd = session_get_data(fd);
     if sd.is_null() {
         return 1;
     }
 
-    let rdata_const = rust_session_rdata_ptr(fd, 0);
-    if rdata_const.is_null() {
-        return 0;
-    }
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(mut session) = s.try_lock() {
+            let pos = session.rdata_pos;
+            let size = session.rdata_size;
+            if pos >= size { return 0; }
+            let buf_slice = &mut session.rdata[pos..size];
 
-    // Cast to *mut u8 for in-place XOR (see Safety doc above).
-    let available = rust_session_available(fd);
-    let buf_slice = std::slice::from_raw_parts_mut(rdata_const as *mut u8, available);
+            let enc_hash = std::slice::from_raw_parts(
+                (*sd).EncHash.as_ptr() as *const u8,
+                (*sd).EncHash.len(),
+            );
 
-    let enc_hash = std::slice::from_raw_parts(
-        (*sd).EncHash.as_ptr() as *const u8,
-        (*sd).EncHash.len(),
-    );
-
-    if is_key_client(buf_slice[3]) {
-        let mut key = [0u8; 10];
-        generate_key2(buf_slice, enc_hash, &mut key, true);
-        tk_crypt_dynamic(buf_slice, &key);
-    } else {
-        tk_crypt_static(buf_slice, config().xor_key.as_bytes());
+            if is_key_client(buf_slice[3]) {
+                let mut key = [0u8; 10];
+                generate_key2(buf_slice, enc_hash, &mut key, true);
+                tk_crypt_dynamic(buf_slice, &key);
+            } else {
+                tk_crypt_static(buf_slice, config().xor_key.as_bytes());
+            }
+        }
     }
 
     0
@@ -272,12 +275,12 @@ unsafe fn metacrc_path(path: &str) -> u32 {
     crc.sum()
 }
 
-unsafe fn send_metafile_impl(fd: i32, file: &str) {
+unsafe fn send_metafile_impl(fd: SessionId, file: &str) {
     use flate2::write::ZlibEncoder;
     use flate2::Compression;
     use std::io::Write;
     use crate::config::config;
-    use crate::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
+    use crate::game::map_parse::packet::{wfifohead, wfifob, wfifop, wfifoset};
 
     let cfg = config();
     let path = format!("{}{}", cfg.meta_dir, file);
@@ -293,46 +296,40 @@ unsafe fn send_metafile_impl(fd: i32, file: &str) {
     let compressed = enc.finish().unwrap_or_default();
     let clen = compressed.len() as u16;
 
-    // Packet layout (offsets from write-buffer base):
-    //   [0]=0xAA  [1-2]=len+3 (set last)  [3]=0x6F  [4]=0  [5]=0 (subtype file)
-    //   [6]=name_len  [7..7+name_len]=name  [7+name_len]='\0'
-    //   then: checksum 4B | clen 2B | compressed data | 0x00
-    // len = (name_len+1) + 4 + 2 + compressed.len() + 1
     let fname = file.as_bytes();
     let name_len = fname.len();
     let len = (name_len + 1) + 4 + 2 + compressed.len() + 1;
-
-    // original_len = len + 3; total buf needed = original_len + 6 = len + 9
     let total = len + 9;
-    rust_session_wfifohead(fd, total);
+    wfifohead(fd, total);
 
-    let w = |off: usize| rust_session_wdata_ptr(fd, off);
-    *w(0) = 0xAA;
+    wfifob(fd, 0, 0xAA);
     let plen = (len + 3) as u16;
-    *w(1) = (plen >> 8) as u8;
-    *w(2) = (plen & 0xFF) as u8;
-    *w(3) = 0x6F;
-    *w(4) = 0;
-    *w(5) = 0;
-    *w(6) = name_len as u8;
+    wfifob(fd, 1, (plen >> 8) as u8);
+    wfifob(fd, 2, (plen & 0xFF) as u8);
+    wfifob(fd, 3, 0x6F);
+    wfifob(fd, 4, 0);
+    wfifob(fd, 5, 0);
+    wfifob(fd, 6, name_len as u8);
     for (i, &b) in fname.iter().enumerate() {
-        *w(7 + i) = b;
+        wfifob(fd, 7 + i, b);
     }
-    *w(7 + name_len) = 0; // null terminator (mirrors strcpy)
+    wfifob(fd, 7 + name_len, 0);
 
     let mut off = 7 + name_len + 1;
     let cs = checksum.to_be_bytes();
-    *w(off) = cs[0]; *w(off+1) = cs[1]; *w(off+2) = cs[2]; *w(off+3) = cs[3];
+    wfifob(fd, off, cs[0]); wfifob(fd, off+1, cs[1]); wfifob(fd, off+2, cs[2]); wfifob(fd, off+3, cs[3]);
     off += 4;
     let cl = clen.to_be_bytes();
-    *w(off) = cl[0]; *w(off+1) = cl[1];
+    wfifob(fd, off, cl[0]); wfifob(fd, off+1, cl[1]);
     off += 2;
-    std::ptr::copy_nonoverlapping(compressed.as_ptr(), rust_session_wdata_ptr(fd, off), compressed.len());
+    let dst = wfifop(fd, off);
+    if !dst.is_null() {
+        std::ptr::copy_nonoverlapping(compressed.as_ptr(), dst, compressed.len());
+    }
     off += compressed.len();
-    *w(off) = 0;
+    wfifob(fd, off, 0);
 
-    let n = encrypt(fd) as usize;
-    rust_session_commit(fd, n);
+    wfifoset(fd, encrypt(fd) as usize);
 }
 
 /// Respond to a client meta-file request with the compressed file data.
@@ -340,13 +337,13 @@ unsafe fn send_metafile_impl(fd: i32, file: &str) {
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`crate::game::pc::MapSessionData`].
 pub unsafe fn send_meta(sd: *mut crate::game::pc::MapSessionData) -> i32 {
-    use crate::session::rust_session_rdata_ptr;
+    use crate::game::map_parse::packet::{rfifob};
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
-    let name_len = *rust_session_rdata_ptr(fd, 6) as usize;
+    let name_len = rfifob(fd, 6) as usize;
     let mut buf = vec![0u8; name_len];
     for i in 0..name_len {
-        buf[i] = *rust_session_rdata_ptr(fd, 7 + i);
+        buf[i] = rfifob(fd, 7 + i);
     }
     let file = String::from_utf8_lossy(&buf).into_owned();
     send_metafile_impl(fd, &file);
@@ -360,7 +357,7 @@ pub unsafe fn send_meta(sd: *mut crate::game::pc::MapSessionData) -> i32 {
 pub unsafe fn send_metalist(sd: *mut crate::game::pc::MapSessionData) -> i32 {
     use flate2::Crc;
     use crate::config::config;
-    use crate::session::{rust_session_wdata_ptr, rust_session_commit, rust_session_wfifohead};
+    use crate::game::map_parse::packet::{wfifohead, wfifob, wfifoset};
 
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
@@ -368,47 +365,41 @@ pub unsafe fn send_metalist(sd: *mut crate::game::pc::MapSessionData) -> i32 {
     let files = &cfg.meta;
     let meta_dir = &cfg.meta_dir;
 
-    // Pre-compute payload length: 2 (count) + per-file (1 + name_len + 4)
     let entry_bytes: usize = files.iter().map(|f| 1 + f.len() + 4).sum();
-    // len = 2 + entry_bytes; WFIFOW(1) = len + 4; WFIFOSET = len + 10
     let len = 2 + entry_bytes;
     let total = len + 10;
-    rust_session_wfifohead(fd, total);
+    wfifohead(fd, total);
 
-    let w = |off: usize| rust_session_wdata_ptr(fd, off);
-    *w(0) = 0xAA;
-    // [1-2] set after computing len
-    *w(3) = 0x6F;
-    *w(4) = 0;
-    *w(5) = 1; // subtype: list
+    wfifob(fd, 0, 0xAA);
+    wfifob(fd, 3, 0x6F);
+    wfifob(fd, 4, 0);
+    wfifob(fd, 5, 1); // subtype: list
     let count = files.len() as u16;
-    *w(6) = (count >> 8) as u8;
-    *w(7) = (count & 0xFF) as u8;
+    wfifob(fd, 6, (count >> 8) as u8);
+    wfifob(fd, 7, (count & 0xFF) as u8);
 
-    let mut off = 8; // 6 (fixed header base) + 2 (count)
+    let mut off = 8;
     for fname in files.iter() {
         let fbytes = fname.as_bytes();
-        *w(off) = fbytes.len() as u8;
+        wfifob(fd, off, fbytes.len() as u8);
         off += 1;
         for (i, &b) in fbytes.iter().enumerate() {
-            *w(off + i) = b;
+            wfifob(fd, off + i, b);
         }
         off += fbytes.len();
         let path = format!("{}{}", meta_dir, fname);
         let mut crc = Crc::new();
         crc.update(&std::fs::read(&path).unwrap_or_default());
         let cs = crc.sum().to_be_bytes();
-        *w(off) = cs[0]; *w(off+1) = cs[1]; *w(off+2) = cs[2]; *w(off+3) = cs[3];
+        wfifob(fd, off, cs[0]); wfifob(fd, off+1, cs[1]); wfifob(fd, off+2, cs[2]); wfifob(fd, off+3, cs[3]);
         off += 4;
     }
 
-    // Set length field: len + 4 (matches C: WFIFOW(1) = len + 4)
     let plen = (len + 4) as u16;
-    *w(1) = (plen >> 8) as u8;
-    *w(2) = (plen & 0xFF) as u8;
+    wfifob(fd, 1, (plen >> 8) as u8);
+    wfifob(fd, 2, (plen & 0xFF) as u8);
 
-    let n = encrypt(fd) as usize;
-    rust_session_commit(fd, n);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -469,7 +460,7 @@ mod tests {
 use std::ffi::CStr;
 use std::slice;
 
-use crate::session::{RFIFO_SIZE, WFIFO_SIZE};
+use crate::session::{SessionId, RFIFO_SIZE, WFIFO_SIZE};
 
 /// Whether the opcode uses dynamic encryption (client-side check).
 pub fn rust_crypt_is_key_client(opcode: i32) -> bool {

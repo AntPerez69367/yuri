@@ -36,7 +36,7 @@ const OPT_WALKTHROUGH: u64 = 128;
 
 use crate::game::map_server::map_fd;
 
-use crate::session::{rust_session_set_eof, rust_session_set_data};
+use crate::session::{session_set_eof, get_session_manager, SessionId};
 use crate::network::crypt::rust_crypt_populate_table;
 use crate::game::pc::{
     rust_pc_setpos, rust_pc_loadmagic, rust_pc_starttimer, rust_pc_requestmp,
@@ -58,6 +58,7 @@ use crate::game::map_parse::visual::clif_object_look_sub_inner;
 /// map-server session and fires the full player-login sequence.
 ///
 pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
+    let sid = SessionId::from_raw(fd);
     // Ignore packets arriving on the inter-server socket itself.
     if fd == map_fd.load(std::sync::atomic::Ordering::Relaxed) {
         return 0;
@@ -65,7 +66,7 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
 
     // Null status pointer means the char-server signaled an error.
     if p.is_null() {
-        rust_session_set_eof(fd, 7);
+        session_set_eof(sid, 7);
         return 0;
     }
 
@@ -79,8 +80,12 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
     ptr::copy_nonoverlapping(p, ptr::addr_of_mut!((*sd).status), 1);
 
     // Attach to session.
-    (*sd).fd = fd;
-    rust_session_set_data(fd, sd as *mut std::ffi::c_void);
+    (*sd).fd = sid;
+    if let Some(session_arc) = get_session_manager().get_session(sid) {
+        if let Ok(mut session) = session_arc.try_lock() {
+            session.session_data = Some(sd);
+        }
+    }
 
     // Build the per-session encryption hash table from the character name.
     // C: populate_table(sd->status.name, sd->EncHash, sizeof(sd->EncHash))
@@ -225,7 +230,7 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
     if fire_login_hook {
         let name_str = std::ffi::CStr::from_ptr((*sd).status.name.as_ptr() as *const i8)
             .to_string_lossy();
-        let raw_ip = crate::session::rust_session_get_client_ip(fd);
+        let raw_ip = crate::session::session_get_client_ip(fd);
         let addr = format!("{}.{}.{}.{}", raw_ip & 0xff, (raw_ip >> 8) & 0xff,
             (raw_ip >> 16) & 0xff, (raw_ip >> 24) & 0xff);
         println!("[map] [login] name={} addr={}", name_str, addr);
@@ -346,8 +351,7 @@ pub mod intif_save_impl {
         Some(pkt)
     }
 
-    pub unsafe fn rust_sl_intif_save(sd: *mut std::ffi::c_void) -> i32 {
-        let sd = sd as *mut MapSessionData;
+    pub unsafe fn rust_sl_intif_save(sd: *mut MapSessionData) -> i32 {
         if sd.is_null() { return -1; }
         (*sd).status.last_pos.m = (*sd).bl.m;
         (*sd).status.last_pos.x = (*sd).bl.x;
@@ -360,8 +364,7 @@ pub mod intif_save_impl {
         }
     }
 
-    pub unsafe fn rust_sl_intif_savequit(sd: *mut std::ffi::c_void) -> i32 {
-        let sd = sd as *mut MapSessionData;
+    pub unsafe fn rust_sl_intif_savequit(sd: *mut MapSessionData) -> i32 {
         if sd.is_null() { return -1; }
         if !map_is_loaded((*sd).status.dest_pos.m as i32) {
             if (*sd).status.dest_pos.m == 0 {

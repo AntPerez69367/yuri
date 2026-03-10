@@ -5,7 +5,7 @@
 
 use crate::database::map_db::{BlockList, WarpList, BLOCK_SIZE};
 use crate::database::map_db::raw_map_ptr;
-use crate::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr};
+use crate::session::session_exists;
 use crate::game::mob::MOB_DEAD;
 use crate::game::pc::{
     MapSessionData,
@@ -39,7 +39,7 @@ use crate::servers::char::charstatus::{MAX_INVENTORY, MAX_MAGIC_TIMERS};
 
 use super::packet::{
     encrypt,
-    wfifob, wfifow, wfifol, wfifoset, wfifoheader,
+    wfifob, wfifow, wfifol, wfifop, wfifoset, wfifoheader,
     rfifob,
     clif_send,
     SAMEAREA,
@@ -201,8 +201,7 @@ pub unsafe fn clif_senddelitem(sd: *mut MapSessionData, num: i32, r#type: i32) -
     (*sd).status.inventory[n].time = 0;
     (*sd).status.inventory[n].real_name[0] = 0;
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 
@@ -309,8 +308,7 @@ pub unsafe fn clif_sendadditem(sd: *mut MapSessionData, num: i32) -> i32 {
         }
     }
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 
@@ -332,7 +330,7 @@ pub unsafe fn clif_sendadditem(sd: *mut MapSessionData, num: i32) -> i32 {
     let buf_len = strlen_cstr(buf.as_ptr()) as usize;
     wfifob(fd, 9, buf_len as u8);
     {
-        let dst = rust_session_wdata_ptr(fd, 10);
+        let dst = wfifop(fd, 10);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(buf.as_ptr().cast::<u8>(), dst, buf_len);
         }
@@ -344,7 +342,7 @@ pub unsafe fn clif_sendadditem(sd: *mut MapSessionData, num: i32) -> i32 {
     let base_len = strlen_cstr(base_name);
     wfifob(fd, len, base_len as u8);
     {
-        let dst = rust_session_wdata_ptr(fd, len + 1);
+        let dst = wfifop(fd, len + 1);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(base_name.cast::<u8>(), dst, base_len);
         }
@@ -393,7 +391,7 @@ pub unsafe fn clif_sendadditem(sd: *mut MapSessionData, num: i32) -> i32 {
         let owner_len = bytes.len();
         wfifob(fd, len, owner_len as u8);
         {
-            let dst = rust_session_wdata_ptr(fd, len + 1);
+            let dst = wfifop(fd, len + 1);
             if !dst.is_null() {
                 std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, owner_len);
             }
@@ -428,8 +426,7 @@ pub unsafe fn clif_equipit(sd: *mut MapSessionData, id: i32) -> i32 {
         rust_itemdb_name((*sd).status.equip[slot].id)
     };
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 
@@ -447,7 +444,7 @@ pub unsafe fn clif_equipit(sd: *mut MapSessionData, id: i32) -> i32 {
     let nameof_len = strlen_cstr(nameof);
     wfifob(fd, 9, nameof_len as u8);
     {
-        let dst = rust_session_wdata_ptr(fd, 10);
+        let dst = wfifop(fd, 10);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(nameof.cast::<u8>(), dst, nameof_len);
         }
@@ -458,7 +455,7 @@ pub unsafe fn clif_equipit(sd: *mut MapSessionData, id: i32) -> i32 {
     let base_len = strlen_cstr(base_name);
     wfifob(fd, len + 9, base_len as u8);
     {
-        let dst = rust_session_wdata_ptr(fd, len + 10);
+        let dst = wfifop(fd, len + 10);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(base_name.cast::<u8>(), dst, base_len);
         }
@@ -593,8 +590,7 @@ pub unsafe fn clif_parsegetitem(sd: *mut MapSessionData) -> i32 {
 /// Send an unequip confirmation to the client.
 ///
 pub unsafe fn clif_unequipit(sd: *mut MapSessionData, spot: i32) -> i32 {
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 
@@ -844,8 +840,7 @@ pub unsafe fn clif_open_sub(sd: *mut MapSessionData) -> i32 {
 /// Send a remove-spell packet to the client.
 ///
 pub unsafe fn clif_removespell(sd: *mut MapSessionData, pos: i32) -> i32 {
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 

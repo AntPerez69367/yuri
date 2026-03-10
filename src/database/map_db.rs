@@ -651,6 +651,22 @@ pub fn raw_map_ptr() -> *mut MapData {
     MAP_PTR.get().map(|m| m.0).unwrap_or(std::ptr::null_mut())
 }
 
+/// Safe read-only access to map data by index.
+/// Returns `None` if the map array isn't initialized or `m` is out of bounds.
+pub fn map_data(m: usize) -> Option<&'static MapData> {
+    let ptr = MAP_PTR.get()?.0;
+    if ptr.is_null() || m >= MAP_SLOTS { return None; }
+    Some(unsafe { &*ptr.add(m) })
+}
+
+/// Safe mutable access to map data by index.
+/// Returns `None` if the map array isn't initialized or `m` is out of bounds.
+pub fn map_data_mut(m: usize) -> Option<&'static mut MapData> {
+    let ptr = MAP_PTR.get()?.0;
+    if ptr.is_null() || m >= MAP_SLOTS { return None; }
+    Some(unsafe { &mut *ptr.add(m) })
+}
+
 /// Allocate the 65535-slot map array, load all maps from DB + files, set C globals.
 pub unsafe fn rust_map_init(maps_dir: *const i8, server_id: i32) -> i32 {
     ffi_catch!(-1, {

@@ -1413,12 +1413,25 @@ impl UserData for PcObject {
             Ok(())
         });
 
-        methods.add_method("_dialog_send", |_, this, (msg, gfx_tbl): (String, mlua::Table)| {
+        methods.add_method("_dialog_send", |_, this, (msg, opts_tbl): (String, mlua::Table)| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            let gfx = lua_table_to_ints(&gfx_tbl).unwrap_or_default();
+            // The options table contains strings like "previous", "next", "quit".
+            // Parse them into prev/next flags for the dialog packet.
+            let mut has_prev = 0i32;
+            let mut has_next = 0i32;
+            let len = opts_tbl.raw_len();
+            for i in 1..=len {
+                if let Ok(s) = opts_tbl.raw_get::<String>(i) {
+                    match s.as_str() {
+                        "previous" => has_prev = 1,
+                        "next" => has_next = 1,
+                        _ => {}
+                    }
+                }
+            }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
-            unsafe { sffi::sl_pc_dialog_send(&mut *sd, cs.as_ptr(), gfx.as_ptr(), gfx.len() as i32); }
+            unsafe { sffi::sl_pc_dialog_send(&mut *sd, cs.as_ptr(), has_prev, has_next); }
             Ok(())
         });
 

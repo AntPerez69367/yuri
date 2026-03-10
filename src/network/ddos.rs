@@ -47,7 +47,7 @@ fn get_ddos() -> &'static Mutex<DdosState> {
 /// Mark an IP as DDoS-locked.
 ///
 /// `ip_net` is in network byte order (sin_addr.s_addr), matching what
-/// `rust_session_get_client_ip` returns.
+/// `session_get_client_ip` returns.
 pub fn add_ip_lockout(ip_net: u32) {
     let ip = u32::from_be(ip_net);
     let tick = crate::game::time_util::gettick();

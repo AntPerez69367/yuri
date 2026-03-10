@@ -8,7 +8,7 @@
 
 use crate::database::map_db::BlockList;
 use crate::database::map_db::{get_map_ptr, map_is_loaded};
-use crate::session::{rust_session_exists, rust_session_set_eof, rust_session_wdata_ptr};
+use crate::session::{session_exists, SessionId};
 use crate::game::mob::MobSpawnData;
 use crate::database::get_pool;
 
@@ -23,7 +23,7 @@ use crate::game::pc::{
 
 use super::packet::{
     encrypt,
-    rfifob, rfifop,
+    rfifob, rfifop, wfifop,
     wfifob, wfifoset, wfifohead,
 };
 use crate::game::block::AreaType;
@@ -83,8 +83,8 @@ unsafe fn groups_set(groupid: usize, slot: usize, val: u32) {
 
 /// Copy `len` bytes from `src` into the send-buffer at `pos`.
 #[inline]
-unsafe fn wfifop_copy(fd: i32, pos: usize, src: *const u8, len: usize) {
-    let dst = rust_session_wdata_ptr(fd, pos);
+unsafe fn wfifop_copy(fd: SessionId, pos: usize, src: *const u8, len: usize) {
+    let dst = wfifop(fd, pos);
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(src, dst, len);
     }
@@ -92,15 +92,15 @@ unsafe fn wfifop_copy(fd: i32, pos: usize, src: *const u8, len: usize) {
 
 /// Write a big-endian u16 into the send buffer at `pos`.
 #[inline]
-unsafe fn wfifow_be(fd: i32, pos: usize, val: u16) {
-    let p = rust_session_wdata_ptr(fd, pos) as *mut u16;
+unsafe fn wfifow_be(fd: SessionId, pos: usize, val: u16) {
+    let p = wfifop(fd, pos) as *mut u16;
     if !p.is_null() { p.write_unaligned(val.to_be()); }
 }
 
 /// Write a big-endian u32 into the send buffer at `pos`.
 #[inline]
-unsafe fn wfifol_be(fd: i32, pos: usize, val: u32) {
-    let p = rust_session_wdata_ptr(fd, pos) as *mut u32;
+unsafe fn wfifol_be(fd: SessionId, pos: usize, val: u32) {
+    let p = wfifop(fd, pos) as *mut u32;
     if !p.is_null() { p.write_unaligned(val.to_be()); }
 }
 
@@ -120,8 +120,7 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
     let group_count = (*sd).group_count as usize;
     let groupid     = (*sd).groupid as usize;
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 
@@ -309,8 +308,7 @@ pub unsafe fn clif_grouphealth_update(sd: *mut MapSessionData) -> i32 {
         let tsd = map_id2sd_local(groups_get(groupid, x));
         if tsd.is_null() { continue; }
 
-        if rust_session_exists((*sd).fd) == 0 {
-            rust_session_set_eof((*sd).fd, 8);
+        if !session_exists((*sd).fd) {
             return 0;
         }
 
@@ -701,8 +699,7 @@ pub unsafe fn clif_mapselect(
 ) -> i32 {
     if sd.is_null() { return 0; }
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 
@@ -800,8 +797,7 @@ pub unsafe fn clif_pb_sub_inner(
 pub unsafe fn clif_sendpowerboard(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 
@@ -875,8 +871,7 @@ pub async unsafe fn clif_huntertoggle(sd: *mut MapSessionData) -> i32 {
         .await
         .ok();
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
     wfifohead((*sd).fd, 5);

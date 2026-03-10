@@ -83,7 +83,7 @@ pub struct PcBodItems {
 pub struct MapSessionData {
     // Intrusive block-list header (must be first — cast to *mut BlockList for grid operations).
     pub bl:                BlockList,
-    pub fd:                i32,
+    pub fd:                SessionId,
 
     // mmo
     pub status:            MmoCharStatus,
@@ -561,9 +561,10 @@ use crate::database::item_db::{
 };
 use crate::database::magic_db::{rust_magicdb_dispel as magicdb_dispel, rust_magicdb_yname as magicdb_yname_pc};
 use crate::database::class_db::{rust_classdb_path as classdb_path, rust_classdb_level as classdb_level};
-use crate::session::{rust_session_exists, rust_session_set_eof};
+use crate::session::{session_exists, SessionId};
+use crate::game::map_parse::packet::{wfifop, wfifohead, wfifoset};
 use crate::network::crypt::encrypt;
-unsafe fn encrypt_fd(fd: i32) -> i32 { encrypt(fd) }
+unsafe fn encrypt_fd(fd: SessionId) -> i32 { encrypt(fd) }
 use crate::game::scripting::pc_accessors::sl_pc_forcesave;
 use crate::game::time_util::gettick;
 unsafe fn gettick_pc() -> u32 { gettick() }
@@ -1214,38 +1215,37 @@ pub unsafe fn rust_pc_sendpong(id: i32, _none: i32) -> i32 {
     let sd = map_id2sd_pc(id as u32);
     if sd.is_null() { return 1; }
 
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return 0;
     }
 
     // WFIFOHEAD(fd, 10)
-    crate::session::rust_session_wfifohead((*sd).fd, 10);
+    wfifohead((*sd).fd, 10);
 
     // WFIFOB(fd, 0) = 0xAA
-    let p = crate::session::rust_session_wdata_ptr((*sd).fd, 0);
+    let p = wfifop((*sd).fd, 0);
     if !p.is_null() { *p = 0xAAu8; }
 
     // WFIFOW(fd, 1) = SWAP16(0x09)  — big-endian 16-bit (byte-swap of 0x0009 → 0x0900)
-    let p = crate::session::rust_session_wdata_ptr((*sd).fd, 1) as *mut u16;
+    let p = wfifop((*sd).fd, 1) as *mut u16;
     if !p.is_null() { p.write_unaligned(0x09u16.swap_bytes()); }
 
     // WFIFOB(fd, 3) = 0x68
-    let p = crate::session::rust_session_wdata_ptr((*sd).fd, 3);
+    let p = wfifop((*sd).fd, 3);
     if !p.is_null() { *p = 0x68u8; }
 
     // WFIFOL(fd, 5) = SWAP32(gettick())  — big-endian 32-bit tick
     let tick = gettick_pc();
-    let p = crate::session::rust_session_wdata_ptr((*sd).fd, 5) as *mut u32;
+    let p = wfifop((*sd).fd, 5) as *mut u32;
     if !p.is_null() { p.write_unaligned(tick.swap_bytes()); }
 
     // WFIFOB(fd, 9) = 0x00
-    let p = crate::session::rust_session_wdata_ptr((*sd).fd, 9);
+    let p = wfifop((*sd).fd, 9);
     if !p.is_null() { *p = 0x00u8; }
 
     // WFIFOSET(fd, encrypt(fd))
     let enc_len = encrypt_fd((*sd).fd);
-    crate::session::rust_session_commit((*sd).fd, enc_len as usize);
+    wfifoset((*sd).fd, enc_len as usize);
 
     (*sd).LastPingTick = gettick_pc() as u64;
     0
@@ -2876,7 +2876,7 @@ pub unsafe fn rust_pc_useitem(
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd as *mut std::ffi::c_void);
+            sl_async_freeco(sd);
             sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
             rust_pc_delitem(sd, id, 1, 2);
@@ -2887,7 +2887,7 @@ pub unsafe fn rust_pc_useitem(
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd as *mut std::ffi::c_void);
+            sl_async_freeco(sd);
             sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
             rust_pc_delitem(sd, id, 1, 6);
@@ -2898,7 +2898,7 @@ pub unsafe fn rust_pc_useitem(
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd as *mut std::ffi::c_void);
+            sl_async_freeco(sd);
             sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
             // No auto-delete for USESPC — script decides.
@@ -2909,7 +2909,7 @@ pub unsafe fn rust_pc_useitem(
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd as *mut std::ffi::c_void);
+            sl_async_freeco(sd);
             sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
@@ -2919,7 +2919,7 @@ pub unsafe fn rust_pc_useitem(
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd as *mut std::ffi::c_void);
+            sl_async_freeco(sd);
             sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"maps".as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
@@ -2937,7 +2937,7 @@ pub unsafe fn rust_pc_useitem(
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd as *mut std::ffi::c_void);
+            sl_async_freeco(sd);
             sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"onMountItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
@@ -2947,7 +2947,7 @@ pub unsafe fn rust_pc_useitem(
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd as *mut std::ffi::c_void);
+            sl_async_freeco(sd);
             sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"useFace".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
@@ -2957,7 +2957,7 @@ pub unsafe fn rust_pc_useitem(
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd as *mut std::ffi::c_void);
+            sl_async_freeco(sd);
             sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"useSetItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
@@ -2967,7 +2967,7 @@ pub unsafe fn rust_pc_useitem(
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd as *mut std::ffi::c_void);
+            sl_async_freeco(sd);
             sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"useSkinItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
@@ -2977,7 +2977,7 @@ pub unsafe fn rust_pc_useitem(
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd as *mut std::ffi::c_void);
+            sl_async_freeco(sd);
             sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"useHairDye".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
@@ -2987,7 +2987,7 @@ pub unsafe fn rust_pc_useitem(
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd as *mut std::ffi::c_void);
+            sl_async_freeco(sd);
             sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"useBeardItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
@@ -2997,7 +2997,7 @@ pub unsafe fn rust_pc_useitem(
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd as *mut std::ffi::c_void);
+            sl_async_freeco(sd);
             sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
             (*sd).status.inventory[id_u].dura -= 1;
@@ -3023,7 +3023,7 @@ pub unsafe fn rust_pc_useitem(
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd as *mut std::ffi::c_void);
+            sl_async_freeco(sd);
             sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
@@ -3053,7 +3053,7 @@ pub unsafe fn rust_pc_runfloor_sub(sd: *mut MapSessionData) -> i32 {
     if (*nd).bl.subtype != FLOOR && (*nd).bl.subtype != 2 { return 0; }
 
     if (*nd).bl.subtype == 2 {
-        sl_async_freeco(sd as *mut std::ffi::c_void);
+        sl_async_freeco(sd);
         sl_doscript_2_pc((*nd).name.as_ptr(), c"click".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*nd).bl as *mut BlockList);
     }
     0
@@ -3629,8 +3629,7 @@ pub async unsafe fn rust_pc_warp(
 
     // If the target map is not loaded on this server, hand off to the right server.
     if !map_is_loaded(m as u16) {
-        if rust_session_exists((*sd).fd) == 0 {
-            rust_session_set_eof((*sd).fd, 20);
+        if !session_exists((*sd).fd) {
             return 0;
         }
 

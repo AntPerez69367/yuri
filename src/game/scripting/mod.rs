@@ -570,7 +570,7 @@ pub unsafe fn rust_sl_reload() -> i32 {
     ffi_catch!(-1, sl_reload())
 }
 
-pub unsafe fn rust_sl_luasize(_user: *mut std::ffi::c_void) -> i32 {
+pub unsafe fn rust_sl_luasize(_user: *mut crate::game::pc::MapSessionData) -> i32 {
     ffi_catch!(0, sl_luasize())
 }
 
@@ -615,47 +615,47 @@ pub unsafe fn sl_updatepeople(
     ffi_catch!(0, sl_updatepeople_impl(bl, ap))
 }
 
-pub unsafe fn rust_sl_resumemenu(selection: u32, sd: *mut std::ffi::c_void) {
-    ffi_catch!((), async_coro::resume_menu(selection, sd))
+pub unsafe fn rust_sl_resumemenu(selection: u32, sd: *mut crate::game::pc::MapSessionData) {
+    ffi_catch!((), async_coro::resume_menu(selection, sd as *mut std::ffi::c_void))
 }
 
-pub unsafe fn rust_sl_resumemenuseq(selection: u32, choice: i32, sd: *mut std::ffi::c_void) {
-    ffi_catch!((), async_coro::resume_menuseq(selection, choice, sd))
+pub unsafe fn rust_sl_resumemenuseq(selection: u32, choice: i32, sd: *mut crate::game::pc::MapSessionData) {
+    ffi_catch!((), async_coro::resume_menuseq(selection, choice, sd as *mut std::ffi::c_void))
 }
 
 pub unsafe fn rust_sl_resumeinputseq(
     choice: u32,
     input:  *mut i8,
-    sd:     *mut std::ffi::c_void,
+    sd:     *mut crate::game::pc::MapSessionData,
 ) {
-    ffi_catch!((), async_coro::resume_inputseq(choice, input, sd))
+    ffi_catch!((), async_coro::resume_inputseq(choice, input, sd as *mut std::ffi::c_void))
 }
 
-pub unsafe fn rust_sl_resumedialog(choice: u32, sd: *mut std::ffi::c_void) {
-    ffi_catch!((), async_coro::resume_dialog(choice, sd))
+pub unsafe fn rust_sl_resumedialog(choice: u32, sd: *mut crate::game::pc::MapSessionData) {
+    ffi_catch!((), async_coro::resume_dialog(choice, sd as *mut std::ffi::c_void))
 }
 
-pub unsafe fn rust_sl_resumebuy(items: *mut i8, sd: *mut std::ffi::c_void) {
-    ffi_catch!((), async_coro::resume_buy(items, sd))
+pub unsafe fn rust_sl_resumebuy(items: *mut i8, sd: *mut crate::game::pc::MapSessionData) {
+    ffi_catch!((), async_coro::resume_buy(items, sd as *mut std::ffi::c_void))
 }
 
 pub unsafe fn rust_sl_resumeinput(
     tag:   *mut i8,
     input: *mut i8,
-    sd:    *mut std::ffi::c_void,
+    sd:    *mut crate::game::pc::MapSessionData,
 ) {
-    ffi_catch!((), async_coro::resume_input(tag, input, sd))
+    ffi_catch!((), async_coro::resume_input(tag, input, sd as *mut std::ffi::c_void))
 }
 
-pub unsafe fn rust_sl_resumesell(choice: u32, sd: *mut std::ffi::c_void) {
-    ffi_catch!((), async_coro::resume_sell(choice, sd))
+pub unsafe fn rust_sl_resumesell(choice: u32, sd: *mut crate::game::pc::MapSessionData) {
+    ffi_catch!((), async_coro::resume_sell(choice, sd as *mut std::ffi::c_void))
 }
 
-pub unsafe fn rust_sl_exec(user: *mut std::ffi::c_void, code: *mut i8) {
-    ffi_catch!((), sl_exec_str(user, code))
+pub unsafe fn rust_sl_exec(user: *mut crate::game::pc::MapSessionData, code: *mut i8) {
+    ffi_catch!((), sl_exec_str(user as *mut std::ffi::c_void, code))
 }
 
-pub unsafe fn rust_sl_async_freeco(user: *mut std::ffi::c_void) {
+pub unsafe fn rust_sl_async_freeco(user: *mut crate::game::pc::MapSessionData) {
     thread_registry::cancel(user as usize);
-    async_coro::clear_menu_opts(user);
+    async_coro::clear_menu_opts(user as *mut std::ffi::c_void);
 }

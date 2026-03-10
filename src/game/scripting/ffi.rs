@@ -38,23 +38,23 @@ pub fn map_id2mob(id: u32) -> *mut std::ffi::c_void {
 }
 
 // ─── PC registries ────────────────────────────────────────────────────────────
-pub unsafe fn rust_pc_readglobalreg(sd: *mut std::ffi::c_void, attrname: *const i8) -> i32 {
-    crate::game::pc::rust_pc_readglobalreg(sd as *mut _, attrname as *const i8)
+pub unsafe fn rust_pc_readglobalreg(sd: *mut crate::game::pc::MapSessionData, attrname: *const i8) -> i32 {
+    crate::game::pc::rust_pc_readglobalreg(sd, attrname)
 }
-pub unsafe fn rust_pc_setglobalreg(sd: *mut std::ffi::c_void, attrname: *const i8, val: u64) -> i32 {
-    crate::game::pc::rust_pc_setglobalreg(sd as *mut _, attrname as *const i8, val)
+pub unsafe fn rust_pc_setglobalreg(sd: *mut crate::game::pc::MapSessionData, attrname: *const i8, val: u64) -> i32 {
+    crate::game::pc::rust_pc_setglobalreg(sd, attrname, val)
 }
-pub unsafe fn rust_pc_readglobalregstring(sd: *mut std::ffi::c_void, attrname: *const i8) -> *const i8 {
-    crate::game::pc::rust_pc_readglobalregstring(sd as *mut _, attrname as *const i8) as *const i8
+pub unsafe fn rust_pc_readglobalregstring(sd: *mut crate::game::pc::MapSessionData, attrname: *const i8) -> *const i8 {
+    crate::game::pc::rust_pc_readglobalregstring(sd, attrname) as *const i8
 }
-pub unsafe fn rust_pc_setglobalregstring(sd: *mut std::ffi::c_void, attrname: *const i8, val: *const i8) -> i32 {
-    crate::game::pc::rust_pc_setglobalregstring(sd as *mut _, attrname as *const i8, val as *const i8)
+pub unsafe fn rust_pc_setglobalregstring(sd: *mut crate::game::pc::MapSessionData, attrname: *const i8, val: *const i8) -> i32 {
+    crate::game::pc::rust_pc_setglobalregstring(sd, attrname, val)
 }
-pub unsafe fn rust_pc_readquestreg(sd: *mut std::ffi::c_void, attrname: *const i8) -> i32 {
-    crate::game::pc::rust_pc_readquestreg(sd as *mut _, attrname)
+pub unsafe fn rust_pc_readquestreg(sd: *mut crate::game::pc::MapSessionData, attrname: *const i8) -> i32 {
+    crate::game::pc::rust_pc_readquestreg(sd, attrname)
 }
-pub unsafe fn rust_pc_setquestreg(sd: *mut std::ffi::c_void, attrname: *const i8, val: i32) -> i32 {
-    crate::game::pc::rust_pc_setquestreg(sd as *mut _, attrname, val)
+pub unsafe fn rust_pc_setquestreg(sd: *mut crate::game::pc::MapSessionData, attrname: *const i8, val: i32) -> i32 {
+    crate::game::pc::rust_pc_setquestreg(sd, attrname, val)
 }
 
 // ─── NPC registries ───────────────────────────────────────────────────────────
@@ -76,7 +76,7 @@ pub unsafe fn rust_mob_setglobalreg(mob: *mut std::ffi::c_void, attrname: *const
 // ─── Broadcast / player state ─────────────────────────────────────────────────
 pub use crate::game::map_parse::chat::{clif_broadcast, clif_gmbroadcast};
 
-pub unsafe fn clif_mystaytus(sd: *mut std::ffi::c_void) {
+pub unsafe fn clif_mystaytus(sd: *mut crate::game::pc::MapSessionData) {
     crate::database::blocking_run_async(
         crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as usize)
     );

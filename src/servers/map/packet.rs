@@ -10,9 +10,10 @@ use crate::game::map_char::call_intif_mmo_tosd;
 use crate::game::map_server::nmail_sendmessage;
 use crate::game::pc::{MapSessionData, FLAG_MAIL};
 use crate::network::crypt::encrypt;
+use crate::game::map_parse::packet::{wfifop, wfifohead, wfifoset};
 use crate::session::{
-    get_session_manager, rust_session_commit, rust_session_exists, rust_session_get_data,
-    rust_session_get_eof, rust_session_set_eof, rust_session_wdata_ptr, rust_session_wfifohead,
+    get_session_manager, session_exists, session_get_data,
+    session_get_eof, session_set_eof, SessionId,
 };
 use super::{AuthEntry, MapState};
 
@@ -94,15 +95,15 @@ impl ClientPacket {
     /// Finalize length field and send to the player's session fd.
     /// [1..2] stores the payload length after [3] (i.e. buf.len() - 3),
     /// which encrypt() reads and adds 6 to compute total wire size.
-    fn send(mut self, fd: i32) {
+    fn send(mut self, fd: SessionId) {
         let len = (self.buf.len() - 3) as u16;
         let len_be = len.to_be_bytes();
         self.buf[1] = len_be[0];
         self.buf[2] = len_be[1];
 
         unsafe {
-            rust_session_wfifohead(fd, self.buf.len() + 64);
-            let p = rust_session_wdata_ptr(fd, 0);
+            wfifohead(fd, self.buf.len() + 64);
+            let p = wfifop(fd, 0);
             if p.is_null() { return; }
             std::ptr::copy_nonoverlapping(self.buf.as_ptr(), p, self.buf.len());
             let enc_len = encrypt(fd);
@@ -110,7 +111,7 @@ impl ClientPacket {
                 tracing::warn!("[map] [packet] encrypt failed fd={} rc={}", fd, enc_len);
                 return;
             }
-            rust_session_commit(fd, enc_len as usize);
+            wfifoset(fd, enc_len as usize);
         }
     }
 }
@@ -140,15 +141,15 @@ fn read_u32_le(pkt: &[u8], off: usize) -> u32 {
 }
 
 /// Look up a player's MapSessionData by fd.  Returns None if invalid.
-fn get_sd(fd: i32) -> Option<&'static mut MapSessionData> {
-    if fd <= 0 || rust_session_exists(fd) == 0 { return None; }
-    let ptr = rust_session_get_data(fd) as *mut MapSessionData;
+fn get_sd(fd: SessionId) -> Option<&'static mut MapSessionData> {
+    if fd.raw() <= 0 || !session_exists(fd) { return None; }
+    let ptr = session_get_data(fd);
     if ptr.is_null() { return None; }
     Some(unsafe { &mut *ptr })
 }
 
 /// Send a board notification message to a player.
-fn send_message(fd: i32, msg: &std::ffi::CStr, r#type: i32) {
+fn send_message(fd: SessionId, msg: &std::ffi::CStr, r#type: i32) {
     if let Some(sd) = get_sd(fd) {
         unsafe { nmail_sendmessage(sd, msg.as_ptr(), 6, r#type); }
     }
@@ -249,17 +250,18 @@ async fn handle_charload(_state: &Arc<MapState>, pkt: &[u8]) {
     tracing::info!("[map] [charif] charload session_fd={} bytes={}", session_fd, raw.len());
 
     let fd = session_fd as i32;
+    let sid = SessionId::from_raw(fd);
 
     // Suppress write notifications during spawn so packets flush as a single batch.
     let manager = get_session_manager();
-    if let Some(session_arc) = manager.get_session(fd) {
+    if let Some(session_arc) = manager.get_session(sid) {
         session_arc.lock().await.suppress_notify = true;
     }
 
     let rc = call_intif_mmo_tosd(fd, &mut raw);
     tracing::info!("[map] [charif] intif_mmo_tosd returned rc={}", rc);
 
-    if let Some(session_arc) = manager.get_session(fd) {
+    if let Some(session_arc) = manager.get_session(sid) {
         let mut session = session_arc.lock().await;
         session.suppress_notify = false;
         session.write_notify.notify_one();
@@ -273,11 +275,11 @@ fn handle_checkonline(pkt: &[u8]) {
 
     let manager = get_session_manager();
     for fd in manager.get_all_fds() {
-        if rust_session_exists(fd) == 0 || rust_session_get_eof(fd) != 0 { continue; }
+        if !session_exists(fd) || session_get_eof(fd) != 0 { continue; }
         let Some(sd) = get_sd(fd) else { continue };
         if sd.status.id == char_id {
             tracing::warn!("[map] [charif] checkonline: kicking char_id={} fd={}", char_id, fd);
-            rust_session_set_eof(fd, 1);
+            session_set_eof(fd, 1);
             return;
         }
     }
@@ -290,7 +292,7 @@ fn handle_checkonline(pkt: &[u8]) {
 /// [2..3]=fd (u16 LE), [4]=result (0=ok, 1=no permission, 2=error)
 fn handle_deletepost_response(pkt: &[u8]) {
     if pkt.len() < 5 { tracing::warn!("[map] [packet] 0x3808 too short len={}", pkt.len()); return; }
-    let fd = read_u16_le(pkt, 2) as i32;
+    let fd = SessionId::from_raw(read_u16_le(pkt, 2) as i32);
     let (msg, r#type) = match pkt[4] {
         0 => (c"The message has been deleted.", 1),
         1 => (c"You can only delete your own messages.", 0),
@@ -312,7 +314,7 @@ fn handle_showposts_response(pkt: &[u8]) {
     if pkt.len() < 46 { tracing::warn!("[map] [packet] 0x3809 too short len={}", pkt.len()); return; }
 
     let h = &pkt[6..];
-    let fd          = read_u32_le(h, 0) as i32;
+    let fd          = SessionId::from_raw(read_u32_le(h, 0) as i32);
     let board       = read_u32_le(h, 4) as i32;
     let flags1      = read_u32_le(h, 12) as u8;
     let flags2      = read_u32_le(h, 16) as u8;
@@ -396,7 +398,7 @@ fn handle_showposts_response(pkt: &[u8]) {
 ///   then per entry: path_nation(1)+mark_icon(1)+hunter(1)+color(1)+name(len-prefixed)
 fn handle_userlist_response(pkt: &[u8]) {
     if pkt.len() < 10 { tracing::warn!("[map] [packet] 0x380A too short len={}", pkt.len()); return; }
-    let fd    = read_u16_le(pkt, 6) as i32;
+    let fd    = SessionId::from_raw(read_u16_le(pkt, 6) as i32);
     let count = read_u16_le(pkt, 8) as usize;
 
     let sd = match get_sd(fd) {
@@ -457,8 +459,8 @@ fn handle_userlist_response(pkt: &[u8]) {
 
     // Send via encrypt
     unsafe {
-        rust_session_wfifohead(fd, buf.len() + 64);
-        let p = rust_session_wdata_ptr(fd, 0);
+        wfifohead(fd, buf.len() + 64);
+        let p = wfifop(fd, 0);
         if p.is_null() { return; }
         std::ptr::copy_nonoverlapping(buf.as_ptr(), p, buf.len());
         let enc_len = encrypt(fd);
@@ -466,7 +468,7 @@ fn handle_userlist_response(pkt: &[u8]) {
             tracing::warn!("[map] [packet] 0x380A encrypt failed fd={}", fd);
             return;
         }
-        rust_session_commit(fd, enc_len as usize);
+        wfifoset(fd, enc_len as usize);
     }
 }
 
@@ -474,7 +476,7 @@ fn handle_userlist_response(pkt: &[u8]) {
 /// [2..3]=fd (u16 LE), [4..5]=result (u16 LE, 0=ok, 1=error)
 fn handle_boardpost_response(pkt: &[u8]) {
     if pkt.len() < 6 { tracing::warn!("[map] [packet] 0x380B too short len={}", pkt.len()); return; }
-    let fd = read_u16_le(pkt, 2) as i32;
+    let fd = SessionId::from_raw(read_u16_le(pkt, 2) as i32);
     let result = read_u16_le(pkt, 4);
     let (msg, r#type) = match result {
         0 => (c"Your message has been posted.", 1),
@@ -487,7 +489,7 @@ fn handle_boardpost_response(pkt: &[u8]) {
 /// [2..3]=fd (u16 LE), [4..5]=result (u16 LE, 0=ok, 1=error, 2=not found)
 fn handle_nmailwrite_response(pkt: &[u8]) {
     if pkt.len() < 6 { tracing::warn!("[map] [packet] 0x380C too short len={}", pkt.len()); return; }
-    let fd = read_u16_le(pkt, 2) as i32;
+    let fd = SessionId::from_raw(read_u16_le(pkt, 2) as i32);
     let result = read_u16_le(pkt, 4);
     let (msg, r#type) = match result {
         0 => (c"Your message has been sent.", 1),
@@ -501,7 +503,7 @@ fn handle_nmailwrite_response(pkt: &[u8]) {
 /// [2..3]=fd (u16 LE), [4..5]=value (u16 LE)
 fn handle_setmp(pkt: &[u8]) {
     if pkt.len() < 6 { tracing::warn!("[map] [packet] 0x380E too short len={}", pkt.len()); return; }
-    let fd = read_u16_le(pkt, 2) as i32;
+    let fd = SessionId::from_raw(read_u16_le(pkt, 2) as i32);
     let value = read_u16_le(pkt, 4);
     if value == 0 {
         if let Some(sd) = get_sd(fd) {
@@ -522,7 +524,7 @@ fn handle_readpost_response(pkt: &[u8]) {
     //               +name[16]+msg[4000]+user[52]+topic[52]
     if pkt.len() < 4154 { tracing::warn!("[map] [packet] 0x380F too short len={}", pkt.len()); return; }
 
-    let fd         = read_u32_le(pkt, 2) as i32;
+    let fd         = SessionId::from_raw(read_u32_le(pkt, 2) as i32);
     let post       = read_u32_le(pkt, 6) as u16;
     let month      = read_u32_le(pkt, 10) as u8;
     let day        = read_u32_le(pkt, 14) as u8;

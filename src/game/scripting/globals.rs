@@ -741,7 +741,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
             sd.status.clan = 0;
             sd.status.clan_title[0] = 0;
             sd.status.clan_rank = 0;
-            unsafe { sffi::clif_mystaytus(sd as *mut _ as *mut std::ffi::c_void); }
+            unsafe { sffi::clif_mystaytus(sd as *mut _); }
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaClnId`='0',`ChaClanTitle`='',`ChaClnRank`='0' WHERE `ChaId`=?",
@@ -756,7 +756,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
             sd.status.clan = clan as u32;
             sd.status.clan_title[0] = 0;
             sd.status.clan_rank = 1;
-            unsafe { sffi::clif_mystaytus(sd as *mut _ as *mut std::ffi::c_void); }
+            unsafe { sffi::clif_mystaytus(sd as *mut _); }
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaClnId`=?,`ChaClanTitle`='',`ChaClnRank`='1' WHERE `ChaId`=?",
@@ -784,7 +784,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
             let copy_len = bytes.len().min(dst.len() - 1);
             for (i, &b) in bytes.iter().take(copy_len).enumerate() { dst[i] = b as i8; }
             dst[copy_len] = 0;
-            unsafe { sffi::clif_mystaytus(sd as *mut _ as *mut std::ffi::c_void); }
+            unsafe { sffi::clif_mystaytus(sd as *mut _); }
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaClanTitle`=? WHERE `ChaId`=?", title, id as u32
@@ -801,7 +801,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
             let new_class = crate::database::class_db::path(sd.status.class as i32) as u8;
             sd.status.class = new_class;
             sd.status.class_rank = 0;
-            unsafe { sffi::clif_mystaytus(sd as *mut _ as *mut std::ffi::c_void); }
+            unsafe { sffi::clif_mystaytus(sd as *mut _); }
             let ok = sqlx::query!(
                 "UPDATE `Character` SET `ChaPthId`=?,`ChaPthRank`='0' WHERE `ChaId`=?",
                 new_class as u32, id as u32
@@ -825,7 +825,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         if let Some(sd) = crate::game::map_server::map_id2sd_pc(id as u32) {
             sd.status.class = cls as u8;
             sd.status.class_rank = 0;
-            unsafe { sffi::clif_mystaytus(sd as *mut _ as *mut std::ffi::c_void); }
+            unsafe { sffi::clif_mystaytus(sd as *mut _); }
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaPthId`=?,`ChaPthRank`='0' WHERE `ChaId`=?",

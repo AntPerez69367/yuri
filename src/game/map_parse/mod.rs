@@ -29,7 +29,7 @@ pub mod events;
 
 
 use crate::database::map_db::raw_map_ptr;
-use crate::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof, rust_session_set_eof};
+use crate::session::{SessionId, session_exists, session_get_data, session_get_eof, session_set_eof};
 use crate::game::time_util::timer_insert;
 use crate::game::pc::MapSessionData;
 
@@ -84,21 +84,21 @@ unsafe fn pc_warp(sd: *mut MapSessionData, map_id: u16, x: u16, y: u16) {
 unsafe fn clif_debug_u16(buf: *const u8, len: u16) {
     clif_debug(buf, len as i32);
 }
-// createdb_start takes *mut std::ffi::c_void in handlers.rs.
+// createdb_start wrapper.
 #[inline]
 unsafe fn createdb_start(sd: *mut MapSessionData) {
-    crate::game::client::handlers::createdb_start(sd as *mut std::ffi::c_void);
+    crate::game::client::handlers::createdb_start(sd);
 }
 
 /// Main packet dispatcher.
 // clif_parse — ported to rust (src/game/map_parse/mod.rs)
-pub async unsafe fn clif_parse(fd: i32) -> i32 {
-    if fd < 0 { return 0; }
-    if rust_session_exists(fd) == 0 { return 0; }
+pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
+    if fd.raw() < 0 { return 0; }
+    if !session_exists(fd) { return 0; }
 
-    let sd = rust_session_get_data(fd) as *mut MapSessionData;
+    let sd = session_get_data(fd);
 
-    if rust_session_get_eof(fd) != 0 {
+    if session_get_eof(fd) != 0 {
         if !sd.is_null() {
             libc::printf(b"[map] [session_eof] name=%s\n\0".as_ptr() as *const i8,
                 (*sd).status.name.as_ptr());
@@ -106,13 +106,13 @@ pub async unsafe fn clif_parse(fd: i32) -> i32 {
             clif_closeit(sd);
         }
         clif_print_disconnect(fd);
-        // session_eof(fd) is a C inline that calls rust_session_set_eof(fd, 1)
-        rust_session_set_eof(fd, 1);
+        // session_eof(fd) is a C inline that calls session_set_eof(fd, 1)
+        session_set_eof(fd, 1);
         return 0;
     }
 
     if rfiforest(fd) > 0 && rfifob(fd, 0) != 0xAA {
-        rust_session_set_eof(fd, 13);
+        session_set_eof(fd, 13);
         return 0;
     }
 
@@ -141,8 +141,8 @@ pub async unsafe fn clif_parse(fd: i32) -> i32 {
     // Dual login check
     let mut logincount = 0i32;
     for i in 0..crate::session::get_fd_max() {
-        if rust_session_exists(i) != 0 {
-            let tsd = rust_session_get_data(i) as *mut MapSessionData;
+        if session_exists(SessionId::from_raw(i)) {
+            let tsd = session_get_data(SessionId::from_raw(i));
             if !tsd.is_null() {
                 if (*sd).status.id == (*tsd).status.id {
                     logincount += 1;
@@ -153,8 +153,8 @@ pub async unsafe fn clif_parse(fd: i32) -> i32 {
                         (*sd).status.name.as_ptr(),
                         (*sd).status.ipaddress.as_ptr(),
                     );
-                    rust_session_set_eof((*sd).fd, 1);
-                    rust_session_set_eof((*tsd).fd, 1);
+                    session_set_eof((*sd).fd, 1);
+                    session_set_eof((*tsd).fd, 1);
                     break;
                 }
             }

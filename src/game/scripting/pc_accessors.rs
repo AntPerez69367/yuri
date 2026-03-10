@@ -1,6 +1,8 @@
 //! PC (USER) field accessors for Lua scripting.
 
+use crate::game::map_parse::packet::rfifob;
 use crate::game::pc::{MapSessionData, EQ_FACEACCTWO, SFLAG_HPMP, SFLAG_FULLSTATS, SFLAG_XPMONEY};
+use crate::session::SessionId;
 use crate::database::map_db::BlockList;
 use crate::game::mob::{MobSpawnData, MAX_THREATCOUNT};
 use crate::servers::char::charstatus::{MAX_INVENTORY, MAX_SPELLS, MAX_KILLREG, MAX_EQUIP, MAX_MAGIC_TIMERS, MAX_LEGENDS, MAX_BANK_SLOTS};
@@ -583,7 +585,7 @@ pub unsafe fn sl_pc_set_speech(sd: &mut MapSessionData, v: *const i8) {
 
 // ─── Dispatcher accessors (used by src/game/client/mod.rs) ───────────────────
 
-pub fn sl_pc_fd(sd: &mut MapSessionData) -> i32 {
+pub fn sl_pc_fd(sd: &mut MapSessionData) -> SessionId {
     sd.fd
 }
 pub fn sl_pc_chat_timer(sd: &mut MapSessionData) -> i32 {
@@ -665,11 +667,11 @@ pub unsafe fn sl_pc_removehealth(sd: &mut MapSessionData, damage: i32, caster: i
 }
 
 pub unsafe fn sl_pc_freeasync(sd: &mut MapSessionData) {
-    sl_async_freeco(sd as *mut MapSessionData as *mut std::ffi::c_void);
+    sl_async_freeco(sd as *mut MapSessionData);
 }
 
 pub unsafe fn sl_pc_forcesave(sd: &mut MapSessionData) -> i32 {
-    sl_intif_save(sd as *mut MapSessionData as *mut std::ffi::c_void)
+    sl_intif_save(sd as *mut MapSessionData)
 }
 
 pub unsafe fn sl_pc_die(sd: &mut MapSessionData) {
@@ -1802,7 +1804,7 @@ pub unsafe fn sl_pc_getcreationitems(
     sd: &mut MapSessionData, len: i32, out: *mut u32,
 ) -> i32 {
     if out.is_null() { return 0; }
-    let curitem = (*crate::session::rust_session_rdata_ptr(sd.fd, len as usize)) as i32 - 1;
+    let curitem = rfifob(sd.fd, len as usize) as i32 - 1;
     let maxinv = sd.status.maxinv as i32;
     if curitem >= 0 && curitem < maxinv && sd.status.inventory[curitem as usize].id != 0 {
         *out = sd.status.inventory[curitem as usize].id;
@@ -1816,7 +1818,7 @@ pub unsafe fn sl_pc_getcreationamounts(
 ) -> i32 {
     let t = crate::database::item_db::rust_itemdb_type(item_id);
     if t < 3 || t > 17 {
-        (*crate::session::rust_session_rdata_ptr(sd.fd, len as usize)) as i32
+        rfifob(sd.fd, len as usize) as i32
     } else {
         1
     }
@@ -1826,7 +1828,7 @@ pub unsafe fn sl_pc_getcreationamounts(
 
 use crate::game::map_parse::dialogs::{
     clif_input as clif_input_pc, clif_scriptmes as clif_scriptmes_pc,
-    clif_inputseq as clif_inputseq_pc, clif_scriptmenuseq as clif_scriptmenuseq_pc,
+    clif_scriptmenuseq as clif_scriptmenuseq_pc,
     clif_buydialog as clif_buydialog_pc, clif_selldialog as clif_selldialog_pc,
 };
 
@@ -1835,23 +1837,27 @@ pub unsafe fn sl_pc_input_send(sd: &mut MapSessionData, msg: *const i8) {
 }
 
 pub unsafe fn sl_pc_dialog_send(
-    sd: &mut MapSessionData, msg: *const i8, graphics: *const i32, ngraphics: i32,
+    sd: &mut MapSessionData, msg: *const i8, prev: i32, next: i32,
 ) {
-    let prev = if !graphics.is_null() && ngraphics > 0 { *graphics.add(0) } else { 0 };
-    let next = if !graphics.is_null() && ngraphics > 1 { *graphics.add(1) } else { 0 };
     clif_scriptmes_pc(sd, sd.last_click as i32, msg, prev, next);
 }
 
 pub unsafe fn sl_pc_dialogseq_send(
     sd: &mut MapSessionData, entries: *const *const i8, n: i32, can_continue: i32,
 ) {
-    let title    = if !entries.is_null() && n > 0 { *entries.add(0) } else { c"".as_ptr() };
-    let subtitle = if !entries.is_null() && n > 1 { *entries.add(1) } else { c"".as_ptr() };
-    let body     = if !entries.is_null() && n > 2 { *entries.add(2) } else { c"".as_ptr() };
-    let nopts    = (n - 3).max(0) as usize;
-    let opts_ptr = if nopts > 0 && !entries.is_null() { entries.add(3) } else { std::ptr::null() };
-    clif_inputseq_pc(sd, sd.last_click as i32, title, subtitle, body,
-                     opts_ptr as *mut *const i8, nopts as i32, 0, can_continue);
+    // Concatenate all text entries into a single dialog message separated by newlines.
+    let mut combined = String::new();
+    for i in 0..n as usize {
+        if entries.is_null() { break; }
+        let p = *entries.add(i);
+        if !p.is_null() {
+            let s = std::ffi::CStr::from_ptr(p).to_string_lossy();
+            if !combined.is_empty() { combined.push('\n'); }
+            combined.push_str(&s);
+        }
+    }
+    let cmsg = std::ffi::CString::new(combined).unwrap_or_default();
+    clif_scriptmes_pc(sd, sd.last_click as i32, cmsg.as_ptr(), 0, can_continue);
 }
 
 /// Build 1-indexed option array (buf[0]=NULL, buf[1..n]=options[0..n-1]) and call clif.

@@ -16,26 +16,16 @@
 pub mod handlers;
 pub mod visual;
 
-// Shims for visual.rs functions that take *mut MapSessionData but are called from
-// the dispatcher with *mut std::ffi::c_void. These thin wrappers perform the pointer cast.
 #[inline]
-unsafe fn clif_cancelafk(sd: *mut std::ffi::c_void) {
-    visual::clif_cancelafk(sd as *mut crate::game::pc::MapSessionData);
-}
+unsafe fn clif_cancelafk(sd: SD) { visual::clif_cancelafk(sd); }
 #[inline]
-unsafe fn clif_sendprofile(sd: *mut std::ffi::c_void) {
-    visual::clif_sendprofile(sd as *mut crate::game::pc::MapSessionData);
-}
+unsafe fn clif_sendprofile(sd: SD) { visual::clif_sendprofile(sd); }
 #[inline]
-unsafe fn clif_sendboard(sd: *mut std::ffi::c_void) {
-    visual::clif_sendboard(sd as *mut crate::game::pc::MapSessionData);
-}
+unsafe fn clif_sendboard(sd: SD) { visual::clif_sendboard(sd); }
 
 use crate::session::{
-    rust_session_exists, rust_session_get_data, rust_session_get_eof,
-    rust_session_rdata_ptr, rust_session_set_eof, rust_session_skip,
-    rust_session_available, rust_session_wfifohead, rust_session_wdata_ptr,
-    rust_session_commit,
+    session_exists, session_get_data, session_get_eof,
+    session_set_eof, SessionId,
 };
 use crate::session::get_session_manager;
 use crate::database::map_db::BlockList;
@@ -43,41 +33,50 @@ use crate::game::pc::MapSessionData;
 
 // ─── Session buffer helpers ───────────────────────────────────────────────────
 
-/// Read one byte from session recv buffer at `pos`.
-/// Read one byte from the receive FIFO at offset `pos`.
+use crate::game::map_parse::packet::{rfifob, rfifop, rfiforest, rfifoskip, wfifohead, wfifop, wfifoset};
+
+/// Read one byte from the receive FIFO at offset `pos` (big-endian context).
 #[inline]
-unsafe fn rbyte(fd: i32, pos: usize) -> u8 {
-    let p = rust_session_rdata_ptr(fd, pos);
-    if p.is_null() { 0 } else { *p }
+fn rbyte(fd: SessionId, pos: usize) -> u8 {
+    rfifob(fd, pos)
 }
 
-/// Read two bytes at `pos` as big-endian u16.
 /// Read a big-endian u16 from the receive FIFO at offset `pos`.
 #[inline]
-unsafe fn rword_be(fd: i32, pos: usize) -> u16 {
-    let p = rust_session_rdata_ptr(fd, pos);
-    if p.is_null() { return 0; }
-    u16::from_be_bytes([*p, *p.add(1)])
+fn rword_be(fd: SessionId, pos: usize) -> u16 {
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(session) = s.try_lock() {
+            let bytes = session.rdata_bytes();
+            if pos + 1 < bytes.len() {
+                return u16::from_be_bytes([bytes[pos], bytes[pos + 1]]);
+            }
+        }
+    }
+    0
 }
 
-/// Read four bytes at `pos` as big-endian u32.
 /// Read a big-endian u32 from the receive FIFO at offset `pos`.
 #[inline]
-unsafe fn rlong_be(fd: i32, pos: usize) -> u32 {
-    let p = rust_session_rdata_ptr(fd, pos);
-    if p.is_null() { return 0; }
-    u32::from_be_bytes([*p, *p.add(1), *p.add(2), *p.add(3)])
+fn rlong_be(fd: SessionId, pos: usize) -> u32 {
+    if let Some(s) = get_session_manager().get_session(fd) {
+        if let Ok(session) = s.try_lock() {
+            let bytes = session.rdata_bytes();
+            if pos + 3 < bytes.len() {
+                return u32::from_be_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]]);
+            }
+        }
+    }
+    0
 }
 
 /// Raw pointer into recv buffer at `pos`.
-/// Return a raw pointer into the receive FIFO at offset `pos`.
 #[inline]
-unsafe fn rptr(fd: i32, pos: usize) -> *const i8 {
-    rust_session_rdata_ptr(fd, pos) as *const i8
+unsafe fn rptr(fd: SessionId, pos: usize) -> *const i8 {
+    rfifop(fd, pos) as *const i8
 }
 
 
-// Dispatcher calls functions with sd: *mut std::ffi::c_void. Thin wrappers do the cast.
+// Dispatcher calls functions with sd: SD. Thin wrappers do the cast.
 // Full-path references in wrapper bodies avoid name conflicts.
 
 use crate::network::crypt::{decrypt, encrypt};
@@ -93,73 +92,73 @@ use crate::game::time_util::timer_insert;
 
 // Dispatcher wrappers — match dispatcher's *mut std::ffi::c_void calling convention.
 type SD = *mut crate::game::pc::MapSessionData;
-#[inline] unsafe fn clif_isignore(src: *mut std::ffi::c_void, dst: *mut std::ffi::c_void) -> i32 {
-    crate::game::map_parse::chat::clif_isignore(src as SD, dst as SD)
+#[inline] unsafe fn clif_isignore(src: SD, dst: SD) -> i32 {
+    crate::game::map_parse::chat::clif_isignore(src, dst)
 }
 #[allow(dead_code)]
-#[inline] unsafe fn decrypt_fd(fd: i32) { decrypt(fd); }
-#[inline] async unsafe fn clif_handle_disconnect(sd: *mut std::ffi::c_void) { crate::game::client::handlers::clif_handle_disconnect(sd as SD).await; }
-#[inline] unsafe fn clif_closeit(sd: *mut std::ffi::c_void) { crate::game::map_parse::dialogs::clif_closeit(sd as SD); }
-#[inline] async unsafe fn clif_mystaytus(sd: *mut std::ffi::c_void) { crate::game::map_parse::player_state::clif_mystaytus(sd as SD).await; }
-#[inline] unsafe fn clif_groupstatus(sd: *mut std::ffi::c_void) { crate::game::map_parse::groups::clif_groupstatus(sd as SD); }
-#[inline] unsafe fn clif_refresh(sd: *mut std::ffi::c_void) { crate::game::map_parse::player_state::clif_refresh(sd as SD); }
-#[inline] unsafe fn clif_changestatus(sd: *mut std::ffi::c_void, status: u8) { crate::game::client::handlers::clif_changestatus(sd as SD, status as i32); }
-#[inline] async unsafe fn clif_accept2(fd: i32, name: *const i8, val: u8) { crate::game::client::handlers::clif_accept2(fd, name as *mut i8, val as i32).await; }
-#[inline] unsafe fn clif_parsemap(sd: *mut std::ffi::c_void) { crate::game::map_parse::movement::clif_parsemap(sd as SD); }
-#[inline] unsafe fn clif_parsewalk(sd: *mut std::ffi::c_void) { crate::game::map_parse::movement::clif_parsewalk(sd as SD); }
-#[inline] unsafe fn clif_parsewalkpong(sd: *mut std::ffi::c_void) { crate::game::map_parse::movement::clif_parsewalkpong(sd as SD); }
-#[inline] unsafe fn clif_handle_missingobject(sd: *mut std::ffi::c_void) { crate::game::client::handlers::clif_handle_missingobject(sd as SD); }
-#[inline] unsafe fn clif_parselookat(sd: *mut std::ffi::c_void) { crate::game::map_parse::movement::clif_parselookat(sd as SD); }
-#[inline] unsafe fn clif_parselookat_2(sd: *mut std::ffi::c_void) { crate::game::map_parse::movement::clif_parselookat_2(sd as SD); }
-#[inline] unsafe fn clif_open_sub(sd: *mut std::ffi::c_void) { crate::game::map_parse::items::clif_open_sub(sd as SD); }
-#[inline] async unsafe fn clif_handle_clickgetinfo(sd: *mut std::ffi::c_void) { crate::game::map_parse::dialogs::clif_handle_clickgetinfo(sd as SD).await; }
-#[inline] unsafe fn clif_parseviewchange(sd: *mut std::ffi::c_void) { crate::game::map_parse::movement::clif_parseviewchange(sd as SD); }
-#[inline] unsafe fn clif_parseside(sd: *mut std::ffi::c_void) { crate::game::map_parse::movement::clif_parseside(sd as SD); }
-#[inline] unsafe fn clif_parseemotion(sd: *mut std::ffi::c_void) { crate::game::map_parse::chat::clif_parseemotion(sd as SD); }
-#[inline] unsafe fn clif_parsesay(sd: *mut std::ffi::c_void) { crate::game::map_parse::chat::clif_parsesay(sd as SD); }
-#[inline] unsafe fn clif_parsewisp(sd: *mut std::ffi::c_void) { crate::game::map_parse::chat::clif_parsewisp(sd as SD); }
-#[inline] unsafe fn clif_parseignore(sd: *mut std::ffi::c_void) { crate::game::map_parse::chat::clif_parseignore(sd as SD); }
-#[inline] async unsafe fn clif_parsefriends(sd: *mut std::ffi::c_void, list: *const i8, len: i32) { crate::game::client::handlers::clif_parsefriends(sd as SD, list, len).await; }
-#[inline] unsafe fn clif_user_list(sd: *mut std::ffi::c_void) { crate::game::client::visual::clif_user_list(sd as SD); }
-#[inline] unsafe fn clif_addgroup(sd: *mut std::ffi::c_void) { crate::game::map_parse::groups::clif_addgroup(sd as SD); }
-#[inline] unsafe fn clif_parsegetitem(sd: *mut std::ffi::c_void) { crate::game::map_parse::items::clif_parsegetitem(sd as SD); }
-#[inline] unsafe fn clif_parsedropitem(sd: *mut std::ffi::c_void) { crate::game::client::handlers::clif_parsedropitem(sd as SD); }
-#[inline] unsafe fn clif_parseeatitem(sd: *mut std::ffi::c_void) { crate::game::map_parse::items::clif_parseeatitem(sd as SD); }
-#[inline] unsafe fn clif_parseuseitem(sd: *mut std::ffi::c_void) { crate::game::map_parse::items::clif_parseuseitem(sd as SD); }
-#[inline] unsafe fn clif_parseunequip(sd: *mut std::ffi::c_void) { crate::game::map_parse::items::clif_parseunequip(sd as SD); }
-#[inline] unsafe fn clif_parsewield(sd: *mut std::ffi::c_void) { crate::game::map_parse::items::clif_parsewield(sd as SD); }
-#[inline] unsafe fn clif_parsethrow(sd: *mut std::ffi::c_void) { crate::game::map_parse::items::clif_parsethrow(sd as SD); }
-#[inline] unsafe fn clif_throwconfirm(sd: *mut std::ffi::c_void) { crate::game::map_parse::items::clif_throwconfirm(sd as SD); }
-#[inline] unsafe fn clif_dropgold(sd: *mut std::ffi::c_void, amount: u32) { crate::game::map_parse::items::clif_dropgold(sd as SD, amount); }
-#[inline] unsafe fn clif_postitem(sd: *mut std::ffi::c_void) { crate::game::client::handlers::clif_postitem(sd as SD); }
-#[inline] unsafe fn clif_handitem(sd: *mut std::ffi::c_void) { crate::game::map_parse::trading::clif_handitem(sd as SD); }
-#[inline] unsafe fn clif_handgold(sd: *mut std::ffi::c_void) { crate::game::map_parse::trading::clif_handgold(sd as SD); }
-#[inline] unsafe fn clif_parsemagic(sd: *mut std::ffi::c_void) { crate::game::map_parse::combat::clif_parsemagic(&mut *(sd as SD)); }
-#[inline] unsafe fn clif_parseattack(sd: *mut std::ffi::c_void) { crate::game::map_parse::combat::clif_parseattack(&mut *(sd as SD)); }
-#[inline] unsafe fn clif_sendminitext(sd: *mut std::ffi::c_void, msg: *const i8) { crate::game::map_parse::chat::clif_sendminitext(sd as SD, msg); }
-#[inline] unsafe fn clif_parsenpcdialog(sd: *mut std::ffi::c_void) { crate::game::map_parse::dialogs::clif_parsenpcdialog(sd as SD); }
-#[inline] unsafe fn clif_handle_menuinput(sd: *mut std::ffi::c_void) { crate::game::client::handlers::clif_handle_menuinput(sd as SD); }
-#[inline] unsafe fn clif_paperpopupwrite_save(sd: *mut std::ffi::c_void) { crate::game::client::visual::clif_paperpopupwrite_save(sd as SD); }
-#[inline] unsafe fn clif_parsechangespell(sd: *mut std::ffi::c_void) { crate::game::map_parse::items::clif_parsechangespell(sd as SD); }
-#[inline] unsafe fn clif_parsechangepos(sd: *mut std::ffi::c_void) { crate::game::client::handlers::clif_parsechangepos(sd as SD); }
-#[inline] async unsafe fn rust_pc_warp(sd: *mut std::ffi::c_void, m: i32, x: i32, y: i32) -> i32 { crate::game::pc::rust_pc_warp(sd as SD, m, x, y).await }
-#[inline] unsafe fn clif_changeprofile(sd: *mut std::ffi::c_void) { crate::game::client::visual::clif_changeprofile(sd as SD); }
-#[inline] async unsafe fn clif_handle_boards(sd: *mut std::ffi::c_void) { crate::game::client::handlers::clif_handle_boards(sd as SD).await; }
-#[inline] unsafe fn clif_handle_powerboards(sd: *mut std::ffi::c_void) { crate::game::client::handlers::clif_handle_powerboards(sd as SD); }
-#[inline] unsafe fn clif_parseparcel(sd: *mut std::ffi::c_void) { crate::game::map_parse::groups::clif_parseparcel(sd as SD); }
-#[inline] async unsafe fn clif_parseranking(sd: *mut std::ffi::c_void, fd: i32) { crate::game::map_parse::events::clif_parseranking(sd as SD, fd).await; }
+#[inline] unsafe fn decrypt_fd(fd: SessionId) { decrypt(fd); }
+#[inline] async unsafe fn clif_handle_disconnect(sd: SD) { crate::game::client::handlers::clif_handle_disconnect(sd).await; }
+#[inline] unsafe fn clif_closeit(sd: SD) { crate::game::map_parse::dialogs::clif_closeit(sd); }
+#[inline] async unsafe fn clif_mystaytus(sd: SD) { crate::game::map_parse::player_state::clif_mystaytus(sd).await; }
+#[inline] unsafe fn clif_groupstatus(sd: SD) { crate::game::map_parse::groups::clif_groupstatus(sd); }
+#[inline] unsafe fn clif_refresh(sd: SD) { crate::game::map_parse::player_state::clif_refresh(sd); }
+#[inline] unsafe fn clif_changestatus(sd: SD, status: u8) { crate::game::client::handlers::clif_changestatus(sd as SD, status as i32); }
+#[inline] async unsafe fn clif_accept2(fd: SessionId, name: *const i8, val: u8) { crate::game::client::handlers::clif_accept2(fd, name as *mut i8, val as i32).await; }
+#[inline] unsafe fn clif_parsemap(sd: SD) { crate::game::map_parse::movement::clif_parsemap(sd); }
+#[inline] unsafe fn clif_parsewalk(sd: SD) { crate::game::map_parse::movement::clif_parsewalk(sd); }
+#[inline] unsafe fn clif_parsewalkpong(sd: SD) { crate::game::map_parse::movement::clif_parsewalkpong(sd); }
+#[inline] unsafe fn clif_handle_missingobject(sd: SD) { crate::game::client::handlers::clif_handle_missingobject(sd); }
+#[inline] unsafe fn clif_parselookat(sd: SD) { crate::game::map_parse::movement::clif_parselookat(sd); }
+#[inline] unsafe fn clif_parselookat_2(sd: SD) { crate::game::map_parse::movement::clif_parselookat_2(sd); }
+#[inline] unsafe fn clif_open_sub(sd: SD) { crate::game::map_parse::items::clif_open_sub(sd); }
+#[inline] async unsafe fn clif_handle_clickgetinfo(sd: SD) { crate::game::map_parse::dialogs::clif_handle_clickgetinfo(sd).await; }
+#[inline] unsafe fn clif_parseviewchange(sd: SD) { crate::game::map_parse::movement::clif_parseviewchange(sd); }
+#[inline] unsafe fn clif_parseside(sd: SD) { crate::game::map_parse::movement::clif_parseside(sd); }
+#[inline] unsafe fn clif_parseemotion(sd: SD) { crate::game::map_parse::chat::clif_parseemotion(sd); }
+#[inline] unsafe fn clif_parsesay(sd: SD) { crate::game::map_parse::chat::clif_parsesay(sd); }
+#[inline] unsafe fn clif_parsewisp(sd: SD) { crate::game::map_parse::chat::clif_parsewisp(sd); }
+#[inline] unsafe fn clif_parseignore(sd: SD) { crate::game::map_parse::chat::clif_parseignore(sd); }
+#[inline] async unsafe fn clif_parsefriends(sd: SD, list: *const i8, len: i32) { crate::game::client::handlers::clif_parsefriends(sd as SD, list, len).await; }
+#[inline] unsafe fn clif_user_list(sd: SD) { crate::game::client::visual::clif_user_list(sd); }
+#[inline] unsafe fn clif_addgroup(sd: SD) { crate::game::map_parse::groups::clif_addgroup(sd); }
+#[inline] unsafe fn clif_parsegetitem(sd: SD) { crate::game::map_parse::items::clif_parsegetitem(sd); }
+#[inline] unsafe fn clif_parsedropitem(sd: SD) { crate::game::client::handlers::clif_parsedropitem(sd); }
+#[inline] unsafe fn clif_parseeatitem(sd: SD) { crate::game::map_parse::items::clif_parseeatitem(sd); }
+#[inline] unsafe fn clif_parseuseitem(sd: SD) { crate::game::map_parse::items::clif_parseuseitem(sd); }
+#[inline] unsafe fn clif_parseunequip(sd: SD) { crate::game::map_parse::items::clif_parseunequip(sd); }
+#[inline] unsafe fn clif_parsewield(sd: SD) { crate::game::map_parse::items::clif_parsewield(sd); }
+#[inline] unsafe fn clif_parsethrow(sd: SD) { crate::game::map_parse::items::clif_parsethrow(sd); }
+#[inline] unsafe fn clif_throwconfirm(sd: SD) { crate::game::map_parse::items::clif_throwconfirm(sd); }
+#[inline] unsafe fn clif_dropgold(sd: SD, amount: u32) { crate::game::map_parse::items::clif_dropgold(sd as SD, amount); }
+#[inline] unsafe fn clif_postitem(sd: SD) { crate::game::client::handlers::clif_postitem(sd); }
+#[inline] unsafe fn clif_handitem(sd: SD) { crate::game::map_parse::trading::clif_handitem(sd); }
+#[inline] unsafe fn clif_handgold(sd: SD) { crate::game::map_parse::trading::clif_handgold(sd); }
+#[inline] unsafe fn clif_parsemagic(sd: SD) { crate::game::map_parse::combat::clif_parsemagic(&mut *sd); }
+#[inline] unsafe fn clif_parseattack(sd: SD) { crate::game::map_parse::combat::clif_parseattack(&mut *sd); }
+#[inline] unsafe fn clif_sendminitext(sd: SD, msg: *const i8) { crate::game::map_parse::chat::clif_sendminitext(sd as SD, msg); }
+#[inline] unsafe fn clif_parsenpcdialog(sd: SD) { crate::game::map_parse::dialogs::clif_parsenpcdialog(sd); }
+#[inline] unsafe fn clif_handle_menuinput(sd: SD) { crate::game::client::handlers::clif_handle_menuinput(sd); }
+#[inline] unsafe fn clif_paperpopupwrite_save(sd: SD) { crate::game::client::visual::clif_paperpopupwrite_save(sd); }
+#[inline] unsafe fn clif_parsechangespell(sd: SD) { crate::game::map_parse::items::clif_parsechangespell(sd); }
+#[inline] unsafe fn clif_parsechangepos(sd: SD) { crate::game::client::handlers::clif_parsechangepos(sd); }
+#[inline] async unsafe fn rust_pc_warp(sd: SD, m: i32, x: i32, y: i32) -> i32 { crate::game::pc::rust_pc_warp(sd as SD, m, x, y).await }
+#[inline] unsafe fn clif_changeprofile(sd: SD) { crate::game::client::visual::clif_changeprofile(sd); }
+#[inline] async unsafe fn clif_handle_boards(sd: SD) { crate::game::client::handlers::clif_handle_boards(sd).await; }
+#[inline] unsafe fn clif_handle_powerboards(sd: SD) { crate::game::client::handlers::clif_handle_powerboards(sd); }
+#[inline] unsafe fn clif_parseparcel(sd: SD) { crate::game::map_parse::groups::clif_parseparcel(sd); }
+#[inline] async unsafe fn clif_parseranking(sd: SD, fd: SessionId) { crate::game::map_parse::events::clif_parseranking(sd as SD, fd).await; }
 #[allow(dead_code, non_snake_case)]
-#[inline] async unsafe fn clif_sendRewardInfo(sd: *mut std::ffi::c_void, fd: i32) { crate::game::map_parse::events::clif_sendRewardInfo(sd as SD, fd).await; }
+#[inline] async unsafe fn clif_sendRewardInfo(sd: SD, fd: SessionId) { crate::game::map_parse::events::clif_sendRewardInfo(sd as SD, fd).await; }
 #[allow(dead_code, non_snake_case)]
-#[inline] async unsafe fn clif_getReward(sd: *mut std::ffi::c_void, fd: i32) { crate::game::map_parse::events::clif_getReward(sd as SD, fd).await; }
-#[inline] unsafe fn clif_sendtowns(sd: *mut std::ffi::c_void) { crate::game::map_parse::dialogs::clif_sendtowns(sd as SD); }
-#[inline] async unsafe fn clif_huntertoggle(sd: *mut std::ffi::c_void) { crate::game::map_parse::groups::clif_huntertoggle(sd as SD).await; }
-#[inline] async unsafe fn clif_sendhunternote(sd: *mut std::ffi::c_void) { crate::game::map_parse::groups::clif_sendhunternote(sd as SD).await; }
-#[inline] unsafe fn clif_sendminimap(sd: *mut std::ffi::c_void) { crate::game::map_parse::player_state::clif_sendminimap(sd as SD); }
-#[inline] unsafe fn clif_parse_exchange(sd: *mut std::ffi::c_void) { crate::game::map_parse::trading::clif_parse_exchange(sd as SD); }
-#[inline] unsafe fn send_meta(sd: *mut std::ffi::c_void) { crate::network::crypt::send_meta(sd as SD); }
-#[inline] unsafe fn send_metalist(sd: *mut std::ffi::c_void) { crate::network::crypt::send_metalist(sd as SD); }
-#[inline] unsafe fn createdb_start(sd: *mut std::ffi::c_void) { crate::game::client::handlers::createdb_start(sd); }
+#[inline] async unsafe fn clif_getReward(sd: SD, fd: SessionId) { crate::game::map_parse::events::clif_getReward(sd as SD, fd).await; }
+#[inline] unsafe fn clif_sendtowns(sd: SD) { crate::game::map_parse::dialogs::clif_sendtowns(sd); }
+#[inline] async unsafe fn clif_huntertoggle(sd: SD) { crate::game::map_parse::groups::clif_huntertoggle(sd).await; }
+#[inline] async unsafe fn clif_sendhunternote(sd: SD) { crate::game::map_parse::groups::clif_sendhunternote(sd).await; }
+#[inline] unsafe fn clif_sendminimap(sd: SD) { crate::game::map_parse::player_state::clif_sendminimap(sd); }
+#[inline] unsafe fn clif_parse_exchange(sd: SD) { crate::game::map_parse::trading::clif_parse_exchange(sd); }
+#[inline] unsafe fn send_meta(sd: SD) { crate::network::crypt::send_meta(sd); }
+#[inline] unsafe fn send_metalist(sd: SD) { crate::network::crypt::send_metalist(sd); }
+#[inline] unsafe fn createdb_start(sd: SD) { crate::game::client::handlers::createdb_start(sd); }
 
 // ─── Send-type constants (from map_parse.h) ───────────────────────────────────
 
@@ -205,7 +204,7 @@ pub unsafe fn clif_send(
     match send_type {
         ALL_CLIENT | SAMESRV => {
             for i_fd in get_session_manager().get_all_fds() {
-                let sd = rust_session_get_data(i_fd) as *mut MapSessionData;
+                let sd = session_get_data(i_fd);
                 if sd.is_null() {
                     continue;
                 }
@@ -213,7 +212,7 @@ pub unsafe fn clif_send(
                 if !tsd.is_null()
                     && !buf.is_null()
                     && *buf.add(3) == 0x0D
-                    && clif_isignore(tsd as *mut std::ffi::c_void, sd as *mut std::ffi::c_void) == 0
+                    && clif_isignore(tsd, sd) == 0
                 {
                     continue;
                 }
@@ -222,7 +221,7 @@ pub unsafe fn clif_send(
         }
         SAMEMAP => {
             for i_fd in get_session_manager().get_all_fds() {
-                let sd = rust_session_get_data(i_fd) as *mut MapSessionData;
+                let sd = session_get_data(i_fd);
                 if sd.is_null() {
                     continue;
                 }
@@ -232,7 +231,7 @@ pub unsafe fn clif_send(
                 if !tsd.is_null()
                     && !buf.is_null()
                     && *buf.add(3) == 0x0D
-                    && clif_isignore(tsd as *mut std::ffi::c_void, sd as *mut std::ffi::c_void) == 0
+                    && clif_isignore(tsd, sd) == 0
                 {
                     continue;
                 }
@@ -241,7 +240,7 @@ pub unsafe fn clif_send(
         }
         SAMEMAP_WOS => {
             for i_fd in get_session_manager().get_all_fds() {
-                let sd = rust_session_get_data(i_fd) as *mut MapSessionData;
+                let sd = session_get_data(i_fd);
                 if sd.is_null() {
                     continue;
                 }
@@ -255,7 +254,7 @@ pub unsafe fn clif_send(
                 if !tsd.is_null()
                     && !buf.is_null()
                     && *buf.add(3) == 0x0D
-                    && clif_isignore(tsd as *mut std::ffi::c_void, sd as *mut std::ffi::c_void) == 0
+                    && clif_isignore(tsd, sd) == 0
                 {
                     continue;
                 }
@@ -326,7 +325,7 @@ pub unsafe fn clif_sendtogm(
     match send_type {
         ALL_CLIENT | SAMESRV => {
             for i_fd in get_session_manager().get_all_fds() {
-                let sd = rust_session_get_data(i_fd) as *mut MapSessionData;
+                let sd = session_get_data(i_fd);
                 if sd.is_null() {
                     continue;
                 }
@@ -335,7 +334,7 @@ pub unsafe fn clif_sendtogm(
         }
         SAMEMAP => {
             for i_fd in get_session_manager().get_all_fds() {
-                let sd = rust_session_get_data(i_fd) as *mut MapSessionData;
+                let sd = session_get_data(i_fd);
                 if sd.is_null() {
                     continue;
                 }
@@ -352,7 +351,7 @@ pub unsafe fn clif_sendtogm(
                 std::ptr::null_mut()
             };
             for i_fd in get_session_manager().get_all_fds() {
-                let sd = rust_session_get_data(i_fd) as *mut MapSessionData;
+                let sd = session_get_data(i_fd);
                 if sd.is_null() {
                     continue;
                 }
@@ -419,13 +418,13 @@ pub unsafe fn clif_sendtogm(
 /// - `fd` must be a live session registered with the session manager.
 /// - `buf` must point to at least `len` readable bytes.
 #[inline]
-unsafe fn send_to_fd(fd: i32, buf: *const u8, len: i32) {
-    rust_session_wfifohead(fd, (len as usize) + 3);
-    let wptr = rust_session_wdata_ptr(fd, 0);
+unsafe fn send_to_fd(fd: SessionId, buf: *const u8, len: i32) {
+    wfifohead(fd, (len as usize) + 3);
+    let wptr = wfifop(fd, 0);
     if !wptr.is_null() {
         std::ptr::copy_nonoverlapping(buf, wptr, len as usize);
     }
-    rust_session_commit(fd, encrypt(fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
 }
 
 // ─── clif_send_area / clif_send_sub ─────────────────────────────────────────
@@ -509,7 +508,7 @@ unsafe fn should_send_to(
 
     // ── Ignore-list filter (whisper-like packets, opcode 0x0D) ───────────────
     if !tsd.is_null() && len >= 4 && !buf.is_null() && *buf.add(3) == 0x0D {
-        if clif_isignore(tsd as *mut std::ffi::c_void, sd as *mut std::ffi::c_void) == 0 {
+        if clif_isignore(tsd, sd) == 0 {
             return false;
         }
     }
@@ -525,8 +524,7 @@ unsafe fn should_send_to(
     }
 
     // ── Session liveness ──────────────────────────────────────────────────────
-    if rust_session_exists((*sd).fd) == 0 {
-        rust_session_set_eof((*sd).fd, 8);
+    if !session_exists((*sd).fd) {
         return false;
     }
 
@@ -598,12 +596,12 @@ unsafe fn send_to_area(
                     if v >= 1 {
                         // Temporarily zero out channel byte, write, restore.
                         *buf.add(5) = 0;
-                        rust_session_wfifohead(fd, (len as usize) + 3);
-                        let wptr = rust_session_wdata_ptr(fd, 0);
+                        wfifohead(fd, (len as usize) + 3);
+                        let wptr = wfifop(fd, 0);
                         if !wptr.is_null() {
                             std::ptr::copy_nonoverlapping(buf, wptr, len as usize);
                         }
-                        rust_session_commit(fd, encrypt(fd) as usize);
+                        wfifoset(fd, encrypt(fd) as usize);
                         *buf.add(5) = ch_byte;
                         matched = true;
                     }
@@ -612,21 +610,21 @@ unsafe fn send_to_area(
             }
             // If channel byte doesn't match any known channel, send normally.
             if !matched && !CHANNEL_REGS.iter().any(|&(_, v)| v == ch_byte) {
-                rust_session_wfifohead(fd, (len as usize) + 3);
-                let wptr = rust_session_wdata_ptr(fd, 0);
+                wfifohead(fd, (len as usize) + 3);
+                let wptr = wfifop(fd, 0);
                 if !wptr.is_null() {
                     std::ptr::copy_nonoverlapping(buf, wptr, len as usize);
                 }
-                rust_session_commit(fd, encrypt(fd) as usize);
+                wfifoset(fd, encrypt(fd) as usize);
             }
         } else {
             // Normal packet: write directly.
-            rust_session_wfifohead(fd, (len as usize) + 3);
-            let wptr = rust_session_wdata_ptr(fd, 0);
+            wfifohead(fd, (len as usize) + 3);
+            let wptr = wfifop(fd, 0);
             if !wptr.is_null() {
                 std::ptr::copy_nonoverlapping(buf, wptr, len as usize);
             }
-            rust_session_commit(fd, encrypt(fd) as usize);
+            wfifoset(fd, encrypt(fd) as usize);
         }
 
     }
@@ -670,19 +668,19 @@ pub unsafe fn clif_send_area(
 /// Returns `true` if a duplicate session was detected (both connections closed).
 ///
 /// Uses the session manager's fd map directly — no fixed-size buffer needed.
-unsafe fn check_dual_login(fd: i32, sd: *mut crate::game::pc::MapSessionData) -> bool {
+unsafe fn check_dual_login(fd: SessionId, sd: *mut crate::game::pc::MapSessionData) -> bool {
     let my_id = unsafe { sl_pc_status_id(&mut *sd) };
     let mut login_count = 0i32;
     for i_fd in get_session_manager().get_all_fds() {
-        let tsd = rust_session_get_data(i_fd) as *mut crate::game::pc::MapSessionData;
+        let tsd = session_get_data(i_fd);
         if tsd.is_null() { continue; }
         if unsafe { sl_pc_status_id(&mut *tsd) } == my_id {
             login_count += 1;
         }
         if login_count >= 2 {
             tracing::warn!("[map] dual login char_id={} fd={} dup_fd={}", my_id, fd, i_fd);
-            rust_session_set_eof(fd, 1);
-            rust_session_set_eof(i_fd, 1);
+            session_set_eof(fd, 1);
+            session_set_eof(i_fd, 1);
             return true;
         }
     }
@@ -692,32 +690,32 @@ unsafe fn check_dual_login(fd: i32, sd: *mut crate::game::pc::MapSessionData) ->
 // ─── Main dispatcher ──────────────────────────────────────────────────────────
 
 /// Rust replacement for C `clif_parse(int fd)`.
-/// Registered via `rust_session_set_default_parse` at map_server startup.
-pub async fn rust_clif_parse(fd: i32) -> i32 {
+/// Registered as the default parse callback at map_server startup.
+pub async fn rust_clif_parse(fd: SessionId) -> i32 {
     unsafe {
-        if rust_session_exists(fd) == 0 {
+        if !session_exists(fd) {
             return 0;
         }
 
-        let sd = rust_session_get_data(fd);
+        let sd = session_get_data(fd);
 
         // EOF → disconnect and clean up
-        if rust_session_get_eof(fd) != 0 {
-            tracing::info!("[map] [parse] fd={} eof reason={} sd_null={}", fd, rust_session_get_eof(fd), sd.is_null());
+        if session_get_eof(fd) != 0 {
+            tracing::info!("[map] [parse] fd={} eof reason={} sd_null={}", fd, session_get_eof(fd), sd.is_null());
             if !sd.is_null() {
                 clif_handle_disconnect(sd).await;
                 clif_closeit(sd);
             }
             visual::clif_print_disconnect(fd);
-            rust_session_set_eof(fd, 1);
+            session_set_eof(fd, 1);
             return 0;
         }
 
         // Validate packet header: must start with 0xAA
-        let avail = rust_session_available(fd);
+        let avail = rfiforest(fd) as usize;
         if avail > 0 && rbyte(fd, 0) != 0xAA {
             tracing::warn!("[map] [parse] fd={} bad header byte0={:#04X} avail={}", fd, rbyte(fd, 0), avail);
-            rust_session_set_eof(fd, 13);
+            session_set_eof(fd, 13);
             return 0;
         }
         if avail < 3 { return 0; }
@@ -734,13 +732,13 @@ pub async fn rust_clif_parse(fd: i32) -> i32 {
             } else {
                 tracing::debug!("[map] [parse] fd={} pre-login op={:#04X} dropped (sd not set)", fd, op);
             }
-            rust_session_skip(fd, pkt_len);
+            rfifoskip(fd, pkt_len);
             return 0;
         }
 
         // Dual-login check
         if check_dual_login(fd, sd as *mut crate::game::pc::MapSessionData) {
-            rust_session_skip(fd, pkt_len);
+            rfifoskip(fd, pkt_len);
             return 0;
         }
 
@@ -1037,7 +1035,7 @@ pub async fn rust_clif_parse(fd: i32) -> i32 {
             }
         }
 
-        rust_session_skip(fd, pkt_len);
+        rfifoskip(fd, pkt_len);
         0
     }
 }

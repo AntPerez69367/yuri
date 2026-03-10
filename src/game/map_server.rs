@@ -16,18 +16,15 @@ use crate::game::pc::{
 
 use crate::database::map_db::BlockList;
 
-use crate::session::{
-    rust_session_wfifohead, rust_session_wdata_ptr, rust_session_commit,
-    rust_session_rdata_ptr,
-};
+use crate::game::map_parse::packet::{rfifob, rfifop, wfifohead, wfifop, wfifoset};
 
 use crate::session::{
-    rust_session_exists, rust_session_get_eof, rust_session_get_client_ip,
-    rust_session_set_eof, rust_session_get_data,
+    session_exists, session_get_eof, session_get_client_ip,
+    session_set_eof, session_get_data, SessionId,
 };
 use crate::network::crypt::encrypt;
 use crate::database::board_db::{rust_boarddb_script, rust_boarddb_yname};
-use crate::session::{rust_session_call_parse, rust_session_rfifoflush};
+use crate::session::{session_call_parse, get_session_manager};
 use crate::game::scripting::rust_sl_exec as sl_exec;
 
 use crate::core::rust_request_shutdown;
@@ -223,6 +220,25 @@ fn item_map() -> std::sync::MutexGuard<'static, HashMap<u32, Box<crate::game::sc
     ITEM_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
 }
 
+/// Iterate all online players safely. Collects player pointers under the lock,
+/// then releases the lock before invoking the callback — so the callback is free
+/// to call anything (including functions that lock `PLAYER_MAP`).
+///
+/// # Safety
+/// The returned pointers are valid as long as the players remain in `PLAYER_MAP`.
+/// This is safe in single-threaded game code where removals only happen during
+/// disconnect processing (which runs after the current call chain completes).
+pub fn for_each_player<F: FnMut(&mut crate::game::pc::MapSessionData)>(mut f: F) {
+    let ptrs: Vec<*mut crate::game::pc::MapSessionData> = {
+        let mut map = player_map();
+        map.values_mut().map(|sd| sd.as_mut() as *mut crate::game::pc::MapSessionData).collect()
+    };
+    // Lock is released — safe to call back into game code.
+    for ptr in ptrs {
+        f(unsafe { &mut *ptr });
+    }
+}
+
 pub fn map_initiddb() {}
 pub fn map_termiddb() {
     player_map().clear();
@@ -325,6 +341,18 @@ pub enum GameEntity<'a> {
     Item(&'a mut crate::game::scripting::types::floor::FloorItemData),
 }
 
+impl<'a> GameEntity<'a> {
+    /// Get a mutable reference to the entity's block_list header.
+    pub fn bl_mut(&mut self) -> &mut crate::database::map_db::BlockList {
+        match self {
+            GameEntity::Player(sd) => &mut sd.bl,
+            GameEntity::Mob(mob) => &mut mob.bl,
+            GameEntity::Npc(npc) => &mut npc.bl,
+            GameEntity::Item(item) => &mut item.bl,
+        }
+    }
+}
+
 /// Look up any entity by id, dispatching by id range.
 /// Returns None if the id is not registered in any typed map.
 pub fn map_id2entity(id: u32) -> Option<GameEntity<'static>> {
@@ -356,12 +384,13 @@ pub fn mob_map_remove(id: u32) {
 /// Find a player session by name (case-insensitive).
 ///
 pub unsafe fn map_name2sd(name: *const i8) -> *mut MapSessionData {
-    use crate::session::{rust_session_exists, rust_session_get_data, rust_session_get_eof};
+    use crate::session::{session_exists, session_get_data, session_get_eof, SessionId};
     if name.is_null() { return std::ptr::null_mut(); }
     for i in 0..crate::session::get_fd_max() {
-        if rust_session_exists(i) == 0 { continue; }
-        if rust_session_get_eof(i) != 0 { continue; }
-        let sd = rust_session_get_data(i) as *mut MapSessionData;
+        let fd = SessionId::from_raw(i);
+        if !session_exists(fd) { continue; }
+        if session_get_eof(fd) != 0 { continue; }
+        let sd = session_get_data(fd);
         if sd.is_null() { continue; }
         if libc::strcasecmp((*sd).status.name.as_ptr(), name) == 0 {
             return sd;
@@ -448,8 +477,8 @@ unsafe fn cron(name: &[u8]) {
 pub unsafe fn isPlayerActive(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
-    if fd == 0 { return 0; }
-    if rust_session_exists(fd) == 0 {
+    if fd.raw() == 0 { return 0; }
+    if !session_exists(fd) {
         let name = std::ffi::CStr::from_ptr((*sd).status.name.as_ptr());
         tracing::warn!("[map] isPlayerActive: player exists but session does not ({})", name.to_string_lossy());
         return 0;
@@ -461,8 +490,8 @@ pub unsafe fn isPlayerActive(sd: *mut MapSessionData) -> i32 {
 pub unsafe fn isActive(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
-    if rust_session_exists(fd) == 0 { return 0; }
-    if rust_session_get_eof(fd) != 0 { return 0; }
+    if !session_exists(fd) { return 0; }
+    if session_get_eof(fd) != 0 { return 0; }
     1
 }
 
@@ -481,8 +510,8 @@ pub async unsafe fn mmo_setonline(id: u32, val: i32) -> bool {
     let addr = {
         let Some(sd) = map_id2sd_pc(id) else { return false; };
         let fd = sd.fd;
-        // rust_session_get_client_ip returns IP in network byte order (sin_addr.s_addr).
-        let raw_ip = rust_session_get_client_ip(fd);
+        // session_get_client_ip returns IP in network byte order (sin_addr.s_addr).
+        let raw_ip = session_get_client_ip(fd);
         format!(
             "{}.{}.{}.{}",
             raw_ip & 0xff,
@@ -658,37 +687,36 @@ pub unsafe fn nmail_sendmessage(
     if isPlayerActive(sd) == 0 { return 0; }
 
     let fd = (*sd).fd;
-    if rust_session_exists(fd) == 0 {
-        rust_session_set_eof(fd, 8);
+    if !session_exists(fd) {
         return 0;
     }
 
     let msg_len = libc_strlen(message);
 
-    rust_session_wfifohead(fd, 65535 + 3);
-    let p0 = rust_session_wdata_ptr(fd, 0);
+    wfifohead(fd, 65535 + 3);
+    let p0 = wfifop(fd, 0);
     if p0.is_null() { return 0; }
 
     *p0 = 0xAA_u8;
-    *rust_session_wdata_ptr(fd, 3) = 0x31_u8;
-    *rust_session_wdata_ptr(fd, 4) = 0x03_u8;
-    *rust_session_wdata_ptr(fd, 5) = other as u8;
-    *rust_session_wdata_ptr(fd, 6) = r#type as u8;
-    *rust_session_wdata_ptr(fd, 7) = msg_len as u8;
+    *wfifop(fd, 3) = 0x31_u8;
+    *wfifop(fd, 4) = 0x03_u8;
+    *wfifop(fd, 5) = other as u8;
+    *wfifop(fd, 6) = r#type as u8;
+    *wfifop(fd, 7) = msg_len as u8;
     // copy message bytes (replicating C strcpy, without the null — it is overwritten by the sentinel).
     // C does: len = strlen(message); len++ — effective length is N+1.
     std::ptr::copy_nonoverlapping(
         message as *const u8,
-        rust_session_wdata_ptr(fd, 8),
+        wfifop(fd, 8),
         msg_len,
     );
-    *rust_session_wdata_ptr(fd, msg_len + 8) = 0x07_u8; // 0x07 sentinel at [8+N] (matches C: strcpy null is overwritten)
+    *wfifop(fd, msg_len + 8) = 0x07_u8; // 0x07 sentinel at [8+N] (matches C: strcpy null is overwritten)
     // big-endian packet length field at [1..2]: (N+1) + 5 = N + 6
     let size_be = ((msg_len as u16) + 6).to_be();
-    (rust_session_wdata_ptr(fd, 1) as *mut u16).write_unaligned(size_be);
+    (wfifop(fd, 1) as *mut u16).write_unaligned(size_be);
 
     let enc_len = encrypt(fd) as usize;
-    rust_session_commit(fd, enc_len);
+    wfifoset(fd, enc_len);
     0
 }
 
@@ -702,7 +730,7 @@ pub unsafe fn boards_delete(sd: *mut MapSessionData, board: i32) -> i32 {
 
     // Read the post id from the player's recv buffer (big-endian u16 at offset 8).
     let post = {
-        let p = rust_session_rdata_ptr((*sd).fd, 8) as *const u16;
+        let p = rfifop((*sd).fd, 8) as *const u16;
         if p.is_null() { return 0; }
         u16::from_be(p.read_unaligned()) as i32
     };
@@ -717,7 +745,7 @@ pub unsafe fn boards_delete(sd: *mut MapSessionData, board: i32) -> i32 {
     //   [12..27] = name (16 bytes)
     let mut pkt = vec![0u8; 28];
     pkt[0..2].copy_from_slice(&0x3008u16.to_le_bytes());
-    pkt[2..4].copy_from_slice(&((*sd).fd as u16).to_le_bytes());
+    pkt[2..4].copy_from_slice(&((*sd).fd.raw() as u16).to_le_bytes());
     pkt[4..6].copy_from_slice(&((*sd).status.gm_level as u8 as u16).to_le_bytes());
     pkt[6..8].copy_from_slice(&((*sd).board_candel as u16).to_le_bytes());
     pkt[8..10].copy_from_slice(&(board as u16).to_le_bytes());
@@ -777,7 +805,7 @@ pub unsafe fn boards_showposts(
     let mut pkt = vec![0u8; 2 + struct_size];
     pkt[0..2].copy_from_slice(&0x3009u16.to_le_bytes());
     let mut a = BoardShow0 {
-        fd:     (*sd).fd,
+        fd:     (*sd).fd.raw(),
         board,
         bcount: (*sd).bcount,
         flags,
@@ -829,7 +857,7 @@ pub unsafe fn boards_readpost(
 
     let mut header = BoardsReadPost0 {
         name:  [0i8; 16],
-        fd:    (*sd).fd,
+        fd:    (*sd).fd.raw(),
         post,
         board,
         flags,
@@ -863,7 +891,7 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
 
     let fd = (*sd).fd;
 
-    let topiclen = *rust_session_rdata_ptr(fd, 8) as usize;
+    let topiclen = rfifob(fd, 8) as usize;
     if topiclen > 52 {
         clif_Hacker(
             (*sd).status.name.as_mut_ptr() as *mut i8,
@@ -873,7 +901,7 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
     }
 
     let postlen = {
-        let p = rust_session_rdata_ptr(fd, topiclen + 9) as *const u16;
+        let p = rfifop(fd, topiclen + 9) as *const u16;
         if p.is_null() { return 0; }
         u16::from_be(p.read_unaligned()) as usize
     };
@@ -903,7 +931,7 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
     }
 
     let mut header = BoardsPost0 {
-        fd: (*sd).fd,
+        fd: (*sd).fd.raw(),
         board,
         nval: (*sd).boardnameval as i32,
         name:  [0i8; 16],
@@ -912,12 +940,12 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
     };
     std::ptr::copy_nonoverlapping((*sd).status.name.as_ptr(), header.name.as_mut_ptr(), 16);
     std::ptr::copy_nonoverlapping(
-        rust_session_rdata_ptr(fd, 9) as *const i8,
+        rfifop(fd, 9) as *const i8,
         header.topic.as_mut_ptr(),
         topiclen,
     );
     std::ptr::copy_nonoverlapping(
-        rust_session_rdata_ptr(fd, topiclen + 11) as *const i8,
+        rfifop(fd, topiclen + 11) as *const i8,
         header.post.as_mut_ptr(),
         postlen,
     );
@@ -965,7 +993,7 @@ pub async unsafe fn nmail_luascript(
     let mut message = [0i8; 4000];
 
     std::ptr::copy_nonoverlapping(
-        rust_session_rdata_ptr(fd, (to + topic + 12) as usize) as *const i8,
+        rfifop(fd, (to + topic + 12) as usize) as *const i8,
         message.as_mut_ptr(),
         msg as usize,
     );
@@ -985,7 +1013,7 @@ pub async unsafe fn nmail_luascript(
         .is_ok();
     if !ok { return 0; }
 
-    sl_exec(sd as *mut std::ffi::c_void, message.as_mut_ptr());
+    sl_exec(sd, message.as_mut_ptr());
     0
 }
 
@@ -1099,7 +1127,7 @@ pub unsafe fn nmail_sendmailcopy(
     const PKT_LEN: usize = 4124;
     let mut pkt = vec![0u8; PKT_LEN];
     pkt[0..2].copy_from_slice(&0x300Fu16.to_le_bytes());
-    pkt[2..4].copy_from_slice(&((*sd).fd as u16).to_le_bytes());
+    pkt[2..4].copy_from_slice(&((*sd).fd.raw() as u16).to_le_bytes());
     std::ptr::copy_nonoverlapping((*sd).status.name.as_ptr() as *const u8, pkt[4..].as_mut_ptr(), 16);
     std::ptr::copy_nonoverlapping(to_user as *const u8, pkt[20..].as_mut_ptr(), 16);
     std::ptr::copy_nonoverlapping(topic   as *const u8, pkt[72..].as_mut_ptr(), 52);
@@ -1117,7 +1145,7 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
 
-    let tolen = *rust_session_rdata_ptr(fd, 8) as usize;
+    let tolen = rfifob(fd, 8) as usize;
     if tolen > 52 {
         clif_Hacker(
             (*sd).status.name.as_mut_ptr() as *mut i8,
@@ -1125,7 +1153,7 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
         );
         return 0;
     }
-    let topiclen = *rust_session_rdata_ptr(fd, tolen + 9) as usize;
+    let topiclen = rfifob(fd, tolen + 9) as usize;
     if topiclen > 52 {
         clif_Hacker(
             (*sd).status.name.as_mut_ptr() as *mut i8,
@@ -1134,7 +1162,7 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
         return 0;
     }
     let messagelen = {
-        let p = rust_session_rdata_ptr(fd, tolen + topiclen + 10) as *const u16;
+        let p = rfifop(fd, tolen + topiclen + 10) as *const u16;
         if p.is_null() { return 0; }
         u16::from_be(p.read_unaligned()) as usize
     };
@@ -1151,18 +1179,18 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
     let mut message  = [0i8; 4000];
 
     std::ptr::copy_nonoverlapping(
-        rust_session_rdata_ptr(fd, 9) as *const i8,
+        rfifop(fd, 9) as *const i8,
         to_user.as_mut_ptr(), tolen,
     );
     std::ptr::copy_nonoverlapping(
-        rust_session_rdata_ptr(fd, tolen + 10) as *const i8,
+        rfifop(fd, tolen + 10) as *const i8,
         topic.as_mut_ptr(), topiclen,
     );
     std::ptr::copy_nonoverlapping(
-        rust_session_rdata_ptr(fd, topiclen + tolen + 12) as *const i8,
+        rfifop(fd, topiclen + tolen + 12) as *const i8,
         message.as_mut_ptr(), messagelen,
     );
-    let send_copy = *rust_session_rdata_ptr(fd, topiclen + tolen + 12 + messagelen) as i32;
+    let send_copy = rfifob(fd, topiclen + tolen + 12 + messagelen) as i32;
 
     // Case: "lua" — run Lua script mail
     let to_user_cstr = std::ffi::CStr::from_ptr(to_user.as_ptr());
@@ -1286,7 +1314,7 @@ pub unsafe fn nmail_sendmail(
     const PKT_LEN: usize = 4124;
     let mut pkt = vec![0u8; PKT_LEN];
     pkt[0..2].copy_from_slice(&0x300Du16.to_le_bytes());
-    pkt[2..4].copy_from_slice(&((*sd).fd as u16).to_le_bytes());
+    pkt[2..4].copy_from_slice(&((*sd).fd.raw() as u16).to_le_bytes());
     std::ptr::copy_nonoverlapping((*sd).status.name.as_ptr() as *const u8, pkt[4..].as_mut_ptr(), 16);
     std::ptr::copy_nonoverlapping(to_user as *const u8, pkt[20..].as_mut_ptr(), 16);
     std::ptr::copy_nonoverlapping(topic   as *const u8, pkt[72..].as_mut_ptr(), 52);
@@ -1527,8 +1555,9 @@ pub async unsafe fn change_time_char(_id: i32, _n: i32) -> i32 {
 
     // Broadcast updated time to all active sessions.
     for i in 0..crate::session::get_fd_max() {
-        if rust_session_exists(i) != 0 {
-            let sd = rust_session_get_data(i) as *mut MapSessionData;
+        let fd = SessionId::from_raw(i);
+        if session_exists(fd) {
+            let sd = session_get_data(fd);
             if !sd.is_null() {
                 crate::game::map_parse::player_state::clif_sendtime(sd);
             }
@@ -1622,7 +1651,7 @@ pub async unsafe fn uptime() -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// objectFlags — static object collision-flag table loaded from static_objects.tbl
+// Object flags — static object collision-flag table loaded from static_objects.tbl
 //
 // Each byte encodes directional movement flags (OBJ_UP / OBJ_RIGHT / OBJ_DOWN /
 // OBJ_LEFT) for its corresponding object.
@@ -1631,10 +1660,13 @@ pub async unsafe fn uptime() -> i32 {
 /// Static object flag table populated by `object_flag_init`.
 ///
 /// Bitmap of directional collision flags for each floor item object slot.
-/// Stored as a raw pointer for ABI compatibility with movement.rs access patterns.
-// SAFETY: Written once at startup by object_flag_init before any readers.
-// Single-threaded game loop — no concurrent access after init.
-pub static mut objectFlags: *mut u8 = std::ptr::null_mut();
+static OBJECT_FLAGS: std::sync::OnceLock<Box<[u8]>> = std::sync::OnceLock::new();
+
+/// Access the object collision flags table.
+/// Returns `None` if `object_flag_init` hasn't been called yet.
+pub fn object_flags() -> Option<&'static [u8]> {
+    OBJECT_FLAGS.get().map(|b| b.as_ref())
+}
 
 /// Load the static object flag table from `static_objects.tbl`.
 ///
@@ -1647,7 +1679,7 @@ pub static mut objectFlags: *mut u8 = std::ptr::null_mut();
 ///   - 5 bytes: reserved/padding
 ///   - 1 byte: flag byte for this object
 ///
-/// Allocates `objectFlags` with `num + 1` zero-initialised bytes.
+/// Allocates the object flags table with `num + 1` zero-initialised bytes.
 /// The actual per-object flag assignment is intentionally left commented out,
 /// preserving the original C behaviour (table allocated but entries stay zero).
 ///
@@ -1688,9 +1720,9 @@ pub unsafe fn object_flag_init() -> i32 {
     let mut num: i32 = 0;
     libc::fread(std::ptr::addr_of_mut!(num).cast(), 4, 1, fi);
 
-    // Allocate objectFlags with num+1 zero-initialised bytes.
+    // Allocate object flags with num+1 zero-initialised bytes.
     let flags_vec: Vec<u8> = vec![0u8; (num as usize) + 1];
-    objectFlags = Box::into_raw(flags_vec.into_boxed_slice()) as *mut u8;
+    let _ = OBJECT_FLAGS.set(flags_vec.into_boxed_slice());
 
     let mut flag: i8 = 0;
     libc::fread(std::ptr::addr_of_mut!(flag).cast(), 1, 1, fi);
@@ -1709,7 +1741,7 @@ pub unsafe fn object_flag_init() -> i32 {
         let mut nothing = [0u8; 5];
         libc::fread(nothing.as_mut_ptr().cast(), 5, 1, fi);
         libc::fread(std::ptr::addr_of_mut!(flag).cast(), 1, 1, fi);
-        // objectFlags[_z as usize] = flag as u8;  // intentionally not assigned, matching C
+        // flag assignment intentionally omitted, matching original behavior
         _z += 1;
     }
 
@@ -2596,9 +2628,10 @@ pub unsafe fn map_weather(_id: i32, _n: i32) -> i32 {
 ///
 pub unsafe fn map_savechars(_none: i32, _nonetoo: i32) -> i32 {
     for x in 0..crate::session::get_fd_max() {
-        if rust_session_exists(x) == 0 { continue; }
-        if rust_session_get_eof(x) != 0 { continue; }
-        let sd = rust_session_get_data(x);
+        let fd = SessionId::from_raw(x);
+        if !session_exists(fd) { continue; }
+        if session_get_eof(fd) != 0 { continue; }
+        let sd = session_get_data(fd);
         if !sd.is_null() { sl_intif_save(sd); }
     }
     0
@@ -2883,9 +2916,10 @@ pub unsafe fn map_reset_timer(v1: i32, v2: i32) -> i32 {
     if remaining <= 0 {
         // Disconnect all active sessions, then request shutdown.
         for x in 0..crate::session::get_fd_max() {
-            if rust_session_exists(x) != 0 {
-                let sd = rust_session_get_data(x) as *mut MapSessionData;
-                if !sd.is_null() && rust_session_get_eof(x) == 0 {
+            let fd = SessionId::from_raw(x);
+            if session_exists(fd) {
+                let sd = session_get_data(fd);
+                if !sd.is_null() && session_get_eof(fd) == 0 {
                     let sd_usize = sd as usize;
                     // SAFETY: MapSessionData: Send (pc.rs:335). blocking_run_async joins before
                     // returning, preventing concurrent access from the session thread.
@@ -2897,9 +2931,13 @@ pub unsafe fn map_reset_timer(v1: i32, v2: i32) -> i32 {
                     // map_reset_timer is a sync TimerFn so it cannot .await directly.
                     // The session eof flag (set below) ensures rust_clif_parse sees the
                     // disconnect state when the spawned task runs.
-                    tokio::task::spawn_local(rust_session_call_parse(x));
-                    rust_session_rfifoflush(x);
-                    rust_session_set_eof(x, 1);
+                    tokio::task::spawn_local(session_call_parse(fd));
+                    if let Some(s) = get_session_manager().get_session(fd) {
+                        if let Ok(mut session) = s.try_lock() {
+                            session.flush_read_buffer();
+                        }
+                    }
+                    session_set_eof(fd, 1);
                 }
             }
         }

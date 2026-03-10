@@ -18,8 +18,7 @@ use yuri::database::magic_db::rust_magicdb_init;
 use yuri::database::mob_db::rust_mobdb_init;
 use yuri::game::mob::rust_mobspawn_read;
 use yuri::session::{
-    rust_session_set_default_parse, rust_session_set_default_timeout,
-    rust_make_listen_port,
+    get_session_manager, sync_callback, make_listen_port,
 };
 use yuri::core::{rust_core_init, rust_set_termfunc};
 use yuri::servers::map::MapState;
@@ -167,13 +166,15 @@ async fn main() -> Result<()> {
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(map_loadgameregistry())
                 });
-                rust_session_set_default_parse(
-                    std::sync::Arc::new(|fd: i32| -> yuri::session::CallbackFuture {
+                {
+                    let manager = get_session_manager();
+                    let mut cbs = manager.default_callbacks.lock().unwrap();
+                    cbs.parse = Some(std::sync::Arc::new(|fd: yuri::session::SessionId| -> yuri::session::CallbackFuture {
                         Box::pin(yuri::game::client::rust_clif_parse(fd))
-                    })
-                );
-                rust_session_set_default_timeout(clif_timeout);
-                rust_make_listen_port(map_port as i32);
+                    }));
+                    cbs.timeout = Some(sync_callback(clif_timeout));
+                }
+                make_listen_port(map_port as i32);
 
                 // Timers from the old do_init — restored here after do_init was removed.
                 let startup = std::ffi::CString::new("startup").unwrap();
