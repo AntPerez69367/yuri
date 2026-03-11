@@ -1,5 +1,5 @@
 //! Lua scripting engine.
-#![allow(non_snake_case, dead_code, unused_variables, non_upper_case_globals, static_mut_refs)]
+#![allow(non_snake_case, dead_code, unused_variables, non_upper_case_globals)]
 
 pub mod async_coro;
 pub mod ffi;
@@ -25,51 +25,61 @@ use types::registry::*;
 // ---------------------------------------------------------------------------
 // Global Lua state — single instance, lives for the process lifetime.
 // ---------------------------------------------------------------------------
-// SAFETY: Option<mlua::Lua> is !Send + !Sync. Initialised once by rust_sl_init on the game thread.
-// All Lua calls happen on the same thread via the tokio LocalSet executor. No concurrent access.
-static mut SL_STATE: Option<Lua> = None;
+
+/// Wrapper around `Lua` to allow storage in `OnceLock`.
+///
+/// SAFETY: The Lua state is initialised once on the game thread and only
+/// accessed from the same thread via the tokio `LocalSet` executor.
+/// No concurrent access ever occurs.
+struct LuaWrapper(Lua);
+unsafe impl Send for LuaWrapper {}
+unsafe impl Sync for LuaWrapper {}
+
+/// The global Lua state, set once by `sl_init`.
+static SL_STATE: std::sync::OnceLock<LuaWrapper> = std::sync::OnceLock::new();
+
+/// Raw `lua_State` pointer, captured once during `sl_init`.
+static SL_GSTATE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 
 /// Returns a reference to the global Lua state.
+///
 /// # Safety
 /// Must only be called after `sl_init()`.  All scripting runs on the LocalSet
 /// thread (timer_do + session_io_task), so no external locking is needed.
 pub unsafe fn sl_state() -> &'static Lua {
-    SL_STATE.as_ref().expect("sl_init() not called")
+    &SL_STATE.get().expect("sl_init() not called").0
 }
 
-/// Raw lua_State pointer — exported so C code using `sl_gstate` still compiles.
-/// Set after init. Leave null if mlua does not expose a stable raw accessor.
-// SAFETY: Raw pointer alias into SL_STATE's internal lua_State. Same safety invariant as SL_STATE:
-// initialised once on the game thread, only accessed from the tokio LocalSet executor.
-pub static mut sl_gstate: *mut std::ffi::c_void = std::ptr::null_mut();
+/// Returns the raw `lua_State*` pointer captured at init time.
+pub fn sl_gstate_ptr() -> *mut std::ffi::c_void {
+    SL_GSTATE.get().copied().unwrap_or(0) as *mut std::ffi::c_void
+}
 
 // ---------------------------------------------------------------------------
 // sl_init
 // ---------------------------------------------------------------------------
 pub fn sl_init() {
+    // LuaJIT on 64-bit requires luaL_newstate() — Lua::new() uses it.
+    // Lua::new_with(ALL_SAFE, ...) uses a custom allocator that LuaJIT rejects.
+    let lua = Lua::new();
+
+    register_types(&lua).expect("failed to register scripting types");
+    globals::register(&lua).expect("failed to register scripting globals");
+
+    // Capture the raw lua_State* via exec_raw (pointer is stable for process lifetime).
+    // SAFETY: exec_raw requires unsafe. The closure captures a stable pointer that lives for
+    // the process lifetime. No UB — we just store the address as a usize.
     unsafe {
-        // LuaJIT on 64-bit requires luaL_newstate() — Lua::new() uses it.
-        // Lua::new_with(ALL_SAFE, ...) uses a custom allocator that LuaJIT rejects.
-        let lua = Lua::new();
-
-        register_types(&lua).expect("failed to register scripting types");
-        globals::register(&lua).expect("failed to register scripting globals");
-
-        SL_STATE = Some(lua);
-        thread_registry::init();
-
-        // Capture the raw lua_State* via exec_raw and store in sl_gstate so C
-        // helpers 
-        // through the mlua lock (safe: pointer is stable for process lifetime).
-                // it without going through the mlua lock.  Panic on failure — sl_gstate
-        // must be non-null before any C code can call back into Lua.
-        SL_STATE.as_ref().unwrap().exec_raw::<()>((), |L| {
-            sl_gstate = L as *mut std::ffi::c_void;
+        lua.exec_raw::<()>((), |l| {
+            let _ = SL_GSTATE.set(l as usize);
         }).expect("exec_raw failed: sl_gstate could not be initialised");
-
-        // Reload scripts (lua_dir comes from config).
-        sl_reload();
     }
+
+    let _ = SL_STATE.set(LuaWrapper(lua));
+    thread_registry::init();
+
+    // Reload scripts (lua_dir comes from config).
+    unsafe { sl_reload(); }
 }
 
 /// Convert a Lua value (integer id or light userdata pointer) to a C pointer.
