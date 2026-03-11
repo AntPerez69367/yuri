@@ -53,8 +53,8 @@ use crate::game::scripting::rust_sl_async_freeco;
 
 // map_id2bl/map_id2sd_local/map_id2mob_local return *mut ptr — wrap with type casts.
 #[inline]
-unsafe fn map_id2bl(id: u32) -> *mut BlockList {
-    crate::game::map_server::map_id2bl(id) as *mut BlockList
+fn map_id2bl(id: u32) -> *mut BlockList {
+    crate::game::map_server::map_id2bl_ref(id)
 }
 #[inline]
 fn map_id2sd_local(id: u32) -> *mut MapSessionData {
@@ -187,7 +187,7 @@ pub fn clif_send_pc_healthscript(
     let maxvita = sd.max_hp;
     let mut currentvita = sd.status.hp;
 
-    let bl = unsafe { map_id2bl(sd.attacker) };
+    let bl = map_id2bl(sd.attacker);
     let mut tsd: *mut MapSessionData = std::ptr::null_mut();
 
     if !bl.is_null() {
@@ -805,12 +805,10 @@ pub fn clif_send_mob_health(mob: &mut MobSpawnData, damage: i32, critical: i32) 
 pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, critical: i32) -> i32 {
     let _ = critical;
 
-    let bl: *mut BlockList = unsafe {
-        if mob.attacker > 0 {
-            map_id2bl(mob.attacker)
-        } else {
-            std::ptr::null_mut()
-        }
+    let bl: *mut BlockList = if mob.attacker > 0 {
+        map_id2bl(mob.attacker)
+    } else {
+        std::ptr::null_mut()
     };
 
     let mut sd: *mut MapSessionData = std::ptr::null_mut();
@@ -1220,7 +1218,7 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
     }
 
     if sd.target != 0 {
-        let tbl = unsafe { map_id2bl(sd.target as u32) };
+        let tbl = map_id2bl(sd.target as u32);
         if tbl.is_null() { return 0; }
 
         let tsd2 = unsafe { map_id2sd_local((*tbl).id) };

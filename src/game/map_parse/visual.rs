@@ -48,10 +48,9 @@ use crate::database::item_db::{
 };
 use crate::game::pc::rust_pc_isequip;
 
-// map_id2bl returns *mut std::ffi::c_void in map_server — wrap with cast.
 #[inline]
-unsafe fn map_id2bl(id: u32) -> *mut BlockList {
-    crate::game::map_server::map_id2bl(id) as *mut BlockList
+fn map_id2bl(id: u32) -> *mut BlockList {
+    crate::game::map_server::map_id2bl_ref(id)
 }
 
 use crate::game::map_parse::combat::clif_sendanimations;

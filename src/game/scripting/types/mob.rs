@@ -25,10 +25,8 @@ use crate::game::mob::{
 };
 use crate::game::map_parse::combat::clif_send_mob_healthscript;
 use crate::database::magic_db::rust_magicdb_id;
-use crate::game::map_server::map_id2bl;
-
-unsafe fn map_id2bl_mob(id: u32) -> *mut BlockList {
-    map_id2bl(id) as *mut BlockList
+fn map_id2bl_mob(id: u32) -> *mut BlockList {
+    crate::game::map_server::map_id2bl_ref(id)
 }
 
 // ---------------------------------------------------------------------------
@@ -199,7 +197,7 @@ impl UserData for MobObject {
                             let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
                                 Some(m) => m,
                                 None => return Ok(0i32),
-                            };                            let bl = unsafe { map_id2bl_mob(target_id) };
+                            };                            let bl = map_id2bl_mob(target_id);
                             if bl.is_null() {
                                 return Ok(0i32);
                             }

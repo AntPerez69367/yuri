@@ -21,7 +21,7 @@ use crate::game::scripting::rust_sl_resumemenu;
 use crate::game::map_parse::packet::{rfifob, rfifop, wfifohead, wfifop, wfifoset};
 use crate::game::map_server::{
     boards_delete, boards_post, boards_readpost, boards_showposts, hasCoref,
-    map_changepostcolor, map_deliddb, map_getpostcolor, map_id2bl, map_id2sd_pc,
+    map_changepostcolor, map_deliddb, map_getpostcolor, map_id2bl_ref, map_id2sd_pc,
     nmail_sendmessage, nmail_write,
 };
 use crate::game::map_parse::chat::clif_sendminitext;
@@ -175,7 +175,7 @@ pub async unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 pub unsafe fn clif_handle_missingobject(sd: *mut MapSessionData) -> i32 {
     let id = rlong_be((*sd).fd, 5);
-    let bl = map_id2bl(id) as *mut BlockList;
+    let bl = map_id2bl_ref(id);
     if !bl.is_null() {
         if (*bl).bl_type as i32 == BL_PC {
             clif_charspecific((*sd).status.id as i32, id as i32);
@@ -937,9 +937,9 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
                 let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).bl.m as usize);
                 let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
                 for id in ids {
-                    let bl_ptr = crate::game::map_server::map_id2bl(id);
+                    let bl_ptr = crate::game::map_server::map_id2bl_ref(id);
                     if !bl_ptr.is_null() {
-                        clif_object_look_sub_inner(bl_ptr as *mut BlockList, LOOK_GET, sd as *mut BlockList);
+                        clif_object_look_sub_inner(bl_ptr, LOOK_GET, sd as *mut BlockList);
                     }
                 }
             }

@@ -23,9 +23,8 @@ unsafe fn push_ptr(out_ptrs: *mut *mut std::ffi::c_void, count: &mut i32, max_co
 /// Does NOT check alive status.
 #[inline]
 unsafe fn id_to_bl_typed(id: u32, bl_type: i32) -> Option<*mut BlockList> {
-    let p = crate::game::map_server::map_id2bl(id);
-    if p.is_null() { return None; }
-    let bl = p as *mut BlockList;
+    let bl = crate::game::map_server::map_id2bl_ref(id);
+    if bl.is_null() { return None; }
     if ((*bl).bl_type as i32) & bl_type != 0 {
         Some(bl)
     } else {

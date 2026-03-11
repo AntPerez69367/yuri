@@ -786,7 +786,7 @@ pub unsafe fn clif_handgold(sd: *mut MapSessionData) -> i32 {
     let (x, y) = side_cell(&*sd);
 
     let bl = block_grid::first_in_cell((*sd).bl.m as usize, x as u16, y as u16, BL_ALL)
-        .and_then(|id| { let p = crate::game::map_server::map_id2bl(id); if p.is_null() { None } else { Some(p as *mut BlockList) } });
+        .and_then(|id| { let p = crate::game::map_server::map_id2bl_ref(id); if p.is_null() { None } else { Some(p) } });
 
     (*sd).exchange.gold = gold;
 
@@ -824,7 +824,7 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
     (*sd).invslot = slot as u8;
 
     let bl = match block_grid::first_in_cell((*sd).bl.m as usize, x as u16, y as u16, BL_ALL)
-        .and_then(|id| { let p = crate::game::map_server::map_id2bl(id); if p.is_null() { None } else { Some(p as *mut BlockList) } }) {
+        .and_then(|id| { let p = crate::game::map_server::map_id2bl_ref(id); if p.is_null() { None } else { Some(p) } }) {
         Some(p) => p,
         None => return 0,
     };

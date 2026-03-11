@@ -512,14 +512,13 @@ use crate::game::map_server::{
     map_additem, map_readglobalreg,
 };
 use crate::game::block_grid;
-use crate::game::map_server::{map_id2bl};
 fn map_id2sd_pc(id: u32) -> *mut MapSessionData {
     crate::game::map_server::map_id2sd_pc(id)
         .map(|r| r as *mut MapSessionData)
         .unwrap_or(std::ptr::null_mut())
 }
-unsafe fn map_id2bl_pc(id: u32) -> *mut BlockList {
-    map_id2bl(id) as *mut BlockList
+fn map_id2bl_pc(id: u32) -> *mut BlockList {
+    crate::game::map_server::map_id2bl_ref(id)
 }
 use crate::game::map_parse::player_state::{
     clif_sendstatus, clif_getchararea, clif_refresh, clif_sendtime,

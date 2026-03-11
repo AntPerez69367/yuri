@@ -62,7 +62,7 @@ pub fn make_area_query_fn(lua: &mlua::Lua, variant: &str, self_ptr: *mut std::ff
         move |lua, (_self, bl_type): (mlua::Value, i32)| {
             const MAX: usize = 512;
             // Re-resolve the entity pointer on every call so we never use a dangling ptr.
-            let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+            let bl_ptr = sffi::map_id2bl(entity_id);
             if bl_ptr.is_null() {
                 return Ok(lua.create_table()?);
             }
@@ -118,7 +118,7 @@ pub fn make_map_query_fn(lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
 /// Takes a BL id (integer), calls `map_id2bl`, and returns the typed object or nil.
 pub fn make_getblock_fn(lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
     lua.create_function(|lua, (_self, id): (mlua::Value, u32)| {
-        let bl = unsafe { sffi::map_id2bl(id) };
+        let bl = sffi::map_id2bl(id);
         if bl.is_null() {
             return Ok(mlua::Value::Nil);
         }
@@ -171,7 +171,7 @@ pub fn make_sendanimation_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let anim  = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let times = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        let bl_ptr = sffi::map_id2bl(entity_id);
         if bl_ptr.is_null() { return Ok(()); }
         unsafe { sffi::sl_g_sendanimation(bl_ptr, anim, times); }
         Ok(())
@@ -185,7 +185,7 @@ pub fn make_playsound_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> ml
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let sound = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        let bl_ptr = sffi::map_id2bl(entity_id);
         if bl_ptr.is_null() { return Ok(()); }
         unsafe { sffi::sl_g_playsound(bl_ptr, sound); }
         Ok(())
@@ -200,7 +200,7 @@ pub fn make_sendaction_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> m
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let action = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let speed  = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        let bl_ptr = sffi::map_id2bl(entity_id);
         if bl_ptr.is_null() { return Ok(()); }
         unsafe { sffi::sl_g_sendaction(bl_ptr, action, speed); }
         Ok(())
@@ -225,7 +225,7 @@ pub fn make_msg_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Re
                 e.nul_position()
             ))
         })?;
-        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        let bl_ptr = sffi::map_id2bl(entity_id);
         if bl_ptr.is_null() { return Ok(()); }
         unsafe { sffi::sl_g_msg(bl_ptr, color, cs.as_ptr(), target); }
         Ok(())
@@ -241,7 +241,7 @@ pub fn make_dropitem_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlu
         let item   = a.get(1).map(|v| val_to_item_id(v)).unwrap_or(0);
         let amount = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
         let owner  = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        let bl_ptr = sffi::map_id2bl(entity_id);
         if bl_ptr.is_null() { return Ok(()); }
         unsafe { sffi::sl_g_dropitem(bl_ptr, item, amount, owner); }
         Ok(())
@@ -260,7 +260,7 @@ pub fn make_dropitemxy_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> m
         let x      = a.get(4).map(|v| val_to_int(v)).unwrap_or(0);
         let y      = a.get(5).map(|v| val_to_int(v)).unwrap_or(0);
         let owner  = a.get(6).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        let bl_ptr = sffi::map_id2bl(entity_id);
         if bl_ptr.is_null() { return Ok(()); }
         unsafe { sffi::sl_g_dropitemxy(bl_ptr, item, amount, m, x, y, owner); }
         Ok(())
@@ -276,7 +276,7 @@ pub fn make_objectcanmove_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -
         let x    = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let y    = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
         let side = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        let bl_ptr = sffi::map_id2bl(entity_id);
         if bl_ptr.is_null() { return Ok(false); }
         Ok(unsafe { sffi::sl_g_objectcanmove(bl_ptr, x, y, side) } != 0)
     }).map(mlua::Value::Function)
@@ -291,7 +291,7 @@ pub fn make_objectcanmovefrom_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_voi
         let x    = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let y    = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
         let side = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        let bl_ptr = sffi::map_id2bl(entity_id);
         if bl_ptr.is_null() { return Ok(false); }
         Ok(unsafe { sffi::sl_g_objectcanmovefrom(bl_ptr, x, y, side) } != 0)
     }).map(mlua::Value::Function)
@@ -305,7 +305,7 @@ pub fn make_repeatanimation_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void)
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let anim     = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let duration = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        let bl_ptr = sffi::map_id2bl(entity_id);
         if bl_ptr.is_null() { return Ok(()); }
         unsafe { sffi::sl_g_repeatanimation(bl_ptr, anim, duration); }
         Ok(())
@@ -321,7 +321,7 @@ pub fn make_selfanimation_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -
         let target = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let anim   = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
         let times  = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        let bl_ptr = sffi::map_id2bl(entity_id);
         if bl_ptr.is_null() { return Ok(()); }
         unsafe { sffi::sl_g_selfanimation(bl_ptr, target, anim, times); }
         Ok(())
@@ -339,7 +339,7 @@ pub fn make_selfanimationxy_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void)
         let x      = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
         let y      = a.get(4).map(|v| val_to_int(v)).unwrap_or(0);
         let times  = a.get(5).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        let bl_ptr = sffi::map_id2bl(entity_id);
         if bl_ptr.is_null() { return Ok(()); }
         unsafe { sffi::sl_g_selfanimationxy(bl_ptr, target, anim, x, y, times); }
         Ok(())
@@ -368,7 +368,7 @@ pub fn make_sendparcel_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> m
                 e.nul_position()
             ))
         })?;
-        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        let bl_ptr = sffi::map_id2bl(entity_id);
         if bl_ptr.is_null() { return Ok(()); }
         unsafe { sffi::sl_g_sendparcel(bl_ptr, receiver, sender, item, amount, owner, cs.as_ptr(), npcflag); }
         Ok(())
@@ -386,7 +386,7 @@ pub fn make_throwblock_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> m
         let icon   = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
         let color  = a.get(4).map(|v| val_to_int(v)).unwrap_or(0);
         let action = a.get(5).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = unsafe { sffi::map_id2bl(entity_id) };
+        let bl_ptr = sffi::map_id2bl(entity_id);
         if bl_ptr.is_null() { return Ok(()); }
         unsafe { sffi::sl_g_throwblock(bl_ptr, x, y, icon, color, action); }
         Ok(())

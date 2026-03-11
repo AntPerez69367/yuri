@@ -198,9 +198,9 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
         let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).bl.m as usize);
         let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            let bl_ptr = crate::game::map_server::map_id2bl(id);
+            let bl_ptr = crate::game::map_server::map_id2bl_ref(id);
             if !bl_ptr.is_null() {
-                clif_object_look_sub_inner(bl_ptr as *mut BlockList, LOOK_GET, sd as *mut BlockList);
+                clif_object_look_sub_inner(bl_ptr, LOOK_GET, sd as *mut BlockList);
             }
         }
     }

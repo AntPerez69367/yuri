@@ -109,22 +109,22 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     g.set("NPC", lua.create_function(|lua, v: mlua::Value| -> mlua::Result<mlua::Value> {
         let ptr = match v {
             mlua::Value::Integer(i) if i >= 0 && i <= u32::MAX as i64 => {
-                unsafe { ffi::map_id2bl(i as u32) }
+                ffi::map_id2bl_ref(i as u32)
             }
             mlua::Value::Number(f) if f.is_finite() && f >= 0.0 && f <= u32::MAX as f64 => {
-                unsafe { ffi::map_id2bl(f as u32) }
+                ffi::map_id2bl_ref(f as u32)
             }
             mlua::Value::String(ref s) => {
                 let cs = CString::new(s.as_bytes().to_vec()).map_err(mlua::Error::external)?;
-                unsafe { ffi::map_name2npc(cs.as_ptr()) as *mut std::ffi::c_void }
+                unsafe { ffi::map_name2npc(cs.as_ptr()) as *mut BlockList }
             }
             _ => std::ptr::null_mut(),
         };
         if ptr.is_null() { return Ok(mlua::Value::Nil); }
-        if unsafe { (*(ptr as *const BlockList)).bl_type as i32 } != ffi::BL_NPC {
+        if unsafe { (*ptr).bl_type as i32 } != ffi::BL_NPC {
             return Ok(mlua::Value::Nil);
         }
-        Ok(mlua::Value::UserData(lua.create_userdata(NpcObject { ptr })?))
+        Ok(mlua::Value::UserData(lua.create_userdata(NpcObject { ptr: ptr as *mut std::ffi::c_void })?))
     })?)?;
 
     // Player — callable namespace table for PC scripts.

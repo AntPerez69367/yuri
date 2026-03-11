@@ -16,9 +16,15 @@ pub use crate::game::map_server::{cur_year, cur_season, cur_day, cur_time};
 
 // ─── Map id/name lookups ──────────────────────────────────────────────────────
 pub use crate::game::map_server::{
-    map_id2bl, map_id2fl, map_changepostcolor,
+    map_id2bl_ref, map_id2fl, map_changepostcolor,
     map_setglobalreg, map_readglobalgamereg, map_setglobalgamereg,
 };
+
+/// Polymorphic entity lookup returning `*mut c_void` (points to BlockList header).
+/// Used by scripting code that needs a generic entity pointer.
+pub fn map_id2bl(id: u32) -> *mut std::ffi::c_void {
+    map_id2bl_ref(id) as *mut std::ffi::c_void
+}
 
 pub fn map_id2sd(id: u32) -> *mut std::ffi::c_void {
     crate::game::map_server::map_id2sd_pc(id)

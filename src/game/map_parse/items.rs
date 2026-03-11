@@ -1144,9 +1144,8 @@ pub unsafe fn clif_parsethrow(sd: *mut MapSessionData) -> i32 {
         if let Some(grid) = block_grid::get_grid(m as usize) {
             let cell_ids = grid.ids_at_tile(x1 as u16, y1 as u16);
             for cid in cell_ids {
-                let bl_ptr = crate::game::map_server::map_id2bl(cid);
-                if !bl_ptr.is_null() {
-                    let bl = bl_ptr as *mut crate::database::map_db::BlockList;
+                let bl = crate::game::map_server::map_id2bl_ref(cid);
+                if !bl.is_null() {
                     let ty = (*bl).bl_type as i32;
                     if ty == BL_NPC || ty == BL_PC || ty == BL_MOB {
                         clif_throw_check_inner(bl, found.as_mut_ptr());

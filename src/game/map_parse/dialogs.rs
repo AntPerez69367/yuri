@@ -26,7 +26,7 @@ use super::packet::{
 
 
 
-use crate::game::map_server::{map_id2bl as map_id2bl_ms};
+use crate::game::map_server::map_id2bl_ref;
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::client::visual::clif_clickonplayer;
 use crate::game::scripting::{
@@ -54,8 +54,8 @@ fn map_id2npc_local(id: u32) -> *mut crate::game::npc::NpcData {
         .unwrap_or(std::ptr::null_mut())
 }
 #[inline]
-unsafe fn map_id2bl(id: u32) -> *mut BlockList {
-    map_id2bl_ms(id) as *mut BlockList
+fn map_id2bl(id: u32) -> *mut BlockList {
+    map_id2bl_ref(id)
 }
 
 /// Dispatch a Lua event with a single block_list argument.

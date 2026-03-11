@@ -320,7 +320,7 @@ fn map_id2sd_acc(id: u32) -> *mut MapSessionData {
         .unwrap_or(std::ptr::null_mut())
 }
 #[inline(always)]
-unsafe fn map_id2bl_acc(id: u32) -> *mut BlockList {
+fn map_id2bl_acc(id: u32) -> *mut BlockList {
     map_id2bl(id)
 }
 #[inline(always)]

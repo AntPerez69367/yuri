@@ -112,9 +112,8 @@ use crate::game::block::{map_addblock, map_delblock, map_moveblock};
 use crate::game::map_parse::visual::clif_lookgone;
 use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from};
 
-// map_id2bl returns *mut std::ffi::c_void; wrap for std::ffi::c_void usage (npc uses it as void pointer)
-unsafe fn map_id2bl(id: u32) -> *mut std::ffi::c_void {
-    crate::game::map_server::map_id2bl(id)
+fn map_id2bl(id: u32) -> *mut BlockList {
+    crate::game::map_server::map_id2bl_ref(id)
 }
 
 use crate::game::block::AreaType;
@@ -1041,9 +1040,8 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> i32 {
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
         for id in cell_ids {
-            let bl_ptr = crate::game::map_server::map_id2bl(id);
-            if !bl_ptr.is_null() {
-                let bl = bl_ptr as *mut BlockList;
+            let bl = crate::game::map_server::map_id2bl_ref(id);
+            if !bl.is_null() {
                 let ty = (*bl).bl_type as i32;
                 if ty == BL_MOB || ty == BL_PC || ty == BL_NPC {
                     npc_move_sub_inner(bl, nd as *mut NpcData);

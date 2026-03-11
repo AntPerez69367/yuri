@@ -210,9 +210,9 @@ use crate::game::map_server::cur_time;
 // groups[256][256] flat array — defined in map_server.rs as 
 use crate::game::map_server::groups as groups_mob;
 
-// map_id2bl returns *mut std::ffi::c_void; wrap for BlockList usage
-pub unsafe fn map_id2bl(id: u32) -> *mut BlockList {
-    crate::game::map_server::map_id2bl(id) as *mut BlockList
+// map_id2bl returns *mut BlockList for any registered entity.
+pub fn map_id2bl(id: u32) -> *mut BlockList {
+    crate::game::map_server::map_id2bl_ref(id)
 }
 
 // map_id2sd_mob: typed lookup returning raw pointer for MapSessionData usage in mob.rs.
