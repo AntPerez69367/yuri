@@ -209,6 +209,29 @@ async fn main() -> Result<()> {
 
     tracing::info!("[map] [ready] Listening on {}:{}", state.config.map_ip, state.config.map_port);
 
+    // Spawn background deadlock detector (parking_lot feature).
+    // Checks every 5 seconds; logs involved threads + backtraces on detection.
+    std::thread::spawn(|| {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let deadlocks = parking_lot::deadlock::check_deadlock();
+            if deadlocks.is_empty() {
+                continue;
+            }
+            tracing::error!("[map] [deadlock] {} deadlock(s) detected!", deadlocks.len());
+            for (i, threads) in deadlocks.iter().enumerate() {
+                tracing::error!("[map] [deadlock] Deadlock #{}", i + 1);
+                for t in threads {
+                    tracing::error!(
+                        "[map] [deadlock]   Thread {:?}:\n{:?}",
+                        t.thread_id(),
+                        t.backtrace()
+                    );
+                }
+            }
+        }
+    });
+
     // Run the C session event loop. LocalSet is required for spawn_local (accept_loop,
     // session_io_task). This drives client accept + I/O until shutdown is signalled.
     //
