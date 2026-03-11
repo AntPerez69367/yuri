@@ -19,6 +19,12 @@ struct ThreadMap(HashMap<usize, RegistryKey>);
 unsafe impl Send for ThreadMap {}
 unsafe impl Sync for ThreadMap {}
 
+impl std::fmt::Debug for ThreadMap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ThreadMap").field("len", &self.0.len()).finish()
+    }
+}
+
 static THREADS: OnceLock<Mutex<ThreadMap>> = OnceLock::new();
 
 fn threads() -> std::sync::MutexGuard<'static, ThreadMap> {

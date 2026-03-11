@@ -1982,11 +1982,18 @@ pub struct GameData {
 unsafe impl Send for GameData {}
 unsafe impl Sync for GameData {}
 
+impl std::fmt::Debug for GameData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GameData").finish_non_exhaustive()
+    }
+}
+
 /// The game-wide registry global.
 ///
 /// Populated by `map_loadgameregistry` and mutated by `map_setglobalgamereg`.
 static GAMEREG: OnceLock<Mutex<GameData>> = OnceLock::new();
 
+#[inline]
 pub fn gamereg() -> std::sync::MutexGuard<'static, GameData> {
     GAMEREG.get_or_init(|| Mutex::new(GameData {
         registry:     std::ptr::null_mut(),
@@ -1998,7 +2005,7 @@ pub fn gamereg() -> std::sync::MutexGuard<'static, GameData> {
 /// global allocator.  The caller is responsible for freeing via the same allocator.
 fn alloc_zeroed_gamereg_registry(len: usize) -> *mut crate::database::map_db::GlobalReg {
     use crate::database::map_db::GlobalReg;
-    let layout = std::alloc::Layout::array::<GlobalReg>(len).unwrap();
+    let layout = std::alloc::Layout::array::<GlobalReg>(len).expect("GlobalReg layout overflow");
     let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
     if ptr.is_null() {
         std::alloc::handle_alloc_error(layout);
@@ -2835,7 +2842,7 @@ pub unsafe fn map_do_term() {
                 slot.warp = std::ptr::null_mut();
             }
             if !slot.registry.is_null() {
-                let layout = std::alloc::Layout::array::<GlobalReg>(MAX_MAPREG).unwrap();
+                let layout = std::alloc::Layout::array::<GlobalReg>(MAX_MAPREG).expect("GlobalReg layout overflow");
                 std::alloc::dealloc(slot.registry as *mut u8, layout);
                 slot.registry = std::ptr::null_mut();
             }

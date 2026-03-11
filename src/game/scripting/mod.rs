@@ -35,6 +35,12 @@ struct LuaWrapper(Lua);
 unsafe impl Send for LuaWrapper {}
 unsafe impl Sync for LuaWrapper {}
 
+impl std::fmt::Debug for LuaWrapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LuaWrapper").finish_non_exhaustive()
+    }
+}
+
 /// The global Lua state, set once by `sl_init`.
 static SL_STATE: std::sync::OnceLock<LuaWrapper> = std::sync::OnceLock::new();
 
