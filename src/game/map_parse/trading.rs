@@ -51,30 +51,6 @@ use crate::database::item_db::{
 };
 use crate::database::class_db::rust_classdb_name as classdb_name;
 
-// map_id2sd_local: typed lookup returning raw pointer for use in unsafe context.
-#[inline]
-fn map_id2sd_local(id: u32) -> *mut MapSessionData {
-    crate::game::map_server::map_id2sd_pc(id)
-        .map(|r| r as *mut MapSessionData)
-        .unwrap_or(std::ptr::null_mut())
-}
-
-// map_id2mob_local: typed lookup returning raw pointer for use in unsafe context.
-#[inline]
-fn map_id2mob_local(id: u32) -> *mut crate::game::mob::MobSpawnData {
-    crate::game::map_server::map_id2mob_ref(id)
-        .map(|r| r as *mut crate::game::mob::MobSpawnData)
-        .unwrap_or(std::ptr::null_mut())
-}
-
-// map_id2npc_local: typed lookup returning raw pointer for use in unsafe context.
-#[inline]
-fn map_id2npc_local(id: u32) -> *mut crate::game::npc::NpcData {
-    crate::game::map_server::map_id2npc_ref(id)
-        .map(|r| r as *mut crate::game::npc::NpcData)
-        .unwrap_or(std::ptr::null_mut())
-}
-
 /// Dispatch a Lua event with two block_list arguments.
 #[allow(dead_code)]
 unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
@@ -240,8 +216,11 @@ pub unsafe fn clif_startexchange(
         return 0;
     }
 
-    let tsd = map_id2sd_local(target);
-    if tsd.is_null() { return 0; }
+    let tsd_arc = match crate::game::map_server::map_id2sd_pc(target) {
+        Some(a) => a, None => return 0,
+    };
+    let mut _tsd_guard = tsd_arc.write();
+    let tsd = &mut *_tsd_guard as *mut MapSessionData;
 
     (*sd).exchange.target  = target;
     (*tsd).exchange.target = (*sd).bl.id;
@@ -792,13 +771,16 @@ pub unsafe fn clif_handgold(sd: *mut MapSessionData) -> i32 {
 
     if let Some(bl) = bl {
         if (*bl).bl_type as i32 == BL_PC {
-            let tsd = map_id2sd_local((*bl).id);
-            if !tsd.is_null() && (*tsd).status.setting_flags as u32 & FLAG_EXCHANGE != 0 {
-                clif_startexchange(sd, (*bl).id);
-                clif_exchange_money(sd, tsd);
-            } else {
-                let msg = b"They have refused to exchange with you\0".as_ptr() as *const i8;
-                clif_sendminitext(sd, msg);
+            if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc((*bl).id) {
+                let mut tsd_guard = tsd_arc.write();
+                let tsd = &mut *tsd_guard as *mut MapSessionData;
+                if (*tsd).status.setting_flags as u32 & FLAG_EXCHANGE != 0 {
+                    clif_startexchange(sd, (*bl).id);
+                    clif_exchange_money(sd, tsd);
+                } else {
+                    let msg = b"They have refused to exchange with you\0".as_ptr() as *const i8;
+                    clif_sendminitext(sd, msg);
+                }
             }
         }
     }
@@ -830,19 +812,25 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
     };
 
     if (*bl).bl_type as i32 == BL_PC {
-        let tsd = map_id2sd_local((*bl).id);
-        if !tsd.is_null() && (*tsd).status.setting_flags as u32 & FLAG_EXCHANGE != 0 {
-            clif_startexchange(sd, (*bl).id);
-            clif_exchange_additem(sd, tsd, slot as i32, amount);
-        } else {
-            let msg = b"They have refused to exchange with you\0".as_ptr() as *const i8;
-            clif_sendminitext(sd, msg);
+        if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc((*bl).id) {
+            let mut tsd_guard = tsd_arc.write();
+            let tsd = &mut *tsd_guard as *mut MapSessionData;
+            if (*tsd).status.setting_flags as u32 & FLAG_EXCHANGE != 0 {
+                clif_startexchange(sd, (*bl).id);
+                clif_exchange_additem(sd, tsd, slot as i32, amount);
+            } else {
+                let msg = b"They have refused to exchange with you\0".as_ptr() as *const i8;
+                clif_sendminitext(sd, msg);
+            }
         }
     }
 
     if (*bl).bl_type as i32 == BL_MOB {
-        let mob = map_id2mob_local((*bl).id);
-        if mob.is_null() { return 0; }
+        let mob_arc = match crate::game::map_server::map_id2mob_ref((*bl).id) {
+            Some(a) => a, None => return 0,
+        };
+        let mut mob_guard = mob_arc.write();
+        let mob = &mut *mob_guard as *mut crate::game::mob::MobSpawnData;
 
         if itemdb_exchangeable((*sd).status.inventory[slot].id) == 1 { return 0; }
 
@@ -877,8 +865,11 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
     }
 
     if (*bl).bl_type as i32 == BL_NPC {
-        let nd = map_id2npc_local((*bl).id);
-        if nd.is_null() { return 0; }
+        let nd_arc = match crate::game::map_server::map_id2npc_ref((*bl).id) {
+            Some(a) => a, None => return 0,
+        };
+        let mut nd_guard = nd_arc.write();
+        let nd = &mut *nd_guard as *mut crate::game::npc::NpcData;
 
         // Cast to a minimal NPC view to read receiveItem
         #[repr(C)]
@@ -952,14 +943,16 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             // Initiation: type 0
             let raw = rfifol((*sd).fd, 6);
             let target_id = u32::from_be_bytes(raw.to_le_bytes());
-            let tsd = map_id2sd_local(target_id);
-            if tsd.is_null()
-                || (*sd).bl.m != (*tsd).bl.m
-                || (*tsd).bl.bl_type as i32 != BL_PC
-            {
+            let tsd_arc = match crate::game::map_server::map_id2sd_pc(target_id) {
+                Some(a) => a, None => return 0,
+            };
+            let _tsd_guard = tsd_arc.read();
+            let tsd = &*_tsd_guard;
+            if (*sd).bl.m != tsd.bl.m || tsd.bl.bl_type as i32 != BL_PC {
                 return 0;
             }
-            if (*sd).status.gm_level != 0 || ((*tsd).optFlags & OPT_FLAG_STEALTH) == 0 {
+            if (*sd).status.gm_level != 0 || (tsd.optFlags & OPT_FLAG_STEALTH) == 0 {
+                drop(_tsd_guard);
                 clif_startexchange(sd, target_id);
             }
         }
@@ -987,8 +980,11 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             } else if (*sd).status.inventory[id].id != 0 {
                 let raw = rfifol((*sd).fd, 6);
                 let target_id = u32::from_be_bytes(raw.to_le_bytes());
-                let tsd = map_id2sd_local(target_id);
-                if tsd.is_null() { return 0; }
+                let tsd_arc = match crate::game::map_server::map_id2sd_pc(target_id) {
+                    Some(a) => a, None => return 0,
+                };
+                let mut _tsd_guard = tsd_arc.write();
+                let tsd = &mut *_tsd_guard as *mut MapSessionData;
                 clif_exchange_additem(sd, tsd, id as i32, 1);
             }
             // else: blank slot hack attempt — do nothing (matching C)
@@ -1002,8 +998,11 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             let amount = rfifob((*sd).fd, 11) as i32;
             let raw = rfifol((*sd).fd, 6);
             let target_id = u32::from_be_bytes(raw.to_le_bytes());
-            let tsd = map_id2sd_local(target_id);
-            if tsd.is_null() { return 0; }
+            let tsd_arc = match crate::game::map_server::map_id2sd_pc(target_id) {
+                Some(a) => a, None => return 0,
+            };
+            let mut _tsd_guard = tsd_arc.write();
+            let tsd = &mut *_tsd_guard as *mut MapSessionData;
             if amount > 0
                 && (*sd).status.inventory[id].id != 0
                 && amount <= (*sd).status.inventory[id].amount
@@ -1018,7 +1017,11 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             let target_id  = u32::from_be_bytes(raw_target.to_le_bytes());
             let raw_amount = rfifol((*sd).fd, 10);
             let amount     = u32::from_be_bytes(raw_amount.to_le_bytes());
-            let tsd = map_id2sd_local(target_id);
+            let tsd_arc = match crate::game::map_server::map_id2sd_pc(target_id) {
+                Some(a) => a, None => return 0,
+            };
+            let mut _tsd_guard = tsd_arc.write();
+            let tsd = &mut *_tsd_guard as *mut MapSessionData;
             if amount > (*sd).status.money {
                 clif_exchange_money(sd, tsd);
             } else {
@@ -1030,31 +1033,34 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             // Quit exchange
             let raw = rfifol((*sd).fd, 6);
             let target_id = u32::from_be_bytes(raw.to_le_bytes());
-            let tsd = map_id2sd_local(target_id);
             let msg = b"Exchange cancelled.\0".as_ptr() as *const i8;
             clif_exchange_message(sd, msg, 4, 0);
-            if !tsd.is_null() {
+            if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(target_id) {
+                let mut _tsd_guard = tsd_arc.write();
+                let tsd = &mut *_tsd_guard as *mut MapSessionData;
                 clif_exchange_message(tsd, msg, 4, 0);
-            }
-            clif_exchange_close(sd);
-            if !tsd.is_null() {
                 clif_exchange_close(tsd);
             }
+            clif_exchange_close(sd);
         }
         5 => {
             // Finish exchange
             let raw = rfifol((*sd).fd, 6);
             let target_id = u32::from_be_bytes(raw.to_le_bytes());
-            let tsd = map_id2sd_local(target_id);
+            let tsd_arc = crate::game::map_server::map_id2sd_pc(target_id);
 
             if (*sd).exchange.target != target_id {
                 clif_exchange_close(sd);
                 let msg = b"Exchange cancelled.\0".as_ptr() as *const i8;
                 clif_exchange_message(sd, msg, 4, 0);
-                if !tsd.is_null() && (*tsd).exchange.target == (*sd).bl.id {
-                    clif_exchange_message(tsd, msg, 4, 0);
-                    clif_exchange_close(tsd);
-                    session_set_eof((*sd).fd, 10);
+                if let Some(ref arc) = tsd_arc {
+                    let mut guard = arc.write();
+                    let tsd = &mut *guard as *mut MapSessionData;
+                    if (*tsd).exchange.target == (*sd).bl.id {
+                        clif_exchange_message(tsd, msg, 4, 0);
+                        clif_exchange_close(tsd);
+                        session_set_eof((*sd).fd, 10);
+                    }
                 }
                 return 0;
             }
@@ -1062,10 +1068,16 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             let msg_cancel  = b"Exchange cancelled.\0".as_ptr() as *const i8;
             if (*sd).exchange.gold > (*sd).status.money {
                 clif_exchange_message(sd, msg_no_gold, 4, 0);
-                clif_exchange_message(tsd, msg_cancel,  4, 0);
+                if let Some(ref arc) = tsd_arc {
+                    let mut guard = arc.write();
+                    let tsd = &mut *guard as *mut MapSessionData;
+                    clif_exchange_message(tsd, msg_cancel, 4, 0);
+                    clif_exchange_close(tsd);
+                }
                 clif_exchange_close(sd);
-                clif_exchange_close(tsd);
-            } else if !tsd.is_null() {
+            } else if let Some(ref arc) = tsd_arc {
+                let mut guard = arc.write();
+                let tsd = &mut *guard as *mut MapSessionData;
                 clif_exchange_sendok(sd, tsd);
             } else {
                 clif_exchange_close(sd);

@@ -1847,8 +1847,8 @@ pub unsafe fn broadcast_update_state(src: *mut MapSessionData) {
         let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(m as usize) };
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                write_state_packet(src, pc as *mut MapSessionData);
+            if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                write_state_packet(src, &mut *pc_arc.write() as *mut MapSessionData);
             }
         }
     }
@@ -1873,7 +1873,7 @@ use crate::game::client::handlers::{clif_getName, clif_isregistered};
 #[inline]
 fn map_id2sd_cop(id: u32) -> *mut MapSessionData {
     crate::game::map_server::map_id2sd_pc(id)
-        .map(|r| r as *mut MapSessionData)
+        .map(|arc| &mut *arc.write() as *mut MapSessionData)
         .unwrap_or(std::ptr::null_mut())
 }
 

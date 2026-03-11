@@ -316,7 +316,7 @@ use crate::database::class_db::{rust_classdb_path as classdb_path_ffi, rust_clas
 #[inline(always)]
 fn map_id2sd_acc(id: u32) -> *mut MapSessionData {
     crate::game::map_server::map_id2sd_pc(id)
-        .map(|r| r as *mut MapSessionData)
+        .map(|arc| &*arc.write() as *const MapSessionData as *mut MapSessionData)
         .unwrap_or(std::ptr::null_mut())
 }
 #[inline(always)]
@@ -326,7 +326,7 @@ fn map_id2bl_acc(id: u32) -> *mut BlockList {
 #[inline(always)]
 fn map_id2mob_acc(id: u32) -> *mut MobSpawnData {
     crate::game::map_server::map_id2mob_ref(id)
-        .map(|r| r as *mut MobSpawnData)
+        .map(|arc| &*arc.write() as *const MobSpawnData as *mut MobSpawnData)
         .unwrap_or(std::ptr::null_mut())
 }
 
@@ -1333,7 +1333,7 @@ pub unsafe fn sl_user_coref_container(sd: &mut MapSessionData) -> u32 {
 }
 pub fn sl_user_map_id2sd(id: u32) -> *mut std::ffi::c_void {
     crate::game::map_server::map_id2sd_pc(id)
-        .map(|r| r as *mut _ as *mut std::ffi::c_void)
+        .map(|arc| &*arc.write() as *const _ as *mut std::ffi::c_void)
         .unwrap_or(std::ptr::null_mut())
 }
 

@@ -239,7 +239,8 @@ pub unsafe fn clif_sendchararea(sd: *mut MapSessionData) -> i32 {
     if let (Some(grid), Some(slot)) = (block_grid::get_grid((*sd).bl.m as usize), map_data((*sd).bl.m as usize)) {
         let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+            if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                let mut pc = pc_arc.write();
                 clif_charlook_inner(&raw mut pc.bl, LOOK_SEND, sd);
             }
         }
@@ -255,10 +256,10 @@ pub unsafe fn clif_sendchararea(sd: *mut MapSessionData) -> i32 {
 /// Applies visibility rules (stealth, ghost, GFX override).
 ///
 pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
-    let Some(sd) = crate::game::map_server::map_id2sd_pc(sender as u32) else { return 0; };
-    let sd: *mut MapSessionData = sd;
-    let Some(src_sd) = crate::game::map_server::map_id2sd_pc(id as u32) else { return 0; };
-    let src_sd: *mut MapSessionData = src_sd;
+    let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(sender as u32) else { return 0; };
+    let sd: *mut MapSessionData = &mut *sd_arc.write() as *mut MapSessionData;
+    let Some(src_arc) = crate::game::map_server::map_id2sd_pc(id as u32) else { return 0; };
+    let src_sd: *mut MapSessionData = &mut *src_arc.write() as *mut MapSessionData;
 
     // Stealth: hide from non-GM viewers (except from self)
     if ((*sd).optFlags & OPT_FLAG_STEALTH) != 0
@@ -697,12 +698,12 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
         if let Some(grid) = block_grid::get_grid(m as usize) {
             let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
             for id in cell_ids {
-                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_canmove_sub_inner(&raw mut pc.bl, sd);
-                } else if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
-                    clif_canmove_sub_inner(&raw mut mob.bl, sd);
-                } else if let Some(npc) = crate::game::map_server::map_id2npc_ref(id) {
-                    clif_canmove_sub_inner(&raw mut npc.bl, sd);
+                if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_canmove_sub_inner(&raw mut pc_arc.write().bl, sd);
+                } else if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(id) {
+                    clif_canmove_sub_inner(&raw mut mob_arc.write().bl, sd);
+                } else if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(id) {
+                    clif_canmove_sub_inner(&raw mut npc_arc.write().bl, sd);
                 }
             }
         }
@@ -789,30 +790,31 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
             let rect_ids = grid.ids_in_rect(x0, y0, x0 + (x1 - 1), y0 + (y1 - 1));
             clif_mob_look_start(sd);
             for &id in &rect_ids {
-                if let Some(mut ent) = crate::game::map_server::map_id2entity(id) {
-                    let bl = ent.bl_mut() as *mut BlockList;
-                    clif_object_look_sub_inner(bl, LOOK_GET, sd as *mut BlockList);
+                if let Some(ent) = crate::game::map_server::map_id2entity(id) {
+                    ent.with_bl_mut(|bl| {
+                        clif_object_look_sub_inner(bl as *mut BlockList, LOOK_GET, sd as *mut BlockList);
+                    });
                 }
             }
             clif_mob_look_close(sd);
             for &id in &rect_ids {
-                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_charlook_inner(&raw mut pc.bl, LOOK_GET, sd);
+                if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_charlook_inner(&raw mut pc_arc.write().bl, LOOK_GET, sd);
                 }
             }
             for &id in &rect_ids {
-                if let Some(npc) = crate::game::map_server::map_id2npc_ref(id) {
-                    clif_cnpclook_inner(&raw mut npc.bl, LOOK_GET, sd as *mut BlockList);
+                if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(id) {
+                    clif_cnpclook_inner(&raw mut npc_arc.write().bl, LOOK_GET, sd as *mut BlockList);
                 }
             }
             for &id in &rect_ids {
-                if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
-                    clif_cmoblook_inner(&raw mut mob.bl, LOOK_GET, sd as *mut BlockList);
+                if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(id) {
+                    clif_cmoblook_inner(&raw mut mob_arc.write().bl, LOOK_GET, sd as *mut BlockList);
                 }
             }
             for &id in &rect_ids {
-                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_charlook_inner(&raw mut pc.bl, LOOK_SEND, sd);
+                if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_charlook_inner(&raw mut pc_arc.write().bl, LOOK_SEND, sd);
                 }
             }
         }
@@ -929,12 +931,12 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> i32 {
         if let Some(grid) = block_grid::get_grid(m as usize) {
             let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
             for id in cell_ids {
-                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_canmove_sub_inner(&raw mut pc.bl, sd);
-                } else if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
-                    clif_canmove_sub_inner(&raw mut mob.bl, sd);
-                } else if let Some(npc) = crate::game::map_server::map_id2npc_ref(id) {
-                    clif_canmove_sub_inner(&raw mut npc.bl, sd);
+                if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_canmove_sub_inner(&raw mut pc_arc.write().bl, sd);
+                } else if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(id) {
+                    clif_canmove_sub_inner(&raw mut mob_arc.write().bl, sd);
+                } else if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(id) {
+                    clif_canmove_sub_inner(&raw mut npc_arc.write().bl, sd);
                 }
             }
         }
@@ -1032,30 +1034,31 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> i32 {
             let rect_ids = grid.ids_in_rect(x0, y0, x0 + (x1 - 1), y0 + (y1 - 1));
             clif_mob_look_start(sd);
             for &id in &rect_ids {
-                if let Some(mut ent) = crate::game::map_server::map_id2entity(id) {
-                    let bl = ent.bl_mut() as *mut BlockList;
-                    clif_object_look_sub_inner(bl, LOOK_GET, sd as *mut BlockList);
+                if let Some(ent) = crate::game::map_server::map_id2entity(id) {
+                    ent.with_bl_mut(|bl| {
+                        clif_object_look_sub_inner(bl as *mut BlockList, LOOK_GET, sd as *mut BlockList);
+                    });
                 }
             }
             clif_mob_look_close(sd);
             for &id in &rect_ids {
-                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_charlook_inner(&raw mut pc.bl, LOOK_GET, sd);
+                if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_charlook_inner(&raw mut pc_arc.write().bl, LOOK_GET, sd);
                 }
             }
             for &id in &rect_ids {
-                if let Some(npc) = crate::game::map_server::map_id2npc_ref(id) {
-                    clif_cnpclook_inner(&raw mut npc.bl, LOOK_GET, sd as *mut BlockList);
+                if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(id) {
+                    clif_cnpclook_inner(&raw mut npc_arc.write().bl, LOOK_GET, sd as *mut BlockList);
                 }
             }
             for &id in &rect_ids {
-                if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
-                    clif_cmoblook_inner(&raw mut mob.bl, LOOK_GET, sd as *mut BlockList);
+                if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(id) {
+                    clif_cmoblook_inner(&raw mut mob_arc.write().bl, LOOK_GET, sd as *mut BlockList);
                 }
             }
             for &id in &rect_ids {
-                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_charlook_inner(&raw mut pc.bl, LOOK_SEND, sd);
+                if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_charlook_inner(&raw mut pc_arc.write().bl, LOOK_SEND, sd);
                 }
             }
         }
@@ -1470,30 +1473,31 @@ pub unsafe fn clif_parseviewchange(sd: *mut MapSessionData) -> i32 {
         let rect_ids = grid.ids_in_rect(x0, y0, x0 + (x1 - 1), y0 + (y1 - 1));
         clif_mob_look_start(sd);
         for &id in &rect_ids {
-            if let Some(mut ent) = crate::game::map_server::map_id2entity(id) {
-                let bl = ent.bl_mut() as *mut BlockList;
-                clif_object_look_sub_inner(bl, LOOK_GET, sd as *mut BlockList);
+            if let Some(ent) = crate::game::map_server::map_id2entity(id) {
+                ent.with_bl_mut(|bl| {
+                    clif_object_look_sub_inner(bl as *mut BlockList, LOOK_GET, sd as *mut BlockList);
+                });
             }
         }
         clif_mob_look_close(sd);
         for &id in &rect_ids {
-            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_charlook_inner(&raw mut pc.bl, LOOK_GET, sd);
+            if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                clif_charlook_inner(&raw mut pc_arc.write().bl, LOOK_GET, sd);
             }
         }
         for &id in &rect_ids {
-            if let Some(npc) = crate::game::map_server::map_id2npc_ref(id) {
-                clif_cnpclook_inner(&raw mut npc.bl, LOOK_GET, sd as *mut BlockList);
+            if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(id) {
+                clif_cnpclook_inner(&raw mut npc_arc.write().bl, LOOK_GET, sd as *mut BlockList);
             }
         }
         for &id in &rect_ids {
-            if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
-                clif_cmoblook_inner(&raw mut mob.bl, LOOK_GET, sd as *mut BlockList);
+            if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(id) {
+                clif_cmoblook_inner(&raw mut mob_arc.write().bl, LOOK_GET, sd as *mut BlockList);
             }
         }
         for &id in &rect_ids {
-            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_charlook_inner(&raw mut pc.bl, LOOK_SEND, sd);
+            if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                clif_charlook_inner(&raw mut pc_arc.write().bl, LOOK_SEND, sd);
             }
         }
     }
@@ -1539,9 +1543,10 @@ pub unsafe fn clif_parselookat_2(sd: *mut MapSessionData) -> i32 {
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
         for id in cell_ids {
-            if let Some(mut ent) = crate::game::map_server::map_id2entity(id) {
-                let bl = ent.bl_mut() as *mut BlockList;
-                clif_parselookat_sub_inner(bl, sd);
+            if let Some(ent) = crate::game::map_server::map_id2entity(id) {
+                ent.with_bl_mut(|bl| {
+                    clif_parselookat_sub_inner(bl as *mut BlockList, sd);
+                });
             }
         }
     }
@@ -1566,9 +1571,10 @@ pub unsafe fn clif_parselookat(sd: *mut MapSessionData) -> i32 {
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let cell_ids = grid.ids_at_tile(x as u16, y as u16);
         for id in cell_ids {
-            if let Some(mut ent) = crate::game::map_server::map_id2entity(id) {
-                let bl = ent.bl_mut() as *mut BlockList;
-                clif_parselookat_sub_inner(bl, sd);
+            if let Some(ent) = crate::game::map_server::map_id2entity(id) {
+                ent.with_bl_mut(|bl| {
+                    clif_parselookat_sub_inner(bl as *mut BlockList, sd);
+                });
             }
         }
     }
@@ -1595,9 +1601,10 @@ pub unsafe fn clif_refreshnoclick(sd: *mut MapSessionData) -> i32 {
     if let (Some(grid), Some(slot)) = (block_grid::get_grid((*sd).bl.m as usize), map_data((*sd).bl.m as usize)) {
         let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(mut ent) = crate::game::map_server::map_id2entity(id) {
-                let bl = ent.bl_mut() as *mut BlockList;
-                clif_object_look_sub_inner(bl, LOOK_GET, sd as *mut BlockList);
+            if let Some(ent) = crate::game::map_server::map_id2entity(id) {
+                ent.with_bl_mut(|bl| {
+                    clif_object_look_sub_inner(bl as *mut BlockList, LOOK_GET, sd as *mut BlockList);
+                });
             }
         }
     }

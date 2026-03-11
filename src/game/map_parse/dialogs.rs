@@ -43,14 +43,14 @@ use crate::database::class_db::rust_classdb_name;
 #[inline]
 fn map_id2sd_local(id: u32) -> *mut MapSessionData {
     crate::game::map_server::map_id2sd_pc(id)
-        .map(|r| r as *mut MapSessionData)
+        .map(|arc| &mut *arc.write() as *mut MapSessionData)
         .unwrap_or(std::ptr::null_mut())
 }
 // map_id2npc_local: typed lookup returning raw pointer for use in unsafe context.
 #[inline]
 fn map_id2npc_local(id: u32) -> *mut crate::game::npc::NpcData {
     crate::game::map_server::map_id2npc_ref(id)
-        .map(|r| r as *mut crate::game::npc::NpcData)
+        .map(|arc| &mut *arc.write() as *mut crate::game::npc::NpcData)
         .unwrap_or(std::ptr::null_mut())
 }
 #[inline]

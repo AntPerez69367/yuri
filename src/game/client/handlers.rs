@@ -135,7 +135,7 @@ pub unsafe fn clif_stoptimers(sd: *mut MapSessionData) -> i32 {
 pub async unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
     if (*sd).exchange.target != 0 {
         let tsd = map_id2sd_pc((*sd).exchange.target)
-            .map(|r| r as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
+            .map(|arc| &mut *arc.write() as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
         clif_exchange_close(sd);
         if !tsd.is_null() && (*tsd).exchange.target == (*sd).bl.id {
             clif_exchange_message(tsd, c"Exchange cancelled.".as_ptr(), 4, 0);
@@ -155,7 +155,7 @@ pub async unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
     let name = CStr::from_ptr((*sd).status.name.as_ptr() as *const i8).to_string_lossy().into_owned();
 
     clif_quit(sd);
-    map_deliddb(&raw mut (*sd).bl);
+    map_deliddb((*sd).bl.id);
 
     if let Err(e) = sqlx::query("UPDATE `Character` SET `ChaOnline` = '0' WHERE `ChaId` = ?")
         .bind(id)
@@ -212,7 +212,7 @@ pub unsafe fn clif_handle_menuinput(sd: *mut MapSessionData) -> i32 {
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 pub unsafe fn clif_handle_powerboards(sd: *mut MapSessionData) -> i32 {
     let tsd = map_id2sd_pc(rlong_be((*sd).fd, 11))
-        .map(|r| r as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
+        .map(|arc| &mut *arc.write() as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
     if !tsd.is_null() {
         (*sd).pbColor = rbyte((*sd).fd, 15) as i32;
     } else {
@@ -493,7 +493,7 @@ pub unsafe fn clif_delay(milliseconds: i32) {
 
 /// Send a heartbeat packet (opcode 0x3B) to the player with id `id`.
 pub unsafe fn clif_sendheartbeat(id: i32, _none: i32) -> i32 {
-    let sd = map_id2sd_pc(id as u32).map(|r| r as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
+    let sd = map_id2sd_pc(id as u32).map(|arc| &mut *arc.write() as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
     if sd.is_null() { return 1; }
     if !session_exists((*sd).fd) {
         return 0;
@@ -536,7 +536,7 @@ pub unsafe fn clif_addtokillreg(sd: *mut MapSessionData, mob: i32) -> i32 {
     let grp = groups();
     for x in 0..(*sd).group_count as usize {
         let member_id = grp[(*sd).groupid as usize * MAX_GROUP_MEMBERS + x];
-        let tsd = map_id2sd_pc(member_id).map(|r| r as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
+        let tsd = map_id2sd_pc(member_id).map(|arc| &mut *arc.write() as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
         if tsd.is_null() { continue; }
         if (*tsd).bl.m == (*sd).bl.m {
             addtokillreg(tsd, mob);

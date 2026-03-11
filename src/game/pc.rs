@@ -332,7 +332,9 @@ pub struct MapSessionData {
 
 // SAFETY: MapSessionData is only accessed from the single game thread while
 // holding appropriate locks. Raw pointers are to C-managed memory.
+// Sync is required because Arc<RwLock<MapSessionData>> needs T: Send + Sync.
 unsafe impl Send for MapSessionData {}
+unsafe impl Sync for MapSessionData {}
 
 #[cfg(test)]
 mod layout_tests {
@@ -512,10 +514,15 @@ use crate::game::map_server::{
     map_additem, map_readglobalreg,
 };
 use crate::game::block_grid;
+/// Legacy raw-pointer player lookup for deeply unsafe code paths.
 fn map_id2sd_pc(id: u32) -> *mut MapSessionData {
-    crate::game::map_server::map_id2sd_pc(id)
-        .map(|r| r as *mut MapSessionData)
-        .unwrap_or(std::ptr::null_mut())
+    match crate::game::map_server::map_id2sd_pc(id) {
+        Some(arc) => {
+            let ptr = &mut *arc.write() as *mut MapSessionData;
+            ptr
+        }
+        None => std::ptr::null_mut(),
+    }
 }
 fn map_id2bl_pc(id: u32) -> *mut BlockList {
     crate::game::map_server::map_id2bl_ref(id)
@@ -647,8 +654,8 @@ pub unsafe fn rust_pc_afktimer(id: i32, _none: i32) -> i32 {
             let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
             let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
-                if let Some(tsd) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_sendanimation_inner(&mut tsd.bl, 324, sd_bl, 0);
+                if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_sendanimation_inner(&mut tsd_arc.write().bl, 324, sd_bl, 0);
                 }
             }
         }
@@ -671,8 +678,8 @@ pub unsafe fn rust_pc_afktimer(id: i32, _none: i32) -> i32 {
                 let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
                 let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
                 for id in ids {
-                    if let Some(tsd) = crate::game::map_server::map_id2sd_pc(id) {
-                        clif_sendanimation_inner(&mut tsd.bl, 324, sd_bl, 0);
+                    if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                        clif_sendanimation_inner(&mut tsd_arc.write().bl, 324, sd_bl, 0);
                     }
                 }
             }
@@ -804,8 +811,8 @@ pub unsafe fn rust_bl_duratimer(id: i32, _none: i32) -> i32 {
                             let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
                             let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
                             for id in ids {
-                                if let Some(tsd) = crate::game::map_server::map_id2sd_pc(id) {
-                                    clif_sendanimation_inner(&mut tsd.bl, anim, sd_bl, -1);
+                                if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                                    clif_sendanimation_inner(&mut tsd_arc.write().bl, anim, sd_bl, -1);
                                 }
                             }
                         }
@@ -1141,7 +1148,8 @@ pub unsafe fn rust_pc_scripttimer(id: i32, _none: i32) -> i32 {
             let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
             let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
-                if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
+                if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(id) {
+                    let mut mob = mob_arc.write();
                     clif_send_mobbars_inner(&mut mob.bl, &mut *sd);
                 }
             }
@@ -1338,7 +1346,8 @@ pub unsafe fn rust_pc_givexp(
     if let Some(grid) = crate::game::block_grid::get_grid((*sd).bl.m as usize) {
         for id in grid.ids_at_tile(sx, sy) {
             if stack >= 32768 { break; }
-            if let Some(tsd) = crate::game::map_server::map_id2sd_pc(id) {
+            if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                let tsd = tsd_arc.read();
                 if tsd.bl.x == sx && tsd.bl.y == sy && tsd.status.gm_level == 0 {
                     stack += 1;
                 }
@@ -2239,7 +2248,8 @@ unsafe fn pc_dropitemfull_inner(sd: *mut MapSessionData, fl2: *const Item) -> i3
         if let Some(grid) = block_grid::get_grid((*fl).bl.m as usize) {
             let cell_ids = grid.ids_at_tile((*fl).bl.x, (*fl).bl.y);
             for id in cell_ids {
-                if let Some(fl_existing) = crate::game::map_server::map_id2fl_ref(id) {
+                if let Some(fl_arc) = crate::game::map_server::map_id2fl_ref(id) {
+                    let mut fl_existing = fl_arc.write();
                     rust_pc_addtocurrent2_inner(&mut fl_existing.bl as *mut BlockList, def.as_mut_ptr(), fl.as_mut() as *mut FloorItemData);
                 }
             }
@@ -2254,8 +2264,8 @@ unsafe fn pc_dropitemfull_inner(sd: *mut MapSessionData, fl2: *const Item) -> i3
             let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
             let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
-                if let Some(tsd) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_object_look_sub2_inner(&mut tsd.bl as *mut BlockList, LOOK_SEND, fl_bl);
+                if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_object_look_sub2_inner(&mut tsd_arc.write().bl as *mut BlockList, LOOK_SEND, fl_bl);
                 }
             }
         }
@@ -2676,7 +2686,8 @@ pub unsafe fn rust_pc_dropitemmap(
         if let Some(grid) = block_grid::get_grid((*fl).bl.m as usize) {
             let cell_ids = grid.ids_at_tile((*fl).bl.x, (*fl).bl.y);
             for cell_id in cell_ids {
-                if let Some(fl_existing) = crate::game::map_server::map_id2fl_ref(cell_id) {
+                if let Some(fl_arc) = crate::game::map_server::map_id2fl_ref(cell_id) {
+                    let mut fl_existing = fl_arc.write();
                     rust_pc_addtocurrent_inner(&mut fl_existing.bl as *mut BlockList, def.as_mut_ptr(), id, type_, sd);
                 }
             }
@@ -2702,7 +2713,8 @@ pub unsafe fn rust_pc_dropitemmap(
     if let Some(grid) = block_grid::get_grid((*fl).bl.m as usize) {
         let cell_ids = grid.ids_at_tile((*fl).bl.x, (*fl).bl.y);
         for cell_id in cell_ids {
-            if let Some(npc) = crate::game::map_server::map_id2npc_ref(cell_id) {
+            if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(cell_id) {
+                let mut npc = npc_arc.write();
                 rust_pc_npc_drop_inner(&mut npc.bl as *mut BlockList, fl.as_mut() as *mut FloorItemData, sd);
             }
         }
@@ -2717,8 +2729,8 @@ pub unsafe fn rust_pc_dropitemmap(
             let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
             let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
-                if let Some(tsd) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_object_look_sub2_inner(&mut tsd.bl as *mut BlockList, LOOK_SEND, fl_bl);
+                if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_object_look_sub2_inner(&mut tsd_arc.write().bl as *mut BlockList, LOOK_SEND, fl_bl);
                 }
             }
         }
@@ -3044,10 +3056,11 @@ pub unsafe fn rust_pc_runfloor_sub(sd: *mut MapSessionData) -> i32 {
         Some(id) => id,
         None => return 0,
     };
-    let nd = match crate::game::map_server::map_id2npc_ref(npc_id) {
-        Some(n) => n as *mut NpcData,
+    let nd_arc = match crate::game::map_server::map_id2npc_ref(npc_id) {
+        Some(n) => n,
         None => return 0,
     };
+    let nd = &mut *nd_arc.write() as *mut NpcData;
 
     if (*nd).bl.subtype != FLOOR && (*nd).bl.subtype != 2 { return 0; }
 
@@ -3834,8 +3847,8 @@ pub unsafe fn rust_pc_diescript(sd: *mut MapSessionData) -> i32 {
                 let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
                 let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
                 for id in ids {
-                    if let Some(tsd) = crate::game::map_server::map_id2sd_pc(id) {
-                        clif_sendanimation_inner(&mut tsd.bl, anim, sd_bl, -1);
+                    if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                        clif_sendanimation_inner(&mut tsd_arc.write().bl, anim, sd_bl, -1);
                     }
                 }
             }
@@ -3866,7 +3879,8 @@ pub unsafe fn rust_pc_diescript(sd: *mut MapSessionData) -> i32 {
     if spawn_start != spawn_max {
         let mut x = spawn_start;
         while x < spawn_max {
-            if let Some(tmob) = crate::game::map_server::map_id2mob_ref(x) {
+            if let Some(tmob_arc) = crate::game::map_server::map_id2mob_ref(x) {
+                let mut tmob = tmob_arc.write();
                 for i in 0..MAX_THREATCOUNT {
                     if tmob.threat[i].user == (*sd).bl.id {
                         tmob.threat[i].user   = 0;
@@ -3884,7 +3898,8 @@ pub unsafe fn rust_pc_diescript(sd: *mut MapSessionData) -> i32 {
     if onetime_start != onetime_max {
         let mut x = onetime_start;
         while x < onetime_max {
-            if let Some(tmob) = crate::game::map_server::map_id2mob_ref(x) {
+            if let Some(tmob_arc) = crate::game::map_server::map_id2mob_ref(x) {
+                let mut tmob = tmob_arc.write();
                 for i in 0..MAX_THREATCOUNT {
                     if tmob.threat[i].user == (*sd).bl.id {
                         tmob.threat[i].user   = 0;

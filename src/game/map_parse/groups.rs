@@ -45,14 +45,6 @@ use crate::database::item_db::{
     rust_itemdb_look as itemdb_look, rust_itemdb_lookcolor as itemdb_lookcolor,
 };
 
-// map_id2sd_local: typed lookup returning raw pointer for use in unsafe context.
-#[inline]
-fn map_id2sd_local(id: u32) -> *mut MapSessionData {
-    crate::game::map_server::map_id2sd_pc(id)
-        .map(|r| r as *mut MapSessionData)
-        .unwrap_or(std::ptr::null_mut())
-}
-
 // pc_isequip returns i32; usage here expects u32 — wrap with cast.
 #[inline]
 unsafe fn pc_isequip(sd: *mut MapSessionData, slot: i32) -> u32 {
@@ -137,8 +129,11 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
     while (n + w + r + m + p + g) < group_count {
         let member_id = groups_get(groupid, x);
         x += 1;
-        let tsd = map_id2sd_local(member_id);
-        if tsd.is_null() { continue; }
+        let tsd_arc = match crate::game::map_server::map_id2sd_pc(member_id) {
+            Some(a) => a, None => continue,
+        };
+        let mut _tsd_guard = tsd_arc.write();
+        let tsd = &mut *_tsd_guard as *mut MapSessionData;
 
         // TNL calculation mirrors C exactly
         if (*tsd).status.level < 99 {
@@ -175,22 +170,26 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
     let (mut n, mut w, mut r, mut m, mut p, mut g) = (0usize, 0, 0, 0, 0, 0);
     let mut len = 0usize;
     while (n + w + r + m + p + g) < group_count {
-        let tsd = if rogue[r] != 0 {
-            let t = map_id2sd_local(rogue[r]); r += 1; t
+        let member_id = if rogue[r] != 0 {
+            let id = rogue[r]; r += 1; id
         } else if warrior[w] != 0 {
-            let t = map_id2sd_local(warrior[w]); w += 1; t
+            let id = warrior[w]; w += 1; id
         } else if mage[m] != 0 {
-            let t = map_id2sd_local(mage[m]); m += 1; t
+            let id = mage[m]; m += 1; id
         } else if poet[p] != 0 {
-            let t = map_id2sd_local(poet[p]); p += 1; t
+            let id = poet[p]; p += 1; id
         } else if peasant[n] != 0 {
-            let t = map_id2sd_local(peasant[n]); n += 1; t
+            let id = peasant[n]; n += 1; id
         } else if gm_arr[g] != 0 {
-            let t = map_id2sd_local(gm_arr[g]); g += 1; t
+            let id = gm_arr[g]; g += 1; id
         } else {
             break;
         };
-        if tsd.is_null() { continue; }
+        let tsd_arc = match crate::game::map_server::map_id2sd_pc(member_id) {
+            Some(a) => a, None => continue,
+        };
+        let _tsd_guard = tsd_arc.write();
+        let tsd = &*_tsd_guard as *const MapSessionData as *mut MapSessionData;
 
         // Name (null-terminated string from status.name)
         let name_ptr = (*tsd).status.name.as_ptr();
@@ -305,8 +304,11 @@ pub unsafe fn clif_grouphealth_update(sd: *mut MapSessionData) -> i32 {
     let groupid     = (*sd).groupid as usize;
 
     for x in 0..group_count {
-        let tsd = map_id2sd_local(groups_get(groupid, x));
-        if tsd.is_null() { continue; }
+        let tsd_arc = match crate::game::map_server::map_id2sd_pc(groups_get(groupid, x)) {
+            Some(a) => a, None => continue,
+        };
+        let _tsd_guard = tsd_arc.write();
+        let tsd = &*_tsd_guard as *const MapSessionData as *mut MapSessionData;
 
         if !session_exists((*sd).fd) {
             return 0;
@@ -462,8 +464,11 @@ pub unsafe fn clif_updategroup(
     let groupid     = (*sd).groupid as usize;
 
     for x in 0..group_count {
-        let tsd = map_id2sd_local(groups_get(groupid, x));
-        if tsd.is_null() { continue; }
+        let tsd_arc = match crate::game::map_server::map_id2sd_pc(groups_get(groupid, x)) {
+            Some(a) => a, None => continue,
+        };
+        let mut _tsd_guard = tsd_arc.write();
+        let tsd = &mut *_tsd_guard as *mut MapSessionData;
 
         (*tsd).group_count  = (*sd).group_count;
         (*tsd).group_leader = (*sd).group_leader;
@@ -545,10 +550,12 @@ pub unsafe fn clif_findmount(sd: *mut MapSessionData) -> i32 {
         Some(id) => id,
         None => return 0,
     };
-    let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
-        Some(m) => m as *mut MobSpawnData,
+    let mob_arc = match crate::game::map_server::map_id2mob_ref(mob_id) {
+        Some(a) => a,
         None => return 0,
     };
+    let mut mob_guard = mob_arc.write();
+    let mob = &mut *mob_guard as *mut MobSpawnData;
 
     if (*sd).status.state != 0 { return 0; }
 
@@ -660,16 +667,19 @@ pub unsafe fn clif_canmove(
     if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
         let cell_ids = grid.ids_at_tile((*sd).bl.x, (*sd).bl.y);
         for id in cell_ids {
-            if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
-                clif_canmove_sub_inner(&raw mut mob.bl, sd);
-            } else if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_canmove_sub_inner(&raw mut pc.bl, sd);
+            if let Some(arc) = crate::game::map_server::map_id2mob_ref(id) {
+                let mut guard = arc.write();
+                clif_canmove_sub_inner(&mut guard.bl as *mut BlockList, sd);
+            } else if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
+                let mut guard = arc.write();
+                clif_canmove_sub_inner(&mut guard.bl as *mut BlockList, sd);
             }
         }
         let cell_ids2 = grid.ids_at_tile(nx as u16, ny as u16);
         for id in cell_ids2 {
-            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_canmove_sub_inner(&raw mut pc.bl, sd);
+            if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
+                let mut guard = arc.write();
+                clif_canmove_sub_inner(&mut guard.bl as *mut BlockList, sd);
             }
         }
     }
@@ -814,8 +824,9 @@ pub unsafe fn clif_sendpowerboard(sd: *mut MapSessionData) -> i32 {
         let slot = &*get_map_ptr((*sd).bl.m);
         let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_pb_sub_inner(&raw mut pc.bl, sd, len_ptr);
+            if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
+                let mut guard = arc.write();
+                clif_pb_sub_inner(&mut guard.bl as *mut BlockList, sd, len_ptr);
             }
         }
     }

@@ -167,8 +167,9 @@ pub unsafe fn sl_g_getmaptitle(m: i32, buf: *mut i8, buflen: i32) -> i32 {
 /// `target == 0` is a no-op (area broadcast not implemented here).
 pub unsafe fn sl_g_msg(bl: *mut std::ffi::c_void, color: i32, msg: *const i8, target: i32) {
     if bl.is_null() || msg.is_null() || target == 0 { return; }
-    if let Some(tsd) = map_id2sd_pc(target as u32) {
-        clif_sendmsg(tsd, color, msg);
+    if let Some(arc) = map_id2sd_pc(target as u32) {
+        let tsd = &mut *arc.write();
+        clif_sendmsg(tsd as *mut _, color, msg);
     }
 }
 
@@ -198,7 +199,7 @@ pub unsafe fn sl_fl_delete(bl_ptr: *mut std::ffi::c_void) {
     if (*bl).bl_type as i32 == BL_PC { return; }
     map_delblock(bl);
     if (*bl).id > 0 { clif_lookgone(bl); }
-    map_deliddb(bl);
+    map_deliddb((*bl).id);
 }
 
 /// Remove block from the grid and the map ID database.
@@ -207,7 +208,7 @@ pub unsafe fn sl_g_deliddb(bl_ptr: *mut std::ffi::c_void) {
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
     map_delblock(bl);
-    map_deliddb(bl);
+    map_deliddb((*bl).id);
 }
 
 /// No-op — permanent spawn tracking is handled in Lua.
@@ -241,8 +242,8 @@ pub unsafe fn sl_g_delete_bl(bl_ptr: *mut std::ffi::c_void) {
     if (*bl).id > 0 {
         clif_lookgone(bl);
     }
-    // map_deliddb drops the Box from the typed entity map — no libc::free needed.
-    map_deliddb(bl);
+    // map_deliddb drops the Arc from the typed entity map.
+    map_deliddb((*bl).id);
 }
 
 /// Broadcast an action animation at bl's position.
@@ -287,7 +288,7 @@ pub unsafe fn sl_g_dropitem(bl_ptr: *mut std::ffi::c_void, item_id: i32, amount:
     let bl = bl_ptr as *mut BlockList;
     let id = item_id as u32;
     let sd = if owner != 0 {
-        map_id2sd_pc(owner as u32).map(|r| r as *mut MapSessionData).unwrap_or(std::ptr::null_mut())
+        map_id2sd_pc(owner as u32).map(|arc| &mut *arc.write() as *mut MapSessionData).unwrap_or(std::ptr::null_mut())
     } else {
         std::ptr::null_mut()
     };
@@ -309,7 +310,7 @@ pub unsafe fn sl_g_dropitemxy(
 ) {
     let id = item_id as u32;
     let sd = if owner != 0 {
-        map_id2sd_pc(owner as u32).map(|r| r as *mut MapSessionData).unwrap_or(std::ptr::null_mut())
+        map_id2sd_pc(owner as u32).map(|arc| &mut *arc.write() as *mut MapSessionData).unwrap_or(std::ptr::null_mut())
     } else {
         std::ptr::null_mut()
     };
@@ -382,7 +383,8 @@ pub unsafe fn sl_g_sendanimation(bl_ptr: *mut std::ffi::c_void, anim: i32, times
         let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(pc) = map_id2sd_pc(id) {
+            if let Some(arc) = map_id2sd_pc(id) {
+                let pc = &mut *arc.write();
                 clif_sendanimation_inner(&mut pc.bl, anim, bl, times);
             }
         }
@@ -407,7 +409,8 @@ pub unsafe fn sl_g_sendanimxy(
         let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
         let ids = block_grid::ids_in_area(grid, bx, by, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(pc) = map_id2sd_pc(id) {
+            if let Some(arc) = map_id2sd_pc(id) {
+                let pc = &mut *arc.write();
                 clif_sendanimation_xy_inner(&mut pc.bl, anim, times, x, y);
             }
         }
@@ -430,8 +433,8 @@ pub unsafe fn sl_g_repeatanimation(bl_ptr: *mut std::ffi::c_void, anim: i32, dur
         let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(pc) = map_id2sd_pc(id) {
-                clif_sendanimation_inner(&mut pc.bl, anim, bl, wire_dur);
+            if let Some(pc_arc) = map_id2sd_pc(id) {
+                clif_sendanimation_inner(&mut pc_arc.write().bl, anim, bl, wire_dur);
             }
         }
     }
@@ -449,14 +452,13 @@ pub unsafe fn sl_g_selfanimation(
 ) {
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
-    let Some(sd) = map_id2sd_pc(target_id as u32) else { return; };
-    let m  = sd.bl.m as i32;
-    let x  = sd.bl.x as i32;
-    let y  = sd.bl.y as i32;
+    let Some(arc) = map_id2sd_pc(target_id as u32) else { return; };
+    let (m, tx, ty) = { let sd = arc.read(); (sd.bl.m as i32, sd.bl.x as i32, sd.bl.y as i32) };
     if let Some(grid) = block_grid::get_grid(m as usize) {
-        let cell_ids = grid.ids_at_tile(x as u16, y as u16);
+        let cell_ids = grid.ids_at_tile(tx as u16, ty as u16);
         for id in cell_ids {
-            if let Some(pc) = map_id2sd_pc(id) {
+            if let Some(arc) = map_id2sd_pc(id) {
+                let pc = &mut *arc.write();
                 clif_sendanimation_inner(&mut pc.bl, anim, bl, times);
             }
         }
@@ -475,14 +477,13 @@ pub unsafe fn sl_g_selfanimationxy(
     y: i32,
     times: i32,
 ) {
-    let Some(sd) = map_id2sd_pc(target_id as u32) else { return; };
-    let m  = sd.bl.m as i32;
-    let sx = sd.bl.x as i32;
-    let sy = sd.bl.y as i32;
+    let Some(arc) = map_id2sd_pc(target_id as u32) else { return; };
+    let (m, sx, sy) = { let sd = arc.read(); (sd.bl.m as i32, sd.bl.x as i32, sd.bl.y as i32) };
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let cell_ids = grid.ids_at_tile(sx as u16, sy as u16);
         for id in cell_ids {
-            if let Some(pc) = map_id2sd_pc(id) {
+            if let Some(arc) = map_id2sd_pc(id) {
+                let pc = &mut *arc.write();
                 clif_sendanimation_xy_inner(&mut pc.bl, anim, times, x, y);
             }
         }
@@ -501,7 +502,8 @@ pub unsafe fn sl_g_talk(bl_ptr: *mut std::ffi::c_void, talk_type: i32, msg: *con
         let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(pc) = map_id2sd_pc(id) {
+            if let Some(arc) = map_id2sd_pc(id) {
+                let pc = &mut *arc.write();
                 clif_speak_inner(&raw mut pc.bl, msg, bl, talk_type);
             }
         }
@@ -653,12 +655,14 @@ pub unsafe fn sl_g_addnpc(
     (*raw).owner      = owner as u32;
     (*raw).movetime   = movetime as u32;
 
-    // Register in spatial grid and ID database.
-    map_addblock(&mut (*raw).bl);
+    // Insert into NPC_MAP first — this moves the data into Arc<RwLock>,
+    // freeing the original allocation. `raw` is dangling after this.
     let id = (*raw).bl.id;
-    // SAFETY: raw was allocated via alloc_zeroed (system allocator = same as Box on Linux/glibc).
     map_addiddb_npc(id, Box::from_raw(raw));
-    // raw is still valid — Box is now owned by NPC_MAP (not dropped).
+    // Get the live pointer from the Arc<RwLock>.
+    let raw = crate::game::map_server::map_id2npc_ref(id)
+        .expect("npc just inserted").data_ptr();
+    map_addblock(&mut (*raw).bl);
 
     // Fire on_spawn Lua event: npc.on_spawn(nd).
     crate::game::scripting::doscript_blargs(
@@ -829,7 +833,8 @@ pub unsafe fn sl_g_setmap(
         let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
         let ids = block_grid::ids_in_area(grid, 0, 0, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(pc) = map_id2sd_pc(id) {
+            if let Some(arc) = map_id2sd_pc(id) {
+                let pc = &mut *arc.write();
                 crate::game::scripting::sl_updatepeople(&raw mut pc.bl as *mut std::ffi::c_void, std::ptr::null_mut());
             }
         }

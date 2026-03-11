@@ -152,11 +152,11 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
         let bl_id = match v {
             mlua::Value::Integer(id) => {
                 if id < 0 || id > u32::MAX as i64 { return Ok(mlua::Value::Nil); }
-                crate::game::map_server::map_id2sd_pc(id as u32).map(|sd| sd.bl.id)
+                crate::game::map_server::map_id2sd_pc(id as u32).map(|arc| arc.read().bl.id)
             }
             mlua::Value::Number(f) => {
                 if !f.is_finite() || f < 0.0 || f > u32::MAX as f64 { return Ok(mlua::Value::Nil); }
-                crate::game::map_server::map_id2sd_pc(f as u32).map(|sd| sd.bl.id)
+                crate::game::map_server::map_id2sd_pc(f as u32).map(|arc| arc.read().bl.id)
             }
             mlua::Value::String(ref s) => {
                 let cs = CString::new(s.as_bytes().to_vec()).map_err(mlua::Error::external)?;
@@ -348,13 +348,13 @@ pub(crate) unsafe fn bl_to_lua(lua: &Lua, bl: *mut std::ffi::c_void) -> mlua::Re
 pub fn entity_to_lua(lua: &mlua::Lua, id: u32) -> mlua::Result<mlua::Value> {
     use crate::game::map_server::GameEntity;
     match crate::game::map_server::map_id2entity(id) {
-        Some(GameEntity::Player(sd)) => lua.pack(PcObject  { id: sd.bl.id }),
-        Some(GameEntity::Mob(mob))   => lua.pack(MobObject { id: mob.bl.id }),
-        Some(GameEntity::Npc(npc)) => lua.pack(
-            NpcObject { ptr: npc as *mut _ as *mut std::ffi::c_void }
+        Some(GameEntity::Player(arc)) => lua.pack(PcObject  { id: arc.read().bl.id }),
+        Some(GameEntity::Mob(arc))   => lua.pack(MobObject { id: arc.read().bl.id }),
+        Some(GameEntity::Npc(arc)) => lua.pack(
+            NpcObject { ptr: &*arc.write() as *const _ as *mut std::ffi::c_void }
         ),
-        Some(GameEntity::Item(item)) => lua.pack(
-            FloorListObject::new(item as *mut _ as *mut std::ffi::c_void)
+        Some(GameEntity::Item(arc)) => lua.pack(
+            FloorListObject::new(&*arc.write() as *const _ as *mut std::ffi::c_void)
         ),
         None => Ok(mlua::Value::Nil),
     }
@@ -460,8 +460,8 @@ pub unsafe fn doscript_coro(
             // Wrap the first player arg through _wrap_player for yielding method support.
             if i == 0 && bl_ref.bl_type as i32 == ffi::BL_PC {
                 // Derive the user key (MapSessionData pointer) for thread registry.
-                if let Some(sd) = crate::game::map_server::map_id2sd_pc(bl_ref.id) {
-                    user_key = Some(sd as *mut crate::game::pc::MapSessionData as usize);
+                if let Some(arc) = crate::game::map_server::map_id2sd_pc(bl_ref.id) {
+                    user_key = Some(&*arc.read() as *const crate::game::pc::MapSessionData as usize);
                 }
                 let pc_val = bl_to_lua(lua, bl as *mut std::ffi::c_void).unwrap_or(mlua::Value::Nil);
                 if let Some(ref wf) = wrap_fn {

@@ -568,8 +568,8 @@ unsafe fn send_to_area(
 
     let mut _send_count = 0i32;
     for id in ids {
-        let Some(sd_ref) = crate::game::map_server::map_id2sd_pc(id) else { continue; };
-        let sd = sd_ref as *mut MapSessionData;
+        let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) else { continue; };
+        let sd = &mut *sd_arc.write() as *mut MapSessionData;
         let bl = &raw mut (*sd).bl;
         if !should_send_to(sd, src_bl, send_type, buf as *const u8, len) {
             continue;

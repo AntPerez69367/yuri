@@ -89,10 +89,14 @@ fn cstring_ptrs(v: &[CString]) -> Vec<*const i8> {
 impl PcObject {
     /// Get raw pointer to the session data, or null if the session no longer exists.
     /// Used in method bodies as a drop-in for the old `this.sd_ptr()` field.
+    ///
+    /// SAFETY: The game server is single-threaded. The Arc keeps the allocation alive,
+    /// and the RwLock guard is momentarily acquired to obtain the pointer. No concurrent
+    /// mutation is possible because all Lua scripts run on the same LocalSet thread.
     #[inline]
     fn sd_ptr(&self) -> *mut crate::game::pc::MapSessionData {
         crate::game::map_server::map_id2sd_pc(self.id)
-            .map(|sd| sd as *mut crate::game::pc::MapSessionData)
+            .map(|arc| arc.data_ptr())
             .unwrap_or(std::ptr::null_mut())
     }
 }
@@ -101,10 +105,11 @@ impl UserData for PcObject {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         // ── __index: read PC attributes ───────────────────────────────────────
         methods.add_meta_method(MetaMethod::Index, |lua, this, key: String| {
-            let sd = match crate::game::map_server::map_id2sd_pc(this.id) {
-                Some(sd) => sd,
+            let arc = match crate::game::map_server::map_id2sd_pc(this.id) {
+                Some(arc) => arc,
                 None => return Ok(mlua::Value::Nil),
             };
+            let sd = unsafe { &mut *arc.data_ptr() };
             let sd_ptr = sd as *mut crate::game::pc::MapSessionData;
             let sd_void = sd_ptr as *mut std::ffi::c_void;
             macro_rules! int_ {
@@ -397,10 +402,11 @@ impl UserData for PcObject {
                     let capture_id = this.id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_lua, (_this, id): (mlua::AnyUserData, i32)| {
-                            let sd = match crate::game::map_server::map_id2sd_pc(capture_id) {
-                                Some(sd) => sd,
+                            let arc = match crate::game::map_server::map_id2sd_pc(capture_id) {
+                                Some(arc) => arc,
                                 None => return Ok(false),
                             };
+                            let sd = unsafe { &mut *arc.data_ptr() };
                             Ok(sffi::sl_pc_getpk(sd, id) != 0)
                         },
                     )?));
@@ -423,7 +429,8 @@ impl UserData for PcObject {
                     let capture_id = this.id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if let Some(sd) = crate::game::map_server::map_id2sd_pc(capture_id) {
+                            if let Some(arc) = crate::game::map_server::map_id2sd_pc(capture_id) {
+                                let sd = unsafe { &mut *arc.data_ptr() };
                                 unsafe { sffi::sl_g_deliddb(sd as *mut _ as *mut std::ffi::c_void); }
                             }
                             Ok(())
@@ -434,7 +441,8 @@ impl UserData for PcObject {
                     let capture_id = this.id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if let Some(sd) = crate::game::map_server::map_id2sd_pc(capture_id) {
+                            if let Some(arc) = crate::game::map_server::map_id2sd_pc(capture_id) {
+                                let sd = unsafe { &mut *arc.data_ptr() };
                                 unsafe { sffi::sl_g_addpermanentspawn(sd as *mut _ as *mut std::ffi::c_void); }
                             }
                             Ok(())
@@ -460,10 +468,11 @@ impl UserData for PcObject {
         methods.add_meta_method_mut(
             MetaMethod::NewIndex,
             |_lua, this, (key, val): (String, mlua::Value)| {
-                let sd = match crate::game::map_server::map_id2sd_pc(this.id) {
-                    Some(sd) => sd,
+                let arc = match crate::game::map_server::map_id2sd_pc(this.id) {
+                    Some(arc) => arc,
                     None => return Ok(()),
                 };
+                let sd = unsafe { &mut *arc.data_ptr() };
                 let v = val_to_int(&val);
                 match key.as_str() {
                     "actionTime" => sl_pc_set_time(sd, v),
@@ -901,7 +910,7 @@ impl UserData for PcObject {
                 mlua::Value::UserData(ud) => {
                     if let Ok(mob) = ud.borrow::<MobObject>() {
                         match crate::game::map_server::map_id2mob_ref(mob.id) {
-                            Some(mob_data) => mob_data.bl.id as i32,
+                            Some(arc) => arc.read().bl.id as i32,
                             None => return Ok(()),
                         }
                     } else if let Ok(pc) = ud.borrow::<PcObject>() {
@@ -912,10 +921,11 @@ impl UserData for PcObject {
                 }
                 _ => return Ok(()),
             };
-            let sd = match crate::game::map_server::map_id2sd_pc(this.id) {
-                Some(sd) => sd,
+            let arc = match crate::game::map_server::map_id2sd_pc(this.id) {
+                Some(arc) => arc,
                 None => return Ok(()),
             };
+            let sd = unsafe { &mut *arc.data_ptr() };
             unsafe { sl_pc_swingtarget(sd, target_id) };
             Ok(())
         });
@@ -1486,7 +1496,7 @@ impl UserData for PcObject {
             let ptrs = cstring_ptrs(&strs);
             unsafe {
                 sffi::sl_pc_menustring_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
-                crate::game::scripting::async_coro::store_menu_opts(sd as *mut std::ffi::c_void, strings);
+                crate::game::scripting::async_coro::store_menu_opts(sd as *const _ as *mut std::ffi::c_void, strings);
             }
             Ok(())
         });
@@ -1502,7 +1512,7 @@ impl UserData for PcObject {
             let ptrs = cstring_ptrs(&strs);
             unsafe {
                 sffi::sl_pc_menustring2_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
-                crate::game::scripting::async_coro::store_menu_opts(sd as *mut std::ffi::c_void, strings);
+                crate::game::scripting::async_coro::store_menu_opts(sd as *const _ as *mut std::ffi::c_void, strings);
             }
             Ok(())
         });
@@ -1667,7 +1677,7 @@ fn extract_bl_ptr(ud: &mlua::AnyUserData) -> *mut std::ffi::c_void {
     if let Ok(pc) = ud.borrow::<PcObject>() { return pc.sd_ptr() as *mut std::ffi::c_void; }
     if let Ok(mob) = ud.borrow::<crate::game::scripting::types::mob::MobObject>() {
         return crate::game::map_server::map_id2mob_ref(mob.id)
-            .map(|m| m as *mut crate::game::mob::MobSpawnData as *mut std::ffi::c_void)
+            .map(|arc| arc.data_ptr() as *mut std::ffi::c_void)
             .unwrap_or(std::ptr::null_mut());
     }
     if let Ok(npc) = ud.borrow::<crate::game::scripting::types::npc::NpcObject>() { return npc.ptr; }

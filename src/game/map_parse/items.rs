@@ -776,7 +776,7 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
     if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
         let cell_ids = grid.ids_at_tile((*sd).bl.x, (*sd).bl.y);
         for id in cell_ids {
-            if let Some(fl) = crate::game::map_server::map_id2fl_ref(id) {
+            if let Some(fl_arc) = crate::game::map_server::map_id2fl_ref(id) { let fl = &mut *fl_arc.write();
                 clif_addtocurrent_inner(&raw mut fl.bl, def.as_mut_ptr(), amount, std::ptr::null_mut());
             }
         }
@@ -811,8 +811,8 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
             let slot = &*raw_map_ptr().add((*sd).bl.m as usize);
             let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
-                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_object_look_sub2_inner(&raw mut pc.bl, LOOK_SEND, fl_bl);
+                if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_object_look_sub2_inner(&raw mut pc_arc.write().bl, LOOK_SEND, fl_bl);
                 }
             }
         }
@@ -947,7 +947,7 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
         if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
             let cell_ids = grid.ids_at_tile(x as u16, y as u16);
             for cid in cell_ids {
-                if let Some(fl_ref) = crate::game::map_server::map_id2fl_ref(cid) {
+                if let Some(fl_ref_arc) = crate::game::map_server::map_id2fl_ref(cid) { let fl_ref = &mut *fl_ref_arc.write();
                     rust_pc_addtocurrent_inner(&raw mut fl_ref.bl, def.as_mut_ptr(), id as i32, item_type, sd);
                 }
             }
@@ -1027,8 +1027,8 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
             let slot = &*raw_map_ptr().add((*sd).bl.m as usize);
             let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
-                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_object_look_sub2_inner(&raw mut pc.bl, LOOK_SEND, fl_bl);
+                if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_object_look_sub2_inner(&raw mut pc_arc.write().bl, LOOK_SEND, fl_bl);
                 }
             }
         }

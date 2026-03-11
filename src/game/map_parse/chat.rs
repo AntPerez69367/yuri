@@ -213,8 +213,8 @@ pub unsafe fn clif_broadcast(msg: *const i8, m: i32) -> i32 {
                     let slot = &*raw_map_ptr().add(x);
                     let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
                     for id in ids {
-                        if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_broadcast_sub_inner(&raw mut pc.bl, msg);
+                        if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                            clif_broadcast_sub_inner(&raw mut pc_arc.write().bl, msg);
                         }
                     }
                 }
@@ -225,8 +225,8 @@ pub unsafe fn clif_broadcast(msg: *const i8, m: i32) -> i32 {
             let slot = &*raw_map_ptr().add(m as usize);
             let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
             for id in ids {
-                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_broadcast_sub_inner(&raw mut pc.bl, msg);
+                if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_broadcast_sub_inner(&raw mut pc_arc.write().bl, msg);
                 }
             }
         }
@@ -246,8 +246,8 @@ pub unsafe fn clif_gmbroadcast(msg: *const i8, m: i32) -> i32 {
                     let slot = &*raw_map_ptr().add(x);
                     let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
                     for id in ids {
-                        if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_gmbroadcast_sub_inner(&raw mut pc.bl, msg);
+                        if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                            clif_gmbroadcast_sub_inner(&raw mut pc_arc.write().bl, msg);
                         }
                     }
                 }
@@ -258,8 +258,8 @@ pub unsafe fn clif_gmbroadcast(msg: *const i8, m: i32) -> i32 {
             let slot = &*raw_map_ptr().add(m as usize);
             let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
             for id in ids {
-                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_gmbroadcast_sub_inner(&raw mut pc.bl, msg);
+                if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_gmbroadcast_sub_inner(&raw mut pc_arc.write().bl, msg);
                 }
             }
         }
@@ -279,8 +279,8 @@ pub unsafe fn clif_broadcasttogm(msg: *const i8, m: i32) -> i32 {
                     let slot = &*raw_map_ptr().add(x);
                     let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
                     for id in ids {
-                        if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_broadcasttogm_sub_inner(&raw mut pc.bl, msg);
+                        if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                            clif_broadcasttogm_sub_inner(&raw mut pc_arc.write().bl, msg);
                         }
                     }
                 }
@@ -291,8 +291,8 @@ pub unsafe fn clif_broadcasttogm(msg: *const i8, m: i32) -> i32 {
             let slot = &*raw_map_ptr().add(m as usize);
             let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
             for id in ids {
-                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_broadcasttogm_sub_inner(&raw mut pc.bl, msg);
+                if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_broadcasttogm_sub_inner(&raw mut pc_arc.write().bl, msg);
                 }
             }
         }
@@ -1127,17 +1127,17 @@ pub unsafe fn clif_sendscriptsay(
         let area = if say_type == 1 { AreaType::SameMap } else { AreaType::Area };
         let ids = block_grid::ids_in_area(grid, bx, by, area, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(npc) = crate::game::map_server::map_id2npc_ref(id) {
+            if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(id) {
                 if say_type == 1 {
-                    clif_sendnpcyell_inner(&raw mut npc.bl, msg, sd);
+                    clif_sendnpcyell_inner(&raw mut npc_arc.write().bl, msg, sd);
                 } else {
-                    clif_sendnpcsay_inner(&raw mut npc.bl, msg, sd);
+                    clif_sendnpcsay_inner(&raw mut npc_arc.write().bl, msg, sd);
                 }
-            } else if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
+            } else if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(id) {
                 if say_type == 1 {
-                    clif_sendmobyell_inner(&raw mut mob.bl, msg, sd);
+                    clif_sendmobyell_inner(&raw mut mob_arc.write().bl, msg, sd);
                 } else {
-                    clif_sendmobsay_inner(&raw mut mob.bl, msg, sd);
+                    clif_sendmobsay_inner(&raw mut mob_arc.write().bl, msg, sd);
                 }
             }
         }

@@ -51,22 +51,55 @@ use crate::database::magic_db::{
 use crate::game::mob::rust_mob_flushmagic;
 use crate::game::scripting::rust_sl_async_freeco;
 
-// map_id2bl/map_id2sd_local/map_id2mob_local return *mut ptr — wrap with type casts.
+// map_id2bl returns raw *mut BlockList for legacy unsafe code paths.
 #[inline]
 fn map_id2bl(id: u32) -> *mut BlockList {
     crate::game::map_server::map_id2bl_ref(id)
 }
+
+use std::sync::Arc;
+use parking_lot::RwLock;
+
+/// Arc-based player lookup.
+#[inline]
+fn map_id2sd_arc(id: u32) -> Option<Arc<RwLock<MapSessionData>>> {
+    crate::game::map_server::map_id2sd_pc(id)
+}
+
+/// Arc-based mob lookup.
+#[inline]
+fn map_id2mob_arc(id: u32) -> Option<Arc<RwLock<MobSpawnData>>> {
+    crate::game::map_server::map_id2mob_ref(id)
+}
+
+/// Legacy raw-pointer player lookup for deeply unsafe code paths.
+/// Returns a raw pointer by write-locking the Arc. The pointer is valid as long
+/// as the Arc (held internally in the global map) is not removed.
+/// Callers MUST hold the returned `Arc` alive (or the global map keeps it alive).
 #[inline]
 fn map_id2sd_local(id: u32) -> *mut MapSessionData {
-    crate::game::map_server::map_id2sd_pc(id)
-        .map(|r| r as *mut MapSessionData)
-        .unwrap_or(std::ptr::null_mut())
+    match crate::game::map_server::map_id2sd_pc(id) {
+        Some(arc) => {
+            let ptr = &mut *arc.write() as *mut MapSessionData;
+            // SAFETY: The Arc in the global map keeps the allocation alive.
+            // The RwLock write guard is dropped here, but the underlying data
+            // persists in the Arc. This is a transitional pattern.
+            ptr
+        }
+        None => std::ptr::null_mut(),
+    }
 }
+
+/// Legacy raw-pointer mob lookup for deeply unsafe code paths.
 #[inline]
-fn map_id2mob_local(id: u32) -> *mut crate::game::mob::MobSpawnData {
-    crate::game::map_server::map_id2mob_ref(id)
-        .map(|r| r as *mut crate::game::mob::MobSpawnData)
-        .unwrap_or(std::ptr::null_mut())
+fn map_id2mob_local(id: u32) -> *mut MobSpawnData {
+    match crate::game::map_server::map_id2mob_ref(id) {
+        Some(arc) => {
+            let ptr = &mut *arc.write() as *mut MobSpawnData;
+            ptr
+        }
+        None => std::ptr::null_mut(),
+    }
 }
 
 /// Dispatch a Lua event with a single block_list argument.
@@ -879,7 +912,8 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
                 let slot = &*crate::database::map_db::raw_map_ptr().add(mob.bl.m as usize);
                 let ids = block_grid::ids_in_area(grid, mob.bl.x as i32, mob.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
                 for id in ids {
-                    if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                    if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                        let mut pc = pc_arc.write();
                         clif_send_mob_health_sub_inner(&mut pc.bl, &mut *sd, mob, critical, pct_int, damage);
                     }
                 }
@@ -891,7 +925,8 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
                 let slot = &*crate::database::map_db::raw_map_ptr().add(mob.bl.m as usize);
                 let ids = block_grid::ids_in_area(grid, mob.bl.x as i32, mob.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
                 for id in ids {
-                    if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                    if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                        let mut pc = pc_arc.write();
                         clif_send_mob_health_sub_nosd_inner(&mut pc.bl, mob, critical, pct_int, damage);
                     }
                 }
@@ -1057,7 +1092,8 @@ pub async fn clif_mob_kill(mob: &mut MobSpawnData) -> i32 {
             let slot = &*crate::database::map_db::raw_map_ptr().add(mob.bl.m as usize);
             let ids = block_grid::ids_in_area(grid, mob.bl.x as i32, mob.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
-                if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+                if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                    let mut pc = pc_arc.write();
                     clif_send_destroy_inner(&mut pc.bl, mob_ptr);
                 }
             }

@@ -737,7 +737,8 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("removeClanMember", lua.create_async_function(|_, id: i32| async move {
         // Mutate in-memory session data synchronously before any await point.
-        if let Some(sd) = crate::game::map_server::map_id2sd_pc(id as u32) {
+        if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
+            let sd = &mut *arc.write();
             sd.status.clan = 0;
             sd.status.clan_title[0] = 0;
             sd.status.clan_rank = 0;
@@ -752,7 +753,8 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("addClanMember", lua.create_async_function(|_, (id, clan): (i32, i32)| async move {
         // Mutate in-memory session data synchronously before any await point.
-        if let Some(sd) = crate::game::map_server::map_id2sd_pc(id as u32) {
+        if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
+            let sd = &mut *arc.write();
             sd.status.clan = clan as u32;
             sd.status.clan_title[0] = 0;
             sd.status.clan_rank = 1;
@@ -767,7 +769,8 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("updateClanMemberRank", lua.create_async_function(|_, (id, rank): (i32, i32)| async move {
         // Mutate in-memory session data synchronously before any await point.
-        if let Some(sd) = crate::game::map_server::map_id2sd_pc(id as u32) {
+        if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
+            let sd = &mut *arc.write();
             sd.status.clan_rank = rank;
         }
         let ok = sqlx::query!(
@@ -778,7 +781,8 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("updateClanMemberTitle", lua.create_async_function(|_, (id, title): (i32, String)| async move {
         // Mutate in-memory session data synchronously before any await point.
-        if let Some(sd) = crate::game::map_server::map_id2sd_pc(id as u32) {
+        if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
+            let sd = &mut *arc.write();
             let dst = &mut sd.status.clan_title;
             let bytes = title.as_bytes();
             let copy_len = bytes.len().min(dst.len() - 1);
@@ -797,7 +801,8 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("removePathMember", lua.create_async_function(|_, id: i32| async move {
         // Online path: mutate session data synchronously before any await point.
-        if let Some(sd) = crate::game::map_server::map_id2sd_pc(id as u32) {
+        if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
+            let sd = &mut *arc.write();
             let new_class = crate::database::class_db::path(sd.status.class as i32) as u8;
             sd.status.class = new_class;
             sd.status.class_rank = 0;
@@ -822,7 +827,8 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("addPathMember", lua.create_async_function(|_, (id, cls): (i32, i32)| async move {
         // Mutate in-memory session data synchronously before any await point.
-        if let Some(sd) = crate::game::map_server::map_id2sd_pc(id as u32) {
+        if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
+            let sd = &mut *arc.write();
             sd.status.class = cls as u8;
             sd.status.class_rank = 0;
             unsafe { sffi::clif_mystaytus(sd as *mut _); }

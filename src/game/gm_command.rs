@@ -417,7 +417,8 @@ fn command_spell(sd: &mut MapSessionData, line: &str) -> i32 {
         let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(sd.bl.m as usize) };
         let ids = block_grid::ids_in_area(grid, sd.bl.x as i32, sd.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+            if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
+                let mut pc = arc.write();
                 clif_sendanimation_inner(&mut pc.bl, anim, sd_bl, times);
             }
         }
@@ -617,9 +618,10 @@ fn command_respawn(sd: &mut MapSessionData, _line: &str) -> i32 {
     if let Some(grid) = block_grid::get_grid(sd.bl.m as usize) {
         let all_ids: Vec<u32> = grid.all_ids().collect();
         for id in all_ids {
-            if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
+            if let Some(arc) = crate::game::map_server::map_id2mob_ref(id) {
+                let mob = arc.write();
                 if mob.state == MOB_DEAD && mob.onetime == 0 {
-                    unsafe { mob_respawn(mob as *mut MobSpawnData); }
+                    unsafe { mob_respawn(&*mob as *const MobSpawnData as *mut MobSpawnData); }
                 }
             }
         }
@@ -1082,7 +1084,8 @@ fn command_nspell(sd: &mut MapSessionData, _line: &str) -> i32 {
         let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(sd.bl.m as usize) };
         let ids = block_grid::ids_in_area(grid, sd.bl.x as i32, sd.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+            if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
+                let mut pc = arc.write();
                 clif_sendanimation_inner(&mut pc.bl, anim, sd_bl, times);
             }
         }
@@ -1100,7 +1103,8 @@ fn command_pspell(sd: &mut MapSessionData, _line: &str) -> i32 {
         let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(sd.bl.m as usize) };
         let ids = block_grid::ids_in_area(grid, sd.bl.x as i32, sd.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
+            if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
+                let mut pc = arc.write();
                 clif_sendanimation_inner(&mut pc.bl, anim, sd_bl, times);
             }
         }

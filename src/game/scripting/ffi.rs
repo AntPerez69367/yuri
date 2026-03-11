@@ -28,7 +28,7 @@ pub fn map_id2bl(id: u32) -> *mut std::ffi::c_void {
 
 pub fn map_id2sd(id: u32) -> *mut std::ffi::c_void {
     crate::game::map_server::map_id2sd_pc(id)
-        .map(|r| r as *mut _ as *mut std::ffi::c_void)
+        .map(|arc| &*arc.write() as *const _ as *mut std::ffi::c_void)
         .unwrap_or(std::ptr::null_mut())
 }
 pub unsafe fn map_name2sd(name: *const i8) -> *mut std::ffi::c_void {
@@ -39,7 +39,7 @@ pub unsafe fn map_name2npc(name: *const i8) -> *mut std::ffi::c_void {
 }
 pub fn map_id2mob(id: u32) -> *mut std::ffi::c_void {
     crate::game::map_server::map_id2mob_ref(id)
-        .map(|r| r as *mut _ as *mut std::ffi::c_void)
+        .map(|arc| &*arc.write() as *const _ as *mut std::ffi::c_void)
         .unwrap_or(std::ptr::null_mut())
 }
 

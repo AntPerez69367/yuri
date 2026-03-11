@@ -218,9 +218,20 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
 
     // Register the player in the global ID database and mark online.
     tracing::info!("[map] [login] fd={} step=addiddb", fd);
-    // Store player in typed map — moves sd_box ownership to PLAYER_MAP.
-    // The raw pointer sd remains valid because Box heap-allocates and never moves.
-    crate::game::map_server::map_addiddb_player((*sd).bl.id, sd_box);
+    // Store player in typed map — moves sd_box data into Arc<RwLock>,
+    // freeing the original Box. sd is dangling after this call.
+    let sd_id = (*sd).bl.id;
+    crate::game::map_server::map_addiddb_player(sd_id, sd_box);
+    // Get the live pointer from the Arc<RwLock>.
+    let sd: *mut crate::game::pc::MapSessionData =
+        crate::game::map_server::map_id2sd_pc(sd_id)
+            .expect("player just inserted").data_ptr();
+    // Update session.session_data — the old pointer was into the freed Box.
+    if let Some(session_arc) = crate::session::get_session_manager().get_session((*sd).fd) {
+        if let Ok(mut session) = session_arc.try_lock() {
+            session.session_data = Some(sd);
+        }
+    }
     // mmo_setonline returns true when the "login" Lua hook should fire.
     // We capture that here and fire the hook AFTER blocking_run_async returns so
     // Lua's DB calls (which also use blocking_run_async) don't deadlock on DB_RUNTIME.
