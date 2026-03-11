@@ -1878,13 +1878,12 @@ fn map_id2sd_cop(id: u32) -> *mut MapSessionData {
 }
 
 /// Replace first occurrence of `orig` in `src` with `rep`. Returns a pointer into
-/// a static 4096-byte buffer (matches C `replace_str` behaviour exactly).
+/// the caller-provided `buf`.
 ///
 /// # Safety
 /// All pointer arguments must be valid, null-terminated C strings for the duration
-/// of the call.  The returned pointer is valid until the next call.
-#[allow(static_mut_refs)]
-unsafe fn replace_str_rust(src: *const i8, orig: &[u8], rep: *const i8) -> *const i8 {
+/// of the call.  The returned pointer is valid as long as `buf` is alive.
+unsafe fn replace_str_rust(src: *const i8, orig: &[u8], rep: *const i8, buf: &mut [u8; 4096]) -> *const i8 {
     // Strip trailing NUL(s) from orig so orig_len is the actual string length.
     // Callers may pass NUL-terminated byte literals (e.g. b"$player\0"); strstr
     // needs the NUL excluded, and `tail` must point past the matched bytes only.
@@ -1897,23 +1896,21 @@ unsafe fn replace_str_rust(src: *const i8, orig: &[u8], rep: *const i8) -> *cons
     if p.is_null() {
         return src;
     }
-    // Static buffer — matches C semantics (not thread-safe, same as original).
-    static mut REPL_BUF: [u8; 4096] = [0u8; 4096];
     let prefix_len = (p as usize) - (src as usize);
     let rep_len = libc::strlen(rep);
     let tail = p.add(orig_bytes.len()); // points past the matched orig bytes
     // Copy prefix.
-    std::ptr::copy_nonoverlapping(src as *const u8, REPL_BUF.as_mut_ptr(), prefix_len.min(4095));
+    std::ptr::copy_nonoverlapping(src as *const u8, buf.as_mut_ptr(), prefix_len.min(4095));
     // Append rep.
     let after_prefix = prefix_len.min(4095);
     let copy_rep = rep_len.min(4095 - after_prefix);
-    std::ptr::copy_nonoverlapping(rep as *const u8, REPL_BUF.as_mut_ptr().add(after_prefix), copy_rep);
+    std::ptr::copy_nonoverlapping(rep as *const u8, buf.as_mut_ptr().add(after_prefix), copy_rep);
     // Append tail.
     let after_rep = after_prefix + copy_rep;
     let tail_len = libc::strlen(tail).min(4095 - after_rep);
-    std::ptr::copy_nonoverlapping(tail as *const u8, REPL_BUF.as_mut_ptr().add(after_rep), tail_len);
-    REPL_BUF[after_rep + tail_len] = 0;
-    REPL_BUF.as_ptr() as *const i8
+    std::ptr::copy_nonoverlapping(tail as *const u8, buf.as_mut_ptr().add(after_rep), tail_len);
+    buf[after_rep + tail_len] = 0;
+    buf.as_ptr() as *const i8
 }
 
 /// Send the player inspection/profile packet to `sd` (viewer) for `bl` (target player).
@@ -2356,7 +2353,8 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
             let tchaid = lg.tchaid;
             let char_name = clif_getName(tchaid).await;
             let text_ptr  = lg.text.as_ptr() as *const i8;
-            let bff = replace_str_rust(text_ptr, b"$player\0", char_name as *const i8);
+            let mut repl_buf = [0u8; 4096];
+            let bff = replace_str_rust(text_ptr, b"$player\0", char_name as *const i8, &mut repl_buf);
             let bff_len = if bff.is_null() { 0 } else { libc::strlen(bff) };
             wb(p, len + 8, bff_len as u8);
             if !bff.is_null() && bff_len > 0 {

@@ -33,27 +33,25 @@ const BL_ALL:  i32 = 0x0F;  // all block-list types
 /// `rep` (NUL-terminated).  Uses a 4096-byte module-local static buffer —
 
 /// Not thread-safe (single-threaded map server loop).
-#[allow(static_mut_refs)]
-unsafe fn replace_str_local(src: *const i8, orig: &[u8], rep: *const i8) -> *const i8 {
+unsafe fn replace_str_local(src: *const i8, orig: &[u8], rep: *const i8, buf: &mut [u8; 4096]) -> *const i8 {
     let orig_bytes = match orig.iter().position(|&b| b == 0) {
         Some(n) => &orig[..n],
         None => orig,
     };
     let p = libc::strstr(src, orig_bytes.as_ptr() as *const i8);
     if p.is_null() { return src; }
-    static mut REPL_BUF: [u8; 4096] = [0u8; 4096];
     let prefix_len = (p as usize).saturating_sub(src as usize);
     let rep_len = libc::strlen(rep);
     let tail = p.add(orig_bytes.len());
-    std::ptr::copy_nonoverlapping(src as *const u8, REPL_BUF.as_mut_ptr(), prefix_len.min(4095));
+    std::ptr::copy_nonoverlapping(src as *const u8, buf.as_mut_ptr(), prefix_len.min(4095));
     let after_prefix = prefix_len.min(4095);
     let copy_rep = rep_len.min(4095 - after_prefix);
-    std::ptr::copy_nonoverlapping(rep as *const u8, REPL_BUF.as_mut_ptr().add(after_prefix), copy_rep);
+    std::ptr::copy_nonoverlapping(rep as *const u8, buf.as_mut_ptr().add(after_prefix), copy_rep);
     let after_rep = after_prefix + copy_rep;
     let tail_len = libc::strlen(tail).min(4095 - after_rep);
-    std::ptr::copy_nonoverlapping(tail as *const u8, REPL_BUF.as_mut_ptr().add(after_rep), tail_len);
-    REPL_BUF[after_rep + tail_len] = 0;
-    REPL_BUF.as_ptr() as *const i8
+    std::ptr::copy_nonoverlapping(tail as *const u8, buf.as_mut_ptr().add(after_rep), tail_len);
+    buf[after_rep + tail_len] = 0;
+    buf.as_ptr() as *const i8
 }
 
 
@@ -817,7 +815,8 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
             let tchaid = lg.tchaid;
             let char_name = clif_getName(tchaid).await;
             let text_ptr  = lg.text.as_ptr() as *const i8;
-            let buff      = replace_str_local(text_ptr, b"$player\0", char_name);
+            let mut repl_buf = [0u8; 4096];
+            let buff      = replace_str_local(text_ptr, b"$player\0", char_name, &mut repl_buf);
             let buff_ptr  = buff as *const u8;
             let buff_len  = if buff.is_null() { 0 } else { cstr_len(buff_ptr) };
             wfifob(fd, 10 + len, buff_len as u8);
