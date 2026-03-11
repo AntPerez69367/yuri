@@ -41,9 +41,18 @@ pub fn init() {
 ///
 /// Any previously stored thread for this user is silently dropped
 /// (equivalent to cancelling an in-progress NPC interaction).
+///
+/// If the registry insertion fails (e.g. Lua memory exhaustion), the error
+/// is logged and the thread is silently dropped rather than panicking the
+/// server.
 pub fn store(lua: &Lua, user_key: usize, thread: &Thread) {
-    let key = lua.create_registry_value(thread)
-        .expect("failed to store thread in registry");
+    let key = match lua.create_registry_value(thread) {
+        Ok(k) => k,
+        Err(e) => {
+            tracing::error!("[scripting] thread_registry::store: failed to store thread: {e}");
+            return;
+        }
+    };
     threads().0.insert(user_key, key);
 }
 
