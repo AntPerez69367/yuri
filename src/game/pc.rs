@@ -1112,7 +1112,6 @@ pub unsafe fn rust_pc_timer(id: i32, _none: i32) -> i32 {
 
 /// `int pc_scripttimer(int id, int none)` — 500ms script tick: updates UI bars,
 /// fires die script on death, fires Lua `pc_timer` tick/advice hooks.
-#[allow(static_mut_refs)]
 pub unsafe fn rust_pc_scripttimer(id: i32, _none: i32) -> i32 {
     let sd = map_id2sd_pc(id as u32);
     if sd.is_null() { return 1; }
@@ -1123,10 +1122,11 @@ pub unsafe fn rust_pc_scripttimer(id: i32, _none: i32) -> i32 {
 
     if (*sd).groupbars != 0 && (*sd).group_count > 1 {
         let base = (*sd).groupid as usize * 256;
-        if base < groups.len() {
+        let grp = groups();
+        if base < grp.len() {
             for x in 0..(*sd).group_count as usize {
-                if base + x >= groups.len() { break; }
-                let tsd = map_id2sd_pc(groups[base + x]);
+                if base + x >= grp.len() { break; }
+                let tsd = map_id2sd_pc(grp[base + x]);
                 if tsd.is_null() { continue; }
                 if (*tsd).bl.m == (*sd).bl.m {
                     clif_send_groupbars(&mut *sd, &mut *tsd);
@@ -2411,7 +2411,7 @@ pub unsafe fn rust_pc_additem(
             pc_dropitemfull_inner(sd, fl);
             clif_sendminitext(sd, errbuf.as_ptr());
         } else {
-            clif_sendminitext(sd, map_msg[MAP_ERRITMFULL].message.as_ptr());
+            clif_sendminitext(sd, map_msg()[MAP_ERRITMFULL].message.as_ptr());
             pc_dropitemfull_inner(sd, fl);
         }
         return 0;
@@ -2481,7 +2481,7 @@ pub unsafe fn rust_pc_additem(
             clif_sendminitext(sd, errbuf.as_ptr());
         } else {
             pc_dropitemfull_inner(sd, fl);
-            clif_sendminitext(sd, map_msg[MAP_ERRITMFULL].message.as_ptr());
+            clif_sendminitext(sd, map_msg()[MAP_ERRITMFULL].message.as_ptr());
         }
     }
     0
@@ -2519,7 +2519,7 @@ pub unsafe fn rust_pc_additemnolog(
             pc_dropitemfull_inner(sd, fl);
             clif_sendminitext(sd, errbuf.as_ptr());
         } else {
-            clif_sendminitext(sd, map_msg[MAP_ERRITMFULL].message.as_ptr());
+            clif_sendminitext(sd, map_msg()[MAP_ERRITMFULL].message.as_ptr());
             pc_dropitemfull_inner(sd, fl);
         }
         return 0;
@@ -2585,7 +2585,7 @@ pub unsafe fn rust_pc_additemnolog(
             clif_sendminitext(sd, errbuf.as_ptr());
         } else {
             pc_dropitemfull_inner(sd, fl);
-            clif_sendminitext(sd, map_msg[MAP_ERRITMFULL].message.as_ptr());
+            clif_sendminitext(sd, map_msg()[MAP_ERRITMFULL].message.as_ptr());
         }
     }
     0
@@ -2809,28 +2809,28 @@ pub unsafe fn rust_pc_useitem(
             if classdb_path((*sd).status.class as i32)
                 != itemdb_class((*sd).status.inventory[id_u].id)
             {
-                clif_sendminitext(sd, map_msg[MAP_ERRITMPATH].message.as_ptr());
+                clif_sendminitext(sd, map_msg()[MAP_ERRITMPATH].message.as_ptr());
                 return 0;
             }
         } else {
             if (*sd).status.class as i32 != itemdb_class((*sd).status.inventory[id_u].id) {
-                clif_sendminitext(sd, map_msg[MAP_ERRITMPATH].message.as_ptr());
+                clif_sendminitext(sd, map_msg()[MAP_ERRITMPATH].message.as_ptr());
                 return 0;
             }
         }
         if ((*sd).status.mark as i32) < itemdb_rank((*sd).status.inventory[id_u].id) {
-            clif_sendminitext(sd, map_msg[MAP_ERRITMMARK].message.as_ptr());
+            clif_sendminitext(sd, map_msg()[MAP_ERRITMMARK].message.as_ptr());
             return 0;
         }
     }
 
     // Ghost / mounted state restrictions.
     if (*sd).status.state == PC_DIE as i8 {
-        clif_sendminitext(sd, map_msg[MAP_ERRGHOST].message.as_ptr());
+        clif_sendminitext(sd, map_msg()[MAP_ERRGHOST].message.as_ptr());
         return 0;
     }
     if (*sd).status.state == PC_MOUNTED as i8 {
-        clif_sendminitext(sd, map_msg[MAP_ERRMOUNT].message.as_ptr());
+        clif_sendminitext(sd, map_msg()[MAP_ERRMOUNT].message.as_ptr());
         return 0;
     }
 
@@ -3267,7 +3267,7 @@ pub unsafe fn rust_pc_equipitem(
     // Equip eligibility (level, might, sex, 2h conflicts).
     let ret = rust_pc_canequipitem(sd, id);
     if ret != 0 {
-        clif_sendminitext(sd, map_msg[ret as usize].message.as_ptr());
+        clif_sendminitext(sd, map_msg()[ret as usize].message.as_ptr());
         return 0;
     }
 

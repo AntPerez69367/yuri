@@ -642,8 +642,9 @@ pub unsafe fn sl_pc_getgroup(sd: &mut MapSessionData, out: *mut u32, max: i32) -
     if user.group_count > 0 {
         let n = user.group_count.min(max) as usize;
         let gid = (user.groupid as usize).min(255);
+        let grp = pc_acc_groups();
         for i in 0..n {
-            *out.add(i) = pc_acc_groups[gid * MAX_MEMBERS + i];
+            *out.add(i) = grp[gid * MAX_MEMBERS + i];
         }
         return n as i32;
     }

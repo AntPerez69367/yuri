@@ -65,12 +65,14 @@ pub struct UserlistData {
     pub user: [u32; 10000],
 }
 
-// SAFETY: Login authentication queue. Accessed only during the login handshake on the game thread.
-// Single-threaded game loop — no concurrent access.
-pub static mut userlist: UserlistData = UserlistData {
-    user_count: 0,
-    user: [0u32; 10000],
-};
+static USERLIST: OnceLock<Mutex<UserlistData>> = OnceLock::new();
+
+pub fn userlist() -> std::sync::MutexGuard<'static, UserlistData> {
+    USERLIST.get_or_init(|| Mutex::new(UserlistData {
+        user_count: 0,
+        user: [0u32; 10000],
+    })).lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Authentication-attempt counter.
 pub static auth_n: AtomicI32 = AtomicI32::new(0);
@@ -458,9 +460,10 @@ pub unsafe fn map_loadregistry(id: i32) -> i32 {
 /// Read a game-global registry value by name (case-insensitive).
 ///
 pub unsafe fn map_readglobalgamereg(reg: *const i8) -> i32 {
-    if reg.is_null() || gamereg.registry.is_null() { return 0; }
-    for i in 0..gamereg.registry_num as usize {
-        let entry = &*gamereg.registry.add(i);
+    let gr = gamereg();
+    if reg.is_null() || gr.registry.is_null() { return 0; }
+    for i in 0..gr.registry_num as usize {
+        let entry = &*gr.registry.add(i);
         if reg_str_eq(&entry.str, reg) { return entry.val; }
     }
     0
@@ -1435,17 +1438,21 @@ pub struct MapMsgData {
 
 /// The global language message table.
 ///
-///
 /// Entries are populated by `lang_read`.  The `message` field is a
 /// null-terminated, fixed-length C string stored directly in the struct
 /// (no heap allocation); `len` caches `strlen(message)` capped at 255.
-// SAFETY: Fixed-size language string table. Written once by lang_read at startup, read-only thereafter.
-// Single-threaded game loop — no concurrent access.
-pub static mut map_msg: [MapMsgData; MSG_MAX] = {
-    // const-initialise all slots to zero / empty string.
-    const ZERO: MapMsgData = MapMsgData { message: [0; 256], len: 0 };
-    [ZERO; MSG_MAX]
-};
+/// Set once at startup, read-only thereafter.
+static MAP_MSG: OnceLock<Box<[MapMsgData; MSG_MAX]>> = OnceLock::new();
+
+/// Access the global language message table. Returns a reference to the
+/// table, which is valid for the lifetime of the process.
+/// If `lang_read` has not been called, returns a zeroed default table.
+pub fn map_msg() -> &'static [MapMsgData; MSG_MAX] {
+    MAP_MSG.get_or_init(|| {
+        const ZERO: MapMsgData = MapMsgData { message: [0; 256], len: 0 };
+        Box::new([ZERO; MSG_MAX])
+    })
+}
 
 /// Mapping from the string key used in the lang file to the `map_msg` slot index.
 ///
@@ -1512,6 +1519,9 @@ pub unsafe fn lang_read(cfg_file: *const i8) -> i32 {
         }
     };
 
+    const ZERO: MapMsgData = MapMsgData { message: [0; 256], len: 0 };
+    let mut msgs = Box::new([ZERO; MSG_MAX]);
+
     for line in std::io::BufReader::new(file).lines() {
         let line = match line {
             Ok(l) => l,
@@ -1538,7 +1548,7 @@ pub unsafe fn lang_read(cfg_file: *const i8) -> i32 {
         // Copy the value into the fixed message buffer, truncating at 255 bytes.
         let bytes = value.as_bytes();
         let copy_len = bytes.len().min(255);
-        let slot = &mut map_msg[idx];
+        let slot = &mut msgs[idx];
         // Zero the whole buffer first (matches strncpy semantics for short strings).
         slot.message = [0; 256];
         for (i, &b) in bytes[..copy_len].iter().enumerate() {
@@ -1547,6 +1557,9 @@ pub unsafe fn lang_read(cfg_file: *const i8) -> i32 {
         slot.message[copy_len] = 0; // null terminator (already zero, but be explicit)
         slot.len = copy_len as i32;
     }
+
+    // Set the global table (only first call wins; subsequent calls are no-ops).
+    let _ = MAP_MSG.set(msgs);
 
     println!("[map] [lang_read] file={path}");
     0
@@ -1816,18 +1829,15 @@ struct MapSrcEntry {
 
 #[allow(dead_code)]
 /// The parsed map source list.
-// SAFETY: Vec populated once by map loader, read-only thereafter.
-// Single-threaded game loop — no concurrent access.
-static mut MAP_SRC_LIST: Vec<MapSrcEntry> = Vec::new();
+static MAP_SRC_LIST: OnceLock<Mutex<Vec<MapSrcEntry>>> = OnceLock::new();
+
+fn map_src_list() -> std::sync::MutexGuard<'static, Vec<MapSrcEntry>> {
+    MAP_SRC_LIST.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Free all entries in the map source list.
-///
-///
-/// # Safety
-/// Must be called on the game thread.  No other thread may concurrently access
-/// `MAP_SRC_LIST`.
-pub unsafe fn map_src_clear() -> i32 {
-    MAP_SRC_LIST.clear();
+pub fn map_src_clear() -> i32 {
+    map_src_list().clear();
     0
 }
 
@@ -1924,7 +1934,7 @@ pub unsafe fn map_src_add(r1: *const i8) -> i32 {
         mapfile: map_file.as_bytes().to_vec(),
     };
 
-    MAP_SRC_LIST.push(entry);
+    map_src_list().push(entry);
     0
 }
 
@@ -1958,15 +1968,15 @@ unsafe impl Sync for GameData {}
 
 /// The game-wide registry global.
 ///
-/// Exported as `gamereg` so the remaining C function `map_readglobalgamereg`
-/// Populated by
-/// `map_loadgameregistry` and mutated by `map_setglobalgamereg`.
-// SAFETY: Global game registry (season, time, rates). Written by rust_map_cronjob on the game thread.
-// Single-threaded game loop — no concurrent access.
-pub static mut gamereg: GameData = GameData {
-    registry:     std::ptr::null_mut(),
-    registry_num: 0,
-};
+/// Populated by `map_loadgameregistry` and mutated by `map_setglobalgamereg`.
+static GAMEREG: OnceLock<Mutex<GameData>> = OnceLock::new();
+
+pub fn gamereg() -> std::sync::MutexGuard<'static, GameData> {
+    GAMEREG.get_or_init(|| Mutex::new(GameData {
+        registry:     std::ptr::null_mut(),
+        registry_num: 0,
+    })).lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Allocate a zeroed array of `GlobalReg` entries of the given length via the
 /// global allocator.  The caller is responsible for freeing via the same allocator.
@@ -2289,12 +2299,13 @@ pub async unsafe fn map_setglobalreg_str(m: i32, reg_name: String, val: i32) -> 
 /// types so the future is `Send` — safe to `.await` from Lua callback boundaries.
 pub async unsafe fn map_setglobalgamereg_str(reg_name: String, val: i32) -> i32 {
     let save_info: Option<(i32, bool)> = {
-        if gamereg.registry.is_null() { return 0; }
-        let num = gamereg.registry_num as usize;
+        let mut gr = gamereg();
+        if gr.registry.is_null() { return 0; }
+        let num = gr.registry_num as usize;
 
         let mut exist: Option<usize> = None;
         for idx in 0..num {
-            let entry = &*gamereg.registry.add(idx);
+            let entry = &*gr.registry.add(idx);
             let bytes: &[u8] = std::slice::from_raw_parts(entry.str.as_ptr() as *const u8, 64);
             let end = bytes.iter().position(|&b| b == 0).unwrap_or(64);
             let entry_name = std::str::from_utf8_unchecked(&bytes[..end]);
@@ -2305,18 +2316,18 @@ pub async unsafe fn map_setglobalgamereg_str(reg_name: String, val: i32) -> i32 
         }
 
         if let Some(idx) = exist {
-            let entry = &mut *gamereg.registry.add(idx);
+            let entry = &mut *gr.registry.add(idx);
             if entry.val == val { return 0; } // value unchanged — skip save
             entry.val = val;
             Some((idx as i32, val == 0))
         } else {
             let mut reuse_idx: Option<usize> = None;
             for idx in 0..num {
-                let entry = &*gamereg.registry.add(idx);
+                let entry = &*gr.registry.add(idx);
                 if entry.str[0] == 0 { reuse_idx = Some(idx); break; }
             }
             if let Some(idx) = reuse_idx {
-                let entry = &mut *gamereg.registry.add(idx);
+                let entry = &mut *gr.registry.add(idx);
                 let bytes = reg_name.as_bytes();
                 let n = bytes.len().min(63);
                 for (i, &b) in bytes[..n].iter().enumerate() { entry.str[i] = b as i8; }
@@ -2324,8 +2335,8 @@ pub async unsafe fn map_setglobalgamereg_str(reg_name: String, val: i32) -> i32 
                 entry.val = val;
                 Some((idx as i32, false))
             } else if num < MAX_GAMEREG {
-                gamereg.registry_num = (num + 1) as i32;
-                let entry = &mut *gamereg.registry.add(num);
+                gr.registry_num = (num + 1) as i32;
+                let entry = &mut *gr.registry.add(num);
                 let bytes = reg_name.as_bytes();
                 let n = bytes.len().min(63);
                 for (i, &b) in bytes[..n].iter().enumerate() { entry.str[i] = b as i8; }
@@ -2336,13 +2347,14 @@ pub async unsafe fn map_setglobalgamereg_str(reg_name: String, val: i32) -> i32 
                 None
             }
         }
-    }; // all raw pointer refs dropped here
+    }; // MutexGuard dropped here — safe to await below
 
     if let Some((save_idx, clear_str)) = save_info {
         map_savegameregistry(save_idx).await;
         if clear_str {
-            if !gamereg.registry.is_null() {
-                let entry = &mut *gamereg.registry.add(save_idx as usize);
+            let gr = gamereg();
+            if !gr.registry.is_null() {
+                let entry = &mut *gr.registry.add(save_idx as usize);
                 entry.str = [0i8; 64];
             }
         }
@@ -2402,17 +2414,20 @@ pub async unsafe fn map_loadgameregistry() -> i32 {
     let sid = crate::config_globals::global_config().serverid;
     let limit = MAX_GAMEREG as u32;
 
-    gamereg.registry_num = 0;
+    {
+        let mut gr = gamereg();
+        gr.registry_num = 0;
 
-    // Free previous registry if reload.
-    if !gamereg.registry.is_null() {
-        let layout = std::alloc::Layout::array::<crate::database::map_db::GlobalReg>(MAX_GAMEREG)
-            .expect("layout computation is infallible for MAX_GAMEREG = 5000");
-        std::alloc::dealloc(gamereg.registry as *mut u8, layout);
-        gamereg.registry = std::ptr::null_mut();
+        // Free previous registry if reload.
+        if !gr.registry.is_null() {
+            let layout = std::alloc::Layout::array::<crate::database::map_db::GlobalReg>(MAX_GAMEREG)
+                .expect("layout computation is infallible for MAX_GAMEREG = 5000");
+            std::alloc::dealloc(gr.registry as *mut u8, layout);
+            gr.registry = std::ptr::null_mut();
+        }
+
+        gr.registry = alloc_zeroed_gamereg_registry(MAX_GAMEREG);
     }
-
-    gamereg.registry = alloc_zeroed_gamereg_registry(MAX_GAMEREG);
 
     let sql = format!(
         "SELECT GrgIdentifier, GrgValue FROM `GameRegistry{sid}` LIMIT {limit}"
@@ -2432,10 +2447,11 @@ pub async unsafe fn map_loadgameregistry() -> i32 {
     };
 
     let count = rows.len().min(MAX_GAMEREG);
-    gamereg.registry_num = count as i32;
+    let mut gr = gamereg();
+    gr.registry_num = count as i32;
 
     for (i, (identifier, val)) in rows.iter().take(count).enumerate() {
-        let entry = &mut *gamereg.registry.add(i);
+        let entry = &mut *gr.registry.add(i);
         let bytes = identifier.as_bytes();
         let copy_len = bytes.len().min(63);
         std::ptr::copy_nonoverlapping(
@@ -2471,14 +2487,14 @@ pub async unsafe fn map_loadgameregistry() -> i32 {
 /// Must be called on the game thread.  `i` must be within `[0, registry_num)`.
 /// `gamereg.registry` must be a valid allocated array.
 pub async unsafe fn map_savegameregistry(i: i32) -> i32 {
-    if gamereg.registry.is_null() { return 0; }
-    if i < 0 || i as usize >= gamereg.registry_num as usize { return 0; }
-
     // Extract all data into owned/Copy types before the first .await to ensure
     // the future is Send (raw pointer refs cannot cross await points).
     let (sid, identifier, val) = {
+        let gr = gamereg();
+        if gr.registry.is_null() { return 0; }
+        if i < 0 || i as usize >= gr.registry_num as usize { return 0; }
         let sid = crate::config_globals::global_config().serverid;
-        let entry = &*gamereg.registry.add(i as usize);
+        let entry = &*gr.registry.add(i as usize);
         let identifier = {
             let bytes: &[u8] = std::slice::from_raw_parts(entry.str.as_ptr() as *const u8, 64);
             let end = bytes.iter().position(|&b| b == 0).unwrap_or(64);
@@ -2560,13 +2576,14 @@ pub async unsafe fn map_setglobalgamereg(reg: *const i8, val: i32) -> i32 {
     // before the first .await point.
     // Returns Some((save_idx, clear_str)) or None if nothing to save.
     let save_info: Option<(i32, bool)> = {
-        if gamereg.registry.is_null() { return 0; }
-        let num = gamereg.registry_num as usize;
+        let mut gr = gamereg();
+        if gr.registry.is_null() { return 0; }
+        let num = gr.registry_num as usize;
 
         // Search for an existing entry (strcasecmp).
         let mut exist: Option<usize> = None;
         for idx in 0..num {
-            let entry = &*gamereg.registry.add(idx);
+            let entry = &*gr.registry.add(idx);
             if reg_str_eq(&entry.str, reg) {
                 exist = Some(idx);
                 break;
@@ -2574,7 +2591,7 @@ pub async unsafe fn map_setglobalgamereg(reg: *const i8, val: i32) -> i32 {
         }
 
         if let Some(idx) = exist {
-            let entry = &mut *gamereg.registry.add(idx);
+            let entry = &mut *gr.registry.add(idx);
             if entry.val == val { return 0; } // value unchanged — skip save
             entry.val = val;
             Some((idx as i32, val == 0))
@@ -2582,20 +2599,20 @@ pub async unsafe fn map_setglobalgamereg(reg: *const i8, val: i32) -> i32 {
             // Reuse an empty slot.
             let mut reuse_idx: Option<usize> = None;
             for idx in 0..num {
-                let entry = &*gamereg.registry.add(idx);
+                let entry = &*gr.registry.add(idx);
                 if entry.str[0] == 0 {
                     reuse_idx = Some(idx);
                     break;
                 }
             }
             if let Some(idx) = reuse_idx {
-                let entry = &mut *gamereg.registry.add(idx);
+                let entry = &mut *gr.registry.add(idx);
                 copy_cstr_to_reg_str(&mut entry.str, reg);
                 entry.val = val;
                 Some((idx as i32, false))
             } else if num < MAX_GAMEREG {
-                gamereg.registry_num = (num + 1) as i32;
-                let entry = &mut *gamereg.registry.add(num);
+                gr.registry_num = (num + 1) as i32;
+                let entry = &mut *gr.registry.add(num);
                 copy_cstr_to_reg_str(&mut entry.str, reg);
                 entry.val = val;
                 Some((num as i32, false))
@@ -2603,13 +2620,14 @@ pub async unsafe fn map_setglobalgamereg(reg: *const i8, val: i32) -> i32 {
                 None
             }
         }
-    }; // all raw pointer refs dropped here
+    }; // MutexGuard dropped here — safe to await below
 
     if let Some((save_idx, clear_str)) = save_info {
         map_savegameregistry(save_idx).await;
         if clear_str {
-            if !gamereg.registry.is_null() {
-                let entry = &mut *gamereg.registry.add(save_idx as usize);
+            let gr = gamereg();
+            if !gr.registry.is_null() {
+                let entry = &mut *gr.registry.add(save_idx as usize);
                 entry.str = [0i8; 64];
             }
         }
@@ -2819,15 +2837,12 @@ pub unsafe fn map_do_term() {
 // Map server globals.
 // ---------------------------------------------------------------------------
 
-/// Mob search DBMap — null pointer stub (no active callers).
-// SAFETY: Raw *mut std::ffi::c_void handle. Written once at startup, read-only thereafter.
-// Single-threaded game loop — no concurrent access.
-pub static mut mobsearch_db: *mut std::ffi::c_void = std::ptr::null_mut();
-
 /// Party/group member ID table. Flat 2-D: groups[256][256] = 65536 elements.
-// SAFETY: u32 array mapping entity ID to group ID. Read/write on the game thread only.
-// Single-threaded game loop — no concurrent access.
-pub static mut groups: [u32; 65536] = [0u32; 65536];
+static GROUPS: OnceLock<Mutex<Box<[u32; 65536]>>> = OnceLock::new();
+
+pub fn groups() -> std::sync::MutexGuard<'static, Box<[u32; 65536]>> {
+    GROUPS.get_or_init(|| Mutex::new(Box::new([0u32; 65536]))).lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// File descriptor for the logging socket (unused in current build; kept for ABI).
 pub static log_fd: AtomicI32 = AtomicI32::new(0);
@@ -2836,14 +2851,10 @@ pub static log_fd: AtomicI32 = AtomicI32::new(0);
 pub static map_max: AtomicI32 = AtomicI32::new(0);
 
 /// Map server public IP string (dotted-decimal, e.g. "127.0.0.1").
-// SAFETY: Byte array for IP display string, written once at startup.
-// Single-threaded game loop — no concurrent access.
-pub static mut map_ip_s: [u8; 16] = [0u8; 16];
+pub static MAP_IP_S: OnceLock<[u8; 16]> = OnceLock::new();
 
 /// Logging server IP string (dotted-decimal).
-// SAFETY: Byte array for IP display string, written once at startup.
-// Single-threaded game loop — no concurrent access.
-pub static mut log_ip_s: [u8; 16] = [0u8; 16];
+pub static LOG_IP_S: OnceLock<[u8; 16]> = OnceLock::new();
 
 /// Hour value from the previous cron-job tick; used to detect hour changes.
 pub static oldHour: AtomicI32 = AtomicI32::new(0);

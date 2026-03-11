@@ -502,9 +502,8 @@ fn command_makegm(_sd: &mut MapSessionData, line: &str) -> i32 {
     0
 }
 
-#[allow(static_mut_refs)]
 fn command_who(sd: &mut MapSessionData, _line: &str) -> i32 {
-    send_minitext(sd, &format!("There are {} users online.", unsafe { userlist.user_count }));
+    send_minitext(sd, &format!("There are {} users online.", userlist().user_count));
     0
 }
 

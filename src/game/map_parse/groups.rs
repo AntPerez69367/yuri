@@ -69,14 +69,14 @@ unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::dat
 // ─── inline helper: groups array access ──────────────────────────────────────
 
 #[inline]
-unsafe fn groups_get(groupid: usize, slot: usize) -> u32 {
-    groups_raw[groupid.min(MAX_GROUPS - 1) * MAX_GROUP_MEMBERS + slot.min(MAX_GROUP_MEMBERS - 1)]
+fn groups_get(groupid: usize, slot: usize) -> u32 {
+    groups_raw()[groupid.min(MAX_GROUPS - 1) * MAX_GROUP_MEMBERS + slot.min(MAX_GROUP_MEMBERS - 1)]
 }
 
 #[allow(dead_code)]
 #[inline]
-unsafe fn groups_set(groupid: usize, slot: usize, val: u32) {
-    groups_raw[groupid.min(MAX_GROUPS - 1) * MAX_GROUP_MEMBERS + slot.min(MAX_GROUP_MEMBERS - 1)] = val;
+fn groups_set(groupid: usize, slot: usize, val: u32) {
+    groups_raw()[groupid.min(MAX_GROUPS - 1) * MAX_GROUP_MEMBERS + slot.min(MAX_GROUP_MEMBERS - 1)] = val;
 }
 
 // ─── wfifop_copy: write a counted string into the send buffer ─────────────────

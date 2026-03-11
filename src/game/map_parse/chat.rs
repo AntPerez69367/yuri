@@ -497,7 +497,7 @@ pub unsafe fn clif_retrwisp(
 /// Tell the player their whisper failed.
 ///
 pub unsafe fn clif_failwisp(sd: *mut MapSessionData) -> i32 {
-    clif_sendmsg(sd, 0, map_msg[MAP_WHISPFAIL].message.as_ptr() as *const i8);
+    clif_sendmsg(sd, 0, map_msg()[MAP_WHISPFAIL].message.as_ptr() as *const i8);
     0
 }
 
@@ -671,7 +671,6 @@ pub unsafe fn canwhisper(
 
 /// Send a party chat message to all group members.
 ///
-#[allow(static_mut_refs)]
 pub unsafe fn clif_sendgroupmessage(
     sd: *mut MapSessionData,
     msg: *mut u8,
@@ -697,10 +696,11 @@ pub unsafe fn clif_sendgroupmessage(
     let buf2_c = std::ffi::CString::new(buf2).unwrap_or_default();
 
     let base = (*sd).groupid as usize * 256;
+    let grp = groups();
     for i in 0..(*sd).group_count as usize {
         let idx = base + i;
-        if idx >= groups.len() { break; }
-        let tsd = session_get_data_checked(SessionId::from_raw(groups[idx] as i32));
+        if idx >= grp.len() { break; }
+        let tsd = session_get_data_checked(SessionId::from_raw(grp[idx] as i32));
         if !tsd.is_null() && clif_isignore(sd, tsd) != 0 {
             clif_sendmsg(tsd as *mut MapSessionData, 11, buf2_c.as_ptr());
         }

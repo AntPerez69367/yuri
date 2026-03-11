@@ -1731,7 +1731,6 @@ pub unsafe fn rust_mob_addtocurrent_inner(bl: *mut BlockList, def: *mut i32, _id
 
 /// Drop an item onto the ground at (m, x, y).
 /// Reads `attacker->group_count` and `groups[]` to populate floor-item looters.
-#[allow(static_mut_refs)]
 pub unsafe fn rust_mob_dropitem(
     blockid: u32,
     id: u32,
@@ -1792,10 +1791,11 @@ pub unsafe fn rust_mob_dropitem(
                 };
                 let gid = (*attacker).groupid as usize;
                 if gid < 256 {
+                    let grp = groups_mob();
                     for z in 0..safe_count {
                         let idx = gid * MAX_GROUP_MEMBERS + z;
-                        if idx < groups_mob.len() {
-                            (*fl).looters[z] = groups_mob[idx];
+                        if idx < grp.len() {
+                            (*fl).looters[z] = grp[idx];
                         }
                     }
                 }

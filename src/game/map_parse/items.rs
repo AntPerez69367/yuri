@@ -519,7 +519,7 @@ pub unsafe fn clif_sendequip(sd: *mut MapSessionData, id: i32) -> i32 {
     let mut buff = [0i8; 256];
     libc::snprintf(
         buff.as_mut_ptr(), 256,
-        map_msg[msgnum].message.as_ptr(),
+        map_msg()[msgnum].message.as_ptr(),
         name,
     );
     clif_equipit(sd, id);

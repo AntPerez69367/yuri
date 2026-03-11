@@ -2261,7 +2261,7 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
                     libc::snprintf(
                         buff.as_mut_ptr(),
                         buff.len(),
-                        map_msg[msgnum as usize].message.as_ptr(),
+                        map_msg()[msgnum as usize].message.as_ptr(),
                         nameof,
                     );
                     let buff_len = libc::strlen(buff.as_ptr());

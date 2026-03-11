@@ -533,8 +533,9 @@ pub unsafe fn clif_runfloor_sub_inner(bl: *mut crate::database::map_db::BlockLis
 pub unsafe fn clif_addtokillreg(sd: *mut MapSessionData, mob: i32) -> i32 {
     use crate::game::pc::{groups, MAX_GROUP_MEMBERS};
     if sd.is_null() { return 0; }
+    let grp = groups();
     for x in 0..(*sd).group_count as usize {
-        let member_id = groups[(*sd).groupid as usize * MAX_GROUP_MEMBERS + x];
+        let member_id = grp[(*sd).groupid as usize * MAX_GROUP_MEMBERS + x];
         let tsd = map_id2sd_pc(member_id).map(|r| r as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
         if tsd.is_null() { continue; }
         if (*tsd).bl.m == (*sd).bl.m {

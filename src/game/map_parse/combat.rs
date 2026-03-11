@@ -973,7 +973,7 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
                 let tsd2: *mut MapSessionData = if droptype == 1 {
                     map_id2sd_local(dropid)
                 } else {
-                    map_id2sd_local(groups[dropid as usize * 256])
+                    map_id2sd_local(groups()[dropid as usize * 256])
                 };
 
                 if !tsd2.is_null() {
@@ -996,7 +996,7 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
                     rust_pc_checklevel(sd);
                 } else {
                     for x in 0..(*sd).group_count as usize {
-                        let tsdg = map_id2sd_local(groups[(*sd).groupid as usize * 256 + x]);
+                        let tsdg = map_id2sd_local(groups()[(*sd).groupid as usize * 256 + x]);
                         if tsdg.is_null() { continue; }
                         if (*tsdg).bl.m == (*sd).bl.m && (*tsdg).status.state != 1 {
                             rust_pc_checklevel(tsdg);
