@@ -30,9 +30,10 @@ const BL_ALL:  i32 = 0x0F;  // all block-list types
 // ─── Local helpers ────────────────────────────────────────────────────────────
 
 /// Replace the first occurrence of `orig` (NUL-terminated) in `src` with
-/// `rep` (NUL-terminated).  Uses a 4096-byte module-local static buffer —
-
-/// Not thread-safe (single-threaded map server loop).
+/// `rep` (NUL-terminated).  Writes into the caller-provided 4096-byte buffer.
+///
+/// Returns a pointer into `buf` containing the result, or `src` unchanged if
+/// `orig` is not found.
 unsafe fn replace_str_local(src: *const i8, orig: &[u8], rep: *const i8, buf: &mut [u8; 4096]) -> *const i8 {
     let orig_bytes = match orig.iter().position(|&b| b == 0) {
         Some(n) => &orig[..n],
