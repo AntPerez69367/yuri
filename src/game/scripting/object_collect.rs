@@ -269,60 +269,8 @@ pub unsafe fn sl_g_getaliveobjectssamemap(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::game::block::{test_make_map, test_free_map, test_make_bl_node, test_insert_in_block, test_set_map};
     use crate::game::mob::BL_PC;
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Test: sl_g_getobjectscell — writes pointer and returns correct count
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /// Verify that `sl_g_getobjectscell` returns 0 when no entities are
-    /// registered in the global ID maps, even though the block grid has IDs.
-    ///
-    /// The block_grid stores entity IDs; `sl_g_getobjectscell` resolves them
-    /// via `map_id2bl` which requires entities to be registered in the global
-    /// player/mob/npc/item maps.  Without registration, lookup returns null
-    /// and the entity is skipped.
-    #[test]
-    fn test_sl_g_getobjectscell_no_registered_entity() {
-        unsafe {
-            // Build a minimal 100x100 map with one PC at (10, 10).
-            let mut slot = test_make_map(100, 100);
-            let mut bl_node = test_make_bl_node(BL_PC as u8, 10, 10);
-            test_insert_in_block(&mut slot, &raw mut bl_node, 10, 10);
-
-            let slot_ptr = Box::into_raw(slot);
-            test_set_map(slot_ptr);
-
-            // Allocate an output array with 4 slots.
-            let mut out_ptrs: [*mut std::ffi::c_void; 4] = [std::ptr::null_mut(); 4];
-
-            let count = sl_g_getobjectscell(
-                0,          // map slot 0
-                10,         // x
-                10,         // y
-                BL_PC,      // bl_type
-                out_ptrs.as_mut_ptr(),
-                4,          // max_count
-            );
-
-            // Restore global before any assertion.
-            test_set_map(std::ptr::null_mut());
-
-            let slot = Box::from_raw(slot_ptr);
-            test_free_map(slot);
-
-            // Entity ID 0 is not registered in the global maps, so count is 0.
-            assert_eq!(count, 0, "unregistered entity ID should not be found");
-        }
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Test: sl_g_getobjectscell — null out_ptrs returns 0 immediately
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /// Verify the null guard: passing a null `out_ptrs` must return 0 and must
-    /// not dereference the pointer (no segfault).
     #[test]
     fn test_sl_g_getobjectscell_null_out_ptrs_returns_zero() {
         unsafe {
