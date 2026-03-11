@@ -6,7 +6,8 @@ use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicI32, Ordering};
-use std::sync::{Mutex as StdMutex, RwLock};
+use std::sync::Mutex as StdMutex;
+use parking_lot::RwLock;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -165,7 +166,7 @@ impl SessionManager {
 
     /// Insert a session (sync)
     pub fn insert_session(&self, id: SessionId, session: Arc<Mutex<Session>>) -> Result<(), SessionError> {
-        let mut sessions = self.sessions.write().unwrap();
+        let mut sessions = self.sessions.write();
         if sessions.len() >= MAX_SESSIONS {
             return Err(SessionError::MaxSessionsExceeded);
         }
@@ -175,12 +176,12 @@ impl SessionManager {
 
     /// Get a session by ID (sync)
     pub fn get_session(&self, id: SessionId) -> Option<Arc<Mutex<Session>>> {
-        self.sessions.read().unwrap().get(&id).cloned()
+        self.sessions.read().get(&id).cloned()
     }
 
     /// Remove a session (sync)
     pub fn remove_session(&self, id: SessionId) {
-        self.sessions.write().unwrap().remove(&id);
+        self.sessions.write().remove(&id);
     }
 
     /// Get default callbacks (sync)
@@ -195,12 +196,12 @@ impl SessionManager {
 
     /// Get session count (sync)
     pub fn session_count(&self) -> usize {
-        self.sessions.read().unwrap().len()
+        self.sessions.read().len()
     }
 
     /// Get snapshot of all active session IDs (sync)
     pub fn get_all_fds(&self) -> Vec<SessionId> {
-        self.sessions.read().unwrap().keys().copied().collect()
+        self.sessions.read().keys().copied().collect()
     }
 
     /// Register a listener socket (sync, called before server starts)
