@@ -9,6 +9,7 @@
 
 #![allow(non_snake_case)]
 
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::database::{board_db, class_db};
 use crate::session::{
@@ -1147,7 +1148,7 @@ pub unsafe fn clif_paperpopupwrite(
 ///
 ///
 /// The C original uses a `static int number` that increments after each send.
-/// This port uses `static mut SENDTEST_NUMBER: u8` with wrapping arithmetic.
+/// This port uses a `static SENDTEST_NUMBER: AtomicU8` with wrapping arithmetic.
 ///
 /// Packet layout (7 bytes fixed):
 /// ```text
@@ -1159,7 +1160,7 @@ pub unsafe fn clif_paperpopupwrite(
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 pub unsafe fn clif_sendtest(sd: *mut MapSessionData) -> i32 {
-    static mut SENDTEST_NUMBER: u8 = 0;
+    static SENDTEST_NUMBER: AtomicU8 = AtomicU8::new(0);
 
     if sd.is_null() {
         return 0;
@@ -1182,13 +1183,12 @@ pub unsafe fn clif_sendtest(sd: *mut MapSessionData) -> i32 {
     wb(p, 2, 0x04);
     wb(p, 3, 0x63);
     wb(p, 4, 0x03);
-    // SAFETY: single-threaded game loop; no concurrent access to SENDTEST_NUMBER.
-    wb(p, 5, unsafe { SENDTEST_NUMBER });
+    wb(p, 5, SENDTEST_NUMBER.load(Ordering::Relaxed));
     wb(p, 6, 0x00);
 
     wfifoset(fd, encrypt(fd) as usize);
     // Increment after send, matching C post-increment.
-    unsafe { SENDTEST_NUMBER = SENDTEST_NUMBER.wrapping_add(1) };
+    SENDTEST_NUMBER.fetch_add(1, Ordering::Relaxed);
     0
 }
 
