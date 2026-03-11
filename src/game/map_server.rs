@@ -67,6 +67,7 @@ pub struct UserlistData {
 
 static USERLIST: OnceLock<Mutex<UserlistData>> = OnceLock::new();
 
+#[inline]
 pub fn userlist() -> std::sync::MutexGuard<'static, UserlistData> {
     USERLIST.get_or_init(|| Mutex::new(UserlistData {
         user_count: 0,
@@ -90,6 +91,7 @@ const MAX_FLOORITEM: usize = 100_000_000;
 /// and never actually contends.
 static OBJECT_SLOTS: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
 
+#[inline]
 fn object_slots() -> std::sync::MutexGuard<'static, Vec<u8>> {
     OBJECT_SLOTS.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -223,18 +225,23 @@ static MOB_MAP: OnceLock<Mutex<HashMap<u32, RefCell<Box<crate::game::mob::MobSpa
 static NPC_MAP: OnceLock<Mutex<HashMap<u32, RefCell<Box<crate::game::npc::NpcData>>>>> = OnceLock::new();
 static ITEM_MAP: OnceLock<Mutex<HashMap<u32, RefCell<Box<crate::game::scripting::types::floor::FloorItemData>>>>> = OnceLock::new();
 
+#[inline]
 fn player_map() -> std::sync::MutexGuard<'static, HashMap<u32, RefCell<Box<crate::game::pc::MapSessionData>>>> {
     PLAYER_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
 }
+#[inline]
 fn mob_map() -> std::sync::MutexGuard<'static, HashMap<u32, RefCell<Box<crate::game::mob::MobSpawnData>>>> {
     MOB_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
 }
+#[inline]
 fn npc_map() -> std::sync::MutexGuard<'static, HashMap<u32, RefCell<Box<crate::game::npc::NpcData>>>> {
     NPC_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
 }
+#[inline]
 fn item_map() -> std::sync::MutexGuard<'static, HashMap<u32, RefCell<Box<crate::game::scripting::types::floor::FloorItemData>>>> {
     ITEM_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
 }
+
 
 /// Iterate all online players safely. Collects player IDs under the lock,
 /// then releases the lock and re-looks up each player via `map_id2sd_pc` —
@@ -263,7 +270,10 @@ pub fn map_termiddb() {
 /// Typed lookup returning a `*mut BlockList` pointer for any registered entity.
 /// Returns null if the id is not found in any entity map.
 ///
-/// This replaces the old `map_id2bl` which returned `*mut c_void`.
+/// NOTE: This function intentionally bypasses RefCell borrow tracking via
+/// `as_ptr()` because it returns a raw pointer — callers don't hold an RAII
+/// guard, so there is no way to release the borrow. The RefCell borrow
+/// checking provided by `EntityRef` is only effective when callers hold guards.
 pub fn map_id2bl_ref(id: u32) -> *mut crate::database::map_db::BlockList {
     use crate::game::mob::{MOB_START_NUM, FLOORITEM_START_NUM, NPC_START_NUM};
     if id < MOB_START_NUM {
@@ -327,42 +337,45 @@ pub unsafe fn map_deliddb(bl: *mut BlockList) {
 
 // ── Safety model for &'static mut T lookups ───────────────────────────────
 // These functions return &'static mut T by extending the lifetime of a
-// reference obtained through RefCell<Box<T>> stored in a static map.
+// borrow obtained through the entity map's RefCell<Box<T>>. The RefCell
+// is structurally in place for the future Arc<RwLock<T>> migration.
 //
-// The RefCell wrapping is the first step toward safe runtime borrow-checking.
-// Currently the functions still use `as_ptr()` to bypass RefCell's borrow
-// tracking (to avoid panics from re-entrant lookups of the same entity).
-// A future pass will migrate callers to receive proper RefMut guards instead
-// of raw &'static mut references.
-//
-// Safety invariants callers MUST uphold:
-//
-// 1. Single-threaded access: all entity lookups run on the game event loop
-//    thread only. No other thread calls these functions.
-//
-// 2. No simultaneous aliasing: callers must never hold two live &mut T
-//    references to the *same* entity at the same time. Different entities
-//    stored in different maps can be borrowed simultaneously — they are
-//    distinct allocations with no borrow conflict.
-//
-// Violating either invariant is undefined behavior.
+// SAFETY: Single-threaded game loop — no concurrent HashMap mutation.
+// Callers must never hold two live &mut T references to the same entity
+// at the same time. The next migration step replaces these with
+// Arc<RwLock<T>> which enforces this at runtime.
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Typed lookup — returns &'static mut MapSessionData if id is a player.
+/// Typed lookup — returns `&'static mut MapSessionData` if id is a player.
+#[must_use]
+#[inline]
 pub fn map_id2sd_pc(id: u32) -> Option<&'static mut crate::game::pc::MapSessionData> {
-    player_map().get(&id).map(|cell| unsafe { &mut *(*cell.as_ptr()) })
+    let map = player_map();
+    map.get(&id).map(|cell| unsafe { &mut *(*cell.as_ptr()) })
 }
 
+/// Typed lookup — returns `&'static mut MobSpawnData` if id is a mob.
+#[must_use]
+#[inline]
 pub fn map_id2mob_ref(id: u32) -> Option<&'static mut crate::game::mob::MobSpawnData> {
-    mob_map().get(&id).map(|cell| unsafe { &mut *(*cell.as_ptr()) })
+    let map = mob_map();
+    map.get(&id).map(|cell| unsafe { &mut *(*cell.as_ptr()) })
 }
 
+/// Typed lookup — returns `&'static mut NpcData` if id is a npc.
+#[must_use]
+#[inline]
 pub fn map_id2npc_ref(id: u32) -> Option<&'static mut crate::game::npc::NpcData> {
-    npc_map().get(&id).map(|cell| unsafe { &mut *(*cell.as_ptr()) })
+    let map = npc_map();
+    map.get(&id).map(|cell| unsafe { &mut *(*cell.as_ptr()) })
 }
 
+/// Typed lookup — returns `&'static mut FloorItemData` if id is a floor item.
+#[must_use]
+#[inline]
 pub fn map_id2fl_ref(id: u32) -> Option<&'static mut crate::game::scripting::types::floor::FloorItemData> {
-    item_map().get(&id).map(|cell| unsafe { &mut *(*cell.as_ptr()) })
+    let map = item_map();
+    map.get(&id).map(|cell| unsafe { &mut *(*cell.as_ptr()) })
 }
 
 /// Polymorphic entity reference — used by code that handles any entity type.
@@ -387,6 +400,7 @@ impl<'a> GameEntity<'a> {
 
 /// Look up any entity by id, dispatching by id range.
 /// Returns None if the id is not registered in any typed map.
+#[must_use]
 pub fn map_id2entity(id: u32) -> Option<GameEntity<'static>> {
     use crate::game::mob::{MOB_START_NUM, FLOORITEM_START_NUM, NPC_START_NUM};
     if id < MOB_START_NUM {
@@ -442,7 +456,7 @@ pub unsafe fn map_name2npc(name: *const i8) -> *mut std::ffi::c_void {
     while i <= npc_hi {
         if let Some(nd) = map_id2npc_ref(i) {
             if libc::strcasecmp(nd.npc_name.as_ptr(), name) == 0 {
-                return nd as *mut crate::game::npc::NpcData as *mut std::ffi::c_void;
+                return &mut *nd as *mut crate::game::npc::NpcData as *mut std::ffi::c_void;
             }
         }
         i += 1;
@@ -1447,6 +1461,7 @@ static MAP_MSG: OnceLock<Box<[MapMsgData; MSG_MAX]>> = OnceLock::new();
 /// Access the global language message table. Returns a reference to the
 /// table, which is valid for the lifetime of the process.
 /// If `lang_read` has not been called, returns a zeroed default table.
+#[inline]
 pub fn map_msg() -> &'static [MapMsgData; MSG_MAX] {
     MAP_MSG.get_or_init(|| {
         const ZERO: MapMsgData = MapMsgData { message: [0; 256], len: 0 };
@@ -1831,6 +1846,7 @@ struct MapSrcEntry {
 /// The parsed map source list.
 static MAP_SRC_LIST: OnceLock<Mutex<Vec<MapSrcEntry>>> = OnceLock::new();
 
+#[inline]
 fn map_src_list() -> std::sync::MutexGuard<'static, Vec<MapSrcEntry>> {
     MAP_SRC_LIST.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -2840,6 +2856,7 @@ pub unsafe fn map_do_term() {
 /// Party/group member ID table. Flat 2-D: groups[256][256] = 65536 elements.
 static GROUPS: OnceLock<Mutex<Box<[u32; 65536]>>> = OnceLock::new();
 
+#[inline]
 pub fn groups() -> std::sync::MutexGuard<'static, Box<[u32; 65536]>> {
     GROUPS.get_or_init(|| Mutex::new(Box::new([0u32; 65536]))).lock().unwrap_or_else(|e| e.into_inner())
 }
