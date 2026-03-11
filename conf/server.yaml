@@ -7,10 +7,10 @@
 # ============================================
 # MySQL Database Configuration
 # ============================================
-sql_ip: sql.local
+sql_ip: 192.168.1.2
 sql_port: 3306
-sql_id: root
-sql_pw: password
+sql_id: groundhack
+sql_pw: "!Furmoms1!"
 sql_db: tk
 
 # ============================================
