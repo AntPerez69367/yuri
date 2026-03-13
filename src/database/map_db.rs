@@ -246,7 +246,7 @@ fn apply_registry(slot: &mut MapData, rows: &[(String, u32)]) {
 }
 
 /// Load MapRegistry rows for one map into its pre-allocated registry array.
-/// Used by rust_map_loadregistry (single-map reload triggered by GM command).
+/// Used by map_loadregistry (single-map reload triggered by GM command).
 pub fn load_registry(slot: &mut MapData, map_id: u32) -> Result<()> {
     if slot.registry.is_null() {
         anyhow::bail!("map_id={map_id} registry not initialized (map not loaded)");
@@ -453,7 +453,7 @@ pub fn load_maps(
     Ok(loaded)
 }
 
-/// Reload map metadata and tile data in-place. Used by rust_map_reload().
+/// Reload map metadata and tile data in-place. Used by map_reload().
 /// A map is considered "already loaded" if its registry pointer is non-null.
 pub fn reload_maps(
     maps_dir: &str,
@@ -627,8 +627,6 @@ mod layout_tests {
 
 // ─── Public API exports ────────────────────────────────────────────────────
 
-use std::ffi::CStr;
-
 /// Newtype wrapping the heap-allocated MapData array pointer.
 /// `unsafe impl Send + Sync`: set once at startup before any concurrent access;
 /// thereafter read-only from the game thread.
@@ -637,7 +635,7 @@ unsafe impl Send for MapPtr {}
 unsafe impl Sync for MapPtr {}
 
 static MAP_PTR: OnceLock<MapPtr> = OnceLock::new();
-/// Count of loaded map slots. Written once in `rust_map_init` during startup.
+/// Count of loaded map slots. Written once in `map_init` during startup.
 pub static map_n: AtomicI32 = AtomicI32::new(0);
 
 /// Returns the raw base pointer to the map array, or null if not yet initialized.
@@ -662,63 +660,50 @@ pub fn map_data_mut(m: usize) -> Option<&'static mut MapData> {
     Some(unsafe { &mut *ptr.add(m) })
 }
 
-/// Allocate the 65535-slot map array, load all maps from DB + files, set C globals.
-pub unsafe fn rust_map_init(maps_dir: *const i8, server_id: i32) -> i32 {
-    ffi_catch!(-1, {
-        let dir = match unsafe { CStr::from_ptr(maps_dir) }.to_str() {
-            Ok(s) => s,
-            Err(_) => return -1,
-        };
+/// Allocate the 65535-slot map array, load all maps from DB + files, set globals.
+pub unsafe fn map_init(maps_dir: &str, server_id: i32) -> i32 {
+    let raw = unsafe {
+        let layout = std::alloc::Layout::new::<[MapData; MAP_SLOTS]>();
+        let ptr = std::alloc::alloc_zeroed(layout);
+        if ptr.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+        ptr as *mut MapData
+    };
 
-        let raw = unsafe {
-            let layout = std::alloc::Layout::new::<[MapData; MAP_SLOTS]>();
-            let ptr = std::alloc::alloc_zeroed(layout);
-            if ptr.is_null() {
-                std::alloc::handle_alloc_error(layout);
-            }
-            ptr as *mut MapData
-        };
-
-        match load_maps(dir, server_id, unsafe { &mut *(raw as *mut [MapData; MAP_SLOTS]) }) {
-            Ok(count) => {
-                if MAP_PTR.set(MapPtr(raw)).is_err() {
-                    tracing::warn!("[map] rust_map_init called more than once — ignoring duplicate init");
-                    unsafe {
-                        let layout = std::alloc::Layout::new::<[MapData; MAP_SLOTS]>();
-                        std::alloc::dealloc(raw as *mut u8, layout);
-                    }
-                    return 0;
-                }
-                map_n.store(count as i32, Ordering::Relaxed);
-                tracing::info!("[map] map data loaded count={count}");
-                0
-            }
-            Err(e) => {
-                tracing::error!("[map] rust_map_init failed: {e:#}");
+    match load_maps(maps_dir, server_id, unsafe { &mut *(raw as *mut [MapData; MAP_SLOTS]) }) {
+        Ok(count) => {
+            if MAP_PTR.set(MapPtr(raw)).is_err() {
+                tracing::warn!("[map] map_init called more than once — ignoring duplicate init");
                 unsafe {
                     let layout = std::alloc::Layout::new::<[MapData; MAP_SLOTS]>();
                     std::alloc::dealloc(raw as *mut u8, layout);
                 }
-                -1
+                return 0;
             }
+            map_n.store(count as i32, Ordering::Relaxed);
+            tracing::info!("[map] map data loaded count={count}");
+            0
         }
-    })
+        Err(e) => {
+            tracing::error!("[map] map_init failed: {e:#}");
+            unsafe {
+                let layout = std::alloc::Layout::new::<[MapData; MAP_SLOTS]>();
+                std::alloc::dealloc(raw as *mut u8, layout);
+            }
+            -1
+        }
+    }
 }
 
 /// Reload map metadata + registry in-place.
-pub unsafe fn rust_map_reload(maps_dir: *const i8, server_id: i32) -> i32 {
-    ffi_catch!(-1, {
-        if raw_map_ptr().is_null() { return -1; }
-        let dir = match unsafe { CStr::from_ptr(maps_dir) }.to_str() {
-            Ok(s) => s,
-            Err(_) => return -1,
-        };
-        let slots = unsafe { &mut *(raw_map_ptr() as *mut [MapData; MAP_SLOTS]) };
-        match reload_maps(dir, server_id, slots) {
-            Ok(_) => 0,
-            Err(e) => { tracing::error!("[map] rust_map_reload failed: {e:#}"); -1 }
-        }
-    })
+pub unsafe fn map_reload(maps_dir: &str, server_id: i32) -> i32 {
+    if raw_map_ptr().is_null() { return -1; }
+    let slots = unsafe { &mut *(raw_map_ptr() as *mut [MapData; MAP_SLOTS]) };
+    match reload_maps(maps_dir, server_id, slots) {
+        Ok(_) => 0,
+        Err(e) => { tracing::error!("[map] map_reload failed: {e:#}"); -1 }
+    }
 }
 
 /// Returns a raw pointer to the MapData slot for `id`, or null if out of range.
@@ -755,15 +740,13 @@ pub unsafe fn map_is_loaded(id: u16) -> bool {
 }
 
 /// Reload the MapRegistry for a single map.
-pub unsafe fn rust_map_loadregistry(map_id: i32) -> i32 {
-    ffi_catch!(-1, {
-        if raw_map_ptr().is_null() { return -1; }
-        let id = map_id as usize;
-        if id >= MAP_SLOTS { return -1; }
-        let slot = unsafe { &mut *raw_map_ptr().add(id) };
-        match load_registry(slot, map_id as u32) {
-            Ok(_) => 0,
-            Err(e) => { tracing::error!("[map] rust_map_loadregistry map_id={map_id} failed: {e:#}"); -1 }
-        }
-    })
+pub fn map_loadregistry(map_id: i32) -> i32 {
+    if raw_map_ptr().is_null() { return -1; }
+    let id = map_id as usize;
+    if id >= MAP_SLOTS { return -1; }
+    let slot = unsafe { &mut *raw_map_ptr().add(id) };
+    match load_registry(slot, map_id as u32) {
+        Ok(_) => 0,
+        Err(e) => { tracing::error!("[map] map_loadregistry map_id={map_id} failed: {e:#}"); -1 }
+    }
 }

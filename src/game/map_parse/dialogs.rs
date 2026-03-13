@@ -34,7 +34,7 @@ use crate::game::scripting::{
     rust_sl_resumebuy, rust_sl_resumesell, rust_sl_resumeinput, rust_sl_async_freeco,
 };
 use crate::database::item_db;
-use crate::database::class_db::rust_classdb_name;
+use crate::database::class_db::name as classdb_name;
 
 // map_id2sd_local: typed lookup returning raw pointer for use in unsafe context.
 #[inline]
@@ -1167,17 +1167,13 @@ pub unsafe fn clif_buydialog(
                     it.buytext.as_ptr() as *const i8,
                 );
             } else {
-                let path = rust_classdb_name(
+                let cn = classdb_name(
                     item.class as i32,
                     item.rank,
                 );
-                libc::snprintf(
-                    buff_buf.as_mut_ptr() as *mut i8,
-                    64,
-                    b"%s level %u\0".as_ptr() as *const i8,
-                    path,
-                    item.level as u32,
-                );
+                let formatted = format!("{} level {}\0", cn, item.level as u32);
+                let copy = formatted.len().min(64);
+                std::ptr::copy_nonoverlapping(formatted.as_ptr(), buff_buf.as_mut_ptr(), copy);
             }
 
             let buff_len = libc::strlen(buff_buf.as_ptr() as *const i8);
@@ -1269,17 +1265,13 @@ pub unsafe fn clif_buydialog(
                     it.buytext.as_ptr() as *const i8,
                 );
             } else {
-                let path = rust_classdb_name(
+                let cn = classdb_name(
                     item.class as i32,
                     item.rank,
                 );
-                libc::snprintf(
-                    buff_buf.as_mut_ptr() as *mut i8,
-                    64,
-                    b"%s level %u\0".as_ptr() as *const i8,
-                    path,
-                    item.level as u32,
-                );
+                let formatted = format!("{} level {}\0", cn, item.level as u32);
+                let copy = formatted.len().min(64);
+                std::ptr::copy_nonoverlapping(formatted.as_ptr(), buff_buf.as_mut_ptr(), copy);
             }
 
             let buff_len = libc::strlen(buff_buf.as_ptr() as *const i8);

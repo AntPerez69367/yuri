@@ -428,8 +428,8 @@ fn handle_userlist_response(pkt: &[u8]) {
         let nation  = read_u16_le(e, 8) as i32;
         let name    = read_str(pkt, off + 10, 12);
 
-        let path = if class > 4 { class_db::rust_classdb_path(class) } else { class };
-        let icon = class_db::rust_classdb_icon(class);
+        let path = if class > 4 { class_db::path(class) } else { class };
+        let icon = class_db::icon(class);
 
         // path + 16*nation encodes the nation/class combo
         buf.push((path + 16 * nation) as u8);
@@ -438,7 +438,7 @@ fn handle_userlist_response(pkt: &[u8]) {
         // hunter flag
         buf.push(hunter as u8);
         // color: white=143, same-clan=63, GM(path==5)=47
-        let color = if class_db::rust_classdb_path(class) == 5 {
+        let color = if class_db::path(class) == 5 {
             47
         } else if sd_clan != 0 && sd_clan == clan {
             63

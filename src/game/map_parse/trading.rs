@@ -44,7 +44,7 @@ use crate::game::pc::{
     rust_pc_readglobalreg as pc_readglobalreg,
 };
 use crate::database::item_db;
-use crate::database::class_db::rust_classdb_name as classdb_name;
+use crate::database::class_db::name as classdb_name;
 
 /// Dispatch a Lua event with two block_list arguments.
 #[allow(dead_code)]
@@ -225,21 +225,11 @@ pub unsafe fn clif_startexchange(
 
         // Build name string for sd (to send to tsd)
         let tsd_class_name = classdb_name((*tsd).status.class as i32, (*tsd).status.mark as i32);
-        if !tsd_class_name.is_null() {
-            libc::snprintf(
-                buff.as_mut_ptr(),
-                buff.len(),
-                b"%s(%s)\0".as_ptr() as *const i8,
-                (*tsd).status.name.as_ptr(),
-                tsd_class_name,
-            );
-        } else {
-            libc::snprintf(
-                buff.as_mut_ptr(),
-                buff.len(),
-                b"%s()\0".as_ptr() as *const i8,
-                (*tsd).status.name.as_ptr(),
-            );
+        {
+            let tsd_name = std::ffi::CStr::from_ptr((*tsd).status.name.as_ptr()).to_string_lossy();
+            let formatted = format!("{}({})\0", tsd_name, tsd_class_name);
+            let copy_len = formatted.len().min(buff.len());
+            std::ptr::copy_nonoverlapping(formatted.as_ptr() as *const i8, buff.as_mut_ptr(), copy_len);
         }
 
         if !session_exists((*sd).fd) {
@@ -277,21 +267,11 @@ pub unsafe fn clif_startexchange(
 
         // Build name string for tsd (to send to sd)
         let sd_class_name = classdb_name((*sd).status.class as i32, (*sd).status.mark as i32);
-        if !sd_class_name.is_null() {
-            libc::snprintf(
-                buff.as_mut_ptr(),
-                buff.len(),
-                b"%s(%s)\0".as_ptr() as *const i8,
-                (*sd).status.name.as_ptr(),
-                sd_class_name,
-            );
-        } else {
-            libc::snprintf(
-                buff.as_mut_ptr(),
-                buff.len(),
-                b"%s()\0".as_ptr() as *const i8,
-                (*sd).status.name.as_ptr(),
-            );
+        {
+            let sd_name = std::ffi::CStr::from_ptr((*sd).status.name.as_ptr()).to_string_lossy();
+            let formatted = format!("{}({})\0", sd_name, sd_class_name);
+            let copy_len = formatted.len().min(buff.len());
+            std::ptr::copy_nonoverlapping(formatted.as_ptr() as *const i8, buff.as_mut_ptr(), copy_len);
         }
 
         wfifohead((*tsd).fd, 512);

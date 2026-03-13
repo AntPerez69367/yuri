@@ -1,4 +1,3 @@
-use std::ffi::CStr;
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
 use crate::database::item_db::ItemData;
@@ -158,28 +157,19 @@ pub unsafe fn item_data_getattr(
         "protection"   => int!(d.protection),
         "reqMight"     => int!(d.mightreq),
         "rank" => {
-            let path = crate::database::class_db::rust_classdb_path(d.class as i32);
-            let ptr = crate::database::class_db::rust_classdb_name(path, d.rank);
-            let s = classdb_name_to_string(ptr);
+            let path = crate::database::class_db::path(d.class as i32);
+            let s = crate::database::class_db::name(path, d.rank);
             Ok(mlua::Value::String(lua.create_string(s)?))
         }
         "baseClass" => {
-            int!(crate::database::class_db::rust_classdb_path(d.class as i32))
+            int!(crate::database::class_db::path(d.class as i32))
         }
         "className" => {
-            let ptr = crate::database::class_db::rust_classdb_name(d.class as i32, d.rank);
-            let s = classdb_name_to_string(ptr);
+            let s = crate::database::class_db::name(d.class as i32, d.rank);
             Ok(mlua::Value::String(lua.create_string(s)?))
         }
         _ => Ok(mlua::Value::Nil),
     }
-}
-
-fn classdb_name_to_string(ptr: *mut i8) -> String {
-    if ptr.is_null() { return String::new(); }
-    let s = unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() };
-    unsafe { crate::database::class_db::rust_classdb_free_name(ptr); }
-    s
 }
 
 // ---------------------------------------------------------------------------

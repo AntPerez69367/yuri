@@ -40,10 +40,7 @@ use crate::game::map_server::groups;
 use crate::game::pc::{addtokillreg, rust_pc_calcstat, rust_pc_checklevel, rust_pc_isequip};
 use crate::game::client::handlers::clif_addtokillreg;
 use crate::database::item_db;
-use crate::database::magic_db::{
-    rust_magicdb_name, rust_magicdb_yname, rust_magicdb_question, rust_magicdb_type,
-    rust_magicdb_mute, rust_magicdb_ticker, rust_magicdb_canfail,
-};
+use crate::database::magic_db;
 use crate::game::mob::rust_mob_flushmagic;
 use crate::game::scripting::rust_sl_async_freeco;
 
@@ -154,7 +151,7 @@ pub fn clif_pc_damage(sd: &mut MapSessionData, src: &mut MapSessionData) -> i32 
         for x in 0..MAX_SPELLS {
             if sd.status.skill[x] > 0 {
                 unsafe {
-                    sl_doscript_2(rust_magicdb_yname(sd.status.skill[x] as i32), b"passive_on_hit\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut src.bl);
+                    sl_doscript_2(magic_db::search(sd.status.skill[x] as i32).yname.as_ptr(), b"passive_on_hit\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut src.bl);
                 }
             }
         }
@@ -164,9 +161,9 @@ pub fn clif_pc_damage(sd: &mut MapSessionData, src: &mut MapSessionData) -> i32 
                 unsafe {
                     let tsd = map_id2sd_local(sd.status.dura_aether[x].caster_id);
                     if !tsd.is_null() {
-                        crate::game::scripting::doscript_blargs(rust_magicdb_yname(sd.status.dura_aether[x].id as i32), b"on_hit_while_cast\0".as_ptr() as *const i8, &[&raw mut sd.bl as *mut _, &raw mut src.bl as *mut _, &raw mut (*tsd).bl as *mut _]);
+                        crate::game::scripting::doscript_blargs(magic_db::search(sd.status.dura_aether[x].id as i32).yname.as_ptr(), b"on_hit_while_cast\0".as_ptr() as *const i8, &[&raw mut sd.bl as *mut _, &raw mut src.bl as *mut _, &raw mut (*tsd).bl as *mut _]);
                     } else {
-                        sl_doscript_2(rust_magicdb_yname(sd.status.dura_aether[x].id as i32), b"on_hit_while_cast\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut src.bl);
+                        sl_doscript_2(magic_db::search(sd.status.dura_aether[x].id as i32).yname.as_ptr(), b"on_hit_while_cast\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut src.bl);
                     }
                 }
             }
@@ -236,7 +233,7 @@ pub fn clif_send_pc_healthscript(
         for x in 0..MAX_SPELLS {
             if sd.status.skill[x] > 0 {
                 unsafe {
-                    sl_doscript_2(rust_magicdb_yname(sd.status.skill[x] as i32), b"passive_on_takingdamage\0".as_ptr() as *const i8, &raw mut sd.bl, bl);
+                    sl_doscript_2(magic_db::search(sd.status.skill[x] as i32).yname.as_ptr(), b"passive_on_takingdamage\0".as_ptr() as *const i8, &raw mut sd.bl, bl);
                 }
             }
         }
@@ -303,14 +300,14 @@ pub fn clif_send_pc_healthscript(
         for x in 0..MAX_SPELLS {
             if sd.status.skill[x] > 0 {
                 unsafe {
-                    sl_doscript_2(rust_magicdb_yname(sd.status.skill[x] as i32), b"passive_on_takedamage\0".as_ptr() as *const i8, &raw mut sd.bl, bl);
+                    sl_doscript_2(magic_db::search(sd.status.skill[x] as i32).yname.as_ptr(), b"passive_on_takedamage\0".as_ptr() as *const i8, &raw mut sd.bl, bl);
                 }
             }
         }
         for x in 0..MAX_MAGIC_TIMERS {
             if sd.status.dura_aether[x].id > 0 && sd.status.dura_aether[x].duration > 0 {
                 unsafe {
-                    sl_doscript_2(rust_magicdb_yname(sd.status.dura_aether[x].id as i32), b"on_takedamage_while_cast\0".as_ptr() as *const i8, &raw mut sd.bl, bl);
+                    sl_doscript_2(magic_db::search(sd.status.dura_aether[x].id as i32).yname.as_ptr(), b"on_takedamage_while_cast\0".as_ptr() as *const i8, &raw mut sd.bl, bl);
                 }
             }
         }
@@ -531,9 +528,9 @@ pub fn clif_send_duration(
     time: i32,
     tsd: *mut MapSessionData,
 ) -> i32 {
-    let name = rust_magicdb_name(id);
+    let name = magic_db::name_ptr(id);
 
-    if rust_magicdb_ticker(id) == 0 { return 0; }
+    if magic_db::ticker(id) == 0 { return 0; }
 
     // Compute label string and its length.
     // label is written directly into the WFIFO via copy.
@@ -680,7 +677,7 @@ pub fn clif_mob_damage(sd: &mut MapSessionData, mob: &mut MobSpawnData) -> i32 {
         for x in 0..MAX_SPELLS {
             if sd.status.skill[x] > 0 {
                 unsafe {
-                    sl_doscript_2(rust_magicdb_yname(sd.status.skill[x] as i32), b"passive_on_hit\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut mob.bl);
+                    sl_doscript_2(magic_db::search(sd.status.skill[x] as i32).yname.as_ptr(), b"passive_on_hit\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut mob.bl);
                 }
             }
         }
@@ -688,7 +685,7 @@ pub fn clif_mob_damage(sd: &mut MapSessionData, mob: &mut MobSpawnData) -> i32 {
         for x in 0..MAX_MAGIC_TIMERS {
             if sd.status.dura_aether[x].id > 0 && sd.status.dura_aether[x].duration > 0 {
                 unsafe {
-                    sl_doscript_2(rust_magicdb_yname(sd.status.dura_aether[x].id as i32), b"on_hit_while_cast\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut mob.bl);
+                    sl_doscript_2(magic_db::search(sd.status.dura_aether[x].id as i32).yname.as_ptr(), b"on_hit_while_cast\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut mob.bl);
                 }
             }
         }
@@ -894,7 +891,7 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
             let p = &mob.da[x];
             if p.id > 0 && p.duration > 0 {
                 unsafe {
-                    sl_doscript_2(rust_magicdb_yname(p.id as i32), b"on_takedamage_while_cast\0".as_ptr() as *const i8, &raw mut mob.bl, bl);
+                    sl_doscript_2(magic_db::search(p.id as i32).yname.as_ptr(), b"on_takedamage_while_cast\0".as_ptr() as *const i8, &raw mut mob.bl, bl);
                 }
             }
         }
@@ -942,7 +939,7 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
 
             for x in 0..MAX_MAGIC_TIMERS {
                 if mob.da[x].id > 0 && mob.da[x].duration > 0 {
-                    sl_doscript_2(rust_magicdb_yname(mob.da[x].id as i32), b"before_death_while_cast\0".as_ptr() as *const i8, &raw mut mob.bl, bl);
+                    sl_doscript_2(magic_db::search(mob.da[x].id as i32).yname.as_ptr(), b"before_death_while_cast\0".as_ptr() as *const i8, &raw mut mob.bl, bl);
                 }
             }
         }
@@ -956,7 +953,7 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
             unsafe {
                 for x in 0..MAX_MAGIC_TIMERS {
                     if (*tmob).da[x].id > 0 && (*tmob).da[x].duration > 0 {
-                        sl_doscript_2(rust_magicdb_yname((*tmob).da[x].id as i32), b"on_kill_while_cast\0".as_ptr() as *const i8, &raw mut (*tmob).bl, &raw mut mob.bl);
+                        sl_doscript_2(magic_db::search((*tmob).da[x].id as i32).yname.as_ptr(), b"on_kill_while_cast\0".as_ptr() as *const i8, &raw mut (*tmob).bl, &raw mut mob.bl);
                     }
                 }
             }
@@ -967,13 +964,13 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
                 if tmob.is_null() {
                     for x in 0..MAX_MAGIC_TIMERS {
                         if (*sd).status.dura_aether[x].id > 0 && (*sd).status.dura_aether[x].duration > 0 {
-                            sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), b"on_kill_while_cast\0".as_ptr() as *const i8, &raw mut (*sd).bl, &raw mut mob.bl);
+                            sl_doscript_2(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), b"on_kill_while_cast\0".as_ptr() as *const i8, &raw mut (*sd).bl, &raw mut mob.bl);
                         }
                     }
 
                     for x in 0..MAX_SPELLS {
                         if (*sd).status.skill[x] > 0 {
-                            sl_doscript_2(rust_magicdb_yname((*sd).status.skill[x] as i32), b"passive_on_kill\0".as_ptr() as *const i8, &raw mut (*sd).bl, &raw mut mob.bl);
+                            sl_doscript_2(magic_db::search((*sd).status.skill[x] as i32).yname.as_ptr(), b"passive_on_kill\0".as_ptr() as *const i8, &raw mut (*sd).bl, &raw mut mob.bl);
                         }
                     }
                 }
@@ -1042,7 +1039,7 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
         unsafe {
             for x in 0..MAX_MAGIC_TIMERS {
                 if mob.da[x].id > 0 {
-                    sl_doscript_2(rust_magicdb_yname(mob.da[x].id as i32), b"after_death_while_cast\0".as_ptr() as *const i8, &raw mut mob.bl, bl);
+                    sl_doscript_2(magic_db::search(mob.da[x].id as i32).yname.as_ptr(), b"after_death_while_cast\0".as_ptr() as *const i8, &raw mut mob.bl, bl);
                 }
             }
 
@@ -1141,9 +1138,10 @@ pub fn clif_send_destroy_inner(bl: &mut BlockList, mob: *mut MobSpawnData) -> i3
 pub fn clif_sendmagic(sd: &mut MapSessionData, pos: i32) -> i32 {
     unsafe {
         let id   = sd.status.skill[pos as usize] as i32;
-        let name = rust_magicdb_name(id);
-        let question = rust_magicdb_question(id);
-        let spell_type = rust_magicdb_type(id);
+        let spell = magic_db::search(id);
+        let name = spell.name.as_ptr();
+        let question = spell.question.as_ptr();
+        let spell_type = spell.typ;
 
         if !session_exists(sd.fd) {
             return 0;
@@ -1161,13 +1159,13 @@ pub fn clif_sendmagic(sd: &mut MapSessionData, pos: i32) -> i32 {
         wfifob(fd, 7, name_len as u8);
         {
             let dst = wfifop(fd, 8);
-            if !dst.is_null() && !name.is_null() {
+            if !dst.is_null() {
                 std::ptr::copy_nonoverlapping(name as *const u8, dst, name_len);
             }
             let dst2 = wfifop(fd, 8 + name_len);
             if !dst2.is_null() { *dst2 = question_len as u8; }
             let dst3 = wfifop(fd, 9 + name_len);
-            if !dst3.is_null() && !question.is_null() {
+            if !dst3.is_null() {
                 std::ptr::copy_nonoverlapping(question as *const u8, dst3, question_len);
             }
         }
@@ -1187,12 +1185,13 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
     use crate::game::map_parse::packet::{rfifob, rfifol, rfifop};
 
     let pos = (rfifob(sd.fd, 5) as i32) - 1;
+    let spell = magic_db::search(sd.status.skill[pos as usize] as i32);
 
     let i = clif_has_aethers(sd, sd.status.skill[pos as usize] as i32);
     if i > 0 {
         let time = i / 1000;
         unsafe {
-            sl_doscript_simple(rust_magicdb_yname(sd.status.skill[pos as usize] as i32), b"on_aethers\0".as_ptr() as *const i8, &raw mut sd.bl);
+            sl_doscript_simple(spell.yname.as_ptr(), b"on_aethers\0".as_ptr() as *const i8, &raw mut sd.bl);
         }
         let mut msg = [0u8; 64];
         let s = format!("Wait {} second(s) for aethers to settle.", time);
@@ -1203,9 +1202,9 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
         return 0;
     }
 
-    if sd.silence > 0 && rust_magicdb_mute(sd.status.skill[pos as usize] as i32) <= sd.silence {
+    if sd.silence > 0 && spell.mute as i32 <= sd.silence {
         unsafe {
-            sl_doscript_simple(rust_magicdb_yname(sd.status.skill[pos as usize] as i32), b"on_mute\0".as_ptr() as *const i8, &raw mut sd.bl);
+            sl_doscript_simple(spell.yname.as_ptr(), b"on_mute\0".as_ptr() as *const i8, &raw mut sd.bl);
             clif_sendminitext(sd as *mut MapSessionData, b"You have been silenced.\0".as_ptr() as *const i8);
         }
         return 0;
@@ -1214,7 +1213,7 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
     sd.target   = 0;
     sd.attacker = 0;
 
-    match rust_magicdb_type(sd.status.skill[pos as usize] as i32) {
+    match spell.typ {
         1 => {
             // question type
             let dst = sd.question.as_mut_ptr() as *mut u8;
@@ -1286,7 +1285,7 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
                 }
             }
 
-            if rust_magicdb_canfail(sd.status.skill[pos as usize] as i32) == 1 {
+            if spell.canfail as i32 == 1 {
                 let will_diff = (twill - sd.will).max(0);
                 // C: (int)((willDiff / 10) + 0.5) — integer division then round-half-up via +0.5.
                 // Pure-integer equivalent: (will_diff + 5) / 10 (will_diff >= 0 here).
@@ -1302,14 +1301,14 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
             unsafe {
                 if health > 0 || (*tbl).bl_type == BL_PC as u8 {
                     rust_sl_async_freeco(sd as *mut MapSessionData);
-                    sl_doscript_2(rust_magicdb_yname(sd.status.skill[pos as usize] as i32), b"cast\0".as_ptr() as *const i8, &raw mut sd.bl, tbl);
+                    sl_doscript_2(spell.yname.as_ptr(), b"cast\0".as_ptr() as *const i8, &raw mut sd.bl, tbl);
                 }
             }
         }
     } else {
         unsafe {
             rust_sl_async_freeco(sd as *mut MapSessionData);
-            sl_doscript_2(rust_magicdb_yname(sd.status.skill[pos as usize] as i32), b"cast\0".as_ptr() as *const i8, &raw mut sd.bl, std::ptr::null_mut::<BlockList>());
+            sl_doscript_2(spell.yname.as_ptr(), b"cast\0".as_ptr() as *const i8, &raw mut sd.bl, std::ptr::null_mut::<BlockList>());
         }
     }
 
@@ -1558,7 +1557,7 @@ pub fn clif_parseattack(sd: &mut MapSessionData) -> i32 {
     for x in 0..MAX_SPELLS {
         if sd.status.skill[x] > 0 {
             unsafe {
-                sl_doscript_simple(rust_magicdb_yname(sd.status.skill[x] as i32), c"passive_on_swing".as_ptr(), &raw mut sd.bl);
+                sl_doscript_simple(magic_db::search(sd.status.skill[x] as i32).yname.as_ptr(), c"passive_on_swing".as_ptr(), &raw mut sd.bl);
             }
         }
     }
@@ -1566,7 +1565,7 @@ pub fn clif_parseattack(sd: &mut MapSessionData) -> i32 {
     for x in 0..MAX_MAGIC_TIMERS {
         if sd.status.dura_aether[x].id > 0 && sd.status.dura_aether[x].duration > 0 {
             unsafe {
-                sl_doscript_simple(rust_magicdb_yname(sd.status.dura_aether[x].id as i32), c"on_swing_while_cast".as_ptr(), &raw mut sd.bl);
+                sl_doscript_simple(magic_db::search(sd.status.dura_aether[x].id as i32).yname.as_ptr(), c"on_swing_while_cast".as_ptr(), &raw mut sd.bl);
             }
         }
     }

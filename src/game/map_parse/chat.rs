@@ -33,9 +33,9 @@ unsafe fn session_alive(fd: SessionId) -> bool {
 
 use crate::game::map_server::map_name2sd;
 use crate::game::map_parse::combat::clif_sendaction;
-use crate::database::class_db::{rust_classdb_name, rust_classdb_chat};
+use crate::database::class_db::{name as classdb_name, chat as classdb_chat};
 use crate::game::gm_command::rust_is_command;
-use crate::database::magic_db::rust_magicdb_yname;
+use crate::database::magic_db;
 use crate::game::client::handlers::clif_Hacker;
 
 // Alias for the async coroutine freeer (returns () in Rust, was i32 in C — return unused).
@@ -433,23 +433,17 @@ pub unsafe fn clif_sendwisp(
     let src_sd = map_name2sd(srcname);
     if src_sd.is_null() { return 0; }
 
-    let class_name = rust_classdb_name((*src_sd).status.class as i32, (*src_sd).status.mark as i32);
+    let cn = classdb_name((*src_sd).status.class as i32, (*src_sd).status.mark as i32);
     let buf2: Vec<u8>;
     let newlen: usize;
-    if !class_name.is_null() {
-        let cn_str = std::ffi::CStr::from_ptr(class_name).to_bytes();
-        // format: `" (classname) "`
-        let mut tmp = Vec::with_capacity(cn_str.len() + 6);
+    {
+        let cn_bytes = cn.as_bytes();
+        let mut tmp = Vec::with_capacity(cn_bytes.len() + 6);
         tmp.extend_from_slice(b"\" (");
-        tmp.extend_from_slice(cn_str);
+        tmp.extend_from_slice(cn_bytes);
         tmp.extend_from_slice(b") ");
         newlen = tmp.len();
         buf2 = tmp;
-        // free the CString returned by rust_classdb_name
-        drop(std::ffi::CString::from_raw(class_name));
-    } else {
-        buf2 = b"\" () ".to_vec();
-        newlen = buf2.len();
     }
 
     let mut combined: Vec<u8> = Vec::with_capacity(srclen + newlen + msglen);
@@ -816,14 +810,7 @@ pub unsafe fn clif_sendnovicemessage(
     std::ptr::copy_nonoverlapping(msg as *const i8, message.as_mut_ptr(), copy_len);
     let msg_str = i8_slice_to_str(&message[..copy_len]);
 
-    let class_name = rust_classdb_name((*sd).status.class as i32, (*sd).status.mark as i32);
-    let class_str = if !class_name.is_null() {
-        let s = std::ffi::CStr::from_ptr(class_name).to_string_lossy().into_owned();
-        drop(std::ffi::CString::from_raw(class_name));
-        s
-    } else {
-        String::new()
-    };
+    let class_str = classdb_name((*sd).status.class as i32, (*sd).status.mark as i32);
 
     let name_str = i8_slice_to_str(&(*sd).status.name);
     let buf2 = format!(
@@ -923,7 +910,7 @@ pub unsafe fn clif_parsewisp(sd: *mut MapSessionData) -> i32 {
         }
     // "@" → subpath chat
     } else if dst_name[0] == b'@' && dst_name[1] == 0 {
-        if rust_classdb_chat((*sd).status.class as i32) != 0 {
+        if classdb_chat((*sd).status.class as i32) != 0 {
             crate::game::scripting::doscript_strings(c"characterLog".as_ptr(), c"subPathChatLog".as_ptr(), &[(*sd).status.name.as_ptr(), msg_c]);
             clif_sendsubpathmessage(sd, rfifop((*sd).fd, 7 + dstlen) as *mut u8, msglen as i32);
         } else {
@@ -1014,7 +1001,7 @@ pub unsafe fn clif_sendsay(
 
     for i in 0..MAX_SPELLS {
         if (*sd).status.skill[i] > 0 {
-            let yname = rust_magicdb_yname((*sd).status.skill[i] as i32);
+            let yname = (*magic_db::search((*sd).status.skill[i] as i32)).yname.as_ptr();
             sl_doscript_simple(yname, c"on_say".as_ptr(), &raw mut (*sd).bl);
         }
     }
@@ -1289,7 +1276,7 @@ pub unsafe fn clif_parsesay(sd: *mut MapSessionData) -> i32 {
 
     for i in 0..MAX_SPELLS {
         if (*sd).status.skill[i] > 0 {
-            let yname = rust_magicdb_yname((*sd).status.skill[i] as i32);
+            let yname = (*magic_db::search((*sd).status.skill[i] as i32)).yname.as_ptr();
             sl_doscript_simple(yname, c"on_say".as_ptr(), &raw mut (*sd).bl);
         }
     }
@@ -1333,14 +1320,7 @@ fn i8_slice_to_str(s: &[i8]) -> &str {
 /// Build `"[prefix name][(classname)] message"` for group/clan/subpath chat.
 unsafe fn format_chat_prefix(sd: *mut MapSessionData, open: &[u8], close: &[u8], msg: &[i8]) -> Vec<u8> {
     let name = i8_slice_to_str(&(*sd).status.name);
-    let class_name = rust_classdb_name((*sd).status.class as i32, (*sd).status.mark as i32);
-    let class_str = if !class_name.is_null() {
-        let s = std::ffi::CStr::from_ptr(class_name).to_string_lossy().into_owned();
-        drop(std::ffi::CString::from_raw(class_name));
-        s
-    } else {
-        String::new()
-    };
+    let class_str = classdb_name((*sd).status.class as i32, (*sd).status.mark as i32);
     let msg_str = i8_slice_to_str(msg);
 
     let mut out: Vec<u8> = Vec::new();

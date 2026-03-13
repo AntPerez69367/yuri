@@ -53,7 +53,7 @@ fn get_runtime() -> &'static Mutex<Runtime> {
 }
 
 pub(crate) fn get_pool() -> &'static MySqlPool {
-    DB_POOL.get().expect("[db] pool not initialized — rust_db_connect() must be called first")
+    DB_POOL.get().expect("[db] pool not initialized — db_connect() must be called first")
 }
 
 /// Run a future to completion, blocking the current thread.
@@ -101,7 +101,7 @@ where
 }
 
 
-/// Connect to the database. Called from ffi::database::rust_db_connect.
+/// Connect to the database.
 ///
 /// Returns an error if the pool is already initialized or if the connection fails.
 pub fn connect(url: &str) -> Result<(), sqlx::Error> {
@@ -136,36 +136,17 @@ pub fn set_pool(pool: MySqlPool) -> Result<(), sqlx::Error> {
 
 
 
-/// Called from C's do_init() before any *_init() calls.
-pub unsafe fn rust_db_connect(url: *const i8) -> i32 {
+/// Initialize tracing and connect to the database.
+pub fn db_connect(url: &str) -> i32 {
     let _ = tracing_subscriber::fmt()
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .try_init();
 
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        if url.is_null() {
-            tracing::error!("[db] Connect called with null URL");
-            return -1;
-        }
-        let url_str = match unsafe { std::ffi::CStr::from_ptr(url) }.to_str() {
-            Ok(s) => s.to_owned(),
-            Err(e) => {
-                tracing::error!("[db] Connect URL is not valid UTF-8: {}", e);
-                return -1;
-            }
-        };
-        match crate::database::connect(&url_str) {
-            Ok(()) => 0,
-            Err(e) => {
-                tracing::error!("[db] Connect failed: {}", e);
-                -1
-            }
-        }
-    })) {
-        Ok(v) => v,
-        Err(_) => {
-            tracing::error!("[db] Connect panicked");
+    match crate::database::connect(url) {
+        Ok(()) => 0,
+        Err(e) => {
+            tracing::error!("[db] Connect failed: {}", e);
             -1
         }
     }

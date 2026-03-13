@@ -1,6 +1,7 @@
 //! Global Lua functions (91 total) — registered in sl_init.
 
 use std::ffi::{CStr, CString};
+use std::sync::Arc;
 use mlua::{Lua, Value};
 
 use crate::database::get_pool;
@@ -507,15 +508,12 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // Spell / mob DB
     // -----------------------------------------------------------------------
     g.set("getSpellLevel", lua.create_function(|_, spell: String| {
-        let cs = CString::new(spell).map_err(mlua::Error::external)?;
-        Ok(unsafe { sffi::rust_magicdb_level(cs.as_ptr()) as i64 })
+        Ok(crate::database::magic_db::level_by_name(&spell) as i64)
     })?)?;
 
     g.set("getMobAttributes", lua.create_function(|lua, id: u32| {
         let tbl = lua.create_table()?;
-        let db = sffi::rust_mobdb_search(id as u32);
-        if !db.is_null() {
-            let d = unsafe { &*db };
+        if let Some(d) = crate::database::mob_db::searchexist(id) {
             tbl.set(1,  d.vita as i64)?;
             tbl.set(2,  d.baseac as i64)?;
             tbl.set(3,  d.exp as i64)?;
@@ -693,9 +691,9 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
             "UPDATE `Clans` SET `ClnName`=? WHERE `ClnId`=?", name, clan
         ).execute(get_pool()).await;
         // Update in-memory ClanData if the clan is currently loaded.
-        // Pointer access done after DB await — the pointer is valid for the lifetime of the server.
-        let ptr = crate::database::clan_db::searchexist(clan);
-        if !ptr.is_null() {
+        // SAFETY: mutating through Arc requires raw pointer cast — matches pre-Arc behavior.
+        if let Some(arc) = crate::database::clan_db::searchexist(clan) {
+            let ptr = Arc::as_ptr(&arc) as *mut crate::database::clan_db::ClanData;
             let dst = unsafe { &mut (*ptr).name };
             let bytes = name.as_bytes();
             let copy_len = bytes.len().min(dst.len() - 1);

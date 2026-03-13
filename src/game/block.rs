@@ -6,7 +6,7 @@
 //! # Safety
 //! All public functions are `unsafe` because they dereference raw pointers into
 //! the map grid. Callers must ensure:
-//! - The `map` global is initialized (via `rust_map_init` + `map_initblock`).
+//! - The `map` global is initialized (via `map_init` + `map_initblock`).
 //! - `m` is a valid, loaded map slot index.
 #![allow(non_upper_case_globals)]
 

@@ -9,13 +9,7 @@ use yuri::game::map_server::map_initiddb;
 use yuri::game::scripting::rust_sl_init;
 use yuri::game::map_server::{lang_read, map_do_term, map_loadgameregistry};
 use yuri::game::client::visual::clif_timeout;
-use yuri::database::board_db::rust_boarddb_init;
-use yuri::database::clan_db::rust_clandb_init;
-use yuri::database::class_db::rust_classdb_init;
-use yuri::database::item_db;
-use yuri::database::recipe_db::rust_recipedb_init;
-use yuri::database::magic_db::rust_magicdb_init;
-use yuri::database::mob_db::rust_mobdb_init;
+use yuri::database::{item_db, magic_db, mob_db, class_db, board_db, clan_db, recipe_db};
 use yuri::game::mob::rust_mobspawn_read;
 use yuri::session::{
     get_session_manager, sync_callback, make_listen_port,
@@ -98,7 +92,7 @@ async fn main() -> Result<()> {
     };
 
     // Register the pool with the Rust DB module layer (map_db, mob_db, etc.).
-    // We use set_pool() here instead of rust_db_connect() to avoid
+    // We use set_pool() here instead of db_connect() to avoid
     // block_on-inside-runtime panic (we're already inside #[tokio::main]).
     yuri::database::set_pool(pool.clone())
         .context("Failed to register DB pool with Rust DB modules")?;
@@ -109,7 +103,7 @@ async fn main() -> Result<()> {
         .await
         .ok();
 
-    // Run all blocking init (rust_map_init, rust_*db_init, C game init) on a
+    // Run all blocking init (map_db::map_init, *_db::init, game init) on a
     // dedicated thread. spawn_blocking is required because these functions call
     // blocking_run() internally, which panics if called from within the tokio runtime.
     {
@@ -119,9 +113,8 @@ async fn main() -> Result<()> {
         let map_port = config.map_port;
 
         tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let maps_dir_c = CString::new(maps_dir.as_str()).unwrap();
-            if unsafe { yuri::database::map_db::rust_map_init(maps_dir_c.as_ptr(), serverid) } != 0 {
-                anyhow::bail!("rust_map_init failed");
+            if unsafe { yuri::database::map_db::map_init(&maps_dir, serverid) } != 0 {
+                anyhow::bail!("map_init failed");
             }
 
             // Game-logic init — order matches do_init exactly.
@@ -144,18 +137,17 @@ async fn main() -> Result<()> {
                     })
                 });
                 item_db::init();
-                rust_recipedb_init();
-                rust_mobdb_init();
-                // rust_mobspawn_read is now async; drive it to completion from
+                recipe_db::init();
+                mob_db::init();
+                // mobspawn_read is now async; drive it to completion from
                 // within spawn_blocking using block_in_place (safe: not in LocalSet).
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(rust_mobspawn_read())
                 });
-                rust_magicdb_init();
-                let data_dir_c = CString::new(data_dir.as_str()).unwrap();
-                rust_classdb_init(data_dir_c.as_ptr());
-                rust_clandb_init();
-                rust_boarddb_init();
+                magic_db::init();
+                class_db::init(&data_dir);
+                clan_db::init();
+                board_db::init();
                 yuri::game::map_server::object_flag_init();
                 rust_sl_init();
                 // map_loadgameregistry is now async; drive it to completion from

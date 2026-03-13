@@ -57,8 +57,8 @@ unsafe fn replace_str_local(src: *const i8, orig: &[u8], rep: *const i8, buf: &m
 
 
 use crate::game::map_server::{cur_time, cur_year};
-use crate::database::class_db::rust_classdb_name;
-use crate::database::clan_db::rust_clandb_name;
+use crate::database::class_db::name as classdb_name;
+use crate::database::clan_db;
 use crate::database::item_db;
 use crate::game::map_server::map_id2name;
 use crate::game::client::handlers::clif_getName;
@@ -241,7 +241,7 @@ pub unsafe fn clif_sendmapinfo(sd: *mut MapSessionData) -> i32 {
     let fd = (*sd).fd;
     let m  = (*sd).bl.m as usize;
 
-    // Safety: map[] is initialised by rust_map_init before any player can reach
+    // Safety: map[] is initialised by map_init before any player can reach
     // Accessing map[sd->bl.m]:
     let md = &*raw_map_ptr().add(m);
 
@@ -621,8 +621,8 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     // for level-capped (>=99) characters and does the classdb_level DB lookup.
     let tnl: u32 = clif_getLevelTNL(sd) as u32;
 
-    // Get class name (may return null).
-    let class_name = rust_classdb_name(
+    // Get class name.
+    let class_name = classdb_name(
         (*sd).status.class as i32,
         (*sd).status.mark  as i32,
     );
@@ -647,7 +647,7 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
         wfifob(fd, 8 + len, 0);
         len += 1;
     } else {
-        let cname = rust_clandb_name((*sd).status.clan as i32);
+        let cname = clan_db::name((*sd).status.clan as i32);
         if cname.is_null() {
             wfifob(fd, 8 + len, 0);
             len += 1;
@@ -713,14 +713,20 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     len += 5;
 
     // ── Class name ────────────────────────────────────────────────────────────
-    if !class_name.is_null() {
-        let cn_len = cstr_len(class_name as *const u8);
-        wfifob(fd, 8 + len, cn_len as u8);
-        copy_cstr_to_wfifo(fd, 9 + len, class_name as *const u8, cn_len);
-        len += cn_len + 1;
-    } else {
-        wfifob(fd, 8 + len, 0);
-        len += 1;
+    {
+        let cn_bytes = class_name.as_bytes();
+        let cn_len = cn_bytes.len();
+        if cn_len > 0 {
+            wfifob(fd, 8 + len, cn_len as u8);
+            let dst = wfifop(fd, 9 + len) as *mut u8;
+            if !dst.is_null() {
+                std::ptr::copy_nonoverlapping(cn_bytes.as_ptr(), dst, cn_len);
+            }
+            len += cn_len + 1;
+        } else {
+            wfifob(fd, 8 + len, 0);
+            len += 1;
+        }
     }
 
     // ── Equipment (14 slots) ──────────────────────────────────────────────────

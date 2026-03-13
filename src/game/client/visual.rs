@@ -1861,8 +1861,8 @@ use crate::game::pc::{map_msg, FLAG_EXCHANGE, FLAG_GROUP};
 use crate::servers::char::charstatus::MAX_LEGENDS;
 
 // Direct Rust imports (with _cop suffix aliases to avoid name conflicts)
-use crate::database::clan_db::rust_clandb_name as rust_clandb_name_cop;
-use crate::database::class_db::rust_classdb_name as rust_classdb_name_cop;
+use crate::database::clan_db;
+use crate::database::class_db::name as classdb_name_fn;
 use crate::game::client::handlers::{clif_getName, clif_isregistered};
 
 // map_id2sd_cop: typed lookup returning raw pointer for use in unsafe context.
@@ -1964,7 +1964,7 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
     // ── Clan name ─────────────────────────────────────────────────────────────
     {
         if (*tsd).status.clan > 0 {
-            let clan_name = rust_clandb_name_cop((*tsd).status.clan as i32);
+            let clan_name = clan_db::name((*tsd).status.clan as i32);
             if !clan_name.is_null() {
                 let clan_len = libc::strlen(clan_name);
                 wb(p, len + 5, clan_len as u8);
@@ -1996,15 +1996,15 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
 
     // ── Class name ────────────────────────────────────────────────────────────
     {
-        let class_name = rust_classdb_name_cop(
+        let cn = classdb_name_fn(
             (*tsd).status.class as i32,
             (*tsd).status.mark  as i32,
         );
-        if !class_name.is_null() {
-            let cn_len = libc::strlen(class_name);
-            wb(p, len + 5, cn_len as u8);
-            std::ptr::copy_nonoverlapping(class_name as *const u8, p.add(len + 6), cn_len);
-            len += cn_len + 1;
+        let cn_bytes = cn.as_bytes();
+        if !cn_bytes.is_empty() {
+            wb(p, len + 5, cn_bytes.len() as u8);
+            std::ptr::copy_nonoverlapping(cn_bytes.as_ptr(), p.add(len + 6), cn_bytes.len());
+            len += cn_bytes.len() + 1;
         } else {
             wb(p, len + 5, 0);
             len += 1;
@@ -2452,11 +2452,10 @@ pub unsafe fn clif_showboards(sd: *mut MapSessionData) -> i32 {
     // Uses `searchexist` (returns null for missing ids) so no new API is needed.
     for sort_order in 0..256_i32 {
         for x in 0..256_i32 {
-            let bp = board_db::searchexist(x);
-            if bp.is_null() {
-                continue;
-            }
-            let b = &*bp;
+            let b = match board_db::searchexist(x) {
+                Some(b) => b,
+                None => continue,
+            };
             if b.sort   == sort_order
                 && b.level    <= player_level
                 && b.gmlevel  <= player_gmlevel

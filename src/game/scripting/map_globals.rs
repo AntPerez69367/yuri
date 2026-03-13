@@ -686,11 +686,11 @@ pub unsafe fn sl_g_addnpc(
 /// * `block`, `block_mob`, `warp` are Rust-Vec-allocated (null-pointer arrays);
 ///   freed via `Vec::from_raw_parts` and replaced when block dimensions change.
 ///
-/// After loading, calls `rust_map_loadregistry` and broadcasts `sl_updatepeople`
+/// After loading, calls `map_loadregistry` and broadcasts `sl_updatepeople`
 /// to all PCs on the map so their client receives updated map metadata.
 ///
 /// # Safety
-/// The `map` global must have been initialised via `rust_map_init` +
+/// The `map` global must have been initialised via `map_init` +
 /// `map_initblock`. `m` must be a valid index in `0..MAP_SLOTS`.  `mapfile`
 /// must be a valid null-terminated C string pointing to a readable file.
 pub unsafe fn sl_g_setmap(
@@ -715,7 +715,7 @@ pub unsafe fn sl_g_setmap(
     reqmana: i32,
 ) -> i32 {
     use crate::database::map_db::{GlobalReg, parse_map_file};
-    use crate::database::map_db::rust_map_loadregistry;
+    use crate::database::map_db::map_loadregistry;
 
     if mapfile.is_null() { return -1; }
     let path = match std::ffi::CStr::from_ptr(mapfile).to_str() {
@@ -778,7 +778,7 @@ pub unsafe fn sl_g_setmap(
             drop(Vec::from_raw_parts(slot.obj,  old_cells, old_cells));
             drop(Vec::from_raw_parts(slot.map,  old_cells, old_cells));
         }
-        // Free old registry, then allocate a fresh zeroed one so rust_map_loadregistry
+        // Free old registry, then allocate a fresh zeroed one so map_loadregistry
         // does not bail on a null pointer.
         if !slot.registry.is_null() {
             let reg_layout = std::alloc::Layout::array::<GlobalReg>(MAX_MAPREG).unwrap();
@@ -827,7 +827,7 @@ pub unsafe fn sl_g_setmap(
     block_grid::create_grid(m as usize, slot.xs, slot.ys);
 
     // ── Registry + client update ────────────────────────────────────────────
-    rust_map_loadregistry(m);
+    map_loadregistry(m);
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
         let ids = block_grid::ids_in_area(grid, 0, 0, AreaType::SameMap, slot.xs as i32, slot.ys as i32);

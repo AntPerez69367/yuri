@@ -24,7 +24,7 @@ use crate::game::mob::{
     sl_mob_setgrpdmg, sl_mob_setinddmg,
 };
 use crate::game::map_parse::combat::clif_send_mob_healthscript;
-use crate::database::magic_db::rust_magicdb_id;
+use crate::database::magic_db;
 fn map_id2bl_mob(id: u32) -> *mut BlockList {
     crate::game::map_server::map_id2bl_ref(id)
 }
@@ -318,9 +318,7 @@ impl UserData for MobObject {
                                 None => return Ok(false),
                             };
                             let mob = arc.read();
-                            let cs =
-                                CString::new(name.as_bytes()).map_err(mlua::Error::external)?;
-                            let id = unsafe { rust_magicdb_id(cs.as_ptr()) };
+                            let id = magic_db::id_by_name(&name);
                             Ok((0..MAX_MAGIC_TIMERS)
                                 .any(|x| mob.da[x].id as i32 == id && mob.da[x].duration > 0))
                         },
@@ -334,9 +332,7 @@ impl UserData for MobObject {
                                 None => return Ok(false),
                             };
                             let mob = arc.read();
-                            let cs =
-                                CString::new(name.as_bytes()).map_err(mlua::Error::external)?;
-                            let id = unsafe { rust_magicdb_id(cs.as_ptr()) };
+                            let id = magic_db::id_by_name(&name);
                             Ok((0..MAX_MAGIC_TIMERS).any(|x| {
                                 mob.da[x].id as i32 == id
                                     && mob.da[x].caster_id == caster_id
@@ -353,9 +349,7 @@ impl UserData for MobObject {
                                 None => return Ok(0),
                             };
                             let mob = arc.read();
-                            let cs =
-                                CString::new(name.as_bytes()).map_err(mlua::Error::external)?;
-                            let id = unsafe { rust_magicdb_id(cs.as_ptr()) };
+                            let id = magic_db::id_by_name(&name);
                             for x in 0..MAX_MAGIC_TIMERS {
                                 if mob.da[x].id as i32 == id && mob.da[x].duration > 0 {
                                     return Ok(mob.da[x].duration);
@@ -373,9 +367,7 @@ impl UserData for MobObject {
                                 None => return Ok(0),
                             };
                             let mob = arc.read();
-                            let cs =
-                                CString::new(name.as_bytes()).map_err(mlua::Error::external)?;
-                            let id = unsafe { rust_magicdb_id(cs.as_ptr()) };
+                            let id = magic_db::id_by_name(&name);
                             for x in 0..MAX_MAGIC_TIMERS {
                                 if mob.da[x].id as i32 == id
                                     && mob.da[x].caster_id == caster_id
@@ -764,8 +756,8 @@ impl UserData for MobObject {
                             let args: Vec<mlua::Value> = args.into_iter().collect();
                             let spawn_mob_id: u32 = match args.get(1) {
                                 Some(mlua::Value::String(s)) => {
-                                    let cs = CString::new(&*s.as_bytes()).map_err(mlua::Error::external)?;
-                                    unsafe { sffi::rust_mobdb_id(cs.as_ptr()) as u32 }
+                                    let name_str = s.to_str().map_err(mlua::Error::external)?;
+                                    crate::database::mob_db::find_id(&name_str) as u32
                                 }
                                 Some(mlua::Value::Integer(n)) => *n as u32,
                                 Some(mlua::Value::Number(f))  => *f as u32,

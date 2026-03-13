@@ -63,7 +63,7 @@ use crate::game::pc::{
     rust_pc_useitem, rust_pc_unequip, rust_pc_delitem, rust_pc_loadmagic, rust_pc_reload_aether,
 };
 use crate::database::item_db;
-use crate::database::magic_db::rust_magicdb_yname;
+use crate::database::magic_db;
 
 
 
@@ -577,7 +577,7 @@ pub unsafe fn clif_parsegetitem(sd: *mut MapSessionData) -> i32 {
         if (*sd).status.dura_aether[x].id > 0
             && (*sd).status.dura_aether[x].duration > 0
         {
-            sl_doscript_simple(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), b"on_pickup_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl);
+            sl_doscript_simple(magic_db::yname_ptr((*sd).status.dura_aether[x].id as i32), b"on_pickup_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl);
         }
     }
 
@@ -751,7 +751,7 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
         if (*sd).status.dura_aether[x].id > 0
             && (*sd).status.dura_aether[x].duration > 0
         {
-            sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), b"on_drop_gold_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
+            sl_doscript_2(magic_db::yname_ptr((*sd).status.dura_aether[x].id as i32), b"on_drop_gold_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
         }
     }
 
@@ -759,7 +759,7 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
         if (*sd).status.dura_aether[x].id > 0
             && (*sd).status.dura_aether[x].aether > 0
         {
-            sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), b"on_drop_gold_while_aether\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
+            sl_doscript_2(magic_db::yname_ptr((*sd).status.dura_aether[x].id as i32), b"on_drop_gold_while_aether\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
         }
     }
 
@@ -793,7 +793,7 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
             if (*sd).status.dura_aether[x].id > 0
                 && (*sd).status.dura_aether[x].duration > 0
             {
-                sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), b"after_drop_gold_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl_raw).bl);
+                sl_doscript_2(magic_db::yname_ptr((*sd).status.dura_aether[x].id as i32), b"after_drop_gold_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl_raw).bl);
             }
         }
 
@@ -801,7 +801,7 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
             if (*sd).status.dura_aether[x].id > 0
                 && (*sd).status.dura_aether[x].aether > 0
             {
-                sl_doscript_2(rust_magicdb_yname((*sd).status.dura_aether[x].id as i32), b"after_drop_gold_while_aether\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl_raw).bl);
+                sl_doscript_2(magic_db::yname_ptr((*sd).status.dura_aether[x].id as i32), b"after_drop_gold_while_aether\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl_raw).bl);
             }
         }
 

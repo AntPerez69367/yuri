@@ -199,11 +199,28 @@ use crate::game::map_parse::combat::clif_mob_kill;
 use crate::game::map_parse::player_state::clif_sendstatus as clif_sendstatus_mob;
 use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from};
 use crate::game::client::visual::clif_sendmob_side;
-use crate::database::magic_db::{
-    rust_magicdb_yname as magicdb_yname, rust_magicdb_name as magicdb_name,
-    rust_magicdb_id as magicdb_id, rust_magicdb_dispel as magicdb_dispel,
-};
-use crate::database::mob_db::{rust_mobdb_experience as mobdb_experience, rust_mobdb_search as mobdb_search};
+use std::sync::Arc;
+use crate::database::magic_db;
+use crate::database::mob_db;
+
+/// Helper: get magic yname pointer by spell ID (for sl_doscript calls).
+/// The returned pointer is valid for the lifetime of the Arc (temporary lives until end of statement).
+#[inline]
+fn magicdb_yname(id: i32) -> *const i8 {
+    magic_db::search(id).yname.as_ptr()
+}
+
+/// Helper: get magic display name pointer by spell ID.
+#[inline]
+fn magicdb_name(id: i32) -> *const i8 {
+    magic_db::search(id).name.as_ptr()
+}
+
+/// Helper: get magic dispel threshold by spell ID.
+#[inline]
+fn magicdb_dispel(id: i32) -> i32 {
+    magic_db::search(id).dispell as i32
+}
 use crate::game::time_util::gettick;
 use crate::game::map_server::cur_time;
 
@@ -351,11 +368,11 @@ pub unsafe fn mob_respawn_getstats(mob: *mut MobSpawnData) -> i32 {
         return 0;
     }
     (*mob).data = if in_spawn_window(mob) {
-        mobdb_search((*mob).mobid)
+        Arc::as_ptr(&mob_db::search((*mob).mobid)) as *mut MobDbData
     } else if (*mob).replace != 0 {
-        mobdb_search((*mob).replace)
+        Arc::as_ptr(&mob_db::search((*mob).replace)) as *mut MobDbData
     } else {
-        mobdb_search((*mob).mobid)
+        Arc::as_ptr(&mob_db::search((*mob).mobid)) as *mut MobDbData
     };
     if (*mob).data.is_null() {
         return 0;
@@ -368,7 +385,7 @@ pub unsafe fn mob_respawn_getstats(mob: *mut MobSpawnData) -> i32 {
         (*mob).ac = -95;
     }
     if (*mob).exp == 0 {
-        (*mob).exp = mobdb_experience((*mob).mobid);
+        (*mob).exp = mob_db::experience((*mob).mobid);
     }
     (*mob).miss = d.miss;
     (*mob).newmove = d.movetime as u32;
@@ -469,7 +486,7 @@ pub async unsafe fn mobspawn_read() -> i32 {
         };
 
         if (*db).exp == 0 {
-            (*db).exp = mobdb_experience(mobid);
+            (*db).exp = mob_db::experience(mobid);
         }
 
         (*db).id = spn_id;
@@ -2115,7 +2132,7 @@ pub unsafe fn mobspawn_onetime(
         let db: *mut MobSpawnData = mob_box.as_mut() as *mut MobSpawnData;
 
         if (*db).exp == 0 {
-            (*db).exp = mobdb_experience(id);
+            (*db).exp = mob_db::experience(id);
         }
         (*db).startm = m as u16;
         (*db).startx = x as u16;
@@ -2328,7 +2345,7 @@ pub unsafe fn sl_mob_setduration(
     mut time: i32, caster_id: u32, recast: i32,
 ) {
     if mob.is_null() { return; }
-    let id = magicdb_id(name);
+    let id = magic_db::id_by_name(&std::ffi::CStr::from_ptr(name).to_string_lossy());
     if time > 0 && time < 1000 { time = 1000; }
     let mut alreadycast = 0i32;
     for x in 0..MAX_MAGIC_TIMERS {

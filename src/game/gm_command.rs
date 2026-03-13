@@ -66,11 +66,8 @@ use crate::game::scripting::{
 
 // ── database init functions ────────────────────────────────────────────────────
 use crate::database::item_db;
-use crate::database::magic_db::rust_magicdb_id as magicdb_id;
-use crate::database::board_db::{rust_boarddb_term as boarddb_term, rust_boarddb_init as boarddb_init};
-use crate::database::clan_db::rust_clandb_init as clandb_init;
+use crate::database::{magic_db, mob_db, board_db, clan_db};
 use crate::game::npc::{npc_init, warp_init};
-use crate::database::mob_db::{rust_mobdb_term, rust_mobdb_init};
 use crate::game::mob::rust_mobspawn_read as mobspawn_read;
 
 // ── session helpers ────────────────────────────────────────────────────────────
@@ -365,8 +362,7 @@ fn command_killall(sd: &mut MapSessionData, _line: &str) -> i32 {
 fn command_deletespell(sd: &mut MapSessionData, line: &str) -> i32 {
     let spell_name = parse_first_word(line);
     if spell_name.is_empty() { return -1; }
-    let name = str_to_cname(spell_name);
-    let spell = unsafe { magicdb_id(name.as_ptr()) };
+    let spell = magic_db::id_by_name(spell_name);
     if (0..52).contains(&spell) {
         sd.status.skill[spell as usize] = 0;
         unsafe { pc_loadmagic(as_ptr(sd)); }
@@ -454,8 +450,7 @@ fn command_warp(sd: &mut MapSessionData, line: &str) -> i32 {
 fn command_givespell(sd: &mut MapSessionData, line: &str) -> i32 {
     let word = parse_first_word(line);
     if word.is_empty() { return -1; }
-    let name = str_to_cname(word);
-    let spell = unsafe { magicdb_id(name.as_ptr()) };
+    let spell = magic_db::id_by_name(word);
     for x in 0..52usize {
         if sd.status.skill[x] == 0 {
             sd.status.skill[x] = spell as u16;
@@ -567,8 +562,8 @@ fn command_reloadcreations(sd: &mut MapSessionData, _line: &str) -> i32 {
 }
 
 fn command_reloadmob(sd: &mut MapSessionData, _line: &str) -> i32 {
-    rust_mobdb_term();
-    rust_mobdb_init();
+    mob_db::term();
+    mob_db::init();
     send_minitext(sd, "Mob DB Reloaded");
     0
 }
@@ -1118,14 +1113,14 @@ fn command_spellq(sd: &mut MapSessionData, _line: &str) -> i32 {
 }
 
 fn command_reloadboard(sd: &mut MapSessionData, _line: &str) -> i32 {
-    boarddb_term();
-    boarddb_init();
+    board_db::term();
+    board_db::init();
     send_minitext(sd, "Board DB reloaded!");
     0
 }
 
 fn command_reloadclan(sd: &mut MapSessionData, _line: &str) -> i32 {
-    clandb_init();
+    clan_db::init();
     send_minitext(sd, "Clan DB reloaded!");
     0
 }

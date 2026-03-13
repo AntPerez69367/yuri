@@ -89,8 +89,6 @@ pub unsafe fn clif_mystaytus(sd: *mut crate::game::pc::MapSessionData) {
 }
 
 // ─── Magic / mob DB ───────────────────────────────────────────────────────────
-pub use crate::database::magic_db::rust_magicdb_level;
-pub use crate::database::mob_db::{rust_mobdb_search, rust_mobdb_id};
 pub use crate::game::mob::rust_mobspawn_onetime;
 
 // ─── sl_g_* map globals ───────────────────────────────────────────────────────

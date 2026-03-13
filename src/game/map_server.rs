@@ -23,7 +23,7 @@ use crate::session::{
     session_set_eof, session_get_data, SessionId,
 };
 use crate::network::crypt::encrypt;
-use crate::database::board_db::{rust_boarddb_script, rust_boarddb_yname};
+use crate::database::board_db;
 use crate::session::{session_call_parse, get_session_manager};
 use crate::game::scripting::rust_sl_exec as sl_exec;
 
@@ -190,7 +190,7 @@ pub unsafe fn map_additem(bl: *mut BlockList) {
 ///
 /// # Safety
 /// `crate::database::map_db::raw_map_ptr()` must be a valid initialized pointer (non-null, pointing to at
-/// least `MAP_SLOTS` slots). Call only after `rust_map_init` has completed.
+/// least `MAP_SLOTS` slots). Call only after `map_init` has completed.
 pub unsafe fn map_setmapip(id: i32, ip: u32, port: u16) -> i32 {
     if id < 0 || id as usize >= crate::database::map_db::MAP_SLOTS {
         return 1;
@@ -528,11 +528,11 @@ pub unsafe fn map_name2npc(name: *const i8) -> *mut std::ffi::c_void {
     std::ptr::null_mut()
 }
 
-/// Reload the map registry for a single map — thin shim over `rust_map_loadregistry`.
+/// Reload the map registry for a single map.
 ///
 /// Loads the global player registry from the database.
 pub unsafe fn map_loadregistry(id: i32) -> i32 {
-    crate::database::map_db::rust_map_loadregistry(id)
+    crate::database::map_db::map_loadregistry(id)
 }
 
 /// Read a game-global registry value by name (case-insensitive).
@@ -888,8 +888,9 @@ pub unsafe fn boards_showposts(
         (*sd).board_candel   = 1;
     } else {
         (*sd).board = board;
-        if rust_boarddb_script(board) != 0 {
-            let yname = rust_boarddb_yname(board);
+        let bd = &*board_db::search(board);
+        if bd.script != 0 {
+            let yname = bd.yname.as_ptr();
             sl_doscript_simple(yname, b"check\0".as_ptr() as *const i8, std::ptr::addr_of_mut!((*sd).bl));
         } else {
             (*sd).board_canwrite = 1;
@@ -951,8 +952,9 @@ pub unsafe fn boards_readpost(
 ) -> i32 {
     if board != 0 {
         (*sd).board = board;
-        if rust_boarddb_script(board) != 0 {
-            let yname = rust_boarddb_yname(board);
+        let bd = &*board_db::search(board);
+        if bd.script != 0 {
+            let yname = bd.yname.as_ptr();
             sl_doscript_simple(yname, b"check\0".as_ptr() as *const i8, std::ptr::addr_of_mut!((*sd).bl));
         } else {
             (*sd).board_canwrite = 1;
@@ -2916,8 +2918,8 @@ pub unsafe fn map_do_term() {
 
     crate::game::block::map_termblock();
     crate::database::item_db::term();
-    crate::database::magic_db::rust_magicdb_term();
-    crate::database::class_db::rust_classdb_term();
+    crate::database::magic_db::term();
+    crate::database::class_db::term();
     println!("[map] Map Server Shutdown");
 }
 
@@ -2965,13 +2967,12 @@ pub static cronjobtimer: AtomicI32 = AtomicI32::new(0);
 /// Must be called on the game thread. `maps_dir` and `serverid` are read from
 /// `src/config_globals.rs` via `global_config()`.
 pub unsafe fn map_reload() -> i32 {
-    use crate::database::map_db::rust_map_reload;
+    use crate::database::map_db::map_reload;
 
     let gc = crate::config_globals::global_config();
-    let maps_dir_c = std::ffi::CString::new(gc.maps_dir.as_str()).unwrap();
     let serverid = gc.serverid;
-    if rust_map_reload(maps_dir_c.as_ptr(), serverid) != 0 {
-        tracing::error!("[map] rust_map_reload failed");
+    if map_reload(&gc.maps_dir, serverid) != 0 {
+        tracing::error!("[map] map_reload failed");
         return -1;
     }
 

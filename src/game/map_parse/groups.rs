@@ -40,7 +40,7 @@ const BL_ALL: i32 = 0x0F;
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::map_server::{map_name2sd, groups as groups_raw};
 use crate::game::map_parse::movement::clif_object_canmove;
-use crate::database::class_db::{rust_classdb_path as classdb_path, rust_classdb_level as classdb_level};
+use crate::database::class_db::{path as classdb_path, level as classdb_level};
 use crate::database::item_db;
 
 // pc_isequip returns i32; usage here expects u32 — wrap with cast.

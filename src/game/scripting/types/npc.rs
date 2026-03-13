@@ -252,8 +252,8 @@ impl UserData for NpcObject {
                             // args[0]=self, [1]=mob, [2]=x, [3]=y, [4]=amount, [5]=m, [6]=owner
                             let mob_id: u32 = match args.get(1) {
                                 Some(mlua::Value::String(s)) => {
-                                    let cs = CString::new(&*s.as_bytes()).map_err(mlua::Error::external)?;
-                                    unsafe { sffi::rust_mobdb_id(cs.as_ptr()) as u32 }
+                                    let name_str = s.to_str().map_err(mlua::Error::external)?;
+                                    crate::database::mob_db::find_id(&name_str) as u32
                                 }
                                 Some(mlua::Value::Integer(n)) => *n as u32,
                                 Some(mlua::Value::Number(f))  => *f as u32,

@@ -45,10 +45,10 @@ use crate::game::time_util::timer_remove;
 use crate::game::scripting::rust_sl_async_freeco as sl_async_freeco;
 use crate::game::map_char::intif_save_impl::rust_sl_intif_savequit as sl_intif_savequit;
 use crate::game::client::visual::clif_showboards;
-use crate::database::board_db::rust_boarddb_yname;
+use crate::database::board_db;
 use crate::game::map_parse::combat::clif_sendaction;
 use crate::database::item_db;
-use crate::database::magic_db::rust_magicdb_yname as magicdb_yname;
+use crate::database::magic_db;
 use crate::session::{session_exists, session_set_eof, SessionId};
 
 use crate::game::block::AreaType;
@@ -281,7 +281,7 @@ pub async unsafe fn clif_handle_boards(sd: *mut MapSessionData) -> i32 {
         8 => {
             // C fallthrough: case 8 runs the Lua write script, then falls into case 9.
             let board = rword_be((*sd).fd, 6) as i32;
-            sl_doscript_simple(rust_boarddb_yname(board), c"write".as_ptr(), &raw mut (*sd).bl);
+            sl_doscript_simple(board_db::yname_ptr(board), c"write".as_ptr(), &raw mut (*sd).bl);
             (*sd).bcount = 0;
             boards_showposts(sd, 0);
         }
@@ -577,12 +577,12 @@ pub unsafe fn clif_parsedropitem(sd: *mut MapSessionData) -> i32 {
     sl_doscript_simple(drop_item.yname.as_ptr(), c"on_drop".as_ptr(), &raw mut (*sd).bl);
     for x in 0..MAX_MAGIC_TIMERS {
         if (*sd).status.dura_aether[x].id > 0 && (*sd).status.dura_aether[x].duration > 0 {
-            sl_doscript_simple(magicdb_yname((*sd).status.dura_aether[x].id as i32), c"on_drop_while_cast".as_ptr(), &raw mut (*sd).bl);
+            sl_doscript_simple(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"on_drop_while_cast".as_ptr(), &raw mut (*sd).bl);
         }
     }
     for x in 0..MAX_MAGIC_TIMERS {
         if (*sd).status.dura_aether[x].id > 0 && (*sd).status.dura_aether[x].aether > 0 {
-            sl_doscript_simple(magicdb_yname((*sd).status.dura_aether[x].id as i32), c"on_drop_while_aether".as_ptr(), &raw mut (*sd).bl);
+            sl_doscript_simple(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"on_drop_while_aether".as_ptr(), &raw mut (*sd).bl);
         }
     }
     if (*sd).fakeDrop != 0 { return 0; }

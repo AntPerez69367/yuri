@@ -229,16 +229,18 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
         let ptr: *mut std::ffi::c_void = match v {
             mlua::Value::Integer(id) => {
                 if id < 0 || id > u32::MAX as i64 { return Ok(mlua::Value::Nil); }
-                crate::database::recipe_db::rust_recipedb_search(id as u32) as *mut std::ffi::c_void
+                std::sync::Arc::into_raw(crate::database::recipe_db::search(id as u32)) as *mut std::ffi::c_void
             }
             mlua::Value::Number(f) => {
                 if !f.is_finite() || f < 0.0 || f > u32::MAX as f64 { return Ok(mlua::Value::Nil); }
-                crate::database::recipe_db::rust_recipedb_search(f as u32) as *mut std::ffi::c_void
+                std::sync::Arc::into_raw(crate::database::recipe_db::search(f as u32)) as *mut std::ffi::c_void
             }
             mlua::Value::String(ref s) => {
                 let text = s.to_str()?;
-                let cs = CString::new(text.as_bytes()).map_err(mlua::Error::external)?;
-                unsafe { crate::database::recipe_db::rust_recipedb_searchname(cs.as_ptr()) as *mut std::ffi::c_void }
+                match crate::database::recipe_db::searchname(&*text) {
+                    Some(arc) => std::sync::Arc::into_raw(arc) as *mut std::ffi::c_void,
+                    None => std::ptr::null_mut(),
+                }
             }
             _ => std::ptr::null_mut(),
         };

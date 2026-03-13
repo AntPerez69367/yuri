@@ -265,10 +265,9 @@ pub fn sl_pc_gfx_name(sd: &mut MapSessionData) -> *const i8 {
 //   clif_getaccountemail  — C allocates a 255-byte heap buffer; caller owns it.
 //                           Leaked here exactly as the original C code did; Lua
 //                           copies the string via lua_pushstring before returning.
-//   rust_classdb_name     — returns a CString::into_raw pointer; caller must free
-//                           with rust_classdb_free_name.  Leaked here to match the
-//                           original C sl_pc_className / sl_pc_baseClassName behaviour.
-//   rust_clandb_name      — returns a pointer into an interned static table; never
+//   class_db::name()      — returns a String; converted to a leaked CString for
+//                           sl_pc_className / sl_pc_baseClassName / sl_pc_classNameMark.
+//   clan_db::name()       — returns a pointer into an interned static table; never
 //                           freed by the caller.
 
 // ─── Method wrappers: direct Rust imports ────────────────────────────────────
@@ -307,10 +306,25 @@ use crate::game::map_server::{boards_showposts, boards_readpost, nmail_sendmail}
 use crate::game::map_parse::dialogs::clif_send_timer;
 // map lookups — use typed versions
 use crate::game::mob::map_id2bl;
-use crate::database::magic_db::{rust_magicdb_id as magicdb_id, rust_magicdb_name as magicdb_name, rust_magicdb_yname as magicdb_yname};
+use crate::database::{magic_db, class_db, clan_db};
+
+/// Convert a `*const i8` C string to `&str` for database API calls.
+/// Returns "" if the pointer is null or not valid UTF-8.
+unsafe fn cptr_to_str<'a>(p: *const i8) -> &'a str {
+    if p.is_null() { return ""; }
+    std::ffi::CStr::from_ptr(p).to_str().unwrap_or("")
+}
+
+/// Convert a Rust String to a leaked `*const i8` for FFI callers.
+/// The pointer is leaked - Lua copies the string immediately.
+fn string_to_cptr(s: String) -> *const i8 {
+    match std::ffi::CString::new(s) {
+        Ok(cs) => cs.into_raw() as *const i8,
+        Err(_) => std::ptr::null(),
+    }
+}
 use crate::game::client::handlers::{clif_isregistered_sync as clif_isregistered, clif_getaccountemail_sync as clif_getaccountemail};
-use crate::database::clan_db::rust_clandb_name as clandb_name_ffi;
-use crate::database::class_db::{rust_classdb_path as classdb_path_ffi, rust_classdb_name as classdb_name_ffi};
+use crate::database::class_db::name as classdb_name_ffi;
 
 // Inline helpers for map_id2sd_acc and map_id2mob_acc with correct return types
 #[inline(always)]
@@ -344,31 +358,31 @@ pub unsafe fn sl_pc_email(sd: &mut MapSessionData) -> *const i8 {
 
 /// Returns the interned clan name for this character's clan id.
 pub fn sl_pc_clanname(sd: &mut MapSessionData) -> *const i8 {
-    clandb_name_ffi(sd.status.clan as i32)
+    clan_db::name(sd.status.clan as i32)
 }
 
 /// Returns the path (base class id) for this character's class.
 pub fn sl_pc_baseclass(sd: &mut MapSessionData) -> i32 {
-    classdb_path_ffi(sd.status.class as i32)
+    class_db::path(sd.status.class as i32)
 }
 
 /// Returns the display name of the base class (path, rank 0).
 /// The returned pointer is a leaked CString — Lua copies it immediately.
-pub fn sl_pc_baseClassName(sd: &mut MapSessionData) -> *mut i8 {
-    let path = classdb_path_ffi(sd.status.class as i32);
-    classdb_name_ffi(path, 0)
+pub fn sl_pc_baseClassName(sd: &mut MapSessionData) -> *const i8 {
+    let path = class_db::path(sd.status.class as i32);
+    string_to_cptr(classdb_name_ffi(path, 0))
 }
 
 /// Returns the display name of the character's class at rank 0.
 /// The returned pointer is a leaked CString — Lua copies it immediately.
-pub fn sl_pc_className(sd: &mut MapSessionData) -> *mut i8 {
-    classdb_name_ffi(sd.status.class as i32, 0)
+pub fn sl_pc_className(sd: &mut MapSessionData) -> *const i8 {
+    string_to_cptr(classdb_name_ffi(sd.status.class as i32, 0))
 }
 
 /// Returns the display name of the character's class at their current mark (rank).
 /// The returned pointer is a leaked CString — Lua copies it immediately.
-pub fn sl_pc_classNameMark(sd: &mut MapSessionData) -> *mut i8 {
-    classdb_name_ffi(sd.status.class as i32, sd.status.mark as i32)
+pub fn sl_pc_classNameMark(sd: &mut MapSessionData) -> *const i8 {
+    string_to_cptr(classdb_name_ffi(sd.status.class as i32, sd.status.mark as i32))
 }
 
 // ─── Write: direct field setters ─────────────────────────────────────────────
@@ -969,7 +983,7 @@ pub unsafe fn sl_pc_addthreatgeneral(_sd: &mut MapSessionData, _amount: u32) { /
 // ── Spell list ────────────────────────────────────────────────────────────────
 
 pub unsafe fn sl_pc_hasspell(sd: &mut MapSessionData, name: *const i8) -> i32 {
-    let id = magicdb_id(name); if id <= 0 { return 0; }
+    let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_SPELLS {
         if sd.status.skill[i] == id as u16 { return 1; }
     }
@@ -995,7 +1009,7 @@ pub fn sl_pc_removespell(sd: &mut MapSessionData, spell_id: i32) {
 // ── Duration system ───────────────────────────────────────────────────────────
 
 pub unsafe fn sl_pc_hasduration(sd: &mut MapSessionData, name: *const i8) -> i32 {
-    let id = magicdb_id(name); if id <= 0 { return 0; }
+    let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
         if sd.status.dura_aether[i].id == id as u16 && sd.status.dura_aether[i].duration > 0 { return 1; }
     }
@@ -1003,7 +1017,7 @@ pub unsafe fn sl_pc_hasduration(sd: &mut MapSessionData, name: *const i8) -> i32
 }
 
 pub unsafe fn sl_pc_hasdurationid(sd: &mut MapSessionData, name: *const i8, caster_id: i32) -> i32 {
-    let id = magicdb_id(name); if id <= 0 { return 0; }
+    let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
         if sd.status.dura_aether[i].id == id as u16
             && sd.status.dura_aether[i].caster_id == caster_id as u32
@@ -1013,7 +1027,7 @@ pub unsafe fn sl_pc_hasdurationid(sd: &mut MapSessionData, name: *const i8, cast
 }
 
 pub unsafe fn sl_pc_getduration(sd: &mut MapSessionData, name: *const i8) -> i32 {
-    let id = magicdb_id(name); if id <= 0 { return 0; }
+    let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
         if sd.status.dura_aether[i].id == id as u16 { return sd.status.dura_aether[i].duration; }
     }
@@ -1021,7 +1035,7 @@ pub unsafe fn sl_pc_getduration(sd: &mut MapSessionData, name: *const i8) -> i32
 }
 
 pub unsafe fn sl_pc_getdurationid(sd: &mut MapSessionData, name: *const i8, caster_id: i32) -> i32 {
-    let id = magicdb_id(name); if id <= 0 { return 0; }
+    let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
         if sd.status.dura_aether[i].id == id as u16
             && sd.status.dura_aether[i].caster_id == caster_id as u32 {
@@ -1032,7 +1046,7 @@ pub unsafe fn sl_pc_getdurationid(sd: &mut MapSessionData, name: *const i8, cast
 }
 
 pub unsafe fn sl_pc_durationamount(sd: &mut MapSessionData, name: *const i8) -> i32 {
-    let id = magicdb_id(name); if id <= 0 { return 0; }
+    let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     let mut count = 0;
     for i in 0..MAX_MAGIC_TIMERS {
         if sd.status.dura_aether[i].id == id as u16 && sd.status.dura_aether[i].duration > 0 { count += 1; }
@@ -1041,7 +1055,7 @@ pub unsafe fn sl_pc_durationamount(sd: &mut MapSessionData, name: *const i8) -> 
 }
 
 pub unsafe fn sl_pc_setduration(sd: &mut MapSessionData, name: *const i8, mut time_ms: i32, caster_id: i32, recast: i32) {
-    let id = magicdb_id(name); if id <= 0 { return; }
+    let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return; }
     if time_ms > 0 && time_ms < 1000 { time_ms = 1000; }
     let mut alreadycast = false;
     for x in 0..MAX_MAGIC_TIMERS {
@@ -1110,7 +1124,7 @@ pub unsafe fn sl_pc_refreshdurations(sd: &mut MapSessionData) {
 // ── Aether system ─────────────────────────────────────────────────────────────
 
 pub unsafe fn sl_pc_setaether(sd: &mut MapSessionData, name: *const i8, mut time_ms: i32) {
-    let id = magicdb_id(name); if id <= 0 { return; }
+    let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return; }
     if time_ms > 0 && time_ms < 1000 { time_ms = 1000; }
     let mut alreadycast = false;
     for x in 0..MAX_MAGIC_TIMERS {
@@ -1135,7 +1149,7 @@ pub unsafe fn sl_pc_setaether(sd: &mut MapSessionData, name: *const i8, mut time
 }
 
 pub unsafe fn sl_pc_hasaether(sd: &mut MapSessionData, name: *const i8) -> i32 {
-    let id = magicdb_id(name); if id <= 0 { return 0; }
+    let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
         if sd.status.dura_aether[i].id == id as u16 && sd.status.dura_aether[i].aether > 0 { return 1; }
     }
@@ -1143,7 +1157,7 @@ pub unsafe fn sl_pc_hasaether(sd: &mut MapSessionData, name: *const i8) -> i32 {
 }
 
 pub unsafe fn sl_pc_getaether(sd: &mut MapSessionData, name: *const i8) -> i32 {
-    let id = magicdb_id(name); if id <= 0 { return 0; }
+    let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
         if sd.status.dura_aether[i].id == id as u16 { return sd.status.dura_aether[i].aether; }
     }
@@ -1185,7 +1199,7 @@ pub fn sl_pc_updatecountry(sd: &mut MapSessionData, country: i32) {
 }
 
 pub unsafe fn sl_pc_getcasterid(_sd: &mut MapSessionData, name: *const i8) -> i32 {
-    magicdb_id(name)
+    magic_db::id_by_name(cptr_to_str(name))
 }
 
 pub unsafe fn sl_pc_settimer(sd: &mut MapSessionData, kind: i32, length: u32) {
@@ -1715,7 +1729,7 @@ pub unsafe fn sl_pc_getspellnames(
     for x in 0..MAX_SPELLS {
         if count >= max { break; }
         if sd.status.skill[x] != 0 {
-            *out_names.add(count as usize) = magicdb_name(sd.status.skill[x] as i32);
+            *out_names.add(count as usize) = magic_db::search(sd.status.skill[x] as i32).name.as_ptr();
             count += 1;
         }
     }
@@ -1731,7 +1745,7 @@ pub unsafe fn sl_pc_getalldurations(
         if count >= max { break; }
         let da = &sd.status.dura_aether[i];
         if da.id > 0 && da.duration > 0 {
-            *out_names.add(count as usize) = magicdb_yname(da.id as i32);
+            *out_names.add(count as usize) = magic_db::search(da.id as i32).yname.as_ptr();
             count += 1;
         }
     }
@@ -1756,7 +1770,7 @@ pub unsafe fn sl_pc_getlegend(
 
 pub unsafe fn sl_pc_activespells(sd: &mut MapSessionData, name: *const i8) -> i32 {
     if name.is_null() { return 0; }
-    let id = magicdb_id(name);
+    let id = magic_db::id_by_name(cptr_to_str(name));
     for x in 0..MAX_MAGIC_TIMERS {
         let da = &sd.status.dura_aether[x];
         if da.id as i32 == id && da.duration > 0 { return 1; }
@@ -1773,27 +1787,27 @@ pub unsafe fn sl_pc_givexp(sd: &mut MapSessionData, amount: u32) {
 // ─── Clan bank reads ──────────────────────────────────────────────────────────
 
 pub unsafe fn sl_pc_getclanitems(sd: &mut MapSessionData, slot: i32) -> i32 {
-    let clan = crate::database::clan_db::rust_clandb_search(sd.status.clan as i32);
-    if clan.is_null() || (*clan).clanbanks.is_null() { return 0; }
+    let clan = crate::database::clan_db::search(sd.status.clan as i32);
+    if clan.clanbanks.is_null() { return 0; }
     if slot < 0 || slot >= 255 { return 0; }
-    (*(*clan).clanbanks.add(slot as usize)).item_id as i32
+    (*clan.clanbanks.add(slot as usize)).item_id as i32
 }
 
 pub unsafe fn sl_pc_getclanamounts(sd: &mut MapSessionData, slot: i32) -> i32 {
-    let clan = crate::database::clan_db::rust_clandb_search(sd.status.clan as i32);
-    if clan.is_null() || (*clan).clanbanks.is_null() { return 0; }
+    let clan = crate::database::clan_db::search(sd.status.clan as i32);
+    if clan.clanbanks.is_null() { return 0; }
     if slot < 0 || slot >= 255 { return 0; }
-    (*(*clan).clanbanks.add(slot as usize)).amount as i32
+    (*clan.clanbanks.add(slot as usize)).amount as i32
 }
 
 pub unsafe fn sl_pc_checkclankitemamounts(
     sd: &mut MapSessionData, item: i32, _amount: i32,
 ) -> i32 {
-    let clan = crate::database::clan_db::rust_clandb_search(sd.status.clan as i32);
-    if clan.is_null() || (*clan).clanbanks.is_null() { return 0; }
+    let clan = crate::database::clan_db::search(sd.status.clan as i32);
+    if clan.clanbanks.is_null() { return 0; }
     let mut total: u32 = 0;
     for x in 0..255usize {
-        let b = &*(*clan).clanbanks.add(x);
+        let b = &*clan.clanbanks.add(x);
         if b.item_id as i32 == item { total = total.wrapping_add(b.amount); }
     }
     total as i32

@@ -137,7 +137,7 @@ use crate::game::pc::{rust_pc_warp_sync as pc_warp, rust_pc_isequip as pc_isequi
 use crate::game::map_parse::groups::{clif_isingroup, clif_canmove_sub_inner};
 use crate::game::time_util::gettick;
 use crate::database::item_db;
-use crate::database::magic_db::rust_magicdb_yname as magicdb_yname;
+use crate::database::magic_db;
 
 
 
@@ -842,7 +842,7 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
     // Skill passive walk scripts
     for i in 0..MAX_SPELLS {
         if (*sd).status.skill[i] > 0 {
-            let yn = magicdb_yname((*sd).status.skill[i] as i32);
+            let yn = magic_db::yname_ptr((*sd).status.skill[i] as i32);
             if !yn.is_null() {
                 sl_doscript_simple(yn, c"on_walk_passive".as_ptr(), &mut (*sd).bl as *mut BlockList);
             }
@@ -852,7 +852,7 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
     // Aether walk scripts
     for i in 0..MAX_MAGIC_TIMERS {
         if (*sd).status.dura_aether[i].id > 0 && (*sd).status.dura_aether[i].duration > 0 {
-            let yn = magicdb_yname((*sd).status.dura_aether[i].id as i32);
+            let yn = magic_db::yname_ptr((*sd).status.dura_aether[i].id as i32);
             if !yn.is_null() {
                 sl_doscript_simple(yn, c"on_walk_while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
             }

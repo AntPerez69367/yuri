@@ -7,7 +7,7 @@
 use anyhow::{Context, Result};
 use sqlx::mysql::MySqlPoolOptions;
 use sqlx::Row;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
@@ -193,9 +193,7 @@ async fn main() -> Result<()> {
     let data_dir = config.data_dir.clone();
     tokio::task::spawn_blocking(move || {
         item_db::init();
-        let data_dir_c = CString::new(data_dir.as_str())
-            .expect("data_dir contains nul byte");
-        unsafe { class_db::init(data_dir_c.as_ptr()); }
+        class_db::init(&data_dir);
     })
     .await
     .context("DB init thread panicked")?;

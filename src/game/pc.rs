@@ -549,8 +549,8 @@ use crate::game::client::handlers::{clif_quit, clif_transfer};
 use crate::game::time_util::{timer_insert, timer_remove};
 use crate::game::scripting::rust_sl_async_freeco as sl_async_freeco;
 use crate::database::item_db;
-use crate::database::magic_db::{rust_magicdb_dispel as magicdb_dispel, rust_magicdb_yname as magicdb_yname_pc};
-use crate::database::class_db::{rust_classdb_path as classdb_path, rust_classdb_level as classdb_level};
+use crate::database::magic_db;
+use crate::database::class_db::{path as classdb_path, level as classdb_level};
 use crate::session::{session_exists, SessionId};
 use crate::game::map_parse::packet::{wfifop, wfifohead, wfifoset};
 use crate::network::crypt::encrypt;
@@ -740,7 +740,7 @@ pub unsafe fn rust_bl_duratimer(id: i32, _none: i32) -> i32 {
     // while_passive: each learned spell fires once per second
     for x in 0..52usize {
         if (*sd).status.skill[x] > 0 {
-            sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.skill[x] as i32), c"while_passive".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(magic_db::search((*sd).status.skill[x] as i32).yname.as_ptr(), c"while_passive".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -773,10 +773,10 @@ pub unsafe fn rust_bl_duratimer(id: i32, _none: i32) -> i32 {
                         0
                     };
                     if health > 0 || (*tbl).bl_type as i32 == BL_PC {
-                        sl_doscript_2_pc(magicdb_yname_pc(mid), c"while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
+                        sl_doscript_2_pc(magic_db::search(mid).yname.as_ptr(), c"while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
                     }
                 } else {
-                    sl_doscript_simple_pc(magicdb_yname_pc(mid), c"while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(magic_db::search(mid).yname.as_ptr(), c"while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
 
                 if (*sd).status.dura_aether[x].duration <= 0 {
@@ -808,9 +808,9 @@ pub unsafe fn rust_bl_duratimer(id: i32, _none: i32) -> i32 {
                     }
 
                     if !tbl.is_null() {
-                        sl_doscript_2_pc(magicdb_yname_pc(mid), c"uncast".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
+                        sl_doscript_2_pc(magic_db::search(mid).yname.as_ptr(), c"uncast".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
                     } else {
-                        sl_doscript_simple_pc(magicdb_yname_pc(mid), c"uncast".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                        sl_doscript_simple_pc(magic_db::search(mid).yname.as_ptr(), c"uncast".as_ptr(), &mut (*sd).bl as *mut BlockList);
                     }
                 }
             }
@@ -843,7 +843,7 @@ pub unsafe fn rust_bl_secondduratimer(id: i32, _none: i32) -> i32 {
 
     for x in 0..52usize {
         if (*sd).status.skill[x] > 0 {
-            sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.skill[x] as i32), c"while_passive_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(magic_db::search((*sd).status.skill[x] as i32).yname.as_ptr(), c"while_passive_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -870,10 +870,10 @@ pub unsafe fn rust_bl_secondduratimer(id: i32, _none: i32) -> i32 {
                         0
                     };
                     if health > 0 || (*tbl).bl_type as i32 == BL_PC {
-                        sl_doscript_2_pc(magicdb_yname_pc((*sd).status.dura_aether[x].id as i32), c"while_cast_250".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
+                        sl_doscript_2_pc(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"while_cast_250".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
                     }
                 } else {
-                    sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.dura_aether[x].id as i32), c"while_cast_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"while_cast_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
         }
@@ -891,7 +891,7 @@ pub unsafe fn rust_bl_thirdduratimer(id: i32, _none: i32) -> i32 {
 
     for x in 0..52usize {
         if (*sd).status.skill[x] > 0 {
-            sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.skill[x] as i32), c"while_passive_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(magic_db::search((*sd).status.skill[x] as i32).yname.as_ptr(), c"while_passive_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -918,10 +918,10 @@ pub unsafe fn rust_bl_thirdduratimer(id: i32, _none: i32) -> i32 {
                         0
                     };
                     if health > 0 || (*tbl).bl_type as i32 == BL_PC {
-                        sl_doscript_2_pc(magicdb_yname_pc((*sd).status.dura_aether[x].id as i32), c"while_cast_500".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
+                        sl_doscript_2_pc(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"while_cast_500".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
                     }
                 } else {
-                    sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.dura_aether[x].id as i32), c"while_cast_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"while_cast_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
         }
@@ -939,7 +939,7 @@ pub unsafe fn rust_bl_fourthduratimer(id: i32, _none: i32) -> i32 {
 
     for x in 0..52usize {
         if (*sd).status.skill[x] > 0 {
-            sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.skill[x] as i32), c"while_passive_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(magic_db::search((*sd).status.skill[x] as i32).yname.as_ptr(), c"while_passive_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -966,10 +966,10 @@ pub unsafe fn rust_bl_fourthduratimer(id: i32, _none: i32) -> i32 {
                         0
                     };
                     if health > 0 || (*tbl).bl_type as i32 == BL_PC {
-                        sl_doscript_2_pc(magicdb_yname_pc((*sd).status.dura_aether[x].id as i32), c"while_cast_1500".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
+                        sl_doscript_2_pc(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"while_cast_1500".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
                     }
                 } else {
-                    sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.dura_aether[x].id as i32), c"while_cast_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"while_cast_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
         }
@@ -987,7 +987,7 @@ pub unsafe fn rust_bl_fifthduratimer(id: i32, _none: i32) -> i32 {
 
     for x in 0..52usize {
         if (*sd).status.skill[x] > 0 {
-            sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.skill[x] as i32), c"while_passive_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(magic_db::search((*sd).status.skill[x] as i32).yname.as_ptr(), c"while_passive_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -1014,10 +1014,10 @@ pub unsafe fn rust_bl_fifthduratimer(id: i32, _none: i32) -> i32 {
                         0
                     };
                     if health > 0 || (*tbl).bl_type as i32 == BL_PC {
-                        sl_doscript_2_pc(magicdb_yname_pc((*sd).status.dura_aether[x].id as i32), c"while_cast_3000".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
+                        sl_doscript_2_pc(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"while_cast_3000".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
                     }
                 } else {
-                    sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.dura_aether[x].id as i32), c"while_cast_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"while_cast_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
         }
@@ -1495,10 +1495,10 @@ pub unsafe fn rust_pc_calcstat(sd: *mut MapSessionData) -> i32 {
             if p.id > 0 && p.duration > 0 {
                 let tsd = map_id2sd_pc(p.caster_id);
                 if !tsd.is_null() {
-                    sl_doscript_2_pc(magicdb_yname_pc(p.id as i32), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList);
+                    sl_doscript_2_pc(magic_db::search(p.id as i32).yname.as_ptr(), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList);
                 } else {
                     // sl_doscript_simple(magicdb_yname(p->id), "recast", &sd->bl)
-                    sl_doscript_simple_pc(magicdb_yname_pc(p.id as i32), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(magic_db::search(p.id as i32).yname.as_ptr(), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
         }
@@ -1506,7 +1506,7 @@ pub unsafe fn rust_pc_calcstat(sd: *mut MapSessionData) -> i32 {
         // Passive skills
         for x in 0..52usize {
             if (*sd).status.skill[x] > 0 {
-                sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.skill[x] as i32), c"passive".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                sl_doscript_simple_pc(magic_db::search((*sd).status.skill[x] as i32).yname.as_ptr(), c"passive".as_ptr(), &mut (*sd).bl as *mut BlockList);
             }
         }
 
@@ -3675,12 +3675,12 @@ pub async unsafe fn rust_pc_warp(
 
     // Fire passive_before_warp for each known spell.
     for i in 0..MAX_SPELLS {
-        sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.skill[i] as i32), c"passive_before_warp".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc(magic_db::search((*sd).status.skill[i] as i32).yname.as_ptr(), c"passive_before_warp".as_ptr(), &mut (*sd).bl as *mut BlockList);
     }
 
     // Fire before_warp_while_cast for each active aether timer.
     for i in 0..MAX_MAGIC_TIMERS {
-        sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.dura_aether[i].id as i32), c"before_warp_while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc(magic_db::search((*sd).status.dura_aether[i].id as i32).yname.as_ptr(), c"before_warp_while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
     }
 
     // Perform the actual move.
@@ -3697,12 +3697,12 @@ pub async unsafe fn rust_pc_warp(
 
     // Fire passive_on_warp for each known spell.
     for i in 0..MAX_SPELLS {
-        sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.skill[i] as i32), c"passive_on_warp".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc(magic_db::search((*sd).status.skill[i] as i32).yname.as_ptr(), c"passive_on_warp".as_ptr(), &mut (*sd).bl as *mut BlockList);
     }
 
     // Fire on_warp_while_cast for each active aether timer.
     for i in 0..MAX_MAGIC_TIMERS {
-        sl_doscript_simple_pc(magicdb_yname_pc((*sd).status.dura_aether[i].id as i32), c"on_warp_while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc(magic_db::search((*sd).status.dura_aether[i].id as i32).yname.as_ptr(), c"on_warp_while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
     }
 
     0
@@ -3741,11 +3741,11 @@ pub unsafe fn rust_pc_magic_startup(sd: *mut MapSessionData) -> i32 {
                 if !tsd.is_null() {
                     (*sd).target   = p.caster_id as i32;
                     (*sd).attacker = p.caster_id;
-                    sl_doscript_2_pc(magicdb_yname_pc(p.id as i32), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList);
+                    sl_doscript_2_pc(magic_db::search(p.id as i32).yname.as_ptr(), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList);
                 } else {
                     (*sd).target   = (*sd).status.id as i32;
                     (*sd).attacker = (*sd).status.id;
-                    sl_doscript_simple_pc(magicdb_yname_pc(p.id as i32), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(magic_db::search(p.id as i32).yname.as_ptr(), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
 
@@ -3814,7 +3814,7 @@ pub unsafe fn rust_pc_diescript(sd: *mut MapSessionData) -> i32 {
         let id = (*sd).status.dura_aether[i].id;
         if id == 0 { continue; }
 
-        if magicdb_dispel(id as i32) > 0 { continue; }
+        if magic_db::search(id as i32).dispell as i32 > 0 { continue; }
 
         (*sd).status.dura_aether[i].duration = 0;
         clif_send_duration(
@@ -3852,9 +3852,9 @@ pub unsafe fn rust_pc_diescript(sd: *mut MapSessionData) -> i32 {
         };
 
         if !caster_bl.is_null() {
-            sl_doscript_2_pc(magicdb_yname_pc(id as i32), c"uncast".as_ptr(), &mut (*sd).bl as *mut BlockList, caster_bl);
+            sl_doscript_2_pc(magic_db::search(id as i32).yname.as_ptr(), c"uncast".as_ptr(), &mut (*sd).bl as *mut BlockList, caster_bl);
         } else {
-            sl_doscript_simple_pc(magicdb_yname_pc(id as i32), c"uncast".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(magic_db::search(id as i32).yname.as_ptr(), c"uncast".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
