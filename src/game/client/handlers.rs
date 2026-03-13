@@ -47,7 +47,7 @@ use crate::game::map_char::intif_save_impl::rust_sl_intif_savequit as sl_intif_s
 use crate::game::client::visual::clif_showboards;
 use crate::database::board_db::rust_boarddb_yname;
 use crate::game::map_parse::combat::clif_sendaction;
-use crate::database::item_db::{rust_itemdb_droppable as itemdb_droppable, rust_itemdb_yname as itemdb_yname};
+use crate::database::item_db;
 use crate::database::magic_db::rust_magicdb_yname as magicdb_yname;
 use crate::session::{session_exists, session_set_eof, SessionId};
 
@@ -566,14 +566,15 @@ pub unsafe fn clif_parsedropitem(sd: *mut MapSessionData) -> i32 {
     let all = rbyte((*sd).fd, 6) as i32;
     if id as usize >= (*sd).status.maxinv as usize { return 0; }
     if (*sd).status.inventory[id as usize].id != 0 {
-        if itemdb_droppable((*sd).status.inventory[id as usize].id as u32) != 0 {
+        if item_db::search((*sd).status.inventory[id as usize].id as u32).droppable != 0 {
             clif_sendminitext(sd, c"You can't drop this item.".as_ptr());
             return 0;
         }
     }
     clif_sendaction(&mut (*sd).bl, 5, 20, 0);
     (*sd).invslot = id as u8;
-    sl_doscript_simple(itemdb_yname((*sd).status.inventory[id as usize].id as u32), c"on_drop".as_ptr(), &raw mut (*sd).bl);
+    let drop_item = item_db::search((*sd).status.inventory[id as usize].id as u32);
+    sl_doscript_simple(drop_item.yname.as_ptr(), c"on_drop".as_ptr(), &raw mut (*sd).bl);
     for x in 0..MAX_MAGIC_TIMERS {
         if (*sd).status.dura_aether[x].id > 0 && (*sd).status.dura_aether[x].duration > 0 {
             sl_doscript_simple(magicdb_yname((*sd).status.dura_aether[x].id as i32), c"on_drop_while_cast".as_ptr(), &raw mut (*sd).bl);
@@ -1029,7 +1030,6 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
 // Reads ingredient items from the session buffer, builds a Lua `creationItems`
 // table, and dispatches `itemCreation(pc)` script.
 pub unsafe fn createdb_start(sd: *mut MapSessionData) -> i32 {
-    use crate::database::item_db::rust_itemdb_stackamount;
     use crate::game::scripting::sl_state;
     use crate::database::map_db::BlockList;
 
@@ -1053,7 +1053,7 @@ pub unsafe fn createdb_start(sd: *mut MapSessionData) -> i32 {
         if curitem < maxinv {
             items[x] = (*sd).status.inventory[curitem].id;
         }
-        if rust_itemdb_stackamount(items[x]) > 1 {
+        if item_db::search(items[x]).stack_amount > 1 {
             amounts[x] = rfifob(fd, len + 1) as u32;
             len += 2;
         } else {

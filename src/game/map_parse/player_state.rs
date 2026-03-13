@@ -59,9 +59,7 @@ unsafe fn replace_str_local(src: *const i8, orig: &[u8], rep: *const i8, buf: &m
 use crate::game::map_server::{cur_time, cur_year};
 use crate::database::class_db::rust_classdb_name;
 use crate::database::clan_db::rust_clandb_name;
-use crate::database::item_db::{
-    rust_itemdb_name, rust_itemdb_icon, rust_itemdb_iconcolor, rust_itemdb_protected,
-};
+use crate::database::item_db;
 use crate::game::map_server::map_id2name;
 use crate::game::client::handlers::clif_getName;
 use crate::game::client::visual::{
@@ -729,18 +727,19 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     for x in 0..14usize {
         let eq = &(*sd).status.equip[x];
         if eq.id > 0 {
+            let eq_item = item_db::search(eq.id);
             // Icon
             let icon_w: u16 = if eq.custom_icon != 0 {
                 (eq.custom_icon + 49152) as u16
             } else {
-                rust_itemdb_icon(eq.id) as u16
+                eq_item.icon as u16
             };
             wfifow(fd, 8 + len, icon_w.swap_bytes());
 
             let icon_color: u8 = if eq.custom_icon != 0 {
                 eq.custom_icon_color as u8
             } else {
-                rust_itemdb_iconcolor(eq.id) as u8
+                eq_item.icon_color
             };
             wfifob(fd, 10 + len, icon_color);
             len += 3;
@@ -749,8 +748,7 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
             let name_ptr: *const u8 = if !eq.real_name.is_empty() && eq.real_name[0] != 0 {
                 eq.real_name.as_ptr() as *const u8
             } else {
-                let n = rust_itemdb_name(eq.id);
-                if n.is_null() { b"\0".as_ptr() } else { n as *const u8 }
+                eq_item.name.as_ptr() as *const u8
             };
             let name_len = cstr_len(name_ptr);
             wfifob(fd, 8 + len, name_len as u8);
@@ -758,8 +756,7 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
             len += name_len + 1;
 
             // DB name (always from itemdb)
-            let dbname = rust_itemdb_name(eq.id);
-            let dbname_ptr: *const u8 = if dbname.is_null() { b"\0".as_ptr() } else { dbname as *const u8 };
+            let dbname_ptr: *const u8 = eq_item.name.as_ptr() as *const u8;
             let dbname_len = cstr_len(dbname_ptr);
             wfifob(fd, 8 + len, dbname_len as u8);
             copy_cstr_to_wfifo(fd, 9 + len, dbname_ptr, dbname_len);
@@ -767,7 +764,7 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
 
             // Dura (u32 BE) + protection byte
             wfifol(fd, 8 + len, (eq.dura as u32).swap_bytes());
-            let db_prot = rust_itemdb_protected(eq.id) as u32;
+            let db_prot = eq_item.protected as u32;
             let eq_prot = eq.protected;
             let prot_byte: u8 = if eq_prot >= db_prot { eq_prot as u8 } else { db_prot as u8 };
             wfifob(fd, 12 + len, prot_byte);

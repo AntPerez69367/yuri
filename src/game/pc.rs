@@ -548,23 +548,7 @@ use crate::game::client::visual::{
 use crate::game::client::handlers::{clif_quit, clif_transfer};
 use crate::game::time_util::{timer_insert, timer_remove};
 use crate::game::scripting::rust_sl_async_freeco as sl_async_freeco;
-use crate::database::item_db::{
-    rust_itemdb_name as itemdb_name, rust_itemdb_yname as itemdb_yname,
-    rust_itemdb_vita as itemdb_vita, rust_itemdb_mana as itemdb_mana,
-    rust_itemdb_might as itemdb_might, rust_itemdb_grace as itemdb_grace,
-    rust_itemdb_will as itemdb_will, rust_itemdb_ac as itemdb_ac,
-    rust_itemdb_healing as itemdb_healing, rust_itemdb_dam as itemdb_dam,
-    rust_itemdb_hit as itemdb_hit, rust_itemdb_dura as itemdb_dura,
-    rust_itemdb_maxamount as itemdb_maxamount, rust_itemdb_stackamount as itemdb_stackamount,
-    rust_itemdb_type as itemdb_type, rust_itemdb_look as itemdb_look,
-    rust_itemdb_level as itemdb_level, rust_itemdb_mightreq as itemdb_mightreq,
-    rust_itemdb_sex as itemdb_sex, rust_itemdb_droppable as itemdb_droppable,
-    rust_itemdb_unequip as itemdb_unequip, rust_itemdb_class as itemdb_class,
-    rust_itemdb_rank as itemdb_rank, rust_itemdb_time as itemdb_time,
-    rust_itemdb_protection as itemdb_protection,
-    rust_itemdb_minSdam as itemdb_minSdam, rust_itemdb_maxSdam as itemdb_maxSdam,
-    rust_itemdb_minLdam as itemdb_minLdam, rust_itemdb_maxLdam as itemdb_maxLdam,
-};
+use crate::database::item_db;
 use crate::database::magic_db::{rust_magicdb_dispel as magicdb_dispel, rust_magicdb_yname as magicdb_yname_pc};
 use crate::database::class_db::{rust_classdb_path as classdb_path, rust_classdb_level as classdb_level};
 use crate::session::{session_exists, SessionId};
@@ -763,7 +747,7 @@ pub unsafe fn rust_bl_duratimer(id: i32, _none: i32) -> i32 {
     // while_equipped: each worn item fires once per second
     for x in 0..14usize {
         if (*sd).status.equip[x].id > 0 {
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.equip[x].id), c"while_equipped".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.equip[x].id).yname.as_ptr(), c"while_equipped".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -865,7 +849,7 @@ pub unsafe fn rust_bl_secondduratimer(id: i32, _none: i32) -> i32 {
 
     for x in 0..14usize {
         if (*sd).status.equip[x].id > 0 {
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.equip[x].id), c"while_equipped_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.equip[x].id).yname.as_ptr(), c"while_equipped_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -913,7 +897,7 @@ pub unsafe fn rust_bl_thirdduratimer(id: i32, _none: i32) -> i32 {
 
     for x in 0..14usize {
         if (*sd).status.equip[x].id > 0 {
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.equip[x].id), c"while_equipped_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.equip[x].id).yname.as_ptr(), c"while_equipped_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -961,7 +945,7 @@ pub unsafe fn rust_bl_fourthduratimer(id: i32, _none: i32) -> i32 {
 
     for x in 0..14usize {
         if (*sd).status.equip[x].id > 0 {
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.equip[x].id), c"while_equipped_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.equip[x].id).yname.as_ptr(), c"while_equipped_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -1009,7 +993,7 @@ pub unsafe fn rust_bl_fifthduratimer(id: i32, _none: i32) -> i32 {
 
     for x in 0..14usize {
         if (*sd).status.equip[x].id > 0 {
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.equip[x].id), c"while_equipped_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.equip[x].id).yname.as_ptr(), c"while_equipped_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
@@ -1475,20 +1459,21 @@ pub unsafe fn rust_pc_calcstat(sd: *mut MapSessionData) -> i32 {
     for x in 0..14usize {
         let id = (*sd).status.equip[x].id;
         if id > 0 {
-            (*sd).max_hp  = (*sd).max_hp.wrapping_add(itemdb_vita(id)  as u32);
-            (*sd).max_mp  = (*sd).max_mp.wrapping_add(itemdb_mana(id)  as u32);
-            (*sd).might   += itemdb_might(id);
-            (*sd).grace   += itemdb_grace(id);
-            (*sd).will    += itemdb_will(id);
-            (*sd).armor   += itemdb_ac(id);
-            (*sd).healing += itemdb_healing(id);
-            (*sd).dam     += itemdb_dam(id);
-            (*sd).hit     += itemdb_hit(id);
-            (*sd).minSdam += itemdb_minSdam(id);
-            (*sd).maxSdam += itemdb_maxSdam(id);
-            (*sd).minLdam += itemdb_minLdam(id);
-            (*sd).maxLdam += itemdb_maxLdam(id);
-            (*sd).protection = ((*sd).protection as i32 + itemdb_protection(id)) as i16;
+            let db = item_db::search(id);
+            (*sd).max_hp  = (*sd).max_hp.wrapping_add(db.vita  as u32);
+            (*sd).max_mp  = (*sd).max_mp.wrapping_add(db.mana  as u32);
+            (*sd).might   += db.might;
+            (*sd).grace   += db.grace;
+            (*sd).will    += db.will;
+            (*sd).armor   += db.ac;
+            (*sd).healing += db.healing;
+            (*sd).dam     += db.dam;
+            (*sd).hit     += db.hit;
+            (*sd).minSdam += db.min_sdam as i32; // u32 field, i32 accumulator
+            (*sd).maxSdam += db.max_sdam as i32;
+            (*sd).minLdam += db.min_ldam as i32;
+            (*sd).maxLdam += db.max_ldam as i32;
+            (*sd).protection = ((*sd).protection as i32 + db.protection) as i16;
         }
     }
 
@@ -1528,7 +1513,7 @@ pub unsafe fn rust_pc_calcstat(sd: *mut MapSessionData) -> i32 {
         // Re-equip scripts
         for x in 0..14usize {
             if (*sd).status.equip[x].id > 0 {
-                sl_doscript_simple_pc(itemdb_yname((*sd).status.equip[x].id), c"re_equip".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                sl_doscript_simple_pc(item_db::search((*sd).status.equip[x].id).yname.as_ptr(), c"re_equip".as_ptr(), &mut (*sd).bl as *mut BlockList);
             }
         }
     }
@@ -2075,12 +2060,12 @@ pub unsafe fn rust_pc_isinvenspace(
     let id_u  = id as u32;
     let own_u = owner as u32;
 
-    if itemdb_maxamount(id_u) > 0 {
+    if item_db::search(id_u).max_amount > 0 {
         // Count how many of this item the player already owns (inventory + equip).
         let mut maxamount: i32 = 0;
         for i in 0..maxinv {
             let inv = &sd.status.inventory[i];
-            if inv.id == id_u && itemdb_maxamount(id_u) > 0
+            if inv.id == id_u && item_db::search(id_u).max_amount > 0
                 && inv.owner == own_u
                 && libc::strcasecmp(inv.real_name.as_ptr(), engrave) == 0
                 && inv.custom_look       == custom_look
@@ -2093,7 +2078,7 @@ pub unsafe fn rust_pc_isinvenspace(
         }
         for i in 0..14usize {
             let eq = &sd.status.equip[i];
-            if eq.id == id_u && itemdb_maxamount(id_u) > 0
+            if eq.id == id_u && item_db::search(id_u).max_amount > 0
                 && sd.status.inventory[i].owner == own_u
                 && libc::strcasecmp(sd.status.inventory[i].real_name.as_ptr(), engrave) == 0
                 && sd.status.inventory[i].custom_look       == custom_look
@@ -2109,8 +2094,8 @@ pub unsafe fn rust_pc_isinvenspace(
         for i in 0..maxinv {
             let inv = &sd.status.inventory[i];
             if inv.id == id_u
-                && inv.amount < itemdb_stackamount(id_u)
-                && maxamount < itemdb_maxamount(id_u)
+                && inv.amount < item_db::search(id_u).stack_amount
+                && maxamount < item_db::search(id_u).max_amount
                 && inv.owner == own_u
                 && libc::strcasecmp(inv.real_name.as_ptr(), engrave) == 0
                 && inv.custom_look       == custom_look
@@ -2125,7 +2110,7 @@ pub unsafe fn rust_pc_isinvenspace(
         // Find an empty slot under the global cap.
         for i in 0..maxinv {
             if sd.status.inventory[i].id == 0
-                && maxamount < itemdb_maxamount(id_u)
+                && maxamount < item_db::search(id_u).max_amount
             {
                 return i as i32;
             }
@@ -2137,7 +2122,7 @@ pub unsafe fn rust_pc_isinvenspace(
         for i in 0..maxinv {
             let inv = &sd.status.inventory[i];
             if inv.id == id_u
-                && inv.amount < itemdb_stackamount(id_u)
+                && inv.amount < item_db::search(id_u).stack_amount
                 && inv.owner == own_u
                 && libc::strcasecmp(inv.real_name.as_ptr(), engrave) == 0
                 && inv.custom_look       == custom_look
@@ -2176,16 +2161,16 @@ pub unsafe fn rust_pc_isinvenitemspace(
     let own_u = owner as u32;
     let num   = num as usize;
 
-    if itemdb_maxamount(id_u) > 0 {
+    if item_db::search(id_u).max_amount > 0 {
         let mut maxamount: i32 = 0;
         let maxinv = sd.status.maxinv as usize;
         for i in 0..maxinv {
-            if sd.status.inventory[i].id == id_u && itemdb_maxamount(id_u) > 0 {
+            if sd.status.inventory[i].id == id_u && item_db::search(id_u).max_amount > 0 {
                 maxamount += sd.status.inventory[i].amount;
             }
         }
         for i in 0..14usize {
-            if sd.status.equip[i].id == id_u && itemdb_maxamount(id_u) > 0 {
+            if sd.status.equip[i].id == id_u && item_db::search(id_u).max_amount > 0 {
                 // C checks takeoffid: skip the slot being unequipped
                 if sd.takeoffid == -1
                     || sd.status.equip[sd.takeoffid as usize].id != id_u
@@ -2196,27 +2181,27 @@ pub unsafe fn rust_pc_isinvenitemspace(
         }
 
         if sd.status.inventory[num].id == 0
-            && itemdb_maxamount(id_u) - maxamount >= itemdb_stackamount(id_u)
+            && item_db::search(id_u).max_amount - maxamount >= item_db::search(id_u).stack_amount
         {
-            return itemdb_stackamount(id_u);
+            return item_db::search(id_u).stack_amount;
         } else if sd.status.inventory[num].id != id_u
             || sd.status.inventory[num].owner != own_u
             || libc::strcasecmp(sd.status.inventory[num].real_name.as_ptr(), engrave) != 0
         {
             return 0;
         } else {
-            return itemdb_maxamount(id_u) - maxamount;
+            return item_db::search(id_u).max_amount - maxamount;
         }
     } else {
         if sd.status.inventory[num].id == 0 {
-            return itemdb_stackamount(id_u);
+            return item_db::search(id_u).stack_amount;
         } else if sd.status.inventory[num].id != id_u
             || sd.status.inventory[num].owner != own_u
             || libc::strcasecmp(sd.status.inventory[num].real_name.as_ptr(), engrave) != 0
         {
             return 0;
         } else {
-            return itemdb_stackamount(id_u) - sd.status.inventory[num].amount;
+            return item_db::search(id_u).stack_amount - sd.status.inventory[num].amount;
         }
     }
 }
@@ -2244,7 +2229,7 @@ unsafe fn pc_dropitemfull_inner(sd: *mut MapSessionData, fl2: *const Item) -> i3
     let mut def = [0i32; 2];
 
     // Only attempt stacking if item is at full durability.
-    if (*fl).data.dura == itemdb_dura((*fl).data.id as u32) {
+    if (*fl).data.dura == item_db::search((*fl).data.id as u32).dura {
         if let Some(grid) = block_grid::get_grid((*fl).bl.m as usize) {
             let cell_ids = grid.ids_at_tile((*fl).bl.x, (*fl).bl.y);
             for id in cell_ids {
@@ -2338,7 +2323,7 @@ pub unsafe fn rust_pc_addtocurrent_inner(
     if *def != 0 { return 0; }
 
     // Only stack items at full durability.
-    if (*fl).data.dura < itemdb_dura((*fl).data.id as u32) { return 0; }
+    if (*fl).data.dura < item_db::search((*fl).data.id as u32).dura { return 0; }
     libc::memset(
         (*fl).looters.as_mut_ptr() as *mut libc::c_void,
         0,
@@ -2411,12 +2396,12 @@ pub unsafe fn rust_pc_additem(
     );
 
     if num >= maxinv {
-        if itemdb_maxamount(id_u) > 0 {
+        if item_db::search(id_u).max_amount > 0 {
             let mut errbuf = [0i8; 64];
             libc::snprintf(
                 errbuf.as_mut_ptr(), 64,
                 c"(%s). You can't have more than (%i).".as_ptr(),
-                itemdb_name(id_u), itemdb_maxamount(id_u),
+                item_db::search(id_u).name.as_ptr(), item_db::search(id_u).max_amount,
             );
             pc_dropitemfull_inner(sd, fl);
             clif_sendminitext(sd, errbuf.as_ptr());
@@ -2480,12 +2465,12 @@ pub unsafe fn rust_pc_additem(
     }
 
     if num >= maxinv && (*fl).amount != 0 {
-        if itemdb_maxamount(id_u) > 0 {
+        if item_db::search(id_u).max_amount > 0 {
             let mut errbuf = [0i8; 64];
             libc::snprintf(
                 errbuf.as_mut_ptr(), 64,
                 c"(%s). You can't have more than (%i).".as_ptr(),
-                itemdb_name(id_u), itemdb_maxamount(id_u),
+                item_db::search(id_u).name.as_ptr(), item_db::search(id_u).max_amount,
             );
             pc_dropitemfull_inner(sd, fl);
             clif_sendminitext(sd, errbuf.as_ptr());
@@ -2519,12 +2504,12 @@ pub unsafe fn rust_pc_additemnolog(
     );
 
     if num >= maxinv {
-        if itemdb_maxamount(id_u) > 0 {
+        if item_db::search(id_u).max_amount > 0 {
             let mut errbuf = [0i8; 64];
             libc::snprintf(
                 errbuf.as_mut_ptr(), 64,
                 c"(%s). You can't have more than (%i).".as_ptr(),
-                itemdb_name(id_u), itemdb_maxamount(id_u),
+                item_db::search(id_u).name.as_ptr(), item_db::search(id_u).max_amount,
             );
             pc_dropitemfull_inner(sd, fl);
             clif_sendminitext(sd, errbuf.as_ptr());
@@ -2584,12 +2569,12 @@ pub unsafe fn rust_pc_additemnolog(
     }
 
     if num >= maxinv && (*fl).amount != 0 {
-        if itemdb_maxamount(id_u) > 0 {
+        if item_db::search(id_u).max_amount > 0 {
             let mut errbuf = [0i8; 64];
             libc::snprintf(
                 errbuf.as_mut_ptr(), 64,
                 c"(%s). You can't have more than (%i).".as_ptr(),
-                itemdb_name(id_u), itemdb_maxamount(id_u),
+                item_db::search(id_u).name.as_ptr(), item_db::search(id_u).max_amount,
             );
             pc_dropitemfull_inner(sd, fl);
             clif_sendminitext(sd, errbuf.as_ptr());
@@ -2638,7 +2623,7 @@ pub unsafe fn rust_pc_delitem(
         libc::snprintf(
             buf.as_mut_ptr(), 255,
             c"%s (%d)".as_ptr(),
-            itemdb_name(item_id),
+            item_db::search(item_id).name.as_ptr(),
             amount,
         );
         clif_sendminitext(sd, buf.as_ptr());
@@ -2682,7 +2667,7 @@ pub unsafe fn rust_pc_dropitemmap(
     // looters is already zeroed by mem::zeroed()
 
     // Attempt to stack onto an existing floor item at full durability.
-    if (*fl).data.dura == itemdb_dura((*fl).data.id as u32) {
+    if (*fl).data.dura == item_db::search((*fl).data.id as u32).dura {
         if let Some(grid) = block_grid::get_grid((*fl).bl.m as usize) {
             let cell_ids = grid.ids_at_tile((*fl).bl.x, (*fl).bl.y);
             for cell_id in cell_ids {
@@ -2803,10 +2788,10 @@ pub unsafe fn rust_pc_useitem(
     }
 
     // Equipment type: check whether the current equip slot can be replaced.
-    let equip_type = itemdb_type((*sd).status.inventory[id_u].id) - 3;
+    let equip_type = item_db::search((*sd).status.inventory[id_u].id).typ as i32 - 3;
     if equip_type >= 0 && (equip_type as usize) < (*sd).status.equip.len() {
         if (*sd).status.equip[equip_type as usize].id > 0 && (*sd).status.gm_level == 0 {
-            if itemdb_unequip((*sd).status.equip[equip_type as usize].id) == 1 {
+            if item_db::search((*sd).status.equip[equip_type as usize].id).unequip as i32 == 1 {
                 clif_sendminitext(sd, c"You are unable to unequip that.".as_ptr());
                 return 0;
             }
@@ -2814,23 +2799,23 @@ pub unsafe fn rust_pc_useitem(
     }
 
     // Class / path restriction check.
-    if itemdb_class((*sd).status.inventory[id_u].id) != 0 {
+    if item_db::search((*sd).status.inventory[id_u].id).class as i32 != 0 {
         if classdb_path((*sd).status.class as i32) == 5 {
             // GM — no restriction
-        } else if itemdb_class((*sd).status.inventory[id_u].id) < 6 {
+        } else if (item_db::search((*sd).status.inventory[id_u].id).class as i32) < 6 {
             if classdb_path((*sd).status.class as i32)
-                != itemdb_class((*sd).status.inventory[id_u].id)
+                != item_db::search((*sd).status.inventory[id_u].id).class as i32
             {
                 clif_sendminitext(sd, map_msg()[MAP_ERRITMPATH].message.as_ptr());
                 return 0;
             }
         } else {
-            if (*sd).status.class as i32 != itemdb_class((*sd).status.inventory[id_u].id) {
+            if (*sd).status.class as i32 != item_db::search((*sd).status.inventory[id_u].id).class as i32 {
                 clif_sendminitext(sd, map_msg()[MAP_ERRITMPATH].message.as_ptr());
                 return 0;
             }
         }
-        if ((*sd).status.mark as i32) < itemdb_rank((*sd).status.inventory[id_u].id) {
+        if ((*sd).status.mark as i32) < item_db::search((*sd).status.inventory[id_u].id).rank {
             clif_sendminitext(sd, map_msg()[MAP_ERRITMMARK].message.as_ptr());
             return 0;
         }
@@ -2847,12 +2832,12 @@ pub unsafe fn rust_pc_useitem(
     }
 
     // Set a timed expiry if the item has one.
-    if itemdb_time((*sd).status.inventory[id_u].id) != 0
+    if item_db::search((*sd).status.inventory[id_u].id).time as i32 != 0
         && (*sd).status.inventory[id_u].time == 0
     {
         (*sd).status.inventory[id_u].time =
             (libc::time(std::ptr::null_mut()) as u32)
-                .wrapping_add(itemdb_time((*sd).status.inventory[id_u].id) as u32);
+                .wrapping_add(item_db::search((*sd).status.inventory[id_u].id).time as i32 as u32);
     }
 
     let map_ptr = crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
@@ -2878,7 +2863,7 @@ pub unsafe fn rust_pc_useitem(
         };
     }
 
-    let item_type = itemdb_type((*sd).status.inventory[id_u].id);
+    let item_type = item_db::search((*sd).status.inventory[id_u].id).typ as i32;
 
     match item_type {
         t if t == ITM_EAT => {
@@ -2888,7 +2873,7 @@ pub unsafe fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
             rust_pc_delitem(sd, id, 1, 2);
         }
@@ -2899,7 +2884,7 @@ pub unsafe fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
             rust_pc_delitem(sd, id, 1, 6);
         }
@@ -2910,7 +2895,7 @@ pub unsafe fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
             // No auto-delete for USESPC — script decides.
         }
@@ -2921,7 +2906,7 @@ pub unsafe fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_MAP => {
@@ -2931,7 +2916,7 @@ pub unsafe fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"maps".as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_QUIVER => {
@@ -2949,7 +2934,7 @@ pub unsafe fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"onMountItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_FACE => {
@@ -2959,7 +2944,7 @@ pub unsafe fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"useFace".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_SET => {
@@ -2969,7 +2954,7 @@ pub unsafe fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"useSetItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_SKIN => {
@@ -2979,7 +2964,7 @@ pub unsafe fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"useSkinItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_HAIR_DYE => {
@@ -2989,7 +2974,7 @@ pub unsafe fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"useHairDye".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_FACEACCTWO => {
@@ -2999,7 +2984,7 @@ pub unsafe fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"useBeardItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_SMOKE => {
@@ -3009,7 +2994,7 @@ pub unsafe fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
             (*sd).status.inventory[id_u].dura -= 1;
             if (*sd).status.inventory[id_u].dura == 0 {
@@ -3035,7 +3020,7 @@ pub unsafe fn rust_pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         _ => {}
@@ -3182,8 +3167,8 @@ pub unsafe fn rust_pc_canequipitem(
     // Two-handed weapon conflicts:
     // If a weapon with look 10000..29999 is equipped, a shield cannot be added.
     if rust_pc_isequip(sd, EQ_WEAP) != 0 {
-        let weap_look = itemdb_look((*sd).status.equip[EQ_WEAP as usize].id);
-        if itemdb_type(itemid) == ITM_SHIELD
+        let weap_look = item_db::search((*sd).status.equip[EQ_WEAP as usize].id).look;
+        if item_db::search(itemid).typ as i32 == ITM_SHIELD
             && weap_look >= 10000
             && weap_look <= 29999
         {
@@ -3193,8 +3178,8 @@ pub unsafe fn rust_pc_canequipitem(
 
     // If a shield is equipped, a two-handed weapon cannot be added.
     if rust_pc_isequip(sd, EQ_SHIELD) != 0 {
-        let itm_look = itemdb_look(itemid);
-        if itemdb_type(itemid) == ITM_WEAP
+        let itm_look = item_db::search(itemid).look;
+        if item_db::search(itemid).typ as i32 == ITM_WEAP
             && itm_look >= 10000
             && itm_look <= 29999
         {
@@ -3202,13 +3187,13 @@ pub unsafe fn rust_pc_canequipitem(
         }
     }
 
-    if ((*sd).status.level as i32) < itemdb_level(itemid) {
+    if ((*sd).status.level as i32) < item_db::search(itemid).level as i32 {
         return MAP_ERRITMLEVEL as i32;
     }
-    if (*sd).might < itemdb_mightreq(itemid) {
+    if (*sd).might < item_db::search(itemid).mightreq {
         return MAP_ERRITMMIGHT as i32;
     }
-    let item_sex = itemdb_sex(itemid);
+    let item_sex = item_db::search(itemid).sex as i32;
     if ((*sd).status.sex as i32) != item_sex && item_sex != 2 {
         return MAP_ERRITMSEX as i32;
     }
@@ -3226,11 +3211,11 @@ pub unsafe fn rust_pc_canequipstats(
 ) -> i32 {
     if sd.is_null() { return 0; }
 
-    let vita = itemdb_vita(id);
+    let vita = item_db::search(id).vita;
     if vita < 0 && vita.unsigned_abs() > (*sd).max_hp {
         return 0;
     }
-    let mana = itemdb_mana(id);
+    let mana = item_db::search(id).mana;
     if mana < 0 && mana.unsigned_abs() > (*sd).max_mp {
         return 0;
     }
@@ -3286,7 +3271,7 @@ pub unsafe fn rust_pc_equipitem(
 
     // Determine equip slot from item type.  Equip types start at ITM_WEAP=3,
     // so slot = type - 3.  Valid range: 0..=14.
-    let slot = itemdb_type((*sd).status.inventory[id_u].id) - 3;
+    let slot = item_db::search((*sd).status.inventory[id_u].id).typ as i32 - 3;
     if slot < 0 || slot > 14 {
         // Not an equip item.
         return 0;
@@ -3304,7 +3289,7 @@ pub unsafe fn rust_pc_equipitem(
 
     // Fire the Lua equip hooks.
     sl_doscript_simple_pc(c"onEquip".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
-    sl_doscript_simple_pc(itemdb_yname((*sd).status.inventory[id_u].id), c"onEquip".as_ptr(), &mut (*sd).bl as *mut BlockList);
+    sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"onEquip".as_ptr(), &mut (*sd).bl as *mut BlockList);
 
     0
 }
@@ -3319,7 +3304,7 @@ pub unsafe fn rust_pc_equipitem(
 pub unsafe fn rust_pc_equipscript(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
-    let mut ret = itemdb_type((*sd).equipid) - 3;
+    let mut ret = item_db::search((*sd).equipid).typ as i32 - 3;
 
     // Left/right ring slot arbitration: prefer the empty slot.
     if ret == EQ_LEFT {
@@ -3371,7 +3356,7 @@ pub unsafe fn rust_pc_equipscript(sd: *mut MapSessionData) -> i32 {
         (*sd).attacker = (*sd).bl.id;
         (*sd).takeoffid = ret as i8;
         sl_doscript_simple_pc(c"onUnequip".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
-        sl_doscript_simple_pc(itemdb_yname((*sd).equipid), c"equip".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc(item_db::search((*sd).equipid).yname.as_ptr(), c"equip".as_ptr(), &mut (*sd).bl as *mut BlockList);
         (*sd).equipid = 0;
         return 0;
     }
@@ -3385,7 +3370,7 @@ pub unsafe fn rust_pc_equipscript(sd: *mut MapSessionData) -> i32 {
     );
 
     rust_pc_delitem(sd, invslot as i32, 1, 6);
-    sl_doscript_simple_pc(itemdb_yname((*sd).equipid), c"equip".as_ptr(), &mut (*sd).bl as *mut BlockList);
+    sl_doscript_simple_pc(item_db::search((*sd).equipid).yname.as_ptr(), c"equip".as_ptr(), &mut (*sd).bl as *mut BlockList);
     (*sd).equipid = 0;
 
     // If a two-handed weapon was equipped, reset enchantment.
@@ -3492,7 +3477,7 @@ pub unsafe fn rust_pc_unequipscript(sd: *mut MapSessionData) -> i32 {
     }
 
     // Fire the item's unequip Lua hook.
-    sl_doscript_simple_pc(itemdb_yname(takeoff), c"unequip".as_ptr(), &mut (*sd).bl as *mut BlockList);
+    sl_doscript_simple_pc(item_db::search(takeoff).yname.as_ptr(), c"unequip".as_ptr(), &mut (*sd).bl as *mut BlockList);
 
     (*sd).takeoffid = -1i8;
     rust_pc_calcstat(sd);
@@ -3533,7 +3518,7 @@ pub unsafe fn rust_pc_getitemscript(
     }
 
     // Non-droppable items are blocked for regular players.
-    if itemdb_droppable((*fl).data.id) != 0 && (*sd).status.gm_level == 0 {
+    if item_db::search((*fl).data.id).droppable != 0 && (*sd).status.gm_level == 0 {
         clif_sendminitext(sd, c"That item cannot be picked up.".as_ptr());
         return 0;
     }
@@ -3542,7 +3527,7 @@ pub unsafe fn rust_pc_getitemscript(
     let add: bool;
 
     if (*sd).pickuptype == 0
-        && itemdb_stackamount((*fl).data.id) == 1
+        && item_db::search((*fl).data.id).stack_amount == 1
         && (*fl).data.amount > 1
     {
         // Take only 1 from the stack.

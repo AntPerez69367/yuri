@@ -33,10 +33,7 @@ use crate::game::scripting::{
     rust_sl_resumedialog, rust_sl_resumemenuseq, rust_sl_resumeinputseq,
     rust_sl_resumebuy, rust_sl_resumesell, rust_sl_resumeinput, rust_sl_async_freeco,
 };
-use crate::database::item_db::{
-    rust_itemdb_name, rust_itemdb_buytext, rust_itemdb_icon, rust_itemdb_iconcolor,
-    rust_itemdb_class, rust_itemdb_rank, rust_itemdb_level,
-};
+use crate::database::item_db;
 use crate::database::class_db::rust_classdb_name;
 
 // map_id2sd_local: typed lookup returning raw pointer for use in unsafe context.
@@ -1115,12 +1112,13 @@ pub unsafe fn clif_buydialog(
             let it = &*item.add(x);
             let mut name_buf = [0u8; 64];
 
+            let item = item_db::search(it.id);
             if it.custom_icon > 0 {
                 wfifow(fd, len + 22, swap16((it.custom_icon + 49152) as u16));
                 wfifob(fd, len + 24, it.custom_icon_color as u8);
             } else {
-                wfifow(fd, len + 22, swap16(rust_itemdb_icon(it.id) as u16));
-                wfifob(fd, len + 24, rust_itemdb_iconcolor(it.id) as u8);
+                wfifow(fd, len + 22, swap16(item.icon as u16));
+                wfifob(fd, len + 24, item.icon_color as u8);
             }
             len += 3;
             wfifol(fd, len + 22, swap32(*price.add(x) as u32));
@@ -1139,7 +1137,7 @@ pub unsafe fn clif_buydialog(
                     name_buf.as_mut_ptr() as *mut i8,
                     64,
                     b"%s\0".as_ptr() as *const i8,
-                    rust_itemdb_name(it.id),
+                    item.name.as_ptr(),
                 );
             }
             if it.owner != 0 {
@@ -1161,9 +1159,8 @@ pub unsafe fn clif_buydialog(
 
             // Build buy-text / class description
             let mut buff_buf = [0u8; 64];
-            let buytext_ptr = rust_itemdb_buytext(it.id);
-            if !buytext_ptr.is_null() && *buytext_ptr != 0 {
-                libc::strcpy(buff_buf.as_mut_ptr() as *mut i8, buytext_ptr);
+            if item.buytext[0] != 0 {
+                libc::strcpy(buff_buf.as_mut_ptr() as *mut i8, item.buytext.as_ptr());
             } else if it.buytext[0] != 0 {
                 libc::strcpy(
                     buff_buf.as_mut_ptr() as *mut i8,
@@ -1171,15 +1168,15 @@ pub unsafe fn clif_buydialog(
                 );
             } else {
                 let path = rust_classdb_name(
-                    rust_itemdb_class(it.id),
-                    rust_itemdb_rank(it.id),
+                    item.class as i32,
+                    item.rank,
                 );
                 libc::snprintf(
                     buff_buf.as_mut_ptr() as *mut i8,
                     64,
                     b"%s level %u\0".as_ptr() as *const i8,
                     path,
-                    rust_itemdb_level(it.id) as u32,
+                    item.level as u32,
                 );
             }
 
@@ -1223,12 +1220,13 @@ pub unsafe fn clif_buydialog(
             let it = &*item.add(x);
             let mut name_buf = [0u8; 64];
 
+            let item = item_db::search(it.id);
             if it.custom_icon > 0 {
                 wfifow(fd, len + 62, swap16(it.custom_icon as u16));
                 wfifob(fd, len + 64, it.custom_icon_color as u8);
             } else {
-                wfifow(fd, len + 62, swap16(rust_itemdb_icon(it.id) as u16));
-                wfifob(fd, len + 64, rust_itemdb_iconcolor(it.id) as u8);
+                wfifow(fd, len + 62, swap16(item.icon as u16));
+                wfifob(fd, len + 64, item.icon_color as u8);
             }
             len += 3;
             wfifol(fd, len + 62, swap32(*price.add(x) as u32));
@@ -1242,7 +1240,7 @@ pub unsafe fn clif_buydialog(
             } else {
                 libc::strcpy(
                     name_buf.as_mut_ptr() as *mut i8,
-                    rust_itemdb_name(it.id),
+                    item.name.as_ptr(),
                 );
             }
             if it.owner != 0 {
@@ -1263,9 +1261,8 @@ pub unsafe fn clif_buydialog(
             len += name_len + 1;
 
             let mut buff_buf = [0u8; 64];
-            let buytext_ptr = rust_itemdb_buytext(it.id);
-            if !buytext_ptr.is_null() && *buytext_ptr != 0 {
-                libc::strcpy(buff_buf.as_mut_ptr() as *mut i8, buytext_ptr);
+            if item.buytext[0] != 0 {
+                libc::strcpy(buff_buf.as_mut_ptr() as *mut i8, item.buytext.as_ptr());
             } else if it.buytext[0] != 0 {
                 libc::strcpy(
                     buff_buf.as_mut_ptr() as *mut i8,
@@ -1273,15 +1270,15 @@ pub unsafe fn clif_buydialog(
                 );
             } else {
                 let path = rust_classdb_name(
-                    rust_itemdb_class(it.id),
-                    rust_itemdb_rank(it.id),
+                    item.class as i32,
+                    item.rank,
                 );
                 libc::snprintf(
                     buff_buf.as_mut_ptr() as *mut i8,
                     64,
                     b"%s level %u\0".as_ptr() as *const i8,
                     path,
-                    rust_itemdb_level(it.id) as u32,
+                    item.level as u32,
                 );
             }
 

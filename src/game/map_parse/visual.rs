@@ -42,10 +42,7 @@ use crate::game::client::clif_send;
 use crate::game::block::map_addblock;
 use crate::game::map_parse::groups::clif_isingroup;
 use crate::game::map_parse::movement::clif_sendchararea;
-use crate::database::item_db::{
-    rust_itemdb_look, rust_itemdb_lookcolor, rust_itemdb_icon, rust_itemdb_iconcolor,
-    rust_itemdb_type,
-};
+use crate::database::item_db;
 use crate::game::pc::rust_pc_isequip;
 
 #[inline]
@@ -237,7 +234,9 @@ pub unsafe fn clif_object_look_sub_inner(bl: *mut BlockList, look_type: i32, arg
                 if spotter == (*sd).status.id { in_table = true; break; }
             }
 
-            if rust_itemdb_type((*item).data.id) == ITM_TRAPS && !in_table {
+            let item_entry = item_db::search((*item).data.id);
+
+            if item_entry.typ as i32 == ITM_TRAPS && !in_table {
                 return 0;
             }
 
@@ -247,8 +246,8 @@ pub unsafe fn clif_object_look_sub_inner(bl: *mut BlockList, look_type: i32, arg
                 wfifow((*sd).fd, len + 16, (((*item).data.custom_icon as u16).wrapping_add(49152)).swap_bytes());
                 wfifob((*sd).fd, len + 18, (*item).data.custom_icon_color as u8);
             } else {
-                wfifow((*sd).fd, len + 16, (rust_itemdb_icon((*item).data.id) as u16).swap_bytes());
-                wfifob((*sd).fd, len + 18, rust_itemdb_iconcolor((*item).data.id) as u8);
+                wfifow((*sd).fd, len + 16, (item_entry.icon as u16).swap_bytes());
+                wfifob((*sd).fd, len + 18, item_entry.icon_color as u8);
             }
 
             wfifob((*sd).fd, len + 19, 0);
@@ -351,7 +350,9 @@ pub unsafe fn clif_object_look_sub2_inner(bl: *mut BlockList, look_type: i32, ar
                 if spotter == (*sd).status.id { in_table = true; break; }
             }
 
-            if rust_itemdb_type((*item).data.id) == ITM_TRAPS && !in_table {
+            let item_entry = item_db::search((*item).data.id);
+
+            if item_entry.typ as i32 == ITM_TRAPS && !in_table {
                 return 0;
             }
 
@@ -361,8 +362,8 @@ pub unsafe fn clif_object_look_sub2_inner(bl: *mut BlockList, look_type: i32, ar
                 wfifow((*sd).fd, 16, (((*item).data.custom_icon as u16).wrapping_add(49152)).swap_bytes());
                 wfifob((*sd).fd, 18, (*item).data.custom_icon_color as u8);
             } else {
-                wfifow((*sd).fd, 16, (rust_itemdb_icon((*item).data.id) as u16).swap_bytes());
-                wfifob((*sd).fd, 18, rust_itemdb_iconcolor((*item).data.id) as u8);
+                wfifow((*sd).fd, 16, (item_entry.icon as u16).swap_bytes());
+                wfifob((*sd).fd, 18, item_entry.icon_color as u8);
             }
 
             wfifob((*sd).fd, 19, 0);
@@ -437,7 +438,9 @@ pub unsafe fn clif_object_look_specific(sd: *mut MapSessionData, id: u32) -> i32
                 if spotter == (*sd).status.id { in_table = true; break; }
             }
 
-            if rust_itemdb_type((*item).data.id) == ITM_TRAPS && !in_table {
+            let item_entry = item_db::search((*item).data.id);
+
+            if item_entry.typ as i32 == ITM_TRAPS && !in_table {
                 return 0;
             }
 
@@ -447,8 +450,8 @@ pub unsafe fn clif_object_look_specific(sd: *mut MapSessionData, id: u32) -> i32
                 wfifow((*sd).fd, 16, (((*item).data.custom_icon as u16).wrapping_add(49152)).swap_bytes());
                 wfifob((*sd).fd, 18, (*item).data.custom_icon_color as u8);
             } else {
-                wfifow((*sd).fd, 16, (rust_itemdb_icon((*item).data.id) as u16).swap_bytes());
-                wfifob((*sd).fd, 18, rust_itemdb_iconcolor((*item).data.id) as u8);
+                wfifow((*sd).fd, 16, (item_entry.icon as u16).swap_bytes());
+                wfifob((*sd).fd, 18, item_entry.icon_color as u8);
             }
 
             wfifob((*sd).fd, 19, 0);
@@ -1137,61 +1140,71 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     wfifob((*src_sd).fd, 25, (*sd).status.skin_color as u8);
 
     // armor
-    if rust_pc_isequip(sd, EQ_ARMOR) == 0 {
+    let armor_id = rust_pc_isequip(sd, EQ_ARMOR) as u32;
+    if armor_id == 0 {
         wfifow((*src_sd).fd, 26, ((*sd).status.sex as u16).swap_bytes());
     } else {
+        let armor_item = item_db::search(armor_id);
         if (*sd).status.equip[EQ_ARMOR as usize].custom_look != 0 {
             wfifow((*src_sd).fd, 26, ((*sd).status.equip[EQ_ARMOR as usize].custom_look as u16).swap_bytes());
         } else {
-            wfifow((*src_sd).fd, 26, (rust_itemdb_look(rust_pc_isequip(sd, EQ_ARMOR) as u32) as u16).swap_bytes());
+            wfifow((*src_sd).fd, 26, (armor_item.look as u16).swap_bytes());
         }
         if (*sd).status.armor_color > 0 {
             wfifob((*src_sd).fd, 28, (*sd).status.armor_color as u8);
         } else if (*sd).status.equip[EQ_ARMOR as usize].custom_look != 0 {
             wfifob((*src_sd).fd, 28, (*sd).status.equip[EQ_ARMOR as usize].custom_look_color as u8);
         } else {
-            wfifob((*src_sd).fd, 28, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_ARMOR) as u32) as u8);
+            wfifob((*src_sd).fd, 28, armor_item.look_color as u8);
         }
     }
 
     // coat
-    if rust_pc_isequip(sd, EQ_COAT) != 0 {
-        wfifow((*src_sd).fd, 26, (rust_itemdb_look(rust_pc_isequip(sd, EQ_COAT) as u32) as u16).swap_bytes());
+    let coat_id = rust_pc_isequip(sd, EQ_COAT) as u32;
+    if coat_id != 0 {
+        let coat_item = item_db::search(coat_id);
+        wfifow((*src_sd).fd, 26, (coat_item.look as u16).swap_bytes());
         if (*sd).status.armor_color > 0 {
             wfifob((*src_sd).fd, 28, (*sd).status.armor_color as u8);
         } else {
-            wfifob((*src_sd).fd, 28, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_COAT) as u32) as u8);
+            wfifob((*src_sd).fd, 28, coat_item.look_color as u8);
         }
     }
 
     // weapon
-    if rust_pc_isequip(sd, EQ_WEAP) == 0 {
+    let weap_id = rust_pc_isequip(sd, EQ_WEAP) as u32;
+    if weap_id == 0 {
         wfifow((*src_sd).fd, 29, 0xFFFF);
         wfifob((*src_sd).fd, 31, 0x0);
     } else if (*sd).status.equip[EQ_WEAP as usize].custom_look != 0 {
         wfifow((*src_sd).fd, 29, ((*sd).status.equip[EQ_WEAP as usize].custom_look as u16).swap_bytes());
         wfifob((*src_sd).fd, 31, (*sd).status.equip[EQ_WEAP as usize].custom_look_color as u8);
     } else {
-        wfifow((*src_sd).fd, 29, (rust_itemdb_look(rust_pc_isequip(sd, EQ_WEAP) as u32) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 31, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_WEAP) as u32) as u8);
+        let weap_item = item_db::search(weap_id);
+        wfifow((*src_sd).fd, 29, (weap_item.look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 31, weap_item.look_color as u8);
     }
 
     // shield
-    if rust_pc_isequip(sd, EQ_SHIELD) == 0 {
+    let shield_id = rust_pc_isequip(sd, EQ_SHIELD) as u32;
+    if shield_id == 0 {
         wfifow((*src_sd).fd, 32, 0xFFFF);
         wfifob((*src_sd).fd, 34, 0);
     } else if (*sd).status.equip[EQ_SHIELD as usize].custom_look != 0 {
         wfifow((*src_sd).fd, 32, ((*sd).status.equip[EQ_SHIELD as usize].custom_look as u16).swap_bytes());
         wfifob((*src_sd).fd, 34, (*sd).status.equip[EQ_SHIELD as usize].custom_look_color as u8);
     } else {
-        wfifow((*src_sd).fd, 32, (rust_itemdb_look(rust_pc_isequip(sd, EQ_SHIELD) as u32) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 34, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_SHIELD) as u32) as u8);
+        let shield_item = item_db::search(shield_id);
+        wfifow((*src_sd).fd, 32, (shield_item.look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 34, shield_item.look_color as u8);
     }
 
     // helm
-    if rust_pc_isequip(sd, EQ_HELM) == 0
+    let helm_id = rust_pc_isequip(sd, EQ_HELM) as u32;
+    let helm_item = item_db::search(helm_id);
+    if helm_id == 0
         || ((*sd).status.setting_flags & FLAG_HELM as u16) == 0
-        || rust_itemdb_look(rust_pc_isequip(sd, EQ_HELM) as u32) == -1
+        || helm_item.look == -1
     {
         wfifob((*src_sd).fd, 35, 0);
         wfifow((*src_sd).fd, 36, 0xFFFF);
@@ -1201,22 +1214,25 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
             wfifob((*src_sd).fd, 36, (*sd).status.equip[EQ_HELM as usize].custom_look as u8);
             wfifob((*src_sd).fd, 37, (*sd).status.equip[EQ_HELM as usize].custom_look_color as u8);
         } else {
-            wfifob((*src_sd).fd, 36, rust_itemdb_look(rust_pc_isequip(sd, EQ_HELM) as u32) as u8);
-            wfifob((*src_sd).fd, 37, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_HELM) as u32) as u8);
+            wfifob((*src_sd).fd, 36, helm_item.look as u8);
+            wfifob((*src_sd).fd, 37, helm_item.look_color as u8);
         }
     }
 
     // beard (face acc)
-    if rust_pc_isequip(sd, EQ_FACEACC) == 0 {
+    let faceacc_id = rust_pc_isequip(sd, EQ_FACEACC) as u32;
+    if faceacc_id == 0 {
         wfifow((*src_sd).fd, 38, 0xFFFF);
         wfifob((*src_sd).fd, 40, 0);
     } else {
-        wfifow((*src_sd).fd, 38, (rust_itemdb_look(rust_pc_isequip(sd, EQ_FACEACC) as u32) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 40, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_FACEACC) as u32) as u8);
+        let faceacc_item = item_db::search(faceacc_id);
+        wfifow((*src_sd).fd, 38, (faceacc_item.look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 40, faceacc_item.look_color as u8);
     }
 
     // crown
-    if rust_pc_isequip(sd, EQ_CROWN) == 0 {
+    let crown_id = rust_pc_isequip(sd, EQ_CROWN) as u32;
+    if crown_id == 0 {
         wfifow((*src_sd).fd, 41, 0xFFFF);
         wfifob((*src_sd).fd, 43, 0);
     } else {
@@ -1225,51 +1241,60 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
             wfifow((*src_sd).fd, 41, ((*sd).status.equip[EQ_CROWN as usize].custom_look as u16).swap_bytes());
             wfifob((*src_sd).fd, 43, (*sd).status.equip[EQ_CROWN as usize].custom_look_color as u8);
         } else {
-            wfifow((*src_sd).fd, 41, (rust_itemdb_look(rust_pc_isequip(sd, EQ_CROWN) as u32) as u16).swap_bytes());
-            wfifob((*src_sd).fd, 43, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_CROWN) as u32) as u8);
+            let crown_item = item_db::search(crown_id);
+            wfifow((*src_sd).fd, 41, (crown_item.look as u16).swap_bytes());
+            wfifob((*src_sd).fd, 43, crown_item.look_color as u8);
         }
     }
 
     // second face acc
-    if rust_pc_isequip(sd, EQ_FACEACCTWO) == 0 {
+    let faceacctwo_id = rust_pc_isequip(sd, EQ_FACEACCTWO) as u32;
+    if faceacctwo_id == 0 {
         wfifow((*src_sd).fd, 44, 0xFFFF);
         wfifob((*src_sd).fd, 46, 0);
     } else {
-        wfifow((*src_sd).fd, 44, (rust_itemdb_look(rust_pc_isequip(sd, EQ_FACEACCTWO) as u32) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 46, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_FACEACCTWO) as u32) as u8);
+        let faceacctwo_item = item_db::search(faceacctwo_id);
+        wfifow((*src_sd).fd, 44, (faceacctwo_item.look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 46, faceacctwo_item.look_color as u8);
     }
 
     // mantle
-    if rust_pc_isequip(sd, EQ_MANTLE) == 0 {
+    let mantle_id = rust_pc_isequip(sd, EQ_MANTLE) as u32;
+    if mantle_id == 0 {
         wfifow((*src_sd).fd, 47, 0xFFFF);
         wfifob((*src_sd).fd, 49, 0xFF);
     } else {
-        wfifow((*src_sd).fd, 47, (rust_itemdb_look(rust_pc_isequip(sd, EQ_MANTLE) as u32) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 49, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_MANTLE) as u32) as u8);
+        let mantle_item = item_db::search(mantle_id);
+        wfifow((*src_sd).fd, 47, (mantle_item.look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 49, mantle_item.look_color as u8);
     }
 
     // necklace
-    if rust_pc_isequip(sd, EQ_NECKLACE) == 0
+    let necklace_id = rust_pc_isequip(sd, EQ_NECKLACE) as u32;
+    let necklace_item = item_db::search(necklace_id);
+    if necklace_id == 0
         || ((*sd).status.setting_flags & FLAG_NECKLACE as u16) == 0
-        || rust_itemdb_look(rust_pc_isequip(sd, EQ_NECKLACE) as u32) == -1
+        || necklace_item.look == -1
     {
         wfifow((*src_sd).fd, 50, 0xFFFF);
         wfifob((*src_sd).fd, 52, 0);
     } else {
-        wfifow((*src_sd).fd, 50, (rust_itemdb_look(rust_pc_isequip(sd, EQ_NECKLACE) as u32) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 52, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_NECKLACE) as u32) as u8);
+        wfifow((*src_sd).fd, 50, (necklace_item.look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 52, necklace_item.look_color as u8);
     }
 
     // boots
-    if rust_pc_isequip(sd, EQ_BOOTS) == 0 {
+    let boots_id = rust_pc_isequip(sd, EQ_BOOTS) as u32;
+    if boots_id == 0 {
         wfifow((*src_sd).fd, 53, ((*sd).status.sex as u16).swap_bytes());
         wfifob((*src_sd).fd, 55, 0);
     } else if (*sd).status.equip[EQ_BOOTS as usize].custom_look != 0 {
         wfifow((*src_sd).fd, 53, ((*sd).status.equip[EQ_BOOTS as usize].custom_look as u16).swap_bytes());
         wfifob((*src_sd).fd, 55, (*sd).status.equip[EQ_BOOTS as usize].custom_look_color as u8);
     } else {
-        wfifow((*src_sd).fd, 53, (rust_itemdb_look(rust_pc_isequip(sd, EQ_BOOTS) as u32) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 55, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_BOOTS) as u32) as u8);
+        let boots_item = item_db::search(boots_id);
+        wfifow((*src_sd).fd, 53, (boots_item.look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 55, boots_item.look_color as u8);
     }
 
     // 56 = title colour, 57 = outline colour (128=black), 58 = normal colour

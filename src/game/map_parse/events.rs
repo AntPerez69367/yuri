@@ -15,10 +15,7 @@ use super::packet::{
 };
 
 
-use crate::database::item_db::{
-    rust_itemdb_name as itemdb_name, rust_itemdb_icon as itemdb_icon,
-    rust_itemdb_iconcolor as itemdb_iconcolor,
-};
+use crate::database::item_db;
 use crate::game::map_server::{nmail_sendmail, cur_year, cur_season};
 use std::sync::atomic::Ordering as AtomicOrd;
 use crate::game::pc::rust_pc_readglobalreg as pc_readglobalreg;
@@ -182,7 +179,7 @@ pub async unsafe fn sendRewardParcel(
     // Build escape string: "name,\nCongratulations on attaining Rank N!\nHere is your reward: (amount) name"
     let mut escape = [0i8; 255];
     {
-        let item_name = itemdb_name(rewarditem_u);
+        let item_name = item_db::search(rewarditem_u).name.as_ptr();
         libc::sprintf(
             escape.as_mut_ptr(),
             b"%s,\nCongratulations on attaining Rank %i!\nHere is your reward: (%i) %s\0"
@@ -197,7 +194,7 @@ pub async unsafe fn sendRewardParcel(
     // engrave = item name (up to 30 chars)
     let mut engrave = [0i8; 31];
     {
-        let item_name = itemdb_name(rewarditem_u);
+        let item_name = item_db::search(rewarditem_u).name.as_ptr();
         libc::strcpy(engrave.as_mut_ptr(), item_name);
     }
 
@@ -491,8 +488,8 @@ pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: SessionId) -> i3
 (%i) %s, (%i) %s.\n\nPlease continue to play for more great rewards!\0"
                     .as_ptr() as *const i8,
                 eventname.as_ptr(), (*sd).status.name.as_ptr(),
-                reward1amount, itemdb_name(reward1item as u32),
-                reward2amount, itemdb_name(reward2item as u32),
+                reward1amount, item_db::search(reward1item as u32).name.as_ptr(),
+                reward2amount, item_db::search(reward2item as u32).name.as_ptr(),
             );
             libc::sprintf(
                 msg.as_mut_ptr(),
@@ -508,8 +505,8 @@ pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: SessionId) -> i3
 You have been rewarded: (%i) %s, (%i) %s.\n\nPlease continue to play for more great rewards!\0"
                     .as_ptr() as *const i8,
                 eventname.as_ptr(), (*sd).status.name.as_ptr(), rankname.as_ptr(),
-                reward1amount, itemdb_name(reward1item as u32),
-                reward2amount, itemdb_name(reward2item as u32),
+                reward1amount, item_db::search(reward1item as u32).name.as_ptr(),
+                reward2amount, item_db::search(reward2item as u32).name.as_ptr(),
             );
             libc::sprintf(
                 msg.as_mut_ptr(),
@@ -529,7 +526,7 @@ You have been rewarded: (%i) %s, (%i) %s.\n\nPlease continue to play for more gr
 (%i) %s.\n\nPlease continue to play for more great rewards!\0"
                     .as_ptr() as *const i8,
                 eventname.as_ptr(), (*sd).status.name.as_ptr(),
-                reward1amount, itemdb_name(reward1item as u32),
+                reward1amount, item_db::search(reward1item as u32).name.as_ptr(),
             );
             libc::sprintf(
                 msg.as_mut_ptr(),
@@ -545,7 +542,7 @@ You have been rewarded: (%i) %s, (%i) %s.\n\nPlease continue to play for more gr
 You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewards!\0"
                     .as_ptr() as *const i8,
                 eventname.as_ptr(), (*sd).status.name.as_ptr(), rankname.as_ptr(),
-                reward1amount, itemdb_name(reward1item as u32),
+                reward1amount, item_db::search(reward1item as u32).name.as_ptr(),
             );
             libc::sprintf(
                 msg.as_mut_ptr(),
@@ -783,7 +780,7 @@ pub async unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: SessionId) 
         pos += 1;
 
         // Reward 1 name
-        libc::sprintf(buf.as_mut_ptr(), b"%s\0".as_ptr() as *const i8, itemdb_name(rewarditm as u32));
+        libc::sprintf(buf.as_mut_ptr(), b"%s\0".as_ptr() as *const i8, item_db::search(rewarditm as u32).name.as_ptr());
         let buf_len = libc::strlen(buf.as_ptr());
         wfifob(fd, pos, buf_len as u8);
         pos += 1;
@@ -793,9 +790,9 @@ pub async unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: SessionId) 
 
         clif_intcheck(rewardamount, pos as i32, fd);
         pos += 2;
-        clif_intcheck(itemdb_icon(rewarditm as u32) - 49152, pos as i32, fd);
+        clif_intcheck(item_db::search(rewarditm as u32).icon - 49152, pos as i32, fd);
         pos += 1;
-        wfifob(fd, pos, itemdb_iconcolor(rewarditm as u32) as u8);
+        wfifob(fd, pos, item_db::search(rewarditm as u32).icon_color as u8);
         pos += 1;
 
         if reward2amount == 0 {
@@ -805,7 +802,7 @@ pub async unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: SessionId) 
         }
 
         // Reward 2 name
-        libc::sprintf(buf.as_mut_ptr(), b"%s\0".as_ptr() as *const i8, itemdb_name(reward2itm as u32));
+        libc::sprintf(buf.as_mut_ptr(), b"%s\0".as_ptr() as *const i8, item_db::search(reward2itm as u32).name.as_ptr());
         let buf_len = libc::strlen(buf.as_ptr());
         wfifob(fd, pos, buf_len as u8);
         pos += 1;
@@ -815,9 +812,9 @@ pub async unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: SessionId) 
 
         clif_intcheck(reward2amount, pos as i32, fd);
         pos += 2;
-        clif_intcheck(itemdb_icon(reward2itm as u32) - 49152, pos as i32, fd);
+        clif_intcheck(item_db::search(reward2itm as u32).icon - 49152, pos as i32, fd);
         pos += 1;
-        wfifob(fd, pos, itemdb_iconcolor(reward2itm as u32) as u8);
+        wfifob(fd, pos, item_db::search(reward2itm as u32).icon_color as u8);
         pos += 1;
         wfifob(fd, pos, 1);
         pos += 1;

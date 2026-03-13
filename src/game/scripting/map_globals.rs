@@ -292,10 +292,9 @@ pub unsafe fn sl_g_dropitem(bl_ptr: *mut std::ffi::c_void, item_id: i32, amount:
     } else {
         std::ptr::null_mut()
     };
-    let dura = crate::database::item_db::rust_itemdb_dura(id);
-    let prot = crate::database::item_db::rust_itemdb_protected(id);
+    let db = crate::database::item_db::search(id);
     crate::game::mob::rust_mob_dropitem(
-        (*bl).id as u32, id, amount, dura, prot, 0,
+        (*bl).id as u32, id, amount, db.dura, db.protected, 0,
         (*bl).m as i32, (*bl).x as i32, (*bl).y as i32, sd,
     );
 }
@@ -314,9 +313,8 @@ pub unsafe fn sl_g_dropitemxy(
     } else {
         std::ptr::null_mut()
     };
-    let dura = crate::database::item_db::rust_itemdb_dura(id);
-    let prot = crate::database::item_db::rust_itemdb_protected(id);
-    crate::game::mob::rust_mob_dropitem(0, id, amount, dura, prot, 0, m, x, y, sd);
+    let db = crate::database::item_db::search(id);
+    crate::game::mob::rust_mob_dropitem(0, id, amount, db.dura, db.protected, 0, m, x, y, sd);
 }
 
 /// Insert a parcel into the Parcels table, assigning the next available slot.
@@ -334,8 +332,9 @@ pub unsafe fn sl_g_sendparcel(
     };
     let receiver_u = receiver as u32;
     let item_u = item as u32;
-    let dura = crate::database::item_db::rust_itemdb_dura(item_u) as i32;
-    let prot = crate::database::item_db::rust_itemdb_protected(item_u) as i32;
+    let db = crate::database::item_db::search(item_u);
+    let dura = db.dura;
+    let prot = db.protected;
     // Fire-and-forget from LocalSet context: spawn_local avoids blocking the game thread.
     tokio::task::spawn_local(async move {
         let newest: i32 = sqlx::query_scalar::<_, i32>(

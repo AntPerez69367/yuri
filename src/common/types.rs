@@ -106,7 +106,7 @@ unsafe impl bytemuck::Pod for GlobalReg {}
 /// -  7 × `u8`  hair/face/skin/dye/color     ( 7 bytes)
 /// -  1 × `i8`  toggle                       ( 1 byte)
 /// - 34 × `i8`  name buffer                  (34 bytes)
-///                                      total: 72 bytes
+/// - ----------------------------------- total: 72 bytes
 #[repr(C)]
 #[derive(Copy, Clone)]
 pub struct GfxViewer {

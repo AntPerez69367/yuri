@@ -221,8 +221,8 @@ impl UserData for BItemObject {
                 "customIconColor" => int!(bi.custom_icon_color),
                 "note"            => cstr!(&bi.note),
                 _ => {
-                    let db = crate::database::item_db::rust_itemdb_search(bi.id);
-                    unsafe { item_data_getattr(lua, db, &key) }
+                    let db = crate::database::item_db::search(bi.id);
+                    unsafe { item_data_getattr(lua, &*db as *const ItemData, &key) }
                 }
             }
         });
@@ -286,8 +286,8 @@ impl UserData for BankItemObject {
                 "customIconColor" => int!(bd.custom_icon_color),
                 "note"            => cstr!(&bd.note),
                 _ => {
-                    let db = crate::database::item_db::rust_itemdb_search(bd.item_id);
-                    unsafe { item_data_getattr(lua, db, &key) }
+                    let db = crate::database::item_db::search(bd.item_id);
+                    unsafe { item_data_getattr(lua, &*db as *const ItemData, &key) }
                 }
             }
         });
@@ -347,8 +347,8 @@ impl UserData for ParcelObject {
                 "pos"       => int!(p.pos),
                 "npcFlag"   => int!(p.npcflag),
                 _ => {
-                    let db = crate::database::item_db::rust_itemdb_search(p.data.id);
-                    unsafe { item_data_getattr(lua, db, &key) }
+                    let db = crate::database::item_db::search(p.data.id);
+                    unsafe { item_data_getattr(lua, &*db as *const ItemData, &key) }
                 }
             }
         });

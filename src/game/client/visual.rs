@@ -1445,7 +1445,7 @@ const OPT_FLAG_GHOSTS: u64 = 256;
 // Direct Rust imports (with _us suffix aliases to avoid name conflicts)
 use crate::game::map_parse::groups::clif_isingroup as clif_isingroup_us;
 use crate::game::map_parse::movement::clif_charspecific as clif_charspecific_us;
-use crate::database::item_db::{rust_itemdb_look as itemdb_look_us, rust_itemdb_lookcolor as itemdb_lookcolor_us};
+use crate::database::item_db;
 use crate::game::pc::rust_pc_isequip as pc_isequip_us;
 
 /// Write the state packet for `sd` (the player being viewed) into `src_sd`'s
@@ -1556,22 +1556,22 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             if sd_r.status.equip[EQ_ARMOR as usize].custom_look != 0 {
                 ww_be(p, 21, sd_r.status.equip[EQ_ARMOR as usize].custom_look as u16);
             } else {
-                ww_be(p, 21, itemdb_look_us(pc_isequip_us(sd, EQ_ARMOR) as u32) as u16);
+                ww_be(p, 21, item_db::search(pc_isequip_us(sd, EQ_ARMOR) as u32).look as u16);
             }
             if sd_r.status.armor_color > 0 {
                 wb(p, 23, sd_r.status.armor_color as u8);
             } else if sd_r.status.equip[EQ_ARMOR as usize].custom_look != 0 {
                 wb(p, 23, sd_r.status.equip[EQ_ARMOR as usize].custom_look_color as u8);
             } else {
-                wb(p, 23, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_ARMOR) as u32) as u8);
+                wb(p, 23, item_db::search(pc_isequip_us(sd, EQ_ARMOR) as u32).look_color as u8);
             }
         }
         if pc_isequip_us(sd, EQ_COAT) != 0 {
-            ww_be(p, 21, itemdb_look_us(pc_isequip_us(sd, EQ_COAT) as u32) as u16);
+            ww_be(p, 21, item_db::search(pc_isequip_us(sd, EQ_COAT) as u32).look as u16);
             if sd_r.status.armor_color > 0 {
                 wb(p, 23, sd_r.status.armor_color as u8);
             } else {
-                wb(p, 23, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_COAT) as u32) as u8);
+                wb(p, 23, item_db::search(pc_isequip_us(sd, EQ_COAT) as u32).look_color as u8);
             }
         }
 
@@ -1583,8 +1583,8 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             ww_be(p, 24, sd_r.status.equip[EQ_WEAP as usize].custom_look as u16);
             wb(p, 26, sd_r.status.equip[EQ_WEAP as usize].custom_look_color as u8);
         } else {
-            ww_be(p, 24, itemdb_look_us(pc_isequip_us(sd, EQ_WEAP) as u32) as u16);
-            wb(p, 26, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_WEAP) as u32) as u8);
+            ww_be(p, 24, item_db::search(pc_isequip_us(sd, EQ_WEAP) as u32).look as u16);
+            wb(p, 26, item_db::search(pc_isequip_us(sd, EQ_WEAP) as u32).look_color as u8);
         }
 
         // shield  (offsets 27–29)
@@ -1595,14 +1595,14 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             ww_be(p, 27, sd_r.status.equip[EQ_SHIELD as usize].custom_look as u16);
             wb(p, 29, sd_r.status.equip[EQ_SHIELD as usize].custom_look_color as u8);
         } else {
-            ww_be(p, 27, itemdb_look_us(pc_isequip_us(sd, EQ_SHIELD) as u32) as u16);
-            wb(p, 29, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_SHIELD) as u32) as u8);
+            ww_be(p, 27, item_db::search(pc_isequip_us(sd, EQ_SHIELD) as u32).look as u16);
+            wb(p, 29, item_db::search(pc_isequip_us(sd, EQ_SHIELD) as u32).look_color as u8);
         }
 
         // helm  (offsets 30–32)
         if pc_isequip_us(sd, EQ_HELM) == 0
             || (sd_r.status.setting_flags & FLAG_HELM as u16) == 0
-            || itemdb_look_us(pc_isequip_us(sd, EQ_HELM) as u32) == -1
+            || item_db::search(pc_isequip_us(sd, EQ_HELM) as u32).look == -1
         {
             wb(p, 30, 0);
             ww_be(p, 31, 0xFFFF);
@@ -1612,8 +1612,8 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
                 wb(p, 31, sd_r.status.equip[EQ_HELM as usize].custom_look as u8);
                 wb(p, 32, sd_r.status.equip[EQ_HELM as usize].custom_look_color as u8);
             } else {
-                wb(p, 31, itemdb_look_us(pc_isequip_us(sd, EQ_HELM) as u32) as u8);
-                wb(p, 32, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_HELM) as u32) as u8);
+                wb(p, 31, item_db::search(pc_isequip_us(sd, EQ_HELM) as u32).look as u8);
+                wb(p, 32, item_db::search(pc_isequip_us(sd, EQ_HELM) as u32).look_color as u8);
             }
         }
 
@@ -1622,8 +1622,8 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             ww_be(p, 33, 0xFFFF);
             wb(p, 35, 0x0);
         } else {
-            ww_be(p, 33, itemdb_look_us(pc_isequip_us(sd, EQ_FACEACC) as u32) as u16);
-            wb(p, 35, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_FACEACC) as u32) as u8);
+            ww_be(p, 33, item_db::search(pc_isequip_us(sd, EQ_FACEACC) as u32).look as u16);
+            wb(p, 35, item_db::search(pc_isequip_us(sd, EQ_FACEACC) as u32).look_color as u8);
         }
 
         // crown  (offsets 36–38; also writes byte 30)
@@ -1636,8 +1636,8 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
                 ww_be(p, 36, sd_r.status.equip[EQ_CROWN as usize].custom_look as u16);
                 wb(p, 38, sd_r.status.equip[EQ_CROWN as usize].custom_look_color as u8);
             } else {
-                ww_be(p, 36, itemdb_look_us(pc_isequip_us(sd, EQ_CROWN) as u32) as u16);
-                wb(p, 38, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_CROWN) as u32) as u8);
+                ww_be(p, 36, item_db::search(pc_isequip_us(sd, EQ_CROWN) as u32).look as u16);
+                wb(p, 38, item_db::search(pc_isequip_us(sd, EQ_CROWN) as u32).look_color as u8);
             }
         }
 
@@ -1646,8 +1646,8 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             ww_be(p, 39, 0xFFFF);
             wb(p, 41, 0x0);
         } else {
-            ww_be(p, 39, itemdb_look_us(pc_isequip_us(sd, EQ_FACEACCTWO) as u32) as u16);
-            wb(p, 41, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_FACEACCTWO) as u32) as u8);
+            ww_be(p, 39, item_db::search(pc_isequip_us(sd, EQ_FACEACCTWO) as u32).look as u16);
+            wb(p, 41, item_db::search(pc_isequip_us(sd, EQ_FACEACCTWO) as u32).look_color as u8);
         }
 
         // mantle  (offsets 42–44)
@@ -1655,20 +1655,20 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             ww_be(p, 42, 0xFFFF);
             wb(p, 44, 0xFF);
         } else {
-            ww_be(p, 42, itemdb_look_us(pc_isequip_us(sd, EQ_MANTLE) as u32) as u16);
-            wb(p, 44, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_MANTLE) as u32) as u8);
+            ww_be(p, 42, item_db::search(pc_isequip_us(sd, EQ_MANTLE) as u32).look as u16);
+            wb(p, 44, item_db::search(pc_isequip_us(sd, EQ_MANTLE) as u32).look_color as u8);
         }
 
         // necklace  (offsets 45–47)
         if pc_isequip_us(sd, EQ_NECKLACE) == 0
             || (sd_r.status.setting_flags & FLAG_NECKLACE as u16) == 0
-            || itemdb_look_us(pc_isequip_us(sd, EQ_NECKLACE) as u32) == -1
+            || item_db::search(pc_isequip_us(sd, EQ_NECKLACE) as u32).look == -1
         {
             ww_be(p, 45, 0xFFFF);
             wb(p, 47, 0x0);
         } else {
-            ww_be(p, 45, itemdb_look_us(pc_isequip_us(sd, EQ_NECKLACE) as u32) as u16);
-            wb(p, 47, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_NECKLACE) as u32) as u8);
+            ww_be(p, 45, item_db::search(pc_isequip_us(sd, EQ_NECKLACE) as u32).look as u16);
+            wb(p, 47, item_db::search(pc_isequip_us(sd, EQ_NECKLACE) as u32).look_color as u8);
         }
 
         // boots  (offsets 48–50)
@@ -1679,8 +1679,8 @@ unsafe fn write_state_packet(sd: *mut MapSessionData, src_sd: *mut MapSessionDat
             ww_be(p, 48, sd_r.status.equip[EQ_BOOTS as usize].custom_look as u16);
             wb(p, 50, sd_r.status.equip[EQ_BOOTS as usize].custom_look_color as u8);
         } else {
-            ww_be(p, 48, itemdb_look_us(pc_isequip_us(sd, EQ_BOOTS) as u32) as u16);
-            wb(p, 50, itemdb_lookcolor_us(pc_isequip_us(sd, EQ_BOOTS) as u32) as u8);
+            ww_be(p, 48, item_db::search(pc_isequip_us(sd, EQ_BOOTS) as u32).look as u16);
+            wb(p, 50, item_db::search(pc_isequip_us(sd, EQ_BOOTS) as u32).look_color as u8);
         }
 
         // title/outline/color bytes 51–53
@@ -1863,10 +1863,6 @@ use crate::servers::char::charstatus::MAX_LEGENDS;
 // Direct Rust imports (with _cop suffix aliases to avoid name conflicts)
 use crate::database::clan_db::rust_clandb_name as rust_clandb_name_cop;
 use crate::database::class_db::rust_classdb_name as rust_classdb_name_cop;
-use crate::database::item_db::{
-    rust_itemdb_name as rust_itemdb_name_cop, rust_itemdb_icon as rust_itemdb_icon_cop,
-    rust_itemdb_iconcolor as rust_itemdb_iconcolor_cop, rust_itemdb_type as rust_itemdb_type_cop,
-};
 use crate::game::client::handlers::{clif_getName, clif_isregistered};
 
 // map_id2sd_cop: typed lookup returning raw pointer for use in unsafe context.
@@ -2058,23 +2054,23 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
         if (*tsd).status.equip[EQ_ARMOR as usize].custom_look != 0 {
             ww_be(p, len + 4, (*tsd).status.equip[EQ_ARMOR as usize].custom_look as u16);
         } else {
-            ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_ARMOR) as u32) as u16);
+            ww_be(p, len + 4, item_db::search(pc_isequip_us(tsd, EQ_ARMOR) as u32).look as u16);
         }
         if (*tsd).status.armor_color > 0 {
             wb(p, len + 6, (*tsd).status.armor_color as u8);
         } else if (*tsd).status.equip[EQ_ARMOR as usize].custom_look != 0 {
             wb(p, len + 6, (*tsd).status.equip[EQ_ARMOR as usize].custom_look_color as u8);
         } else {
-            wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_ARMOR) as u32) as u8);
+            wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_ARMOR) as u32).look_color as u8);
         }
     }
     // EQ_COAT overrides armor look if equipped.
     if pc_isequip_us(tsd, EQ_COAT) != 0 {
-        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_COAT) as u32) as u16);
+        ww_be(p, len + 4, item_db::search(pc_isequip_us(tsd, EQ_COAT) as u32).look as u16);
         if (*tsd).status.armor_color > 0 {
             wb(p, len + 6, (*tsd).status.armor_color as u8);
         } else {
-            wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_COAT) as u32) as u8);
+            wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_COAT) as u32).look_color as u8);
         }
     }
     len += 3;
@@ -2087,8 +2083,8 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
         ww_be(p, len + 4, (*tsd).status.equip[EQ_WEAP as usize].custom_look as u16);
         wb(p, len + 6, (*tsd).status.equip[EQ_WEAP as usize].custom_look_color as u8);
     } else {
-        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_WEAP) as u32) as u16);
-        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_WEAP) as u32) as u8);
+        ww_be(p, len + 4, item_db::search(pc_isequip_us(tsd, EQ_WEAP) as u32).look as u16);
+        wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_WEAP) as u32).look_color as u8);
     }
     len += 3;
 
@@ -2100,15 +2096,15 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
         ww_be(p, len + 4, (*tsd).status.equip[EQ_SHIELD as usize].custom_look as u16);
         wb(p, len + 6, (*tsd).status.equip[EQ_SHIELD as usize].custom_look_color as u8);
     } else {
-        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_SHIELD) as u32) as u16);
-        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_SHIELD) as u32) as u8);
+        ww_be(p, len + 4, item_db::search(pc_isequip_us(tsd, EQ_SHIELD) as u32).look as u16);
+        wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_SHIELD) as u32).look_color as u8);
     }
     len += 3;
 
     // ── Helm slot ─────────────────────────────────────────────────────────────
     if pc_isequip_us(tsd, EQ_HELM) == 0
         || ((*tsd).status.setting_flags & FLAG_HELM as u16) == 0
-        || itemdb_look_us(pc_isequip_us(tsd, EQ_HELM) as u32) == -1
+        || item_db::search(pc_isequip_us(tsd, EQ_HELM) as u32).look == -1
     {
         wb(p, len + 4, 0);
         ww_be(p, len + 5, 0xFFFF);
@@ -2119,8 +2115,8 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
             wb(p, len + 5, (*tsd).status.equip[EQ_HELM as usize].custom_look as u8);
             wb(p, len + 6, (*tsd).status.equip[EQ_HELM as usize].custom_look_color as u8);
         } else {
-            wb(p, len + 5, itemdb_look_us(pc_isequip_us(tsd, EQ_HELM) as u32) as u8);
-            wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_HELM) as u32) as u8);
+            wb(p, len + 5, item_db::search(pc_isequip_us(tsd, EQ_HELM) as u32).look as u8);
+            wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_HELM) as u32).look_color as u8);
         }
     }
     len += 3;
@@ -2130,8 +2126,8 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
         ww_be(p, len + 4, 0xFFFF);
         wb(p, len + 6, 0);
     } else {
-        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_FACEACC) as u32) as u16);
-        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_FACEACC) as u32) as u8);
+        ww_be(p, len + 4, item_db::search(pc_isequip_us(tsd, EQ_FACEACC) as u32).look as u16);
+        wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_FACEACC) as u32).look_color as u8);
     }
     len += 3;
 
@@ -2145,8 +2141,8 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
             ww_be(p, len + 4, (*tsd).status.equip[EQ_CROWN as usize].custom_look as u16);
             wb(p, len + 6, (*tsd).status.equip[EQ_CROWN as usize].custom_look_color as u8);
         } else {
-            ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_CROWN) as u32) as u16);
-            wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_CROWN) as u32) as u8);
+            ww_be(p, len + 4, item_db::search(pc_isequip_us(tsd, EQ_CROWN) as u32).look as u16);
+            wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_CROWN) as u32).look_color as u8);
         }
     }
     len += 3;
@@ -2156,8 +2152,8 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
         ww_be(p, len + 4, 0xFFFF);
         wb(p, len + 6, 0);
     } else {
-        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_FACEACCTWO) as u32) as u16);
-        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_FACEACCTWO) as u32) as u8);
+        ww_be(p, len + 4, item_db::search(pc_isequip_us(tsd, EQ_FACEACCTWO) as u32).look as u16);
+        wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_FACEACCTWO) as u32).look_color as u8);
     }
     len += 3;
 
@@ -2166,21 +2162,21 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
         ww_be(p, len + 4, 0xFFFF);
         wb(p, len + 6, 0xFF);
     } else {
-        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_MANTLE) as u32) as u16);
-        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_MANTLE) as u32) as u8);
+        ww_be(p, len + 4, item_db::search(pc_isequip_us(tsd, EQ_MANTLE) as u32).look as u16);
+        wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_MANTLE) as u32).look_color as u8);
     }
     len += 3;
 
     // ── Necklace slot ─────────────────────────────────────────────────────────
     if pc_isequip_us(tsd, EQ_NECKLACE) == 0
         || ((*tsd).status.setting_flags & FLAG_NECKLACE as u16) == 0
-        || itemdb_look_us(pc_isequip_us(tsd, EQ_NECKLACE) as u32) == -1
+        || item_db::search(pc_isequip_us(tsd, EQ_NECKLACE) as u32).look == -1
     {
         ww_be(p, len + 4, 0xFFFF);
         wb(p, len + 6, 0);
     } else {
-        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_NECKLACE) as u32) as u16);
-        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_NECKLACE) as u32) as u8);
+        ww_be(p, len + 4, item_db::search(pc_isequip_us(tsd, EQ_NECKLACE) as u32).look as u16);
+        wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_NECKLACE) as u32).look_color as u8);
     }
     len += 3;
 
@@ -2192,8 +2188,8 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
         ww_be(p, len + 4, (*tsd).status.equip[EQ_BOOTS as usize].custom_look as u16);
         wb(p, len + 6, (*tsd).status.equip[EQ_BOOTS as usize].custom_look_color as u8);
     } else {
-        ww_be(p, len + 4, itemdb_look_us(pc_isequip_us(tsd, EQ_BOOTS) as u32) as u16);
-        wb(p, len + 6, itemdb_lookcolor_us(pc_isequip_us(tsd, EQ_BOOTS) as u32) as u8);
+        ww_be(p, len + 4, item_db::search(pc_isequip_us(tsd, EQ_BOOTS) as u32).look as u16);
+        wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_BOOTS) as u32).look_color as u8);
     }
     len += 3;
 
@@ -2205,17 +2201,19 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
     for x in 0..14usize {
         let eq = &(*tsd).status.equip[x];
         if eq.id > 0 {
+            let eq_db = item_db::search(eq.id);
+
             // Icon
             let icon_w: u16 = if eq.custom_icon != 0 {
                 (eq.custom_icon as u16).wrapping_add(49152)
             } else {
-                rust_itemdb_icon_cop(eq.id) as u16
+                eq_db.icon as u16
             };
             ww_be(p, len + 6, icon_w);
             let icon_color: u8 = if eq.custom_icon != 0 {
                 eq.custom_icon_color as u8
             } else {
-                rust_itemdb_iconcolor_cop(eq.id) as u8
+                eq_db.icon_color
             };
             wb(p, len + 8, icon_color);
             len += 3;
@@ -2224,8 +2222,7 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
             let name_ptr: *const u8 = if eq.real_name[0] != 0 {
                 eq.real_name.as_ptr() as *const u8
             } else {
-                let n = rust_itemdb_name_cop(eq.id);
-                if n.is_null() { b"\0".as_ptr() } else { n as *const u8 }
+                eq_db.name.as_ptr() as *const u8
             };
             let name_len = libc::strlen(name_ptr as *const i8);
             wb(p, len + 6, name_len as u8);
@@ -2233,8 +2230,7 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
             len += name_len + 1;
 
             // DB name (always from itemdb).
-            let dbname = rust_itemdb_name_cop(eq.id);
-            let dbname_ptr: *const u8 = if dbname.is_null() { b"\0".as_ptr() } else { dbname as *const u8 };
+            let dbname_ptr: *const u8 = eq_db.name.as_ptr() as *const u8;
             let dbname_len = libc::strlen(dbname_ptr as *const i8);
             wb(p, len + 6, dbname_len as u8);
             std::ptr::copy_nonoverlapping(dbname_ptr, p.add(len + 7), dbname_len);
@@ -2245,12 +2241,12 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
             len += 5;
 
             // Build equip_status summary string for weapon/armor item types (3..=16).
-            let item_type = rust_itemdb_type_cop(eq.id);
+            let item_type = eq_db.typ as i32;
             if item_type >= 3 && item_type <= 16 {
                 let nameof: *const i8 = if eq.real_name[0] != 0 {
                     eq.real_name.as_ptr() as *const i8
                 } else {
-                    rust_itemdb_name_cop(eq.id) as *const i8
+                    eq_db.name.as_ptr()
                 };
                 let msgnum = clif_mapmsgnum(tsd, x as i32);
                 if msgnum >= 0 && nameof != std::ptr::null() {

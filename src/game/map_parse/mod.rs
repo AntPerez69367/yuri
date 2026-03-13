@@ -71,7 +71,7 @@ use crate::game::map_parse::dialogs::clif_sendtowns;
 use crate::game::client::visual::clif_sendprofile;
 use crate::game::map_parse::player_state::clif_sendminimap;
 use crate::network::crypt::{send_meta, send_metalist};
-use crate::database::item_db::rust_itemdb_thrownconfirm as itemdb_thrownconfirm;
+use crate::database::item_db;
 use crate::game::pc::rust_pc_atkspeed;
 
 // pc_warp: actual fn takes i32, old extern had u16 — wrap with cast.
@@ -258,7 +258,7 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
                 rfifoskip(fd, len);
                 return 0;
             }
-            if itemdb_thrownconfirm((*sd).status.inventory[pos - 1].id) == 1 {
+            if item_db::search((*sd).status.inventory[pos - 1].id).thrownconfirm == 1 {
                 if confirm == 1 {
                     clif_parsethrow(sd);
                 } else {

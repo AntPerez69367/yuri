@@ -144,9 +144,10 @@ fn val_to_item_id(v: &mlua::Value) -> i32 {
         mlua::Value::Integer(i) => *i as i32,
         mlua::Value::Number(f)  => *f as i32,
         mlua::Value::String(s)  => {
-            if let Some(cs) = s.to_str().ok().and_then(|r| std::ffi::CString::new(r.as_bytes()).ok()) {
-                let data = unsafe { crate::database::item_db::rust_itemdb_searchname(cs.as_ptr()) };
-                if !data.is_null() { return unsafe { (*data).id } as i32; }
+            if let Ok(r) = s.to_str() {
+                if let Some(item) = crate::database::item_db::searchname(&r) {
+                    return item.id as i32;
+                }
             }
             0
         }

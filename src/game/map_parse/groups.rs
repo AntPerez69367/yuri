@@ -41,9 +41,7 @@ use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::map_server::{map_name2sd, groups as groups_raw};
 use crate::game::map_parse::movement::clif_object_canmove;
 use crate::database::class_db::{rust_classdb_path as classdb_path, rust_classdb_level as classdb_level};
-use crate::database::item_db::{
-    rust_itemdb_look as itemdb_look, rust_itemdb_lookcolor as itemdb_lookcolor,
-};
+use crate::database::item_db;
 
 // pc_isequip returns i32; usage here expects u32 — wrap with cast.
 #[inline]
@@ -217,8 +215,10 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
 
         // Helm slot
         let helm_id = pc_isequip(tsd, EQ_HELM);
+        let helm_item = if helm_id != 0 { Some(item_db::search(helm_id)) } else { None };
+        let helm_look = helm_item.as_ref().map_or(-1, |i| i.look);
         if helm_id == 0 || (*tsd).status.setting_flags as u32 & crate::game::pc::FLAG_HELM == 0
-            || itemdb_look(helm_id) == -1
+            || helm_look == -1
         {
             wfifob((*sd).fd, len + 6, 0);
             wfifow_be((*sd).fd, len + 7, 0xFFFF);
@@ -231,8 +231,8 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
                 wfifob((*sd).fd, len + 9,
                     (*tsd).status.equip[EQ_HELM as usize].custom_look_color as u8);
             } else {
-                wfifow_be((*sd).fd, len + 7, itemdb_look(helm_id) as u16);
-                wfifob((*sd).fd, len + 9, itemdb_lookcolor(helm_id) as u8);
+                wfifow_be((*sd).fd, len + 7, helm_look as u16);
+                wfifob((*sd).fd, len + 9, helm_item.as_ref().unwrap().look_color as u8);
             }
         }
 
@@ -242,8 +242,9 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
             wfifow_be((*sd).fd, len + 10, 0xFFFF);
             wfifob((*sd).fd, len + 12, 0);
         } else {
-            wfifow_be((*sd).fd, len + 10, itemdb_look(faceacc_id) as u16);
-            wfifob((*sd).fd, len + 12, itemdb_lookcolor(faceacc_id) as u8);
+            let faceacc_item = item_db::search(faceacc_id);
+            wfifow_be((*sd).fd, len + 10, faceacc_item.look as u16);
+            wfifob((*sd).fd, len + 12, faceacc_item.look_color as u8);
         }
 
         // Crown slot
@@ -259,8 +260,9 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
                 wfifob((*sd).fd, len + 15,
                     (*tsd).status.equip[EQ_CROWN as usize].custom_look_color as u8);
             } else {
-                wfifow_be((*sd).fd, len + 13, itemdb_look(crown_id) as u16);
-                wfifob((*sd).fd, len + 15, itemdb_lookcolor(crown_id) as u8);
+                let crown_item = item_db::search(crown_id);
+                wfifow_be((*sd).fd, len + 13, crown_item.look as u16);
+                wfifob((*sd).fd, len + 15, crown_item.look_color as u8);
             }
         }
 
@@ -270,8 +272,9 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
             wfifow_be((*sd).fd, len + 16, 0xFFFF);
             wfifob((*sd).fd, len + 18, 0);
         } else {
-            wfifow_be((*sd).fd, len + 16, itemdb_look(faceacc2_id) as u16);
-            wfifob((*sd).fd, len + 18, itemdb_lookcolor(faceacc2_id) as u8);
+            let faceacc2_item = item_db::search(faceacc2_id);
+            wfifow_be((*sd).fd, len + 16, faceacc2_item.look as u16);
+            wfifob((*sd).fd, len + 18, faceacc2_item.look_color as u8);
         }
 
         len += 12; // move past the equipment bytes

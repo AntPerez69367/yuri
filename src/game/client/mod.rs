@@ -86,7 +86,7 @@ use crate::game::scripting::pc_accessors::{
     sl_pc_paralyzed, sl_pc_sleep, sl_pc_status_id, sl_pc_status_gm_level,
     sl_pc_status_mute, sl_pc_inventory_id, sl_pc_bl_m, sl_map_spell,
 };
-use crate::database::item_db::rust_itemdb_thrownconfirm;
+use crate::database::item_db;
 use crate::game::pc::rust_pc_atkspeed;
 use crate::game::time_util::timer_insert;
 
@@ -842,7 +842,7 @@ pub async fn rust_clif_parse(fd: SessionId) -> i32 {
                 clif_cancelafk(sd);
                 let pos = rbyte(fd, 6) as i32;
                 let confirm = rbyte(fd, 5);
-                if rust_itemdb_thrownconfirm(sl_pc_inventory_id(sd_pc, pos - 1)) == 1 {
+                if item_db::search(sl_pc_inventory_id(sd_pc, pos - 1)).thrownconfirm == 1 {
                     if confirm == 1 { clif_parsethrow(sd); } else { clif_throwconfirm(sd); }
                 } else {
                     clif_parsethrow(sd);

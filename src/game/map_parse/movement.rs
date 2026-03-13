@@ -136,10 +136,7 @@ use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::pc::{rust_pc_warp_sync as pc_warp, rust_pc_isequip as pc_isequip};
 use crate::game::map_parse::groups::{clif_isingroup, clif_canmove_sub_inner};
 use crate::game::time_util::gettick;
-use crate::database::item_db::{
-    rust_itemdb_look as itemdb_look, rust_itemdb_lookcolor as itemdb_lookcolor,
-    rust_itemdb_yname as itemdb_yname,
-};
+use crate::database::item_db;
 use crate::database::magic_db::rust_magicdb_yname as magicdb_yname;
 
 
@@ -354,10 +351,11 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     if armor_id == 0 {
         wfifow(src_fd, 26, ((*sd).status.sex as u16).swap_bytes());
     } else {
+        let armor_item = item_db::search(armor_id as u32);
         let armor_look = if (*sd).status.equip[EQ_ARMOR as usize].custom_look != 0 {
             (*sd).status.equip[EQ_ARMOR as usize].custom_look as u16
         } else {
-            itemdb_look(armor_id as u32) as u16
+            armor_item.look as u16
         };
         wfifow(src_fd, 26, armor_look.swap_bytes());
         let armor_color: u8 = if (*sd).status.armor_color > 0 {
@@ -365,15 +363,16 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         } else if (*sd).status.equip[EQ_ARMOR as usize].custom_look != 0 {
             (*sd).status.equip[EQ_ARMOR as usize].custom_look_color as u8
         } else {
-            itemdb_lookcolor(armor_id as u32) as u8
+            armor_item.look_color as u8
         };
         wfifob(src_fd, 28, armor_color);
     }
     // Coat overrides armor
     let coat_id = pc_isequip(sd, EQ_COAT);
     if coat_id != 0 {
-        wfifow(src_fd, 26, (itemdb_look(coat_id as u32) as u16).swap_bytes());
-        wfifob(src_fd, 28, itemdb_lookcolor(coat_id as u32) as u8);
+        let coat_item = item_db::search(coat_id as u32);
+        wfifow(src_fd, 26, (coat_item.look as u16).swap_bytes());
+        wfifob(src_fd, 28, coat_item.look_color as u8);
     }
 
     // Weapon at [29..30], color at [31]
@@ -382,11 +381,12 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         wfifow(src_fd, 29, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 31, 0);
     } else {
+        let weap_item = item_db::search(weap_id as u32);
         let (wlook, wcolor) = if (*sd).status.equip[EQ_WEAP as usize].custom_look != 0 {
             ((*sd).status.equip[EQ_WEAP as usize].custom_look as u16,
              (*sd).status.equip[EQ_WEAP as usize].custom_look_color as u8)
         } else {
-            (itemdb_look(weap_id as u32) as u16, itemdb_lookcolor(weap_id as u32) as u8)
+            (weap_item.look as u16, weap_item.look_color as u8)
         };
         wfifow(src_fd, 29, wlook.swap_bytes());
         wfifob(src_fd, 31, wcolor);
@@ -398,11 +398,12 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         wfifow(src_fd, 32, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 34, 0);
     } else {
+        let shield_item = item_db::search(shield_id as u32);
         let (slook, scolor) = if (*sd).status.equip[EQ_SHIELD as usize].custom_look != 0 {
             ((*sd).status.equip[EQ_SHIELD as usize].custom_look as u16,
              (*sd).status.equip[EQ_SHIELD as usize].custom_look_color as u8)
         } else {
-            (itemdb_look(shield_id as u32) as u16, itemdb_lookcolor(shield_id as u32) as u8)
+            (shield_item.look as u16, shield_item.look_color as u8)
         };
         wfifow(src_fd, 32, slook.swap_bytes());
         wfifob(src_fd, 34, scolor);
@@ -410,7 +411,8 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
 
     // Helm at [35] flag, [36..37] look+color
     let helm_id    = pc_isequip(sd, EQ_HELM);
-    let helm_look  = if helm_id != 0 { itemdb_look(helm_id as u32) } else { -1 };
+    let helm_item  = if helm_id != 0 { Some(item_db::search(helm_id as u32)) } else { None };
+    let helm_look  = helm_item.as_ref().map_or(-1, |i| i.look);
     if helm_id == 0
         || ((*sd).status.setting_flags as u32 & FLAG_HELM) == 0
         || helm_look == -1
@@ -424,7 +426,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
             wfifob(src_fd, 37, (*sd).status.equip[EQ_HELM as usize].custom_look_color as u8);
         } else {
             wfifob(src_fd, 36, helm_look as u8);
-            wfifob(src_fd, 37, itemdb_lookcolor(helm_id as u32) as u8);
+            wfifob(src_fd, 37, helm_item.as_ref().unwrap().look_color as u8);
         }
     }
 
@@ -434,8 +436,9 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         wfifow(src_fd, 38, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 40, 0);
     } else {
-        wfifow(src_fd, 38, (itemdb_look(faceacc_id as u32) as u16).swap_bytes());
-        wfifob(src_fd, 40, itemdb_lookcolor(faceacc_id as u32) as u8);
+        let faceacc_item = item_db::search(faceacc_id as u32);
+        wfifow(src_fd, 38, (faceacc_item.look as u16).swap_bytes());
+        wfifob(src_fd, 40, faceacc_item.look_color as u8);
     }
 
     // Crown at [41..42], color at [43]; also clears helm flag at [35]
@@ -445,11 +448,12 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         wfifob(src_fd, 43, 0);
     } else {
         wfifob(src_fd, 35, 0); // crown present → clear helm flag
+        let crown_item = item_db::search(crown_id as u32);
         let (clook, ccolor) = if (*sd).status.equip[EQ_CROWN as usize].custom_look != 0 {
             ((*sd).status.equip[EQ_CROWN as usize].custom_look as u16,
              (*sd).status.equip[EQ_CROWN as usize].custom_look_color as u8)
         } else {
-            (itemdb_look(crown_id as u32) as u16, itemdb_lookcolor(crown_id as u32) as u8)
+            (crown_item.look as u16, crown_item.look_color as u8)
         };
         wfifow(src_fd, 41, clook.swap_bytes());
         wfifob(src_fd, 43, ccolor);
@@ -461,8 +465,9 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         wfifow(src_fd, 44, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 46, 0);
     } else {
-        wfifow(src_fd, 44, (itemdb_look(faceacc2_id as u32) as u16).swap_bytes());
-        wfifob(src_fd, 46, itemdb_lookcolor(faceacc2_id as u32) as u8);
+        let faceacc2_item = item_db::search(faceacc2_id as u32);
+        wfifow(src_fd, 44, (faceacc2_item.look as u16).swap_bytes());
+        wfifob(src_fd, 46, faceacc2_item.look_color as u8);
     }
 
     // Mantle at [47..48], color at [49]
@@ -471,13 +476,15 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         wfifow(src_fd, 47, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 49, 0xFF);
     } else {
-        wfifow(src_fd, 47, (itemdb_look(mantle_id as u32) as u16).swap_bytes());
-        wfifob(src_fd, 49, itemdb_lookcolor(mantle_id as u32) as u8);
+        let mantle_item = item_db::search(mantle_id as u32);
+        wfifow(src_fd, 47, (mantle_item.look as u16).swap_bytes());
+        wfifob(src_fd, 49, mantle_item.look_color as u8);
     }
 
     // Necklace at [50..51], color at [52]
     let neck_id   = pc_isequip(sd, EQ_NECKLACE);
-    let neck_look = if neck_id != 0 { itemdb_look(neck_id as u32) } else { -1 };
+    let neck_item = if neck_id != 0 { Some(item_db::search(neck_id as u32)) } else { None };
+    let neck_look = neck_item.as_ref().map_or(-1, |i| i.look);
     if neck_id == 0
         || ((*sd).status.setting_flags as u32 & FLAG_NECKLACE) == 0
         || neck_look == -1
@@ -486,7 +493,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         wfifob(src_fd, 52, 0);
     } else {
         wfifow(src_fd, 50, (neck_look as u16).swap_bytes());
-        wfifob(src_fd, 52, itemdb_lookcolor(neck_id as u32) as u8);
+        wfifob(src_fd, 52, neck_item.as_ref().unwrap().look_color as u8);
     }
 
     // Boots at [53..54], color at [55]
@@ -495,11 +502,12 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         wfifow(src_fd, 53, ((*sd).status.sex as u16).swap_bytes());
         wfifob(src_fd, 55, 0);
     } else {
+        let boots_item = item_db::search(boots_id as u32);
         let (blook, bcolor) = if (*sd).status.equip[EQ_BOOTS as usize].custom_look != 0 {
             ((*sd).status.equip[EQ_BOOTS as usize].custom_look as u16,
              (*sd).status.equip[EQ_BOOTS as usize].custom_look_color as u8)
         } else {
-            (itemdb_look(boots_id as u32) as u16, itemdb_lookcolor(boots_id as u32) as u8)
+            (boots_item.look as u16, boots_item.look_color as u8)
         };
         wfifow(src_fd, 53, blook.swap_bytes());
         wfifob(src_fd, 55, bcolor);
@@ -823,8 +831,9 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
     // Equipment walk scripts
     for i in 0..14usize {
         if (*sd).status.equip[i].id > 0 {
-            let yn = itemdb_yname((*sd).status.equip[i].id);
-            if !yn.is_null() {
+            let equip_item = item_db::search((*sd).status.equip[i].id);
+            let yn = equip_item.yname.as_ptr();
+            if *yn != 0 {
                 sl_doscript_simple(yn, c"on_walk".as_ptr(), &mut (*sd).bl as *mut BlockList);
             }
         }

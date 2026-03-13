@@ -1622,8 +1622,8 @@ pub unsafe fn sl_pc_additem(
     fl.id     = id;
     fl.amount = amount as i32;
     fl.owner  = owner;
-    fl.dura   = if dura != 0 { dura } else { crate::database::item_db::rust_itemdb_dura(id) };
-    fl.protected = crate::database::item_db::rust_itemdb_protected(id) as u32;
+    fl.dura   = if dura != 0 { dura } else { crate::database::item_db::search(id).dura };
+    fl.protected = crate::database::item_db::search(id).protected as u32;
     if !engrave.is_null() && *engrave != 0 {
         libc::strncpy(fl.real_name.as_mut_ptr(), engrave, fl.real_name.len() - 1);
     }
@@ -1657,7 +1657,7 @@ pub unsafe fn sl_pc_removeitemdura(
     id: u32, mut amount: u32,
     type_: i32,
 ) {
-    let max_dura = crate::database::item_db::rust_itemdb_dura(id);
+    let max_dura = crate::database::item_db::search(id).dura;
     let maxinv = sd.status.maxinv as usize;
     for x in 0..maxinv {
         if amount == 0 { break; }
@@ -1675,7 +1675,7 @@ pub unsafe fn sl_pc_removeitemdura(
 pub unsafe fn sl_pc_hasitemdura(
     sd: &mut MapSessionData, id: u32, mut amount: u32,
 ) -> i32 {
-    let max_dura = crate::database::item_db::rust_itemdb_dura(id);
+    let max_dura = crate::database::item_db::search(id).dura;
     let maxinv = sd.status.maxinv as usize;
     for x in 0..maxinv {
         if amount == 0 { break; }
@@ -1817,7 +1817,7 @@ pub unsafe fn sl_pc_getcreationitems(
 pub unsafe fn sl_pc_getcreationamounts(
     sd: &mut MapSessionData, len: i32, item_id: u32,
 ) -> i32 {
-    let t = crate::database::item_db::rust_itemdb_type(item_id);
+    let t = crate::database::item_db::search(item_id).typ as i32;
     if t < 3 || t > 17 {
         rfifob(sd.fd, len as usize) as i32
     } else {
@@ -1988,7 +1988,7 @@ pub fn sl_pc_repairall_send(_sd: &mut MapSessionData, _npc_bl: *mut std::ffi::c_
 // ─── Extra extern declarations for later-ported functions ────────────────────
 
 use crate::game::map_parse::player_state::clif_getchararea;
-use crate::database::item_db::{rust_itemdb_name as itemdb_name_item, rust_itemdb_time as itemdb_time_item};
+use crate::database::item_db;
 use crate::game::pc::rust_pc_unequip as pc_unequip_slot;
 
 // ─── Parcel removal ───────────────────────────────────────────────────────────
@@ -2050,12 +2050,12 @@ pub unsafe fn sl_pc_expireitem(sd: &mut MapSessionData) {
     for x in 0..sd.status.maxinv as usize {
         let id = sd.status.inventory[x].id;
         if id == 0 { continue; }
-        let item_t = itemdb_time_item(id) as u32;
+        let db_item = item_db::search(id);
+        let item_t = db_item.time;
         let slot_t = sd.status.inventory[x].time;
         if (slot_t > 0 && slot_t < t) || (item_t > 0 && item_t < t) {
-            let name = itemdb_name_item(id);
-            let msg = format!("Your {} has expired! Please visit the cash shop to purchase another.",
-                std::ffi::CStr::from_ptr(name).to_string_lossy());
+            let name = crate::game::scripting::types::item::fixed_str(&db_item.name);
+            let msg = format!("Your {} has expired! Please visit the cash shop to purchase another.", name);
             if let Ok(cmsg) = std::ffi::CString::new(msg) {
                 pc_delitem(sd, x as i32, 1, 8);
                 clif_sendminitext(sd, cmsg.as_ptr());
@@ -2072,12 +2072,12 @@ pub unsafe fn sl_pc_expireitem(sd: &mut MapSessionData) {
     for x in 0..MAX_EQUIP {
         let id = sd.status.equip[x].id;
         if id == 0 { continue; }
-        let item_t = itemdb_time_item(id) as u32;
+        let db_item = item_db::search(id);
+        let item_t = db_item.time;
         let slot_t = sd.status.equip[x].time;
         if (slot_t > 0 && slot_t < t) || (item_t > 0 && item_t < t) {
-            let name = itemdb_name_item(id);
-            let msg = format!("Your {} has expired! Please visit the cash shop to purchase another.",
-                std::ffi::CStr::from_ptr(name).to_string_lossy());
+            let name = crate::game::scripting::types::item::fixed_str(&db_item.name);
+            let msg = format!("Your {} has expired! Please visit the cash shop to purchase another.", name);
             if let Ok(cmsg) = std::ffi::CString::new(msg) {
                 pc_unequip_slot(sd, x as i32);
                 if eqdel >= 0 { pc_delitem(sd, eqdel, 1, 8); }

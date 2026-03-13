@@ -203,23 +203,23 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     g.set("QUESTREG", ctor!(lua, QuestRegObject))?;
     // ITEM/RECIPE/FL need custom ctors that perform DB/id-db lookups.
     g.set("ITEM", lua.create_function(|lua, v: mlua::Value| -> mlua::Result<mlua::Value> {
-        let ptr: *mut std::ffi::c_void = match v {
+        let item: Option<std::sync::Arc<crate::database::item_db::ItemData>> = match v {
             mlua::Value::Integer(id) => {
                 if id < 0 || id > u32::MAX as i64 { return Ok(mlua::Value::Nil); }
-                crate::database::item_db::rust_itemdb_search(id as u32) as *mut std::ffi::c_void
+                Some(crate::database::item_db::search(id as u32))
             }
             mlua::Value::Number(f) => {
                 if !f.is_finite() || f < 0.0 || f > u32::MAX as f64 { return Ok(mlua::Value::Nil); }
-                crate::database::item_db::rust_itemdb_search(f as u32) as *mut std::ffi::c_void
+                Some(crate::database::item_db::search(f as u32))
             }
             mlua::Value::String(ref s) => {
                 let text = s.to_str()?;
-                let cs = CString::new(text.as_bytes()).map_err(mlua::Error::external)?;
-                unsafe { crate::database::item_db::rust_itemdb_searchname(cs.as_ptr()) as *mut std::ffi::c_void }
+                crate::database::item_db::searchname(&text)
             }
-            _ => std::ptr::null_mut(),
+            _ => None,
         };
-        if ptr.is_null() { return Ok(mlua::Value::Nil); }
+        let Some(item) = item else { return Ok(mlua::Value::Nil); };
+        let ptr = std::sync::Arc::into_raw(item) as *mut std::ffi::c_void;
         Ok(mlua::Value::UserData(lua.create_userdata(ItemObject { ptr })?))
     })?)?;
     g.set("BITEM",    ctor!(lua, BItemObject))?;

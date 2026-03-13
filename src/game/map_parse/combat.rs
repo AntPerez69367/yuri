@@ -39,11 +39,7 @@ use crate::game::client::visual::{clif_getequiptype, broadcast_update_state};
 use crate::game::map_server::groups;
 use crate::game::pc::{addtokillreg, rust_pc_calcstat, rust_pc_checklevel, rust_pc_isequip};
 use crate::game::client::handlers::clif_addtokillreg;
-use crate::database::item_db::{
-    rust_itemdb_name, rust_itemdb_yname, rust_itemdb_sound, rust_itemdb_soundhit,
-    rust_itemdb_ethereal, rust_itemdb_dura, rust_itemdb_protected, rust_itemdb_breakondeath,
-    rust_itemdb_look,
-};
+use crate::database::item_db;
 use crate::database::magic_db::{
     rust_magicdb_name, rust_magicdb_yname, rust_magicdb_question, rust_magicdb_type,
     rust_magicdb_mute, rust_magicdb_ticker, rust_magicdb_canfail,
@@ -142,7 +138,7 @@ pub fn clif_pc_damage(sd: &mut MapSessionData, src: &mut MapSessionData) -> i32 
             unsafe {
                 clif_playsound(
                     &raw mut src.bl,
-                    rust_itemdb_soundhit(sd.status.equip[EQ_WEAP as usize].id) as i32,
+                    item_db::search(sd.status.equip[EQ_WEAP as usize].id).sound_hit as i32,
                 );
             }
         }
@@ -150,7 +146,7 @@ pub fn clif_pc_damage(sd: &mut MapSessionData, src: &mut MapSessionData) -> i32 
         for x in 0..14usize {
             if sd.status.equip[x].id > 0 {
                 unsafe {
-                    sl_doscript_2(rust_itemdb_yname(sd.status.equip[x].id), b"on_hit\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut src.bl);
+                    sl_doscript_2(item_db::search(sd.status.equip[x].id).yname.as_ptr(), b"on_hit\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut src.bl);
                 }
             }
         }
@@ -321,7 +317,7 @@ pub fn clif_send_pc_healthscript(
         for x in 0..14usize {
             if sd.status.equip[x].id > 0 {
                 unsafe {
-                    sl_doscript_2(rust_itemdb_yname(sd.status.equip[x].id), b"on_takedamage\0".as_ptr() as *const i8, &raw mut sd.bl, bl);
+                    sl_doscript_2(item_db::search(sd.status.equip[x].id).yname.as_ptr(), b"on_takedamage\0".as_ptr() as *const i8, &raw mut sd.bl, bl);
                 }
             }
         }
@@ -649,7 +645,7 @@ pub fn clif_mob_damage(sd: &mut MapSessionData, mob: &mut MobSpawnData) -> i32 {
             unsafe {
                 clif_playsound(
                     &raw mut mob.bl,
-                    rust_itemdb_soundhit(sd.status.equip[EQ_WEAP as usize].id) as i32,
+                    item_db::search(sd.status.equip[EQ_WEAP as usize].id).sound_hit as i32,
                 );
             }
         }
@@ -676,7 +672,7 @@ pub fn clif_mob_damage(sd: &mut MapSessionData, mob: &mut MobSpawnData) -> i32 {
         for x in 0..14usize {
             if sd.status.equip[x].id > 0 {
                 unsafe {
-                    sl_doscript_2(rust_itemdb_yname(sd.status.equip[x].id), b"on_hit\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut mob.bl);
+                    sl_doscript_2(item_db::search(sd.status.equip[x].id).yname.as_ptr(), b"on_hit\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut mob.bl);
                 }
             }
         }
@@ -1528,7 +1524,8 @@ pub fn clif_parseattack(sd: &mut MapSessionData) -> i32 {
     tracing::debug!("[attack] clif_parseattack PASS: id={} atkspd={} state={}", sd.bl.id, attackspeed, sd.status.state);
 
     let weap_id = sd.status.equip[EQ_WEAP as usize].id;
-    let sound = rust_itemdb_sound(weap_id) as i32;
+    let weap_item = item_db::search(weap_id);
+    let sound = weap_item.sound as i32;
 
     if sound == 0 {
         clif_sendaction(&mut sd.bl, 1, attackspeed, 9);
@@ -1542,10 +1539,10 @@ pub fn clif_parseattack(sd: &mut MapSessionData) -> i32 {
         sl_doscript_simple(c"onSwing".as_ptr(), std::ptr::null(), &raw mut sd.bl);
     }
 
-    let weap_look = rust_itemdb_look(weap_id);
+    let weap_look = weap_item.look;
     if (20000..30000).contains(&weap_look) {
         unsafe {
-            sl_doscript_simple(rust_itemdb_yname(weap_id), c"shootArrow".as_ptr(), &raw mut sd.bl);
+            sl_doscript_simple(weap_item.yname.as_ptr(), c"shootArrow".as_ptr(), &raw mut sd.bl);
             sl_doscript_simple(c"shootArrow".as_ptr(), std::ptr::null(), &raw mut sd.bl);
         }
     }
@@ -1553,7 +1550,7 @@ pub fn clif_parseattack(sd: &mut MapSessionData) -> i32 {
     for x in 0..14usize {
         if sd.status.equip[x].id > 0 {
             unsafe {
-                sl_doscript_simple(rust_itemdb_yname(sd.status.equip[x].id), c"on_swing".as_ptr(), &raw mut sd.bl);
+                sl_doscript_simple(item_db::search(sd.status.equip[x].id).yname.as_ptr(), c"on_swing".as_ptr(), &raw mut sd.bl);
             }
         }
     }
@@ -1588,7 +1585,7 @@ pub fn clif_deductdura(sd: &mut MapSessionData, equip: i32, val: i32) -> i32 {
     let m = sd.bl.m as usize;
     if unsafe { (*raw_map_ptr().add(m)).pvp } != 0 { return 0; }
 
-    let eth = rust_itemdb_ethereal(sd.status.equip[equip_idx].id);
+    let eth = item_db::search(sd.status.equip[equip_idx].id).ethereal as i32;
     if eth == 0 {
         sd.status.equip[equip_idx].dura -= val;
         clif_checkdura(sd, equip);
@@ -1647,50 +1644,51 @@ pub fn clif_checkdura(sd: &mut MapSessionData, equip: i32) -> i32 {
     if sd.status.equip[equip_idx].id == 0 { return 0; }
 
     let id = sd.status.equip[equip_idx].id;
+    let item = item_db::search(id);
     sd.equipslot = equip as u8;
 
-    let max_dura = rust_itemdb_dura(id) as f32;
+    let max_dura = item.dura as f32;
     let cur_dura = sd.status.equip[equip_idx].dura as f32;
     let percentage = cur_dura / max_dura;
 
     let mut msg_buf = [0i8; 255];
 
     if percentage <= 0.5 && sd.status.equip[equip_idx].repair == 0 {
-        unsafe { format_dura_msg(&mut msg_buf, rust_itemdb_name(id), "50"); }
+        unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "50"); }
         unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
         sd.status.equip[equip_idx].repair = 1;
     }
     if percentage <= 0.25 && sd.status.equip[equip_idx].repair == 1 {
-        unsafe { format_dura_msg(&mut msg_buf, rust_itemdb_name(id), "25"); }
+        unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "25"); }
         unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
         sd.status.equip[equip_idx].repair = 2;
     }
     if percentage <= 0.1 && sd.status.equip[equip_idx].repair == 2 {
-        unsafe { format_dura_msg(&mut msg_buf, rust_itemdb_name(id), "10"); }
+        unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "10"); }
         unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
         sd.status.equip[equip_idx].repair = 3;
     }
     if percentage <= 0.05 && sd.status.equip[equip_idx].repair == 3 {
-        unsafe { format_dura_msg(&mut msg_buf, rust_itemdb_name(id), "5"); }
+        unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "5"); }
         unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
         sd.status.equip[equip_idx].repair = 4;
     }
     if percentage <= 0.01 && sd.status.equip[equip_idx].repair == 4 {
-        unsafe { format_dura_msg(&mut msg_buf, rust_itemdb_name(id), "1"); }
+        unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "1"); }
         unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
         sd.status.equip[equip_idx].repair = 5;
     }
 
     let broken = sd.status.equip[equip_idx].dura <= 0
-        || (sd.status.state == 1 && rust_itemdb_breakondeath(sd.status.equip[equip_idx].id) == 1);
+        || (sd.status.state == 1 && item.bod == 1);
 
     if broken {
-        if rust_itemdb_protected(sd.status.equip[equip_idx].id) != 0
+        if item.protected != 0
             || sd.status.equip[equip_idx].protected >= 1
         {
             sd.status.equip[equip_idx].protected = sd.status.equip[equip_idx].protected.saturating_sub(1);
-            sd.status.equip[equip_idx].dura = rust_itemdb_dura(sd.status.equip[equip_idx].id);
-            unsafe { format_restore_msg(&mut msg_buf, rust_itemdb_name(id)); }
+            sd.status.equip[equip_idx].dura = item.dura;
+            unsafe { format_restore_msg(&mut msg_buf, item.name.as_ptr() as *mut i8); }
             unsafe { clif_sendstatus(sd as *mut MapSessionData, SFLAG_FULLSTATS | SFLAG_HPMP); }
             unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
             unsafe { sl_doscript_simple(b"characterLog\0".as_ptr() as *const i8, b"equipRestore\0".as_ptr() as *const i8, &raw mut sd.bl); }
@@ -1698,12 +1696,12 @@ pub fn clif_checkdura(sd: &mut MapSessionData, equip: i32) -> i32 {
         }
 
         unsafe { sl_doscript_simple(b"characterLog\0".as_ptr() as *const i8, b"equipBreak\0".as_ptr() as *const i8, &raw mut sd.bl); }
-        unsafe { format_destroy_msg(&mut msg_buf, rust_itemdb_name(id)); }
+        unsafe { format_destroy_msg(&mut msg_buf, item.name.as_ptr() as *mut i8); }
 
         sd.breakid = id;
         unsafe {
             sl_doscript_simple(b"onBreak\0".as_ptr() as *const i8, std::ptr::null(), &raw mut sd.bl);
-            sl_doscript_simple(rust_itemdb_yname(id), b"on_break\0".as_ptr() as *const i8, &raw mut sd.bl);
+            sl_doscript_simple(item.yname.as_ptr(), b"on_break\0".as_ptr() as *const i8, &raw mut sd.bl);
         }
 
         sd.status.equip[equip_idx].id              = 0;
@@ -1743,57 +1741,58 @@ pub fn clif_deductduraequip(sd: &mut MapSessionData) -> i32 {
     for equip in 0..14usize {
         if sd.status.equip[equip].id == 0 { continue; }
         let id = sd.status.equip[equip].id;
+        let item = item_db::search(id);
 
-        let eth = rust_itemdb_ethereal(sd.status.equip[equip].id);
+        let eth = item.ethereal as i32;
         if eth != 0 { continue; }
 
         sd.equipslot = equip as u8;
 
-        let deduct = (rust_itemdb_dura(sd.status.equip[equip].id) as f64 * 0.10).floor() as i32;
+        let deduct = (item.dura as f64 * 0.10).floor() as i32;
         sd.status.equip[equip].dura -= deduct;
 
-        let max_dura = rust_itemdb_dura(id) as f32;
+        let max_dura = item.dura as f32;
         let cur_dura = sd.status.equip[equip].dura as f32;
         let percentage = cur_dura / max_dura;
 
         let mut msg_buf = [0i8; 255];
 
         if percentage <= 0.5 && sd.status.equip[equip].repair == 0 {
-            unsafe { format_dura_msg(&mut msg_buf, rust_itemdb_name(id), "50"); }
+            unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "50"); }
             unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
             sd.status.equip[equip].repair = 1;
         }
         if percentage <= 0.25 && sd.status.equip[equip].repair == 1 {
-            unsafe { format_dura_msg(&mut msg_buf, rust_itemdb_name(id), "25"); }
+            unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "25"); }
             unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
             sd.status.equip[equip].repair = 2;
         }
         if percentage <= 0.1 && sd.status.equip[equip].repair == 2 {
-            unsafe { format_dura_msg(&mut msg_buf, rust_itemdb_name(id), "10"); }
+            unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "10"); }
             unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
             sd.status.equip[equip].repair = 3;
         }
         if percentage <= 0.05 && sd.status.equip[equip].repair == 3 {
-            unsafe { format_dura_msg(&mut msg_buf, rust_itemdb_name(id), "5"); }
+            unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "5"); }
             unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
             sd.status.equip[equip].repair = 4;
         }
         if percentage <= 0.01 && sd.status.equip[equip].repair == 4 {
-            unsafe { format_dura_msg(&mut msg_buf, rust_itemdb_name(id), "1"); }
+            unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "1"); }
             unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
             sd.status.equip[equip].repair = 5;
         }
 
         let broken = sd.status.equip[equip].dura <= 0
-            || (sd.status.state == 1 && rust_itemdb_breakondeath(sd.status.equip[equip].id) == 1);
+            || (sd.status.state == 1 && item.bod == 1);
 
         if broken {
-            if rust_itemdb_protected(sd.status.equip[equip].id) != 0
+            if item.protected != 0
                 || sd.status.equip[equip].protected >= 1
             {
                 sd.status.equip[equip].protected = sd.status.equip[equip].protected.saturating_sub(1);
-                sd.status.equip[equip].dura = rust_itemdb_dura(sd.status.equip[equip].id);
-                unsafe { format_restore_msg(&mut msg_buf, rust_itemdb_name(id)); }
+                sd.status.equip[equip].dura = item.dura;
+                unsafe { format_restore_msg(&mut msg_buf, item.name.as_ptr() as *mut i8); }
                 unsafe { clif_sendstatus(sd as *mut MapSessionData, SFLAG_FULLSTATS | SFLAG_HPMP); }
                 unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
                 unsafe { sl_doscript_simple(b"characterLog\0".as_ptr() as *const i8, b"equipRestore\0".as_ptr() as *const i8, &raw mut sd.bl); }
@@ -1808,12 +1807,12 @@ pub fn clif_deductduraequip(sd: &mut MapSessionData) -> i32 {
             }
 
             unsafe { sl_doscript_simple(b"characterLog\0".as_ptr() as *const i8, b"equipBreak\0".as_ptr() as *const i8, &raw mut sd.bl); }
-            unsafe { format_destroy_msg(&mut msg_buf, rust_itemdb_name(id)); }
+            unsafe { format_destroy_msg(&mut msg_buf, item.name.as_ptr() as *mut i8); }
 
             sd.breakid = id;
             unsafe {
                 sl_doscript_simple(b"onBreak\0".as_ptr() as *const i8, std::ptr::null(), &raw mut sd.bl);
-                sl_doscript_simple(rust_itemdb_yname(id), b"on_break\0".as_ptr() as *const i8, &raw mut sd.bl);
+                sl_doscript_simple(item.yname.as_ptr(), b"on_break\0".as_ptr() as *const i8, &raw mut sd.bl);
             }
 
             sd.status.equip[equip].id              = 0;

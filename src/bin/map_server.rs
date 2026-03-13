@@ -12,7 +12,7 @@ use yuri::game::client::visual::clif_timeout;
 use yuri::database::board_db::rust_boarddb_init;
 use yuri::database::clan_db::rust_clandb_init;
 use yuri::database::class_db::rust_classdb_init;
-use yuri::database::item_db::rust_itemdb_init;
+use yuri::database::item_db;
 use yuri::database::recipe_db::rust_recipedb_init;
 use yuri::database::magic_db::rust_magicdb_init;
 use yuri::database::mob_db::rust_mobdb_init;
@@ -143,7 +143,7 @@ async fn main() -> Result<()> {
                         yuri::game::npc::warp_init_async().await;
                     })
                 });
-                rust_itemdb_init();
+                item_db::init();
                 rust_recipedb_init();
                 rust_mobdb_init();
                 // rust_mobspawn_read is now async; drive it to completion from

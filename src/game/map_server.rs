@@ -2915,7 +2915,7 @@ pub unsafe fn map_do_term() {
     }
 
     crate::game::block::map_termblock();
-    crate::database::item_db::rust_itemdb_term();
+    crate::database::item_db::term();
     crate::database::magic_db::rust_magicdb_term();
     crate::database::class_db::rust_classdb_term();
     println!("[map] Map Server Shutdown");

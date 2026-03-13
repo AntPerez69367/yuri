@@ -43,12 +43,7 @@ use crate::game::pc::{
     rust_pc_delitem as pc_delitem, rust_pc_isinvenspace as pc_isinvenspace,
     rust_pc_readglobalreg as pc_readglobalreg,
 };
-use crate::database::item_db::{
-    rust_itemdb_exchangeable as itemdb_exchangeable, rust_itemdb_droppable as itemdb_droppable,
-    rust_itemdb_name as itemdb_name, rust_itemdb_text as itemdb_text,
-    rust_itemdb_type as itemdb_type, rust_itemdb_icon as itemdb_icon,
-    rust_itemdb_iconcolor as itemdb_iconcolor, rust_itemdb_dura as itemdb_dura,
-};
+use crate::database::item_db;
 use crate::database::class_db::rust_classdb_name as classdb_name;
 
 /// Dispatch a Lua event with two block_list arguments.
@@ -434,7 +429,7 @@ pub unsafe fn clif_exchange_additem(
     let item_id = (*sd).status.inventory[slot].id;
 
     if item_id != 0 {
-        if itemdb_exchangeable(item_id) != 0 {
+        if item_db::search(item_id).exchangeable != 0 {
             let msg = b"You cannot exchange that.\0".as_ptr() as *const i8;
             clif_sendminitext(sd, msg);
             return 0;
@@ -465,9 +460,10 @@ pub unsafe fn clif_exchange_additem(
     (*sd).exchange.item[xcount].amount = amount;
 
     // Build display name (nameof = itemdb_name, truncate to 15)
-    let raw_name = itemdb_name((*sd).exchange.item[xcount].id);
+    let ex_item_data = item_db::search((*sd).exchange.item[xcount].id);
+    let raw_name = ex_item_data.name.as_ptr();
     let mut nameof = [0i8; 255];
-    if !raw_name.is_null() {
+    if *raw_name != 0 {
         let name_len = libc::strlen(raw_name).min(nameof.len() - 1);
         std::ptr::copy_nonoverlapping(raw_name, nameof.as_mut_ptr(), name_len);
         nameof[name_len] = 0;
@@ -483,7 +479,7 @@ pub unsafe fn clif_exchange_additem(
     let mut buff = [0i8; 300];
     let i = xcount;
     let ex_item = &(*sd).exchange.item[i];
-    let ex_type = itemdb_type(ex_item.id);
+    let ex_type = ex_item_data.typ as i32;
     let ex_dura = ex_item.dura;
 
     if amount > 1 {
@@ -501,7 +497,7 @@ pub unsafe fn clif_exchange_additem(
     }
 
     if ex_type > 2 && ex_type < 17 {
-        let max_dura = itemdb_dura(ex_item.id);
+        let max_dura = ex_item_data.dura;
         let percentage = if max_dura > 0 {
             (ex_dura as f32 / max_dura as f32) * 100.0
         } else { 0.0 };
@@ -511,11 +507,10 @@ pub unsafe fn clif_exchange_additem(
             nameof.as_ptr(), percentage as i32,
         );
     } else if ex_type == ITM_SMOKE {
-        let txt = itemdb_text(ex_item.id);
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
             b"%s [%d %s]\0".as_ptr() as *const i8,
-            nameof.as_ptr(), ex_dura, txt,
+            nameof.as_ptr(), ex_dura, ex_item_data.text.as_ptr(),
         );
     } else if ex_type == ITM_BAG {
         libc::snprintf(
@@ -555,10 +550,10 @@ pub unsafe fn clif_exchange_additem(
         if !pw.is_null() { pw.write_unaligned((icon_val as u16).to_be()); }
         wfifob((*sd).fd, len + 10, ex_item.custom_icon_color as u8);
     } else {
-        let icon_val = itemdb_icon(ex_item.id) as u16;
+        let icon_val = ex_item_data.icon as u16;
         let pw = wfifop((*sd).fd, len + 8) as *mut u16;
         if !pw.is_null() { pw.write_unaligned(icon_val.to_be()); }
-        wfifob((*sd).fd, len + 10, itemdb_iconcolor(ex_item.id) as u8);
+        wfifob((*sd).fd, len + 10, ex_item_data.icon_color as u8);
     }
     wfifob((*sd).fd, len + 11, buf_len as u8);
     let dst = wfifop((*sd).fd, len + 12) as *mut u8;
@@ -593,7 +588,7 @@ pub unsafe fn clif_exchange_additem(
     }
 
     if ex_type > 2 && ex_type < 17 {
-        let max_dura = itemdb_dura(ex_item.id);
+        let max_dura = ex_item_data.dura;
         let percentage = if max_dura > 0 {
             (ex_dura as f32 / max_dura as f32) * 100.0
         } else { 0.0 };
@@ -603,11 +598,10 @@ pub unsafe fn clif_exchange_additem(
             nameof.as_ptr(), percentage as i32,
         );
     } else if ex_type == ITM_SMOKE {
-        let txt = itemdb_text(ex_item.id);
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
             b"%s [%d %s]\0".as_ptr() as *const i8,
-            nameof.as_ptr(), ex_dura, txt,
+            nameof.as_ptr(), ex_dura, ex_item_data.text.as_ptr(),
         );
     } else if ex_type == ITM_BAG {
         libc::snprintf(
@@ -647,10 +641,10 @@ pub unsafe fn clif_exchange_additem(
         if !pw.is_null() { pw.write_unaligned((icon_val as u16).to_be()); }
         wfifob((*tsd).fd, 10, ex_item.custom_icon_color as u8);
     } else {
-        let icon_val = itemdb_icon(ex_item.id) as u16;
+        let icon_val = ex_item_data.icon as u16;
         let pw = wfifop((*tsd).fd, 8) as *mut u16;
         if !pw.is_null() { pw.write_unaligned(icon_val.to_be()); }
-        wfifob((*tsd).fd, 10, itemdb_iconcolor(ex_item.id) as u8);
+        wfifob((*tsd).fd, 10, ex_item_data.icon_color as u8);
     }
     wfifob((*tsd).fd, 11, buf_len as u8);
     let dst2 = wfifop((*tsd).fd, 12) as *mut u8;
@@ -832,7 +826,7 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
         let mut mob_guard = mob_arc.write();
         let mob = &mut *mob_guard as *mut crate::game::mob::MobSpawnData;
 
-        if itemdb_exchangeable((*sd).status.inventory[slot].id) == 1 { return 0; }
+        if item_db::search((*sd).status.inventory[slot].id).exchangeable == 1 { return 0; }
 
         let inv_id   = (*sd).status.inventory[slot].id;
         let inv_dura = (*sd).status.inventory[slot].dura;
@@ -881,7 +875,8 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
         let nd_min = nd as *mut NpcMinimal;
 
         let inv_id = (*sd).status.inventory[slot].id;
-        if itemdb_exchangeable(inv_id) != 0 || itemdb_droppable(inv_id) != 0 {
+        let inv_item = item_db::search(inv_id);
+        if inv_item.exchangeable != 0 || inv_item.droppable != 0 {
             return 0;
         }
 
@@ -889,7 +884,7 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
             let func = b"handItem\0".as_ptr() as *const i8;
             sl_doscript_coro_2((*nd_min).name.as_ptr(), func, &mut (*sd).bl as *mut BlockList, &mut (*nd_min).bl as *mut BlockList);
         } else {
-            let item_name = itemdb_name(inv_id);
+            let item_name = item_db::search(inv_id).name.as_ptr();
             let mut msg = [0i8; 128];
             libc::snprintf(
                 msg.as_mut_ptr(), msg.len(),

@@ -65,7 +65,7 @@ use crate::game::scripting::{
 };
 
 // ── database init functions ────────────────────────────────────────────────────
-use crate::database::item_db::{rust_itemdb_init as itemdb_read, rust_itemdb_id as itemdb_id, rust_itemdb_dura as itemdb_dura};
+use crate::database::item_db;
 use crate::database::magic_db::rust_magicdb_id as magicdb_id;
 use crate::database::board_db::{rust_boarddb_term as boarddb_term, rust_boarddb_init as boarddb_init};
 use crate::database::clan_db::rust_clandb_init as clandb_init;
@@ -275,7 +275,7 @@ fn command_item(sd: &mut MapSessionData, line: &str) -> i32 {
         if let Some(name) = parts.next() {
             itemnum = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
             let namebuf = str_to_cname(name);
-            itemid = unsafe { itemdb_id(namebuf.as_ptr()) };
+            itemid = item_db::id_by_name(carray_to_str(&namebuf));
         }
     }
     if itemid == 0 { return -1; }
@@ -284,7 +284,7 @@ fn command_item(sd: &mut MapSessionData, line: &str) -> i32 {
     unsafe {
         let mut it: Item = std::mem::zeroed();
         it.id = itemid;
-        it.dura = itemdb_dura(itemid);
+        it.dura = item_db::search(itemid).dura;
         it.amount = itemnum as i32;
         it.owner = 0;
         pc_additem(as_ptr(sd), &mut it);
@@ -556,7 +556,7 @@ fn command_speed(sd: &mut MapSessionData, line: &str) -> i32 {
 }
 
 fn command_reloaditem(sd: &mut MapSessionData, _line: &str) -> i32 {
-    itemdb_read();
+    item_db::init();
     send_minitext(sd, "Item DB Reloaded!");
     0
 }

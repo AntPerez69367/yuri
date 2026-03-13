@@ -224,8 +224,8 @@ impl UserData for FloorListObject {
                     )?));
                 }
                 _ => {
-                    let db = crate::database::item_db::rust_itemdb_search(fl_ref.data.id);
-                    unsafe { item_data_getattr(lua, db, &key) }
+                    let db = crate::database::item_db::search(fl_ref.data.id);
+                    unsafe { item_data_getattr(lua, &*db as *const crate::database::item_db::ItemData, &key) }
                 }
             }
         });
