@@ -25,11 +25,6 @@ pub struct GlobalConfig {
     pub char_port:   i32,
     pub map_ip:      u32,
     pub map_port:    u32,
-    pub sql_id:      [i8; 32],
-    pub sql_pw:      [i8; 32],
-    pub sql_ip:      [i8; 32],
-    pub sql_db:      [i8; 32],
-    pub sql_port:    i32,
     pub serverid:    i32,
     pub require_reg: i32,
     pub nex_version: i32,
@@ -58,10 +53,10 @@ static GLOBAL_CONFIG: OnceLock<GlobalConfig> = OnceLock::new();
 
 /// Returns the global config. Panics if called before `rust_config_populate_c_globals()`.
 pub fn global_config() -> &'static GlobalConfig {
-    GLOBAL_CONFIG.get().expect("[config] global_config() called before rust_config_populate_c_globals()")
+    GLOBAL_CONFIG.get().expect("[config] global_config() called before config was loaded")
 }
 
-/// Set the global config. Called once from `rust_config_populate_c_globals()`.
+/// Set the global config. Called once at startup from `rust_config_read()`.
 /// Silently ignores duplicate calls (startup race guard).
 pub fn set_global_config(cfg: GlobalConfig) {
     let _ = GLOBAL_CONFIG.set(cfg);

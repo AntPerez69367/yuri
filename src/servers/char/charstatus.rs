@@ -8,39 +8,9 @@
 //! repr(C) padding has been replaced with explicit `_pad` fields (e.g.
 //! `SkillInfo::_pad`) so no struct contains uninitialized padding bytes.
 
+pub use crate::common::types::{BankData, GlobalReg, Item, Point};
+
 // ── Sub-structs ───────────────────────────────────────────────────────────────
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct Point {
-    pub m: u16,
-    pub x: u16,
-    pub y: u16,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct Item {
-    pub id: u32,
-    pub owner: u32,
-    pub custom: u32,
-    pub time: u32,
-    pub dura: i32,
-    pub amount: i32,
-    pub pos: u8,
-    pub _pad0: [u8; 3],
-    pub custom_look: u32,
-    pub custom_icon: u32,
-    pub custom_look_color: u32,
-    pub custom_icon_color: u32,
-    pub protected: u32,
-    pub traps_table: [u32; 100],
-    pub buytext: [u8; 64],
-    pub note: [i8; 300],
-    pub repair: i8,
-    pub real_name: [i8; 64],
-    pub _pad1: [u8; 3],
-}
 
 #[repr(C)]
 #[derive(Copy, Clone)]
@@ -71,32 +41,9 @@ pub struct SkillInfo {
 
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub struct BankData {
-    pub item_id: u32,
-    pub amount: u32,
-    pub owner: u32,
-    pub time: u32,
-    pub custom_icon: u32,
-    pub custom_look: u32,
-    pub real_name: [i8; 64],
-    pub custom_look_color: u32,
-    pub custom_icon_color: u32,
-    pub protected: u32,
-    pub note: [i8; 300],
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
 pub struct KillReg {
     pub mob_id: u32,
     pub amount: u32,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct GlobalReg {
-    pub str: [i8; 64],
-    pub val: i32,
 }
 
 #[repr(C)]
@@ -108,20 +55,12 @@ pub struct GlobalRegString {
 
 // Safety: all fields are primitive types or arrays of primitive types with
 // no uninitialized padding beyond explicit `_pad` fields.
-unsafe impl bytemuck::Zeroable for Point {}
-unsafe impl bytemuck::Pod for Point {}
-unsafe impl bytemuck::Zeroable for Item {}
-unsafe impl bytemuck::Pod for Item {}
 unsafe impl bytemuck::Zeroable for Legend {}
 unsafe impl bytemuck::Pod for Legend {}
 unsafe impl bytemuck::Zeroable for SkillInfo {}
 unsafe impl bytemuck::Pod for SkillInfo {}
-unsafe impl bytemuck::Zeroable for BankData {}
-unsafe impl bytemuck::Pod for BankData {}
 unsafe impl bytemuck::Zeroable for KillReg {}
 unsafe impl bytemuck::Pod for KillReg {}
-unsafe impl bytemuck::Zeroable for GlobalReg {}
-unsafe impl bytemuck::Pod for GlobalReg {}
 unsafe impl bytemuck::Zeroable for GlobalRegString {}
 unsafe impl bytemuck::Pod for GlobalRegString {}
 

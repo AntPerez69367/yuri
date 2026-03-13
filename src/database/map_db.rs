@@ -16,12 +16,7 @@ pub const BLOCK_SIZE: usize = 8;
 pub const MAX_MAPREG: usize = 500;
 pub const MAP_SLOTS: usize = 65535;
 
-/// Player/NPC/mob registry entry (string or integer key-value pair).
-#[repr(C)]
-pub struct GlobalReg {
-    pub str: [i8; 64],
-    pub val: i32,
-}
+pub use crate::common::types::GlobalReg;
 
 /// Intrusive linked-list node for entities on the block grid. 48 bytes on 64-bit.
 /// Intrusive doubly-linked list header embedded as first field in every entity

@@ -2764,6 +2764,7 @@ dependencies = [
  "bytes",
  "chrono",
  "criterion",
+ "dotenvy",
  "flate2",
  "hex",
  "libc",

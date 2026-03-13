@@ -154,18 +154,13 @@ async fn main() -> Result<()> {
         .context("[metan] [config_error] conf/server.yaml")?;
 
     // Connect to database
-    let db_url = format!(
-        "mysql://{}:{}@{}:{}/{}",
-        config.sql_id, config.sql_pw, config.sql_ip, config.sql_port, config.sql_db
-    );
+    let db_url = std::env::var("DATABASE_URL")
+        .context("DATABASE_URL environment variable not set")?;
     let pool = MySqlPoolOptions::new()
         .max_connections(5)
         .connect(&db_url)
         .await
-        .with_context(|| format!(
-            "Cannot connect to MySQL (host={}:{} db={} user={})",
-            config.sql_ip, config.sql_port, config.sql_db, config.sql_id
-        ))?;
+        .with_context(|| format!("Cannot connect to MySQL: {}", db_url))?;
 
     // Register pool with the Rust DB module layer.
     // Use set_pool() (async-safe) instead of connect() which would panic inside tokio.

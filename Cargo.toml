@@ -9,6 +9,7 @@ rust-version = "1.93"
 crate-type = ["staticlib", "rlib"]
 
 [dependencies]
+dotenvy = "0.15"
 toml = "0.9.8"
 rand = "0.10.0"
 flate2 = "1"

@@ -31,6 +31,8 @@ pub fn db_init() {}
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
+
     tracing_subscriber::fmt()
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -68,7 +70,7 @@ async fn main() -> Result<()> {
             .with_context(|| format!("Cannot parse config: {}", conf_file))?
     };
 
-    // Call rust_config_read so C code can access config globals
+    // Populate GlobalConfig so game modules can access config via global_config()
     {
         let cpath = CString::new(conf_file.as_str()).unwrap();
         if unsafe { yuri::config::rust_config_read(cpath.as_ptr()) } != 0 {
@@ -86,18 +88,13 @@ async fn main() -> Result<()> {
 
     // Rust async DB pool
     let pool = {
-        let db_url = format!(
-            "mysql://{}:{}@{}:{}/{}",
-            config.sql_id, config.sql_pw, config.sql_ip, config.sql_port, config.sql_db
-        );
+        let db_url = std::env::var("DATABASE_URL")
+            .context("DATABASE_URL environment variable not set")?;
         MySqlPoolOptions::new()
             .max_connections(5)
             .connect(&db_url)
             .await
-            .with_context(|| format!(
-                "Cannot connect to MySQL (host={}:{} db={} user={})",
-                config.sql_ip, config.sql_port, config.sql_db, config.sql_id
-            ))?
+            .with_context(|| format!("Cannot connect to MySQL: {}", db_url))?
     };
 
     // Register the pool with the Rust DB module layer (map_db, mob_db, etc.).

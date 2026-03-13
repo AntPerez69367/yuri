@@ -17,20 +17,7 @@ pub const META_MAX: usize = 20;
 /// Maximum number of towns supported
 pub const TOWN_MAX: usize = 255;
 
-/// A point in 3D space (map, x, y)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Point {
-    pub m: u16,
-    pub x: u16,
-    pub y: u16,
-}
-
-impl Point {
-    /// Create a new point
-    pub fn new(m: u16, x: u16, y: u16) -> Self {
-        Self { m, x, y }
-    }
-}
+pub use crate::common::types::Point;
 
 /// Main server configuration
 ///
@@ -38,18 +25,6 @@ impl Point {
 /// Just add a field here, and serde handles the rest!
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
-    // ============================================
-    // MySQL Database Configuration
-    // ============================================
-    pub sql_ip: String,
-
-    #[serde(default = "default_sql_port")]
-    pub sql_port: u16,
-
-    pub sql_id: String,
-    pub sql_pw: String,
-    pub sql_db: String,
-
     // ============================================
     // Login Server Configuration
     // ============================================
@@ -161,10 +136,6 @@ pub struct ServerConfig {
 // These are called by serde when a field is missing
 // ============================================
 
-fn default_sql_port() -> u16 {
-    3306
-}
-
 fn default_login_port() -> u16 {
     2000
 }
@@ -222,7 +193,7 @@ impl ServerConfig {
     ///
     /// let config = ServerConfig::from_file("conf/server.yaml")
     ///     .expect("Failed to load config");
-    /// println!("SQL DB: {}", config.sql_db);
+    /// println!("Map IP: {}", config.map_ip);
     /// ```
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
@@ -258,9 +229,6 @@ impl ServerConfig {
     /// Checks that required fields are set and values are reasonable
     fn validate(&self) -> Result<()> {
         // Check required fields aren't empty
-        anyhow::ensure!(!self.sql_ip.is_empty(), "sql_ip cannot be empty");
-        anyhow::ensure!(!self.sql_id.is_empty(), "sql_id cannot be empty");
-        anyhow::ensure!(!self.sql_db.is_empty(), "sql_db cannot be empty");
         anyhow::ensure!(!self.map_ip.is_empty(), "map_ip cannot be empty");
         anyhow::ensure!(!self.char_ip.is_empty(), "char_ip cannot be empty");
         anyhow::ensure!(!self.login_ip.is_empty(), "login_ip cannot be empty");
@@ -314,11 +282,6 @@ mod tests {
     /// Helper to create a minimal valid config
     fn minimal_config() -> &'static str {
         r#"
-sql_ip: "127.0.0.1"
-sql_id: "user"
-sql_pw: "pass"
-sql_db: "testdb"
-
 login_id: "loginid"
 login_pw: "loginpw"
 login_ip: "127.0.0.1"
@@ -347,11 +310,6 @@ start_point:
     #[test]
     fn test_minimal_config() {
         let config = ServerConfig::from_str(minimal_config()).unwrap();
-
-        assert_eq!(config.sql_ip, "127.0.0.1");
-        assert_eq!(config.sql_id, "user");
-        assert_eq!(config.sql_pw, "pass");
-        assert_eq!(config.sql_db, "testdb");
         assert_eq!(config.start_point, Point::new(0, 1, 1));
     }
 
@@ -360,7 +318,6 @@ start_point:
         let config = ServerConfig::from_str(minimal_config()).unwrap();
 
         // All these should have defaults
-        assert_eq!(config.sql_port, 3306);
         assert_eq!(config.login_port, 2000);
         assert_eq!(config.char_port, 2005);
         assert_eq!(config.map_port, 2001);
@@ -376,12 +333,6 @@ start_point:
     #[test]
     fn test_custom_ports() {
         let config_str = r#"
-sql_ip: "127.0.0.1"
-sql_port: 5432
-sql_id: "user"
-sql_pw: "pass"
-sql_db: "testdb"
-
 login_id: "loginid"
 login_pw: "loginpw"
 login_ip: "127.0.0.1"
@@ -402,7 +353,6 @@ start_point:
 "#;
 
         let config = ServerConfig::from_str(config_str).unwrap();
-        assert_eq!(config.sql_port, 5432);
         assert_eq!(config.login_port, 3000);
         assert_eq!(config.char_port, 3005);
         assert_eq!(config.map_port, 3001);
@@ -411,10 +361,6 @@ start_point:
     #[test]
     fn test_meta_files_as_list() {
         let config_str = r#"
-sql_ip: "127.0.0.1"
-sql_id: "user"
-sql_pw: "pass"
-sql_db: "testdb"
 login_id: "loginid"
 login_pw: "loginpw"
 login_ip: "127.0.0.1"
@@ -443,10 +389,6 @@ meta:
     #[test]
     fn test_towns_as_list() {
         let config_str = r#"
-sql_ip: "127.0.0.1"
-sql_id: "user"
-sql_pw: "pass"
-sql_db: "testdb"
 login_id: "loginid"
 login_pw: "loginpw"
 login_ip: "127.0.0.1"
@@ -474,10 +416,6 @@ town:
     #[test]
     fn test_missing_required_field() {
         let config_str = r#"
-sql_ip: "127.0.0.1"
-sql_id: "user"
-# Missing sql_pw!
-sql_db: "testdb"
 "#;
 
         let result = ServerConfig::from_str(config_str);
@@ -485,13 +423,13 @@ sql_db: "testdb"
 
         let err = result.unwrap_err();
         let err_msg = format!("{:?}", err);
-        assert!(err_msg.contains("sql_pw") || err_msg.contains("missing field"));
+        assert!(err_msg.contains("missing field") || err_msg.contains("map_ip") || err_msg.contains("login_ip"));
     }
 
     #[test]
     fn test_invalid_yaml() {
         let config_str = r#"
-sql_ip: [this is not valid yaml
+login_id: [this is not valid yaml
 "#;
 
         let result = ServerConfig::from_str(config_str);
@@ -501,11 +439,6 @@ sql_ip: [this is not valid yaml
     #[test]
     fn test_wrong_type() {
         let config_str = r#"
-sql_ip: "127.0.0.1"
-sql_port: "not_a_number"
-sql_id: "user"
-sql_pw: "pass"
-sql_db: "testdb"
 login_id: "loginid"
 login_pw: "loginpw"
 login_ip: "127.0.0.1"
@@ -513,6 +446,7 @@ char_id: "charid"
 char_pw: "charpw"
 char_ip: "127.0.0.1"
 map_ip: "127.0.0.1"
+map_port: "not_a_number"
 start_point:
   m: 0
   x: 1
@@ -521,33 +455,6 @@ start_point:
 
         let result = ServerConfig::from_str(config_str);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validation_empty_sql_ip() {
-        let config_str = r#"
-sql_ip: ""
-sql_id: "user"
-sql_pw: "pass"
-sql_db: "testdb"
-login_id: "loginid"
-login_pw: "loginpw"
-login_ip: "127.0.0.1"
-char_id: "charid"
-char_pw: "charpw"
-char_ip: "127.0.0.1"
-map_ip: "127.0.0.1"
-start_point:
-  m: 0
-  x: 1
-  y: 1
-"#;
-
-        let result = ServerConfig::from_str(config_str);
-        assert!(result.is_err());
-
-        let err_msg = format!("{}", result.unwrap_err());
-        assert!(err_msg.contains("sql_ip"));
     }
 
     #[test]
@@ -570,10 +477,6 @@ start_point:
     #[test]
     fn test_xor_key_too_long() {
         let config_str = r#"
-sql_ip: "127.0.0.1"
-sql_id: "user"
-sql_pw: "pass"
-sql_db: "testdb"
 login_id: "loginid"
 login_pw: "loginpw"
 login_ip: "127.0.0.1"
@@ -599,12 +502,6 @@ start_point:
     fn test_full_config() {
         let config_str = r#"
 # Full server configuration
-sql_ip: "192.168.1.2"
-sql_port: 3306
-sql_id: "gameuser"
-sql_pw: "gamepass"
-sql_db: "gamedb"
-
 login_id: "2d8ae0cc4ef940848d885e2493cd8d8a"
 login_pw: "d6ed86ed53a749639b215436916c8c1e"
 login_ip: "127.0.0.1"
@@ -652,8 +549,6 @@ town:
         let config = ServerConfig::from_str(config_str).unwrap();
 
         // Verify all fields
-        assert_eq!(config.sql_ip, "192.168.1.2");
-        assert_eq!(config.sql_id, "gameuser");
         assert_eq!(config.xor_key, "TestKey");
         assert_eq!(config.meta.len(), 5);
         assert_eq!(config.town.len(), 6);
@@ -671,9 +566,6 @@ town:
 
         // Load it back
         let loaded = ServerConfig::from_file(&temp_file).unwrap();
-
-        assert_eq!(config.sql_ip, loaded.sql_ip);
-        assert_eq!(config.sql_db, loaded.sql_db);
         assert_eq!(config.start_point, loaded.start_point);
 
         // Cleanup
@@ -731,50 +623,6 @@ pub unsafe fn rust_config_read(cfg_file: *const i8) -> i32 {
             tracing::error!("[rust_config_read] failed to load config: {}", e);
             -1
         }
-    }
-}
-
-pub fn rust_config_get_sql_ip() -> *const i8 {
-    match get_config() {
-        Some(cfg) => match CString::new(cfg.sql_ip.clone()) {
-            Ok(s) => s.into_raw(),
-            Err(_) => ptr::null(),
-        },
-        None => ptr::null(),
-    }
-}
-
-pub fn rust_config_get_sql_port() -> u16 {
-    get_config().map(|c| c.sql_port).unwrap_or(3306)
-}
-
-pub fn rust_config_get_sql_id() -> *const i8 {
-    match get_config() {
-        Some(cfg) => match CString::new(cfg.sql_id.clone()) {
-            Ok(s) => s.into_raw(),
-            Err(_) => ptr::null(),
-        },
-        None => ptr::null(),
-    }
-}
-
-pub fn rust_config_get_sql_pw() -> *const i8 {
-    match get_config() {
-        Some(cfg) => match CString::new(cfg.sql_pw.clone()) {
-            Ok(s) => s.into_raw(),
-            Err(_) => ptr::null(),
-        },
-        None => ptr::null(),
-    }
-}
-
-pub fn rust_config_get_sql_db() -> *const i8 {
-    match get_config() {
-        Some(cfg) => match CString::new(cfg.sql_db.clone()) {
-            Ok(s) => s.into_raw(),
-            Err(_) => ptr::null(),
-        },
-        None => ptr::null(),
     }
 }
 
@@ -911,11 +759,6 @@ pub unsafe fn rust_config_populate_c_globals() {
         char_port:   2005,
         map_ip:      0,
         map_port:    0,
-        sql_id:      [0; 32],
-        sql_pw:      [0; 32],
-        sql_ip:      [0; 32],
-        sql_db:      [0; 32],
-        sql_port:    3306,
         serverid:    0,
         require_reg: 1,
         nex_version: 0,
@@ -932,12 +775,6 @@ pub unsafe fn rust_config_populate_c_globals() {
     };
 
     unsafe {
-        copy_cstr(rust_config_get_sql_id(), &mut cfg.sql_id);
-        copy_cstr(rust_config_get_sql_pw(), &mut cfg.sql_pw);
-        copy_cstr(rust_config_get_sql_ip(), &mut cfg.sql_ip);
-        copy_cstr(rust_config_get_sql_db(), &mut cfg.sql_db);
-        cfg.sql_port = rust_config_get_sql_port() as i32;
-
         let config_opt = get_config();
         if let Some(config) = config_opt {
             if let Ok(s) = CString::new(config.login_id.clone()) {
@@ -972,15 +809,15 @@ pub unsafe fn rust_config_populate_c_globals() {
             }
 
             cfg.start_pos   = config.start_point;
-            cfg.serverid    = config.server_id as i32;
-            cfg.require_reg = config.require_reg as i32;
-            cfg.nex_version = config.version as i32;
-            cfg.nex_deep    = config.deep as i32;
-            cfg.save_time   = (config.save_time * 1000) as i32;
+            cfg.serverid    = config.server_id;
+            cfg.require_reg = config.require_reg;
+            cfg.nex_version = config.version;
+            cfg.nex_deep    = config.deep;
+            cfg.save_time   = config.save_time * 1000;
 
             // XP_RATE and D_RATE are AtomicI32 (written at runtime by GM commands).
-            XP_RATE.store(config.xprate as i32, Ordering::Relaxed);
-            D_RATE.store(config.droprate as i32, Ordering::Relaxed);
+            XP_RATE.store(config.xprate, Ordering::Relaxed);
+            D_RATE.store(config.droprate, Ordering::Relaxed);
 
             cfg.metamax = config.meta.len().min(20) as i32;
             for (i, meta) in config.meta.iter().take(20).enumerate() {

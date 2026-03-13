@@ -6,6 +6,8 @@ use yuri::servers::login::{LoginState, parse_lang_file};
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
+
     tracing_subscriber::fmt()
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -55,15 +57,13 @@ async fn main() -> Result<()> {
     let lang_content = std::fs::read_to_string(&lang_file).unwrap_or_default();
     let messages = parse_lang_file(&lang_content)?;
 
-    let db_url = format!(
-        "mysql://{}:{}@{}:{}/{}",
-        config.sql_id, config.sql_pw, config.sql_ip, config.sql_port, config.sql_db
-    );
+    let db_url = std::env::var("DATABASE_URL")
+        .context("DATABASE_URL environment variable not set")?;
     let pool = MySqlPoolOptions::new()
         .max_connections(5)
         .connect(&db_url)
         .await
-        .with_context(|| format!("Cannot connect to DB: {}", config.sql_ip))?;
+        .with_context(|| format!("Cannot connect to DB: {}", db_url))?;
 
     tracing::info!("[login] [started] Login Server Started");
 

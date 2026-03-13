@@ -3,48 +3,7 @@ use mlua::{MetaMethod, UserData, UserDataMethods};
 
 use crate::database::item_db::ItemData;
 use crate::database::recipe_db::RecipeData;
-
-// ---------------------------------------------------------------------------
-// repr(C) structs mirroring C game structs
-// ---------------------------------------------------------------------------
-
-/// Live item instance. 880 bytes.
-#[repr(C)]
-pub struct BoundItem {
-    pub id: u32,
-    pub owner: u32,
-    pub custom: u32,
-    pub time: u32,
-    pub dura: i32,
-    pub amount: i32,
-    pub pos: u8,
-    pub _pad: [u8; 3],
-    pub custom_look: u32,
-    pub custom_icon: u32,
-    pub custom_look_color: u32,
-    pub custom_icon_color: u32,
-    pub protected: u32,
-    pub traps_table: [u32; 100],
-    pub buytext: [u8; 64],
-    pub note: [i8; 300],
-    pub repair: i8,
-    pub real_name: [i8; 64],
-}
-
-#[repr(C)]
-pub struct BankData {
-    pub item_id: u32,
-    pub amount: u32,
-    pub owner: u32,
-    pub time: u32,
-    pub custom_icon: u32,
-    pub custom_look: u32,
-    pub real_name: [i8; 64],
-    pub custom_look_color: u32,
-    pub custom_icon_color: u32,
-    pub protected: u32,
-    pub note: [i8; 300],
-}
+pub use crate::common::types::{BankData, Item as BoundItem};
 
 #[repr(C)]
 pub struct Parcel {

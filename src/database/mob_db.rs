@@ -7,36 +7,14 @@ use sqlx::Row;
 
 use super::{blocking_run, get_pool};
 use super::item_db::str_to_fixed;
+use crate::common::types::Item;
 
 const MAX_EQUIP: usize = 15;
-
-/// Live item instance (not the item template).
-/// Also used by pc.rs inventory — move to a shared types module when pc.rs is written.
-pub struct MobItem {
-    pub id: u32,
-    pub owner: u32,
-    pub custom: u32,
-    pub time: u32,
-    pub dura: i32,
-    pub amount: i32,
-    pub pos: u8,
-    pub _pad: [u8; 3],
-    pub custom_look: u32,
-    pub custom_icon: u32,
-    pub custom_look_color: u32,
-    pub custom_icon_color: u32,
-    pub protected_: u32,
-    pub traps_table: [u32; 100],
-    pub buytext: [u8; 64],
-    pub note: [i8; 300],
-    pub repair: i8,
-    pub real_name: [i8; 64],
-}
 
 /// Mob database entry.
 /// The `equip` array is populated by a MobEquipment sub-query for NPC mobs (mobtype == 1).
 pub struct MobDbData {
-    pub equip: [MobItem; 15], // MAX_EQUIP from mmo.h
+    pub equip: [Item; MAX_EQUIP],
     pub vita: i32,
     pub r#type: i32,
     pub subtype: i32,

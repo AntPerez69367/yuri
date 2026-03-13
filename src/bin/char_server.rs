@@ -7,6 +7,8 @@ use yuri::servers::char::db;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenvy::dotenv().ok();
+
     tracing_subscriber::fmt()
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -43,18 +45,13 @@ async fn main() -> Result<()> {
     };
 
     let pool = {
-        let db_url = format!(
-            "mysql://{}:{}@{}:{}/{}",
-            config.sql_id, config.sql_pw, config.sql_ip, config.sql_port, config.sql_db
-        );
+        let db_url = std::env::var("DATABASE_URL")
+            .context("DATABASE_URL environment variable not set")?;
         MySqlPoolOptions::new()
             .max_connections(5)
             .connect(&db_url)
             .await
-            .with_context(|| format!(
-                "Cannot connect to MySQL (host={}:{} db={} user={})",
-                config.sql_ip, config.sql_port, config.sql_db, config.sql_id
-            ))?
+            .with_context(|| format!("Cannot connect to MySQL: {}", db_url))?
     };
 
     db::reset_all_online(&pool).await;
