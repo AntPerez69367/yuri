@@ -707,7 +707,7 @@ pub async unsafe fn map_addmob(
     let m     = (*sd).bl.m  as i32;
     let x     = (*sd).bl.x  as i32;
     let y     = (*sd).bl.y  as i32;
-    let sid   = crate::config_globals::global_config().serverid;
+    let sid   = crate::config::config().server_id;
 
     let sql = format!(
         "INSERT INTO `Spawns{sid}` \
@@ -1813,7 +1813,7 @@ pub fn object_flags() -> Option<&'static [u8]> {
 /// and point to a null-terminated string.
 pub unsafe fn object_flag_init() -> i32 {
     let filename = b"static_objects.tbl\0";
-    let dir_bytes = crate::config_globals::global_config().data_dir.as_bytes();
+    let dir_bytes = crate::config::config().data_dir.as_bytes();
 
     // Build full path: data_dir + filename (without the extra NUL added by CString).
     let mut path_bytes: Vec<u8> = Vec::with_capacity(dir_bytes.len() + filename.len() - 1);
@@ -2501,7 +2501,7 @@ pub async unsafe fn map_loadgameregistry() -> i32 {
         grg_value: u32, // INT UNSIGNED in schema
     }
 
-    let sid = crate::config_globals::global_config().serverid;
+    let sid = crate::config::config().server_id;
     let limit = MAX_GAMEREG as u32;
 
     {
@@ -2583,7 +2583,7 @@ pub async unsafe fn map_savegameregistry(i: i32) -> i32 {
         let gr = gamereg();
         if gr.registry.is_null() { return 0; }
         if i < 0 || i as usize >= gr.registry_num as usize { return 0; }
-        let sid = crate::config_globals::global_config().serverid;
+        let sid = crate::config::config().server_id;
         let entry = &*gr.registry.add(i as usize);
         let identifier = {
             let bytes: &[u8] = std::slice::from_raw_parts(entry.str.as_ptr() as *const u8, 64);
@@ -2808,7 +2808,7 @@ pub async unsafe fn map_lastdeath_mob(
         let starty     = (*p).starty as i32;
         let map_id     = (*p).bl.m  as i32;
         let mob_id     = (*p).bl.id as i32;
-        let sid        = crate::config_globals::global_config().serverid;
+        let sid        = crate::config::config().server_id;
         (last_death, startx, starty, map_id, mob_id, sid)
     }; // p ref dropped here
 
@@ -2964,14 +2964,14 @@ pub static cronjobtimer: AtomicI32 = AtomicI32::new(0);
 ///
 ///
 /// # Safety
-/// Must be called on the game thread. `maps_dir` and `serverid` are read from
-/// `src/config_globals.rs` via `global_config()`.
+/// Must be called on the game thread. `maps_dir` and `server_id` are read from
+/// `crate::config::config()`.
 pub unsafe fn map_reload() -> i32 {
     use crate::database::map_db::map_reload;
 
-    let gc = crate::config_globals::global_config();
-    let serverid = gc.serverid;
-    if map_reload(&gc.maps_dir, serverid) != 0 {
+    let cfg = crate::config::config();
+    let serverid = cfg.server_id;
+    if map_reload(&cfg.maps_dir, serverid) != 0 {
         tracing::error!("[map] map_reload failed");
         return -1;
     }

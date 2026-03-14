@@ -64,12 +64,9 @@ async fn main() -> Result<()> {
             .with_context(|| format!("Cannot parse config: {}", conf_file))?
     };
 
-    // Populate GlobalConfig so game modules can access config via global_config()
-    {
-        let cpath = CString::new(conf_file.as_str()).unwrap();
-        if unsafe { yuri::config::rust_config_read(cpath.as_ptr()) } != 0 {
-            anyhow::bail!("rust_config_read failed for {}", conf_file);
-        }
+    // Load config into the global CONFIG static and initialise rate atomics.
+    if yuri::config::config_read(&conf_file) != 0 {
+        anyhow::bail!("config_read failed for {}", conf_file);
     }
 
     // Load lang strings

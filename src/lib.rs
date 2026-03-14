@@ -25,7 +25,7 @@ pub mod common;
 
 /// Server configuration (replaces config.c)
 pub mod config;
-/// C-compatible global variables from config.c (replaces config.c globals)
+/// Runtime-mutable rate globals (XP_RATE, D_RATE)
 pub mod config_globals;
 /// Core utilities and server lifecycle (replaces core.c)
 pub mod core;

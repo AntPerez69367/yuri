@@ -306,16 +306,20 @@ pub unsafe fn clif_closeit(sd: *mut MapSessionData) -> i32 {
     wfifohead(fd, 255);
     wfifob(fd, 0, 0xAA);
     wfifob(fd, 3, 0x03);
-    let gc = crate::config_globals::global_config();
-    wfifol(fd, 4, swap32(gc.login_ip as u32));
-    wfifow(fd, 8, swap16(gc.login_port as u16));
+    let cfg = crate::config::config();
+    let login_ip: u32 = cfg.login_ip.parse::<std::net::Ipv4Addr>()
+        .map(|a| u32::from_le_bytes(a.octets()))
+        .unwrap_or(0);
+    wfifol(fd, 4, swap32(login_ip));
+    wfifow(fd, 8, swap16(cfg.login_port as u16));
     wfifob(fd, 10, 0x16);
     wfifow(fd, 11, swap16(9));
-    // copy xor_key (9 chars + null) into WFIFOP(sd->fd, 13)
-    libc::strcpy(
-        wfifop(fd, 13) as *mut i8,
-        gc.xor_key.as_ptr(),
-    );
+    // copy xor_key (up to 9 chars + null) into WFIFOP(sd->fd, 13)
+    let xor_bytes = cfg.xor_key.as_bytes();
+    let dst = wfifop(fd, 13) as *mut u8;
+    let xor_len = xor_bytes.len().min(9);
+    std::ptr::copy_nonoverlapping(xor_bytes.as_ptr(), dst, xor_len);
+    *dst.add(xor_len) = 0;
     let mut len = 11usize;
     let name_ptr = (*sd).status.name.as_ptr();
     let name_len = cstrlen(name_ptr as *const i8);
@@ -343,8 +347,8 @@ pub unsafe fn clif_sendtowns(sd: *mut MapSessionData) -> i32 {
         return 0;
     }
 
-    let gc = crate::config_globals::global_config();
-    let n = gc.town_n as usize;
+    let cfg = crate::config::config();
+    let n = cfg.town.len().min(255);
 
     wfifohead(fd, 0x59);
     wfifob(fd, 0, 0xAA);
@@ -356,14 +360,13 @@ pub unsafe fn clif_sendtowns(sd: *mut MapSessionData) -> i32 {
 
     let mut len = 0usize;
     for x in 0..n {
-        let name_ptr = gc.towns[x].name.as_ptr();
-        let name_len = cstrlen(name_ptr as *const i8);
+        let town_bytes = cfg.town[x].as_bytes();
+        let name_len = town_bytes.len();
         wfifob(fd, len + 10, x as u8);
         wfifob(fd, len + 11, name_len as u8);
-        libc::strcpy(
-            wfifop(fd, len + 12) as *mut i8,
-            name_ptr as *const i8,
-        );
+        let dst = wfifop(fd, len + 12) as *mut u8;
+        std::ptr::copy_nonoverlapping(town_bytes.as_ptr(), dst, name_len);
+        *dst.add(name_len) = 0;
         len += name_len + 2;
     }
 

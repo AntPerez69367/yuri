@@ -598,7 +598,7 @@ pub unsafe fn warp_init() -> i32 {
 // ---------------------------------------------------------------------------
 
 fn server_id() -> u32 {
-    crate::config_globals::global_config().serverid as u32
+    crate::config::config().server_id as u32
 }
 
 fn copy_str_to_array<const N: usize>(s: &str, dst: &mut [i8; N]) {

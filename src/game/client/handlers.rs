@@ -728,7 +728,11 @@ pub unsafe fn clif_transfer(
     *w(0) = 0xAA;
     *w(3) = 0x03;
     // SWAP32(map_ip) — network-order IP → host-order, then LE write = network bytes on wire
-    (w(4) as *mut u32).write_unaligned(crate::config_globals::global_config().map_ip.swap_bytes());
+    let map_ip: u32 = crate::config::config().map_ip
+        .parse::<std::net::Ipv4Addr>()
+        .map(|a| u32::from_le_bytes(a.octets()))
+        .unwrap_or(0);
+    (w(4) as *mut u32).write_unaligned(map_ip.swap_bytes());
     (w(8) as *mut u16).write_unaligned(dest_port.to_be());
     *w(10) = 0x16;
     (w(11) as *mut u16).write_unaligned(9u16.to_be());

@@ -441,7 +441,7 @@ async fn mobspawn_fetch(serverid_val: i32) -> Result<Vec<sqlx::mysql::MySqlRow>,
 }
 
 pub async unsafe fn mobspawn_read() -> i32 {
-    let serverid_val = crate::config_globals::global_config().serverid;
+    let serverid_val = crate::config::config().server_id;
     let result = mobspawn_fetch(serverid_val).await;
 
     let rows = match result {

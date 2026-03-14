@@ -575,276 +575,38 @@ town:
 
 // ─── Public API exports ────────────────────────────────────────────────────
 
-use std::ffi::{CStr, CString};
-use std::net::Ipv4Addr;
-use std::ptr;
 use std::sync::OnceLock;
 
 /// Global config instance
 static CONFIG: OnceLock<ServerConfig> = OnceLock::new();
 
-fn get_config() -> Option<&'static ServerConfig> {
-    CONFIG.get()
-}
-
-/// Public accessor for the loaded config — used by game modules (e.g. scripting).
+/// Public accessor for the loaded config -- used by game modules (e.g. scripting).
 pub fn config() -> &'static ServerConfig {
-    CONFIG.get().expect("config not loaded — rust_config_read must be called first")
+    CONFIG.get().expect("config not loaded — config_read must be called first")
 }
 
-pub unsafe fn rust_config_read(cfg_file: *const i8) -> i32 {
-    if cfg_file.is_null() {
-        tracing::error!("[rust_config_read] cfg_file is null");
-        return -1;
-    }
-
-    let c_str = unsafe { CStr::from_ptr(cfg_file) };
-    let file_path = match c_str.to_str() {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("[rust_config_read] invalid UTF-8 in path: {}", e);
-            return -1;
-        }
-    };
-
+pub fn config_read(file_path: &str) -> i32 {
     match ServerConfig::from_file(file_path) {
-        Ok(config) => {
-            tracing::info!("[rust_config_read] loaded config from: {}", file_path);
+        Ok(parsed) => {
+            tracing::info!("[config_read] loaded config from: {}", file_path);
 
-            if CONFIG.set(config).is_err() {
-                tracing::error!("[rust_config_read] config already loaded");
+            if CONFIG.set(parsed).is_err() {
+                tracing::error!("[config_read] config already loaded");
                 return -1;
             }
 
-            unsafe { rust_config_populate_c_globals(); }
+            // Initialise runtime-mutable rate atomics from the loaded config.
+            use crate::config_globals::{XP_RATE, D_RATE};
+            use std::sync::atomic::Ordering;
+            let cfg = config();
+            XP_RATE.store(cfg.xprate, Ordering::Relaxed);
+            D_RATE.store(cfg.droprate, Ordering::Relaxed);
+
             0
         }
         Err(e) => {
-            tracing::error!("[rust_config_read] failed to load config: {}", e);
+            tracing::error!("[config_read] failed to load config: {}", e);
             -1
         }
     }
-}
-
-pub fn rust_config_get_map_ip() -> u32 {
-    match get_config() {
-        Some(cfg) => {
-            if let Ok(addr) = cfg.map_ip.parse::<std::net::Ipv4Addr>() {
-                u32::from(addr)
-            } else { 0 }
-        }
-        None => 0,
-    }
-}
-
-pub fn rust_config_get_map_port() -> u16 {
-    get_config().map(|c| c.map_port).unwrap_or(2001)
-}
-
-pub fn rust_config_get_char_ip() -> u32 {
-    match get_config() {
-        Some(cfg) => {
-            if let Ok(addr) = cfg.char_ip.parse::<std::net::Ipv4Addr>() {
-                u32::from(addr)
-            } else { 0 }
-        }
-        None => 0,
-    }
-}
-
-pub fn rust_config_get_char_port() -> u16 {
-    get_config().map(|c| c.char_port).unwrap_or(2005)
-}
-
-pub fn rust_config_get_login_ip() -> u32 {
-    match get_config() {
-        Some(cfg) => {
-            if let Ok(addr) = cfg.login_ip.parse::<std::net::Ipv4Addr>() {
-                u32::from(addr)
-            } else { 0 }
-        }
-        None => 0,
-    }
-}
-
-pub fn rust_config_get_login_port() -> u16 {
-    get_config().map(|c| c.login_port).unwrap_or(2000)
-}
-
-pub fn rust_config_get_xor_key() -> *const i8 {
-    match get_config() {
-        Some(cfg) => match CString::new(cfg.xor_key.clone()) {
-            Ok(s) => s.into_raw(),
-            Err(_) => ptr::null(),
-        },
-        None => ptr::null(),
-    }
-}
-
-pub fn rust_config_get_start_point() -> Point {
-    get_config().map(|c| c.start_point).unwrap_or(Point::new(0, 0, 0))
-}
-
-pub fn rust_config_get_server_id() -> i32 {
-    get_config().map(|c| c.server_id).unwrap_or(0)
-}
-
-pub fn rust_config_get_meta_count() -> i32 {
-    get_config().map(|c| c.meta.len() as i32).unwrap_or(0)
-}
-
-pub fn rust_config_get_meta_file(index: i32) -> *const i8 {
-    match get_config() {
-        Some(cfg) => {
-            if index >= 0 && (index as usize) < cfg.meta.len() {
-                match CString::new(cfg.meta[index as usize].clone()) {
-                    Ok(s) => s.into_raw(),
-                    Err(_) => ptr::null(),
-                }
-            } else { ptr::null() }
-        }
-        None => ptr::null(),
-    }
-}
-
-pub fn rust_config_get_town_count() -> i32 {
-    get_config().map(|c| c.town.len() as i32).unwrap_or(0)
-}
-
-pub fn rust_config_get_town_name(index: i32) -> *const i8 {
-    match get_config() {
-        Some(cfg) => {
-            if index >= 0 && (index as usize) < cfg.town.len() {
-                match CString::new(cfg.town[index as usize].clone()) {
-                    Ok(s) => s.into_raw(),
-                    Err(_) => ptr::null(),
-                }
-            } else { ptr::null() }
-        }
-        None => ptr::null(),
-    }
-}
-
-pub unsafe fn rust_config_free_string(ptr: *mut i8) {
-    if !ptr.is_null() {
-        unsafe { let _ = CString::from_raw(ptr); }
-    }
-}
-
-pub unsafe fn rust_config_populate_c_globals() {
-    use crate::config_globals::{GlobalConfig, TownData, set_global_config, XP_RATE, D_RATE};
-    use std::sync::atomic::Ordering;
-
-    unsafe fn copy_cstr<const N: usize>(ptr: *const i8, buf: &mut [i8; N]) {
-        if !ptr.is_null() {
-            let cstr = CStr::from_ptr(ptr);
-            let bytes = cstr.to_bytes();
-            let len = bytes.len().min(N - 1);
-            ptr::copy_nonoverlapping(bytes.as_ptr(), buf.as_mut_ptr() as *mut u8, len);
-            buf[len] = 0;
-            rust_config_free_string(ptr as *mut i8);
-        }
-    }
-
-    let mut cfg = GlobalConfig {
-        xor_key:     [0; 10],
-        start_pos:   crate::config::Point { m: 0, x: 0, y: 0 },
-        login_id:    [0; 33],
-        login_pw:    [0; 33],
-        login_ip:    0,
-        login_port:  2000,
-        char_id:     [0; 33],
-        char_pw:     [0; 33],
-        char_ip:     0,
-        char_port:   2005,
-        map_ip:      0,
-        map_port:    0,
-        serverid:    0,
-        require_reg: 1,
-        nex_version: 0,
-        nex_deep:    0,
-        save_time:   60000,
-        meta_file:   [[0; 256]; 20],
-        metamax:     0,
-        towns:       [TownData { name: [0; 32] }; 255],
-        town_n:      0,
-        data_dir:    String::from("./data/"),
-        lua_dir:     String::from("./data/lua/"),
-        maps_dir:    String::from("./data/maps/"),
-        meta_dir:    String::from("./data/meta/"),
-    };
-
-    unsafe {
-        let config_opt = get_config();
-        if let Some(config) = config_opt {
-            if let Ok(s) = CString::new(config.login_id.clone()) {
-                copy_cstr(s.into_raw(), &mut cfg.login_id);
-            }
-            if let Ok(s) = CString::new(config.login_pw.clone()) {
-                copy_cstr(s.into_raw(), &mut cfg.login_pw);
-            }
-            cfg.login_port = config.login_port as i32;
-            if let Ok(addr) = config.login_ip.parse::<Ipv4Addr>() {
-                cfg.login_ip = u32::from_le_bytes(addr.octets()) as i32;
-            }
-
-            if let Ok(s) = CString::new(config.char_id.clone()) {
-                copy_cstr(s.into_raw(), &mut cfg.char_id);
-            }
-            if let Ok(s) = CString::new(config.char_pw.clone()) {
-                copy_cstr(s.into_raw(), &mut cfg.char_pw);
-            }
-            cfg.char_port = config.char_port as i32;
-            if let Ok(addr) = config.char_ip.parse::<Ipv4Addr>() {
-                cfg.char_ip = u32::from_le_bytes(addr.octets()) as i32;
-            }
-
-            cfg.map_port = config.map_port as u32;
-            if let Ok(addr) = config.map_ip.parse::<Ipv4Addr>() {
-                cfg.map_ip = u32::from_le_bytes(addr.octets());
-            }
-
-            if let Ok(s) = CString::new(config.xor_key.clone()) {
-                copy_cstr(s.into_raw(), &mut cfg.xor_key);
-            }
-
-            cfg.start_pos   = config.start_point;
-            cfg.serverid    = config.server_id;
-            cfg.require_reg = config.require_reg;
-            cfg.nex_version = config.version;
-            cfg.nex_deep    = config.deep;
-            cfg.save_time   = config.save_time * 1000;
-
-            // XP_RATE and D_RATE are AtomicI32 (written at runtime by GM commands).
-            XP_RATE.store(config.xprate, Ordering::Relaxed);
-            D_RATE.store(config.droprate, Ordering::Relaxed);
-
-            cfg.metamax = config.meta.len().min(20) as i32;
-            for (i, meta) in config.meta.iter().take(20).enumerate() {
-                if let Ok(s) = CString::new(meta.clone()) {
-                    let bytes = s.as_bytes();
-                    let len = bytes.len().min(255);
-                    ptr::copy_nonoverlapping(bytes.as_ptr(), cfg.meta_file[i].as_mut_ptr() as *mut u8, len);
-                    cfg.meta_file[i][len] = 0;
-                }
-            }
-
-            cfg.town_n = config.town.len().min(255) as i32;
-            for (i, town) in config.town.iter().take(255).enumerate() {
-                if let Ok(s) = CString::new(town.clone()) {
-                    let bytes = s.as_bytes();
-                    let len = bytes.len().min(31);
-                    ptr::copy_nonoverlapping(bytes.as_ptr(), cfg.towns[i].name.as_mut_ptr() as *mut u8, len);
-                    cfg.towns[i].name[len] = 0;
-                }
-            }
-
-            cfg.data_dir  = config.data_dir.clone();
-            cfg.lua_dir   = config.lua_dir.clone();
-            cfg.maps_dir  = config.maps_dir.clone();
-            cfg.meta_dir  = config.meta_dir.clone();
-        }
-    }
-
-    set_global_config(cfg);
 }
