@@ -27,7 +27,7 @@ use crate::database::board_db;
 use crate::session::{session_call_parse, get_session_manager};
 use crate::game::scripting::rust_sl_exec as sl_exec;
 
-use crate::core::rust_request_shutdown;
+use crate::core::request_shutdown;
 use crate::game::map_char::intif_save_impl::rust_sl_intif_save as sl_intif_save;
 
 // ---------------------------------------------------------------------------
@@ -3073,7 +3073,7 @@ pub unsafe fn map_reset_timer(v1: i32, v2: i32) -> i32 {
                 }
             }
         }
-        rust_request_shutdown();
+        request_shutdown();
         RESET_TIMER_REMAINING.store(0, Ordering::Relaxed);
         RESET_TIMER_DIFF.store(0, Ordering::Relaxed);
         return 1;

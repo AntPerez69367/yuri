@@ -808,7 +808,7 @@ pub async fn run_async_server(_port: u16) -> Result<(), Box<dyn std::error::Erro
                 }
 
                 // Check shutdown signal
-                if crate::core::rust_should_shutdown() != 0 {
+                if crate::core::should_shutdown() {
                     tracing::info!("[rust_server] Shutdown requested");
                     break;
                 }

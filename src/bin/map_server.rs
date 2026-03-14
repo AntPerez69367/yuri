@@ -14,7 +14,7 @@ use yuri::game::mob::rust_mobspawn_read;
 use yuri::session::{
     get_session_manager, sync_callback, make_listen_port,
 };
-use yuri::core::{rust_core_init, rust_set_termfunc};
+use yuri::core::{core_init, set_termfunc};
 use yuri::servers::map::MapState;
 
 
@@ -33,7 +33,7 @@ async fn main() -> Result<()> {
         .init();
 
     // Initialize core state.
-    rust_core_init();
+    core_init();
     // fd_max is now owned by session.rs (get_fd_max()); no external callback needed.
     // db_init() is now a no-op stub defined above
     // timer_init() was a no-op — removed
@@ -169,7 +169,7 @@ async fn main() -> Result<()> {
                 let startup = std::ffi::CString::new("startup").unwrap();
                 yuri::game::scripting::doscript_blargs(startup.as_ptr(), std::ptr::null(), &[]);
 
-                rust_set_termfunc(Some(map_do_term));
+                set_termfunc(Some(map_do_term));
             }
             Ok(())
         }).await
@@ -240,7 +240,7 @@ async fn main() -> Result<()> {
     tracing::info!("[map] Shutting down...");
     // Deregister the term callback before calling map_do_term() explicitly so
     // a signal arriving after the session loop cannot fire it a second time.
-    unsafe { rust_set_termfunc(None); }
+    unsafe { set_termfunc(None); }
     unsafe { map_do_term(); }
     Ok(())
 }
