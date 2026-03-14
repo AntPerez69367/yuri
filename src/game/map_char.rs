@@ -37,7 +37,7 @@ const OPT_WALKTHROUGH: u64 = 128;
 use crate::game::map_server::map_fd;
 
 use crate::session::{session_set_eof, get_session_manager, SessionId};
-use crate::network::crypt::rust_crypt_populate_table;
+use crate::network::crypt::crypt_populate_table;
 use crate::game::pc::{
     rust_pc_setpos, rust_pc_loadmagic, rust_pc_starttimer, rust_pc_requestmp,
     rust_pc_loaditem, rust_pc_loadequip, rust_pc_magic_startup,
@@ -89,7 +89,7 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
 
     // Build the per-session encryption hash table from the character name.
     // C: populate_table(sd->status.name, sd->EncHash, sizeof(sd->EncHash))
-    rust_crypt_populate_table(
+    crypt_populate_table(
         (*sd).status.name.as_ptr() as *const i8,
         (*sd).EncHash.as_mut_ptr(),
         0x401, // sizeof(sd->EncHash)

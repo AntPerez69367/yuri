@@ -69,7 +69,7 @@ use crate::game::map_parse::visual::{clif_mob_look_start, clif_mob_look_close};
 use crate::game::map_parse::movement::clif_sendchararea;
 use crate::game::map_parse::groups::{clif_grouphealth_update, clif_leavegroup};
 use crate::game::map_parse::chat::clif_sendminitext;
-use crate::network::crypt::rust_crypt_set_packet_indexes;
+use crate::network::crypt::crypt_set_packet_indexes;
 
 use crate::game::block::AreaType;
 use crate::game::block_grid;
@@ -961,10 +961,10 @@ pub unsafe fn clif_refresh(sd: *mut MapSessionData) -> i32 {
     wfifow(fd, 1, 2_u16.swap_bytes()); // SWAP16(2)
     wfifob(fd, 3, 0x22);
     wfifob(fd, 4, 0x03);
-    // set_packet_indexes — shim for rust_crypt_set_packet_indexes
+    // set_packet_indexes — shim for crypt_set_packet_indexes
     let pkt_ptr = wfifop(fd, 0);
     if !pkt_ptr.is_null() {
-        rust_crypt_set_packet_indexes(pkt_ptr);
+        crypt_set_packet_indexes(pkt_ptr);
     }
     wfifoset(fd, 5 + 3);
 
