@@ -46,7 +46,7 @@ use crate::database::item_db;
 // pc_isequip returns i32; usage here expects u32 — wrap with cast.
 #[inline]
 unsafe fn pc_isequip(sd: *mut MapSessionData, slot: i32) -> u32 {
-    crate::game::pc::rust_pc_isequip(sd, slot) as u32
+    crate::game::pc::pc_isequip(sd, slot) as u32
 }
 
 /// Dispatch a Lua event with two block_list arguments.

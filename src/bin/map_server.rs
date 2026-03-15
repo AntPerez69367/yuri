@@ -6,11 +6,11 @@ use yuri::config::ServerConfig;
 use yuri::game::block::map_initblock;
 use yuri::game::map_server::map_initiddb;
 
-use yuri::game::scripting::rust_sl_init;
+use yuri::game::scripting::sl_init;
 use yuri::game::map_server::{lang_read, map_do_term, map_loadgameregistry};
 use yuri::game::client::visual::clif_timeout;
 use yuri::database::{item_db, magic_db, mob_db, class_db, board_db, clan_db, recipe_db};
-use yuri::game::mob::rust_mobspawn_read;
+use yuri::game::mob::mobspawn_read;
 use yuri::session::{
     get_session_manager, sync_callback, make_listen_port,
 };
@@ -139,14 +139,14 @@ async fn main() -> Result<()> {
                 // mobspawn_read is now async; drive it to completion from
                 // within spawn_blocking using block_in_place (safe: not in LocalSet).
                 tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(rust_mobspawn_read())
+                    tokio::runtime::Handle::current().block_on(mobspawn_read())
                 });
                 magic_db::init();
                 class_db::init(&data_dir);
                 clan_db::init();
                 board_db::init();
                 yuri::game::map_server::object_flag_init();
-                rust_sl_init();
+                sl_init();
                 // map_loadgameregistry is now async; drive it to completion from
                 // within spawn_blocking using block_in_place (safe: not in LocalSet).
                 tokio::task::block_in_place(|| {
@@ -156,7 +156,7 @@ async fn main() -> Result<()> {
                     let manager = get_session_manager();
                     let mut cbs = manager.default_callbacks.lock().unwrap();
                     cbs.parse = Some(std::sync::Arc::new(|fd: yuri::session::SessionId| -> yuri::session::CallbackFuture {
-                        Box::pin(yuri::game::client::rust_clif_parse(fd))
+                        Box::pin(yuri::game::client::clif_parse(fd))
                     }));
                     cbs.timeout = Some(sync_callback(clif_timeout));
                 }

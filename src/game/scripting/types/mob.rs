@@ -8,7 +8,10 @@ use crate::game::mob::{
     mob_calcstat, mob_warp, move_mob, move_mob_ignore_object, move_mob_intent, moveghost_mob,
     MobSpawnData, MAX_MAGIC_TIMERS, MAX_THREATCOUNT,
 };
-use crate::game::scripting::ffi as sffi;
+use crate::game::scripting::map_globals::{
+    sl_g_sendside, sl_g_delete_bl, sl_g_talk, sl_g_deliddb, sl_g_addpermanentspawn, sl_g_getusers,
+};
+use crate::game::mob::mobspawn_onetime;
 use crate::game::scripting::types::item::fixed_str;
 use crate::game::scripting::types::registry::{GameRegObject, MapRegObject, MobRegObject};
 use crate::game::scripting::types::shared;
@@ -19,7 +22,7 @@ pub struct MobObject {
 // u32 is Send — no unsafe impl needed.
 
 use crate::game::mob::{
-    rust_mob_attack, sl_mob_addhealth, sl_mob_callbase, sl_mob_checkmove, sl_mob_checkthreat,
+    mob_attack, sl_mob_addhealth, sl_mob_callbase, sl_mob_checkmove, sl_mob_checkthreat,
     sl_mob_flushduration, sl_mob_flushdurationnouncast, sl_mob_removehealth, sl_mob_setduration,
     sl_mob_setgrpdmg, sl_mob_setinddmg,
 };
@@ -129,7 +132,7 @@ impl UserData for MobObject {
                                 None => return Ok(0i32),
                             };
                             let mob = unsafe { &mut *arc.data_ptr() };
-                            Ok(unsafe { rust_mob_attack(mob as *mut MobSpawnData, id) })
+                            Ok(unsafe { mob_attack(mob as *mut MobSpawnData, id) })
                         },
                     )?))
                 }
@@ -535,7 +538,7 @@ impl UserData for MobObject {
                         move |_, _: mlua::MultiValue| {
                             if let Some(arc) = crate::game::map_server::map_id2mob_ref(mob_id) {
                                 let mob = unsafe { &mut *arc.data_ptr() };
-                                unsafe { sffi::sl_g_sendside(mob as *mut _ as *mut std::ffi::c_void); }
+                                unsafe { sl_g_sendside(mob as *mut _ as *mut std::ffi::c_void); }
                             }
                             Ok(())
                         }
@@ -548,7 +551,7 @@ impl UserData for MobObject {
                         move |_, _: mlua::MultiValue| {
                             if let Some(arc) = crate::game::map_server::map_id2mob_ref(capture_id) {
                                 let mob = unsafe { &mut *arc.data_ptr() };
-                                unsafe { sffi::sl_g_delete_bl(mob as *mut _ as *mut std::ffi::c_void); }
+                                unsafe { sl_g_delete_bl(mob as *mut _ as *mut std::ffi::c_void); }
                             }
                             Ok(())
                         }
@@ -572,7 +575,7 @@ impl UserData for MobObject {
                                 _ => String::new(),
                             };
                             if let Ok(cs) = CString::new(msg.as_bytes()) {
-                                unsafe { sffi::sl_g_talk(mob as *mut _ as *mut std::ffi::c_void, talk_type, cs.as_ptr()); }
+                                unsafe { sl_g_talk(mob as *mut _ as *mut std::ffi::c_void, talk_type, cs.as_ptr()); }
                             }
                             Ok(())
                         }
@@ -729,7 +732,7 @@ impl UserData for MobObject {
                         move |_, _: mlua::MultiValue| {
                             if let Some(arc) = crate::game::map_server::map_id2mob_ref(mob_id) {
                                 let mob = unsafe { &mut *arc.data_ptr() };
-                                unsafe { sffi::sl_g_deliddb(mob as *mut _ as *mut std::ffi::c_void); }
+                                unsafe { sl_g_deliddb(mob as *mut _ as *mut std::ffi::c_void); }
                             }
                             Ok(())
                         }
@@ -740,7 +743,7 @@ impl UserData for MobObject {
                         move |_, _: mlua::MultiValue| {
                             if let Some(arc) = crate::game::map_server::map_id2mob_ref(mob_id) {
                                 let mob = unsafe { &mut *arc.data_ptr() };
-                                unsafe { sffi::sl_g_addpermanentspawn(mob as *mut _ as *mut std::ffi::c_void); }
+                                unsafe { sl_g_addpermanentspawn(mob as *mut _ as *mut std::ffi::c_void); }
                             }
                             Ok(())
                         }
@@ -781,7 +784,7 @@ impl UserData for MobObject {
                             let tbl = lua.create_table()?;
                             if amount <= 0 { return Ok(mlua::Value::Table(tbl)); }
                             let spawned = unsafe {
-                                sffi::rust_mobspawn_onetime(spawn_mob_id, m, x, y, amount, 0, 0, 0, owner)
+                                mobspawn_onetime(spawn_mob_id, m, x, y, amount, 0, 0, 0, owner)
                             };
                             if spawned.is_empty() { return Ok(mlua::Value::Table(tbl)); }
                             for (i, spawned_id) in spawned.into_iter().enumerate() {
@@ -797,7 +800,7 @@ impl UserData for MobObject {
                         |lua, _: mlua::MultiValue| {
                             const MAX: usize = 4096;
                             let mut ptrs: Vec<*mut std::ffi::c_void> = vec![std::ptr::null_mut(); MAX];
-                            let count = unsafe { sffi::sl_g_getusers(ptrs.as_mut_ptr(), MAX as i32) } as usize;
+                            let count = unsafe { sl_g_getusers(ptrs.as_mut_ptr(), MAX as i32) } as usize;
                             if count >= MAX {
                                 tracing::warn!("[scripting] getUsers: result capped at {MAX}; some players may be missing");
                             }

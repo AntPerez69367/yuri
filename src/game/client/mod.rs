@@ -87,7 +87,7 @@ use crate::game::scripting::pc_accessors::{
     sl_pc_status_mute, sl_pc_inventory_id, sl_pc_bl_m, sl_map_spell,
 };
 use crate::database::item_db;
-use crate::game::pc::rust_pc_atkspeed;
+use crate::game::pc::pc_atkspeed;
 use crate::game::time_util::timer_insert;
 
 // Dispatcher wrappers — match dispatcher's *mut std::ffi::c_void calling convention.
@@ -141,7 +141,7 @@ type SD = *mut crate::game::pc::MapSessionData;
 #[inline] unsafe fn clif_paperpopupwrite_save(sd: SD) { crate::game::client::visual::clif_paperpopupwrite_save(sd); }
 #[inline] unsafe fn clif_parsechangespell(sd: SD) { crate::game::map_parse::items::clif_parsechangespell(sd); }
 #[inline] unsafe fn clif_parsechangepos(sd: SD) { crate::game::client::handlers::clif_parsechangepos(sd); }
-#[inline] async unsafe fn rust_pc_warp(sd: SD, m: i32, x: i32, y: i32) -> i32 { crate::game::pc::rust_pc_warp(sd as SD, m, x, y).await }
+#[inline] async unsafe fn pc_warp(sd: SD, m: i32, x: i32, y: i32) -> i32 { crate::game::pc::pc_warp(sd as SD, m, x, y).await }
 #[inline] unsafe fn clif_changeprofile(sd: SD) { crate::game::client::visual::clif_changeprofile(sd); }
 #[inline] async unsafe fn clif_handle_boards(sd: SD) { crate::game::client::handlers::clif_handle_boards(sd).await; }
 #[inline] unsafe fn clif_handle_powerboards(sd: SD) { crate::game::client::handlers::clif_handle_powerboards(sd); }
@@ -589,7 +589,7 @@ unsafe fn send_to_area(
                 if ch_byte == ch_val {
                     // Check if player has this channel enabled (global_reg >= 1).
                     let reg_cstr = std::ffi::CString::new(reg_name).unwrap_or_default();
-                    let v = crate::game::pc::rust_pc_readglobalreg(
+                    let v = crate::game::pc::pc_readglobalreg(
                         sd,
                         reg_cstr.as_ptr() as *const i8,
                     );
@@ -691,7 +691,7 @@ unsafe fn check_dual_login(fd: SessionId, sd: *mut crate::game::pc::MapSessionDa
 
 /// Rust replacement for C `clif_parse(int fd)`.
 /// Registered as the default parse callback at map_server startup.
-pub async fn rust_clif_parse(fd: SessionId) -> i32 {
+pub async fn clif_parse(fd: SessionId) -> i32 {
     unsafe {
         if !session_exists(fd) {
             return 0;
@@ -831,7 +831,7 @@ pub async fn rust_clif_parse(fd: SessionId) -> i32 {
                     let delay = ((spd_val * 1000) / 60) as u32;
                     tracing::debug!("[attack] id={} delay={}ms — entering clif_parseattack", sd_pc.bl.id, delay);
                     timer_insert(
-                        delay, delay, Some(rust_pc_atkspeed), sd_pc.bl.id as i32, 0,
+                        delay, delay, Some(pc_atkspeed), sd_pc.bl.id as i32, 0,
                     );
                     clif_parseattack(sd);
                 } else {
@@ -952,7 +952,7 @@ pub async fn rust_clif_parse(fd: SessionId) -> i32 {
                 clif_handle_boards(sd).await;
             }
             0x3F => {
-                rust_pc_warp(sd, rword_be(fd, 5) as i32, rword_be(fd, 7) as i32, rword_be(fd, 9) as i32).await;
+                pc_warp(sd, rword_be(fd, 5) as i32, rword_be(fd, 7) as i32, rword_be(fd, 9) as i32).await;
             }
             0x41 => {
                 clif_cancelafk(sd);

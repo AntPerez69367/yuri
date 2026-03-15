@@ -25,10 +25,10 @@ use crate::session::{
 use crate::network::crypt::encrypt;
 use crate::database::board_db;
 use crate::session::{session_call_parse, get_session_manager};
-use crate::game::scripting::rust_sl_exec as sl_exec;
+use crate::game::scripting::sl_exec;
 
 use crate::core::request_shutdown;
-use crate::game::map_char::intif_save_impl::rust_sl_intif_save as sl_intif_save;
+use crate::game::map_char::intif_save_impl::sl_intif_save;
 
 // ---------------------------------------------------------------------------
 // In-game time globals.
@@ -551,7 +551,7 @@ pub unsafe fn map_readglobalgamereg(reg: *const i8) -> i32 {
 ///
 /// Called every 1000 ms from the Tokio select! loop.
 /// Must be called on the Lua-owning thread (LocalSet).
-pub unsafe fn rust_map_cronjob() {
+pub unsafe fn map_cronjob() {
     let t = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -3059,9 +3059,9 @@ pub unsafe fn map_reset_timer(v1: i32, v2: i32) -> i32 {
                         let sd = sd_usize as *mut crate::game::pc::MapSessionData;
                         unsafe { crate::game::client::handlers::clif_handle_disconnect(sd).await }
                     }));
-                    // rust_session_call_parse is now async; schedule it on the LocalSet.
+                    // session_call_parse is now async; schedule it on the LocalSet.
                     // map_reset_timer is a sync TimerFn so it cannot .await directly.
-                    // The session eof flag (set below) ensures rust_clif_parse sees the
+                    // The session eof flag (set below) ensures clif_parse sees the
                     // disconnect state when the spawned task runs.
                     tokio::task::spawn_local(session_call_parse(fd));
                     if let Some(s) = get_session_manager().get_session(fd) {

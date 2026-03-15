@@ -793,13 +793,13 @@ pub async fn run_async_server(_port: u16) -> Result<(), Box<dyn std::error::Erro
                 crate::game::time_util::timer_do(crate::game::time_util::gettick());
             }
             _ = mob_tick.tick() => {
-                unsafe { crate::game::mob::rust_mob_timer_spawns(); }
+                unsafe { crate::game::mob::mob_timer_spawns(); }
             }
             _ = npc_tick.tick() => {
                 unsafe { crate::game::npc::npc_runtimers(); }
             }
             _ = cron_tick.tick() => {
-                unsafe { crate::game::map_server::rust_map_cronjob(); }
+                unsafe { crate::game::map_server::map_cronjob(); }
 
                 // Spawn I/O tasks for connections made from callbacks.
                 for fd in drain_pending_connections() {

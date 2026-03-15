@@ -943,7 +943,7 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
                         let ids = block_grid::ids_in_area(grid, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
                         for id in ids {
                             if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                                rust_mob_find_target_inner(&mut sd_arc.write().bl, mob);
+                                mob_find_target_inner(&mut sd_arc.write().bl, mob);
                             }
                         }
                     }
@@ -1011,7 +1011,7 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
                         let ids = block_grid::ids_in_area(grid, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
                         for id in ids {
                             if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                                rust_mob_find_target_inner(&mut sd_arc.write().bl, mob);
+                                mob_find_target_inner(&mut sd_arc.write().bl, mob);
                             }
                         }
                     }
@@ -1450,7 +1450,7 @@ pub unsafe fn move_mob(mob: *mut MobSpawnData) -> i32 {
         let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
         for id in cell_ids {
             if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(id) {
-                rust_mob_move_inner(&mut npc_arc.write().bl, mob);
+                mob_move_inner(&mut npc_arc.write().bl, mob);
             }
         }
     }
@@ -1579,7 +1579,7 @@ pub unsafe fn moveghost_mob(mob: *mut MobSpawnData) -> i32 {
         let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
         for id in cell_ids {
             if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(id) {
-                rust_mob_move_inner(&mut npc_arc.write().bl, mob);
+                mob_move_inner(&mut npc_arc.write().bl, mob);
             }
         }
     }
@@ -1749,7 +1749,7 @@ pub unsafe fn mob_thing_yeah_inner(_bl: *mut BlockList, def: *mut i32) -> i32 {
 
 /// Typed inner: merge item `fl2` into an existing floor-item `fl` if IDs match.
 /// Args: `int* def`, `int id` (unused), `FLOORITEM* fl2`, `USER* sd` (unused).
-pub unsafe fn rust_mob_addtocurrent_inner(bl: *mut BlockList, def: *mut i32, _id: i32, fl2: *mut crate::game::scripting::types::floor::FloorItemData, _sd: *mut MapSessionData) -> i32 {
+pub unsafe fn mob_addtocurrent_inner(bl: *mut BlockList, def: *mut i32, _id: i32, fl2: *mut crate::game::scripting::types::floor::FloorItemData, _sd: *mut MapSessionData) -> i32 {
     use crate::game::scripting::types::floor::FloorItemData;
     if bl.is_null() {
         return 0;
@@ -1770,7 +1770,7 @@ pub unsafe fn rust_mob_addtocurrent_inner(bl: *mut BlockList, def: *mut i32, _id
 
 /// Drop an item onto the ground at (m, x, y).
 /// Reads `attacker->group_count` and `groups[]` to populate floor-item looters.
-pub unsafe fn rust_mob_dropitem(
+pub unsafe fn mob_dropitem(
     blockid: u32,
     id: u32,
     amount: i32,
@@ -1812,7 +1812,7 @@ pub unsafe fn rust_mob_dropitem(
         let cell_ids = grid.ids_at_tile(x as u16, y as u16);
         for cid in cell_ids {
             if let Some(fl_arc) = crate::game::map_server::map_id2fl_ref(cid) {
-                rust_mob_addtocurrent_inner(&mut fl_arc.write().bl, def_ptr, id as i32, fl_ptr, sd_ptr);
+                mob_addtocurrent_inner(&mut fl_arc.write().bl, def_ptr, id as i32, fl_ptr, sd_ptr);
             }
         }
     }
@@ -1870,7 +1870,7 @@ pub unsafe fn mobdb_drops(mob: *mut MobSpawnData, sd: *mut MapSessionData) -> i3
     for i in 0..MAX_INVENTORY {
         let slot = &(*mob).inventory[i];
         if slot.id != 0 && slot.amount >= 1 {
-            rust_mob_dropitem(
+            mob_dropitem(
                 (*mob).bl.id,
                 slot.id as u32,
                 slot.amount,
@@ -1897,7 +1897,7 @@ pub unsafe fn mobdb_drops(mob: *mut MobSpawnData, sd: *mut MapSessionData) -> i3
 /// Typed inner: selects a PC as this mob's target.
 /// Reads `sd->status.dura_aether` to check sneak/cloak/hide, then conditionally
 /// updates `mob->target` based on `sd->status.gm_level` and a random roll.
-pub unsafe fn rust_mob_find_target_inner(bl: *mut BlockList, mob: *mut MobSpawnData) -> i32 {
+pub unsafe fn mob_find_target_inner(bl: *mut BlockList, mob: *mut MobSpawnData) -> i32 {
     use crate::game::pc::PC_DIE;
     if bl.is_null() {
         return 0;
@@ -1966,7 +1966,7 @@ pub unsafe fn rust_mob_find_target_inner(bl: *mut BlockList, mob: *mut MobSpawnD
 /// Mob attacks a player (or another mob) by ID.
 /// Reads `sd->uFlags` and `sd->optFlags` to check immortal/stealth before attacking.
 /// Calls scripting hooks `hitCritChance` and `swingDamage`, then sends network damage.
-pub unsafe fn rust_mob_attack(mob: *mut MobSpawnData, id: i32) -> i32 {
+pub unsafe fn mob_attack(mob: *mut MobSpawnData, id: i32) -> i32 {
     use crate::game::pc::{OPT_FLAG_STEALTH, SFLAG_HPMP, U_FLAG_IMMORTAL};
     if id < 0 {
         return 0;
@@ -2036,7 +2036,7 @@ pub unsafe fn rust_mob_attack(mob: *mut MobSpawnData, id: i32) -> i32 {
 
 /// Calculate and set `mob->critchance` based on mob stats vs player stats.
 /// Returns 0 (miss), 1 (normal hit), or 2 (critical hit).
-pub unsafe fn rust_mob_calc_critical(
+pub unsafe fn mob_calc_critical(
     mob: *mut MobSpawnData,
     sd: *mut MapSessionData,
 ) -> i32 {
@@ -2071,7 +2071,7 @@ pub unsafe fn rust_mob_calc_critical(
 
 /// Typed inner: check whether an entity blocks mob movement.
 /// Sets `mob->canmove = 1` if the entity occupies the cell and is not a valid ghost/GM.
-pub unsafe fn rust_mob_move_inner(bl: *mut BlockList, mob: *mut MobSpawnData) -> i32 {
+pub unsafe fn mob_move_inner(bl: *mut BlockList, mob: *mut MobSpawnData) -> i32 {
     use crate::game::pc::PC_DIE;
     if bl.is_null() {
         return 0;
@@ -2328,7 +2328,7 @@ pub unsafe fn sl_mob_checkmove(mob: *mut MobSpawnData) -> i32 {
                     _ => {},
                 };
                 ent.with_bl_mut(|bl| {
-                    rust_mob_move_inner(bl as *mut BlockList, mob);
+                    mob_move_inner(bl as *mut BlockList, mob);
                 });
             }
         }
@@ -2439,82 +2439,3 @@ mod tests {
 
 
 
-pub async unsafe fn rust_mobspawn_read() -> i32 {
-    mobspawn_read().await
-}
-
-pub unsafe fn rust_mob_timer_spawns() {
-    mob_timer_spawns()
-}
-
-pub unsafe fn rust_mob_respawn_getstats(mob: *mut MobSpawnData) -> i32 {
-    mob_respawn_getstats(mob)
-}
-
-pub unsafe fn rust_mob_warp(mob: *mut MobSpawnData, m: i32, x: i32, y: i32) -> i32 {
-    mob_warp(mob, m, x, y)
-}
-
-pub unsafe fn rust_mobspawn_onetime(
-    id: u32, m: i32, x: i32, y: i32,
-    times: i32, start: i32, end: i32,
-    replace: u32, owner: u32,
-) -> Vec<u32> {
-    mobspawn_onetime(id, m, x, y, times, start, end, replace, owner)
-}
-
-pub unsafe fn rust_mob_readglobalreg(mob: *mut MobSpawnData, reg: *const i8) -> i32 {
-    mob_readglobalreg(mob, reg)
-}
-
-pub unsafe fn rust_mob_setglobalreg(mob: *mut MobSpawnData, reg: *const i8, val: i32) -> i32 {
-    mob_setglobalreg(mob, reg, val)
-}
-
-pub unsafe fn rust_mob_drops(mob: *mut MobSpawnData, sd: *mut MapSessionData) -> i32 {
-    mobdb_drops(mob, sd)
-}
-
-pub unsafe fn rust_mob_handle_sub(mob: *mut MobSpawnData) -> i32 {
-    mob_handle_sub(mob);
-    0
-}
-
-pub async unsafe fn rust_kill_mob(mob: *mut MobSpawnData) -> i32 {
-    kill_mob(mob).await
-}
-
-pub unsafe fn rust_mob_calcstat(mob: *mut MobSpawnData) -> i32 {
-    mob_calcstat(mob)
-}
-
-pub unsafe fn rust_mob_respawn(mob: *mut MobSpawnData) -> i32 {
-    mob_respawn(mob)
-}
-
-pub unsafe fn rust_mob_respawn_nousers(mob: *mut MobSpawnData) -> i32 {
-    mob_respawn_nousers(mob)
-}
-
-pub unsafe fn rust_mob_flushmagic(mob: *mut MobSpawnData) -> i32 {
-    mob_flushmagic(mob)
-}
-
-pub unsafe fn rust_move_mob(mob: *mut MobSpawnData) -> i32 {
-    move_mob(mob)
-}
-
-pub unsafe fn rust_move_mob_ignore_object(mob: *mut MobSpawnData) -> i32 {
-    move_mob_ignore_object(mob)
-}
-
-pub unsafe fn rust_moveghost_mob(mob: *mut MobSpawnData) -> i32 {
-    moveghost_mob(mob)
-}
-
-pub unsafe fn rust_move_mob_intent(
-    mob: *mut MobSpawnData,
-    bl: *mut crate::database::map_db::BlockList,
-) -> i32 {
-    move_mob_intent(mob, bl)
-}

@@ -18,7 +18,7 @@ use super::packet::{
 use crate::database::item_db;
 use crate::game::map_server::{nmail_sendmail, cur_year, cur_season};
 use std::sync::atomic::Ordering as AtomicOrd;
-use crate::game::pc::rust_pc_readglobalreg as pc_readglobalreg;
+use crate::game::pc::pc_readglobalreg;
 use crate::game::map_parse::chat::clif_sendmsg;
 use crate::session::SessionId;
 

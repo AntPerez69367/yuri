@@ -30,8 +30,8 @@ use crate::game::map_server::map_id2bl_ref;
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::client::visual::clif_clickonplayer;
 use crate::game::scripting::{
-    rust_sl_resumedialog, rust_sl_resumemenuseq, rust_sl_resumeinputseq,
-    rust_sl_resumebuy, rust_sl_resumesell, rust_sl_resumeinput, rust_sl_async_freeco,
+    sl_resumedialog, sl_resumemenuseq, sl_resumeinputseq,
+    sl_resumebuy, sl_resumesell, sl_resumeinput, sl_async_freeco,
 };
 use crate::database::item_db;
 use crate::database::class_db::name as classdb_name;
@@ -408,23 +408,23 @@ pub unsafe fn clif_parsenpcdialog(sd: *mut MapSessionData) -> i32 {
     match rfifob(fd, 5) {
         0x01 => {
             // Dialog
-            rust_sl_resumedialog(npc_choice, sd);
+            sl_resumedialog(npc_choice, sd);
         }
         0x02 => {
             // Special menu
             let npc_menu = rfifob(fd, 15) as i32;
-            rust_sl_resumemenuseq(npc_choice, npc_menu, sd);
+            sl_resumemenuseq(npc_choice, npc_menu, sd);
         }
         0x04 => {
             // inputSeq returned input
             if rfifob(fd, 13) != 0x02 {
-                rust_sl_async_freeco(sd);
+                sl_async_freeco(sd);
                 return 1;
             }
             let input_len = rfifob(fd, 15) as usize;
             let mut input = [0u8; 100];
             copy_rfifo_bytes(&mut input, rfifop(fd, 16), input_len);
-            rust_sl_resumeinputseq(
+            sl_resumeinputseq(
                 npc_choice,
                 input.as_mut_ptr() as *mut i8,
                 sd,
@@ -1018,7 +1018,7 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
 
         if same_map_or_f1 {
             (*sd).last_click = (*bl).id;
-            rust_sl_async_freeco(sd);
+            sl_async_freeco(sd);
 
             if (*sd).status.karma <= -3.0f32 {
                 let nd_name = (*nd).name.as_ptr();
@@ -1047,7 +1047,7 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
             && (sd_ref.bl.y as i32 - (*bl).y as i32).abs() <= radius
         {
             (*sd).last_click = (*bl).id;
-            rust_sl_async_freeco(sd);
+            sl_async_freeco(sd);
             sl_doscript_coro_2(b"onLook\0".as_ptr() as *const i8, std::ptr::null(), &sd_ref.bl as *const _ as *mut BlockList, bl);
             if !(*mob).data.is_null() {
                 sl_doscript_coro_2((*(*mob).data).yname.as_ptr() as *const i8, b"click\0".as_ptr() as *const i8, &sd_ref.bl as *const _ as *mut BlockList, bl);
@@ -1307,7 +1307,7 @@ pub unsafe fn clif_parsebuy(sd: *mut MapSessionData) -> i32 {
         item_name_len,
     );
     if itemname[0] != 0 {
-        rust_sl_resumebuy(itemname.as_mut_ptr() as *mut i8, sd);
+        sl_resumebuy(itemname.as_mut_ptr() as *mut i8, sd);
     }
     0
 }
@@ -1404,7 +1404,7 @@ pub unsafe fn clif_selldialog(
 /// Parse a sell response packet.  Mirrors `clif_parsesell` in
 pub unsafe fn clif_parsesell(sd: *mut MapSessionData) -> i32 {
     let fd = (*sd).fd;
-    rust_sl_resumesell(rfifob(fd, 12) as u32, sd);
+    sl_resumesell(rfifob(fd, 12) as u32, sd);
     0
 }
 
@@ -1554,7 +1554,7 @@ pub unsafe fn clif_parseinput(sd: *mut MapSessionData) -> i32 {
         inp_len,
     );
 
-    rust_sl_resumeinput(
+    sl_resumeinput(
         output.as_mut_ptr() as *mut i8,
         output2.as_mut_ptr() as *mut i8,
         sd,

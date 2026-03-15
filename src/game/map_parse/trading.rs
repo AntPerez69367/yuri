@@ -39,9 +39,9 @@ use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::map_parse::player_state::clif_sendstatus;
 use crate::game::block_grid;
 use crate::game::pc::{
-    rust_pc_additem as pc_additem, rust_pc_additemnolog as pc_additemnolog,
-    rust_pc_delitem as pc_delitem, rust_pc_isinvenspace as pc_isinvenspace,
-    rust_pc_readglobalreg as pc_readglobalreg,
+    pc_additem, pc_additemnolog,
+    pc_delitem, pc_isinvenspace,
+    pc_readglobalreg,
 };
 use crate::database::item_db;
 use crate::database::class_db::name as classdb_name;

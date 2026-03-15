@@ -43,7 +43,7 @@ use crate::game::block::map_addblock;
 use crate::game::map_parse::groups::clif_isingroup;
 use crate::game::map_parse::movement::clif_sendchararea;
 use crate::database::item_db;
-use crate::game::pc::rust_pc_isequip;
+use crate::game::pc::pc_isequip;
 
 #[inline]
 fn map_id2bl(id: u32) -> *mut BlockList {
@@ -1140,7 +1140,7 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     wfifob((*src_sd).fd, 25, (*sd).status.skin_color as u8);
 
     // armor
-    let armor_id = rust_pc_isequip(sd, EQ_ARMOR) as u32;
+    let armor_id = pc_isequip(sd, EQ_ARMOR) as u32;
     if armor_id == 0 {
         wfifow((*src_sd).fd, 26, ((*sd).status.sex as u16).swap_bytes());
     } else {
@@ -1160,7 +1160,7 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     }
 
     // coat
-    let coat_id = rust_pc_isequip(sd, EQ_COAT) as u32;
+    let coat_id = pc_isequip(sd, EQ_COAT) as u32;
     if coat_id != 0 {
         let coat_item = item_db::search(coat_id);
         wfifow((*src_sd).fd, 26, (coat_item.look as u16).swap_bytes());
@@ -1172,7 +1172,7 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     }
 
     // weapon
-    let weap_id = rust_pc_isequip(sd, EQ_WEAP) as u32;
+    let weap_id = pc_isequip(sd, EQ_WEAP) as u32;
     if weap_id == 0 {
         wfifow((*src_sd).fd, 29, 0xFFFF);
         wfifob((*src_sd).fd, 31, 0x0);
@@ -1186,7 +1186,7 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     }
 
     // shield
-    let shield_id = rust_pc_isequip(sd, EQ_SHIELD) as u32;
+    let shield_id = pc_isequip(sd, EQ_SHIELD) as u32;
     if shield_id == 0 {
         wfifow((*src_sd).fd, 32, 0xFFFF);
         wfifob((*src_sd).fd, 34, 0);
@@ -1200,7 +1200,7 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     }
 
     // helm
-    let helm_id = rust_pc_isequip(sd, EQ_HELM) as u32;
+    let helm_id = pc_isequip(sd, EQ_HELM) as u32;
     let helm_item = item_db::search(helm_id);
     if helm_id == 0
         || ((*sd).status.setting_flags & FLAG_HELM as u16) == 0
@@ -1220,7 +1220,7 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     }
 
     // beard (face acc)
-    let faceacc_id = rust_pc_isequip(sd, EQ_FACEACC) as u32;
+    let faceacc_id = pc_isequip(sd, EQ_FACEACC) as u32;
     if faceacc_id == 0 {
         wfifow((*src_sd).fd, 38, 0xFFFF);
         wfifob((*src_sd).fd, 40, 0);
@@ -1231,7 +1231,7 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     }
 
     // crown
-    let crown_id = rust_pc_isequip(sd, EQ_CROWN) as u32;
+    let crown_id = pc_isequip(sd, EQ_CROWN) as u32;
     if crown_id == 0 {
         wfifow((*src_sd).fd, 41, 0xFFFF);
         wfifob((*src_sd).fd, 43, 0);
@@ -1248,7 +1248,7 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     }
 
     // second face acc
-    let faceacctwo_id = rust_pc_isequip(sd, EQ_FACEACCTWO) as u32;
+    let faceacctwo_id = pc_isequip(sd, EQ_FACEACCTWO) as u32;
     if faceacctwo_id == 0 {
         wfifow((*src_sd).fd, 44, 0xFFFF);
         wfifob((*src_sd).fd, 46, 0);
@@ -1259,7 +1259,7 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     }
 
     // mantle
-    let mantle_id = rust_pc_isequip(sd, EQ_MANTLE) as u32;
+    let mantle_id = pc_isequip(sd, EQ_MANTLE) as u32;
     if mantle_id == 0 {
         wfifow((*src_sd).fd, 47, 0xFFFF);
         wfifob((*src_sd).fd, 49, 0xFF);
@@ -1270,7 +1270,7 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     }
 
     // necklace
-    let necklace_id = rust_pc_isequip(sd, EQ_NECKLACE) as u32;
+    let necklace_id = pc_isequip(sd, EQ_NECKLACE) as u32;
     let necklace_item = item_db::search(necklace_id);
     if necklace_id == 0
         || ((*sd).status.setting_flags & FLAG_NECKLACE as u16) == 0
@@ -1284,7 +1284,7 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     }
 
     // boots
-    let boots_id = rust_pc_isequip(sd, EQ_BOOTS) as u32;
+    let boots_id = pc_isequip(sd, EQ_BOOTS) as u32;
     if boots_id == 0 {
         wfifow((*src_sd).fd, 53, ((*sd).status.sex as u16).swap_bytes());
         wfifob((*src_sd).fd, 55, 0);

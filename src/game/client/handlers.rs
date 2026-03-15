@@ -17,7 +17,7 @@ use std::ffi::CStr;
 use crate::database::get_pool;
 use crate::database::map_db::BlockList;
 use crate::game::block::map_delblock;
-use crate::game::scripting::rust_sl_resumemenu;
+use crate::game::scripting::sl_resumemenu;
 use crate::game::map_parse::packet::{rfifob, rfifop, wfifohead, wfifop, wfifoset};
 use crate::game::map_server::{
     boards_delete, boards_post, boards_readpost, boards_showposts, hasCoref,
@@ -32,18 +32,18 @@ use crate::game::map_parse::player_state::clif_sendxy;
 use crate::game::map_parse::trading::{clif_exchange_close, clif_exchange_message};
 use crate::game::map_parse::visual::{clif_lookgone, clif_object_look_specific};
 use crate::game::mob::{BL_PC, MAX_MAGIC_TIMERS};
-use crate::game::pc::{rust_pc_stoptimer, MapSessionData};
+use crate::game::pc::{pc_stoptimer, MapSessionData};
 
 
 
 use crate::game::pc::{
-    rust_pc_changeitem as pc_changeitem, rust_pc_readglobalreg as pc_readglobalreg,
-    rust_pc_dropitemmap as pc_dropitemmap, rust_pc_setpos as pc_setpos,
+    pc_changeitem, pc_readglobalreg,
+    pc_dropitemmap, pc_setpos,
     addtokillreg,
 };
 use crate::game::time_util::timer_remove;
-use crate::game::scripting::rust_sl_async_freeco as sl_async_freeco;
-use crate::game::map_char::intif_save_impl::rust_sl_intif_savequit as sl_intif_savequit;
+use crate::game::scripting::sl_async_freeco;
+use crate::game::map_char::intif_save_impl::sl_intif_savequit;
 use crate::game::client::visual::clif_showboards;
 use crate::database::board_db;
 use crate::game::map_parse::combat::clif_sendaction;
@@ -143,7 +143,7 @@ pub async unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
         }
     }
 
-    rust_pc_stoptimer(sd);
+    pc_stoptimer(sd);
     sl_async_freeco(sd);
     clif_leavegroup(sd);
     clif_stoptimers(sd);
@@ -325,7 +325,7 @@ pub unsafe fn clif_handle_obstruction(sd: *mut MapSessionData) -> i32 {
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 pub unsafe fn clif_parsemenu(sd: *mut MapSessionData) -> i32 {
     let selection = rword_be((*sd).fd, 10) as u32;
-    rust_sl_resumemenu(selection, sd);
+    sl_resumemenu(selection, sd);
     0
 }
 
@@ -699,7 +699,7 @@ pub async unsafe fn clif_accept2(
     .ok()
     .flatten()
     .unwrap_or(0);
-    crate::game::map_char::rust_intif_load(fd.raw(), id, n.as_ptr() as *const i8);
+    crate::game::map_char::intif_load(fd.raw(), id, n.as_ptr() as *const i8);
     0
 }
 
@@ -848,7 +848,7 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
         chat::clif_sendminitext,
     };
     use crate::game::client::handlers::clif_quit;
-    use crate::game::pc::rust_pc_setglobalreg;
+    use crate::game::pc::pc_setglobalreg;
 
     let sflag = (*sd).status.setting_flags;
 
@@ -1000,10 +1000,10 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
             (*sd).status.setting_flags ^= FLAG_HELM as u16;
             if (*sd).status.setting_flags & FLAG_HELM as u16 != 0 {
                 clif_sendminitext(sd, c"Show Helmet      :ON".as_ptr());
-                rust_pc_setglobalreg(sd, c"show_helmet".as_ptr(), 1);
+                pc_setglobalreg(sd, c"show_helmet".as_ptr(), 1);
             } else {
                 clif_sendminitext(sd, c"Show Helmet      :OFF".as_ptr());
-                rust_pc_setglobalreg(sd, c"show_helmet".as_ptr(), 0);
+                pc_setglobalreg(sd, c"show_helmet".as_ptr(), 0);
             }
             clif_sendstatus(sd, 0);
             clif_sendchararea(sd);
@@ -1013,10 +1013,10 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
             (*sd).status.setting_flags ^= FLAG_NECKLACE as u16;
             if (*sd).status.setting_flags & FLAG_NECKLACE as u16 != 0 {
                 clif_sendminitext(sd, c"Show Necklace      :ON".as_ptr());
-                rust_pc_setglobalreg(sd, c"show_necklace".as_ptr(), 1);
+                pc_setglobalreg(sd, c"show_necklace".as_ptr(), 1);
             } else {
                 clif_sendminitext(sd, c"Show Necklace      :OFF".as_ptr());
-                rust_pc_setglobalreg(sd, c"show_necklace".as_ptr(), 0);
+                pc_setglobalreg(sd, c"show_necklace".as_ptr(), 0);
             }
             clif_sendstatus(sd, 0);
             clif_sendchararea(sd);

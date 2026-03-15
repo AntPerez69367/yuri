@@ -5,7 +5,23 @@
 use mlua::{MetaMethod, UserData, UserDataMethods};
 use std::ffi::{CStr, CString};
 
-use crate::game::scripting::ffi as sffi;
+use crate::game::scripting::pc_accessors::{
+    sl_pc_getpk, sl_pc_getgroup,
+    sl_pc_input_send, sl_pc_dialog_send, sl_pc_dialogseq_send,
+    sl_pc_menu_send, sl_pc_menuseq_send,
+    sl_pc_menustring_send, sl_pc_menustring2_send,
+    sl_pc_buy_send, sl_pc_buydialog_send, sl_pc_buyextend_send,
+    sl_pc_sell_send, sl_pc_sell2_send, sl_pc_sellextend_send,
+    sl_pc_showbank_send, sl_pc_showbankadd_send,
+    sl_pc_bankaddmoney_send, sl_pc_bankwithdrawmoney_send,
+    sl_pc_clanshowbank_send, sl_pc_clanshowbankadd_send,
+    sl_pc_clanbankaddmoney_send, sl_pc_clanbankwithdrawmoney_send,
+    sl_pc_clanviewbank_send,
+    sl_pc_repairextend_send, sl_pc_repairall_send,
+};
+use crate::game::scripting::map_globals::{
+    sl_g_getusers, sl_g_deliddb, sl_g_addpermanentspawn,
+};
 use crate::game::scripting::types::mob::MobObject;
 use crate::game::scripting::types::registry::{
     GameRegObject, MapRegObject, NpcRegObject, QuestRegObject, RegObject, RegStringObject,
@@ -343,7 +359,7 @@ impl UserData for PcObject {
                     const MAX_MEMBERS: usize = 256;
                     let mut ids = [0u32; MAX_MEMBERS];
                     let n = unsafe {
-                        sffi::sl_pc_getgroup(sd, ids.as_mut_ptr(), MAX_MEMBERS as i32)
+                        sl_pc_getgroup(sd, ids.as_mut_ptr(), MAX_MEMBERS as i32)
                     };
                     let t = lua.create_table()?;
                     for i in 0..n.max(0) as usize {
@@ -374,7 +390,7 @@ impl UserData for PcObject {
                             const MAX: usize = 4096;
                             let mut ptrs: Vec<*mut std::ffi::c_void> = vec![std::ptr::null_mut(); MAX];
                             let count =
-                                unsafe { sffi::sl_g_getusers(ptrs.as_mut_ptr(), MAX as i32) }
+                                unsafe { sl_g_getusers(ptrs.as_mut_ptr(), MAX as i32) }
                                     as usize;
                             let tbl = lua.create_table()?;
                             for (i, &bl) in ptrs[..count].iter().enumerate() {
@@ -407,7 +423,7 @@ impl UserData for PcObject {
                                 None => return Ok(false),
                             };
                             let sd = unsafe { &mut *arc.data_ptr() };
-                            Ok(sffi::sl_pc_getpk(sd, id) != 0)
+                            Ok(sl_pc_getpk(sd, id) != 0)
                         },
                     )?));
                 }
@@ -431,7 +447,7 @@ impl UserData for PcObject {
                         move |_, _: mlua::MultiValue| {
                             if let Some(arc) = crate::game::map_server::map_id2sd_pc(capture_id) {
                                 let sd = unsafe { &mut *arc.data_ptr() };
-                                unsafe { sffi::sl_g_deliddb(sd as *mut _ as *mut std::ffi::c_void); }
+                                unsafe { sl_g_deliddb(sd as *mut _ as *mut std::ffi::c_void); }
                             }
                             Ok(())
                         }
@@ -443,7 +459,7 @@ impl UserData for PcObject {
                         move |_, _: mlua::MultiValue| {
                             if let Some(arc) = crate::game::map_server::map_id2sd_pc(capture_id) {
                                 let sd = unsafe { &mut *arc.data_ptr() };
-                                unsafe { sffi::sl_g_addpermanentspawn(sd as *mut _ as *mut std::ffi::c_void); }
+                                unsafe { sl_g_addpermanentspawn(sd as *mut _ as *mut std::ffi::c_void); }
                             }
                             Ok(())
                         }
@@ -1413,7 +1429,7 @@ impl UserData for PcObject {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
-            unsafe { sffi::sl_pc_input_send(&mut *sd, cs.as_ptr()); }
+            unsafe { sl_pc_input_send(&mut *sd, cs.as_ptr()); }
             Ok(())
         });
 
@@ -1441,7 +1457,7 @@ impl UserData for PcObject {
                 }
             }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
-            unsafe { sffi::sl_pc_dialog_send(&mut *sd, cs.as_ptr(), has_prev, has_next); }
+            unsafe { sl_pc_dialog_send(&mut *sd, cs.as_ptr(), has_prev, has_next); }
             Ok(())
         });
 
@@ -1461,7 +1477,7 @@ impl UserData for PcObject {
                 .unwrap_or(false);
             let strs = lua_table_to_cstrings_from(&entries_tbl, 2).unwrap_or_default();
             let ptrs = cstring_ptrs(&strs);
-            unsafe { sffi::sl_pc_dialogseq_send(&mut *sd, ptrs.as_ptr(), ptrs.len() as i32, can_continue as i32); }
+            unsafe { sl_pc_dialogseq_send(&mut *sd, ptrs.as_ptr(), ptrs.len() as i32, can_continue as i32); }
             Ok(())
         });
 
@@ -1471,7 +1487,7 @@ impl UserData for PcObject {
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let strs = lua_table_to_cstrings(&opts_tbl).unwrap_or_default();
             let ptrs = cstring_ptrs(&strs);
-            unsafe { sffi::sl_pc_menu_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32); }
+            unsafe { sl_pc_menu_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32); }
             Ok(())
         });
 
@@ -1481,7 +1497,7 @@ impl UserData for PcObject {
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let strs = lua_table_to_cstrings(&opts_tbl).unwrap_or_default();
             let ptrs = cstring_ptrs(&strs);
-            unsafe { sffi::sl_pc_menuseq_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32); }
+            unsafe { sl_pc_menuseq_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32); }
             Ok(())
         });
 
@@ -1495,7 +1511,7 @@ impl UserData for PcObject {
                 .collect();
             let ptrs = cstring_ptrs(&strs);
             unsafe {
-                sffi::sl_pc_menustring_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
+                sl_pc_menustring_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
                 crate::game::scripting::async_coro::store_menu_opts(sd as *const _ as *mut std::ffi::c_void, strings);
             }
             Ok(())
@@ -1511,7 +1527,7 @@ impl UserData for PcObject {
                 .collect();
             let ptrs = cstring_ptrs(&strs);
             unsafe {
-                sffi::sl_pc_menustring2_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
+                sl_pc_menustring2_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
                 crate::game::scripting::async_coro::store_menu_opts(sd as *const _ as *mut std::ffi::c_void, strings);
             }
             Ok(())
@@ -1529,7 +1545,7 @@ impl UserData for PcObject {
             let dn_p = cstring_ptrs(&dn);
             let bt_p = cstring_ptrs(&bt);
             unsafe {
-                sffi::sl_pc_buy_send(&mut *sd, cs.as_ptr(),
+                sl_pc_buy_send(&mut *sd, cs.as_ptr(),
                     items.as_ptr(), values.as_ptr(),
                     dn_p.as_ptr(), bt_p.as_ptr(), items.len() as i32);
             }
@@ -1541,7 +1557,7 @@ impl UserData for PcObject {
             if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let items = lua_table_to_ints(&items_tbl).unwrap_or_default();
-            unsafe { sffi::sl_pc_buydialog_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
+            unsafe { sl_pc_buydialog_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
             Ok(())
         });
 
@@ -1554,7 +1570,7 @@ impl UserData for PcObject {
             let prices = lua_table_to_ints(&prices_tbl).unwrap_or_default();
             let maxs   = lua_table_to_ints(&max_tbl).unwrap_or_default();
             unsafe {
-                sffi::sl_pc_buyextend_send(&mut *sd, cs.as_ptr(),
+                sl_pc_buyextend_send(&mut *sd, cs.as_ptr(),
                     items.as_ptr(), prices.as_ptr(), maxs.as_ptr(), items.len() as i32);
             }
             Ok(())
@@ -1565,7 +1581,7 @@ impl UserData for PcObject {
             if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let items = lua_table_to_ints(&items_tbl).unwrap_or_default();
-            unsafe { sffi::sl_pc_sell_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
+            unsafe { sl_pc_sell_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
             Ok(())
         });
 
@@ -1574,7 +1590,7 @@ impl UserData for PcObject {
             if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let items = lua_table_to_ints(&items_tbl).unwrap_or_default();
-            unsafe { sffi::sl_pc_sell2_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
+            unsafe { sl_pc_sell2_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
             Ok(())
         });
 
@@ -1583,7 +1599,7 @@ impl UserData for PcObject {
             if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let items = lua_table_to_ints(&items_tbl).unwrap_or_default();
-            unsafe { sffi::sl_pc_sellextend_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
+            unsafe { sl_pc_sellextend_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
             Ok(())
         });
 
@@ -1591,28 +1607,28 @@ impl UserData for PcObject {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
-            unsafe { sffi::sl_pc_showbank_send(&mut *sd, cs.as_ptr()); }
+            unsafe { sl_pc_showbank_send(&mut *sd, cs.as_ptr()); }
             Ok(())
         });
 
         methods.add_method("_showBankAdd_send", |_, this, ()| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            unsafe { sffi::sl_pc_showbankadd_send(&mut *sd); }
+            unsafe { sl_pc_showbankadd_send(&mut *sd); }
             Ok(())
         });
 
         methods.add_method("_bankAddMoney_send", |_, this, ()| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            unsafe { sffi::sl_pc_bankaddmoney_send(&mut *sd); }
+            unsafe { sl_pc_bankaddmoney_send(&mut *sd); }
             Ok(())
         });
 
         methods.add_method("_bankWithdrawMoney_send", |_, this, ()| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            unsafe { sffi::sl_pc_bankwithdrawmoney_send(&mut *sd); }
+            unsafe { sl_pc_bankwithdrawmoney_send(&mut *sd); }
             Ok(())
         });
 
@@ -1620,42 +1636,42 @@ impl UserData for PcObject {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
-            unsafe { sffi::sl_pc_clanshowbank_send(&mut *sd, cs.as_ptr()); }
+            unsafe { sl_pc_clanshowbank_send(&mut *sd, cs.as_ptr()); }
             Ok(())
         });
 
         methods.add_method("_clanShowBankAdd_send", |_, this, ()| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            unsafe { sffi::sl_pc_clanshowbankadd_send(&mut *sd); }
+            unsafe { sl_pc_clanshowbankadd_send(&mut *sd); }
             Ok(())
         });
 
         methods.add_method("_clanBankAddMoney_send", |_, this, ()| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            unsafe { sffi::sl_pc_clanbankaddmoney_send(&mut *sd); }
+            unsafe { sl_pc_clanbankaddmoney_send(&mut *sd); }
             Ok(())
         });
 
         methods.add_method("_clanBankWithdrawMoney_send", |_, this, ()| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            unsafe { sffi::sl_pc_clanbankwithdrawmoney_send(&mut *sd); }
+            unsafe { sl_pc_clanbankwithdrawmoney_send(&mut *sd); }
             Ok(())
         });
 
         methods.add_method("_clanViewBank_send", |_, this, ()| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            unsafe { sffi::sl_pc_clanviewbank_send(&mut *sd); }
+            unsafe { sl_pc_clanviewbank_send(&mut *sd); }
             Ok(())
         });
 
         methods.add_method("_repairExtend_send", |_, this, ()| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            unsafe { sffi::sl_pc_repairextend_send(&mut *sd); }
+            unsafe { sl_pc_repairextend_send(&mut *sd); }
             Ok(())
         });
 
@@ -1667,7 +1683,7 @@ impl UserData for PcObject {
             } else {
                 std::ptr::null_mut()
             };
-            unsafe { sffi::sl_pc_repairall_send(&mut *sd, npc_ptr); }
+            unsafe { sl_pc_repairall_send(&mut *sd, npc_ptr); }
             Ok(())
         });
     }

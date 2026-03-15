@@ -293,7 +293,7 @@ pub unsafe fn sl_g_dropitem(bl_ptr: *mut std::ffi::c_void, item_id: i32, amount:
         std::ptr::null_mut()
     };
     let db = crate::database::item_db::search(id);
-    crate::game::mob::rust_mob_dropitem(
+    crate::game::mob::mob_dropitem(
         (*bl).id as u32, id, amount, db.dura, db.protected, 0,
         (*bl).m as i32, (*bl).x as i32, (*bl).y as i32, sd,
     );
@@ -314,7 +314,7 @@ pub unsafe fn sl_g_dropitemxy(
         std::ptr::null_mut()
     };
     let db = crate::database::item_db::search(id);
-    crate::game::mob::rust_mob_dropitem(0, id, amount, db.dura, db.protected, 0, m, x, y, sd);
+    crate::game::mob::mob_dropitem(0, id, amount, db.dura, db.protected, 0, m, x, y, sd);
 }
 
 /// Insert a parcel into the Parcels table, assigning the next available slot.

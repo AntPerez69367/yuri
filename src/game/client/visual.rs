@@ -1446,7 +1446,7 @@ const OPT_FLAG_GHOSTS: u64 = 256;
 use crate::game::map_parse::groups::clif_isingroup as clif_isingroup_us;
 use crate::game::map_parse::movement::clif_charspecific as clif_charspecific_us;
 use crate::database::item_db;
-use crate::game::pc::rust_pc_isequip as pc_isequip_us;
+use crate::game::pc::pc_isequip as pc_isequip_us;
 
 /// Write the state packet for `sd` (the player being viewed) into `src_sd`'s
 /// (the viewer's) write buffer.

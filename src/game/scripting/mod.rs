@@ -2,7 +2,6 @@
 #![allow(non_snake_case, dead_code, unused_variables, non_upper_case_globals)]
 
 pub mod async_coro;
-pub mod ffi;
 pub mod globals;
 pub mod object_collect;
 pub mod pc_accessors;
@@ -15,6 +14,7 @@ use mlua::Lua;
 use std::ffi::{CStr, CString};
 
 use crate::database::map_db::BlockList;
+use crate::game::pc::{BL_PC, BL_MOB, BL_NPC, BL_ITEM};
 use types::floor::FloorListObject;
 use types::item::*;
 use types::mob::MobObject;
@@ -125,19 +125,19 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     g.set("NPC", lua.create_function(|lua, v: mlua::Value| -> mlua::Result<mlua::Value> {
         let ptr = match v {
             mlua::Value::Integer(i) if i >= 0 && i <= u32::MAX as i64 => {
-                ffi::map_id2bl_ref(i as u32)
+                crate::game::map_server::map_id2bl_ref(i as u32)
             }
             mlua::Value::Number(f) if f.is_finite() && f >= 0.0 && f <= u32::MAX as f64 => {
-                ffi::map_id2bl_ref(f as u32)
+                crate::game::map_server::map_id2bl_ref(f as u32)
             }
             mlua::Value::String(ref s) => {
                 let cs = CString::new(s.as_bytes().to_vec()).map_err(mlua::Error::external)?;
-                unsafe { ffi::map_name2npc(cs.as_ptr()) as *mut BlockList }
+                unsafe { crate::game::map_server::map_name2npc(cs.as_ptr()) as *mut BlockList }
             }
             _ => std::ptr::null_mut(),
         };
         if ptr.is_null() { return Ok(mlua::Value::Nil); }
-        if unsafe { (*ptr).bl_type as i32 } != ffi::BL_NPC {
+        if unsafe { (*ptr).bl_type as i32 } != BL_NPC {
             return Ok(mlua::Value::Nil);
         }
         Ok(mlua::Value::UserData(lua.create_userdata(NpcObject { ptr: ptr as *mut std::ffi::c_void })?))
@@ -160,9 +160,9 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
             }
             mlua::Value::String(ref s) => {
                 let cs = CString::new(s.as_bytes().to_vec()).map_err(mlua::Error::external)?;
-                let ptr = unsafe { ffi::map_name2sd(cs.as_ptr()) };
+                let ptr = unsafe { crate::game::map_server::map_name2sd(cs.as_ptr()) };
                 if ptr.is_null() { None }
-                else { Some(unsafe { (*(ptr as *const crate::game::pc::MapSessionData)).bl.id }) }
+                else { Some(unsafe { (*ptr).bl.id }) }
             }
             _ => None,
         };
@@ -248,7 +248,7 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
         Ok(mlua::Value::UserData(lua.create_userdata(RecipeObject { ptr })?))
     })?)?;
     let fl_ctor = lua.create_function(|lua, id: u32| -> mlua::Result<mlua::Value> {
-        let ptr = unsafe { ffi::map_id2fl(id) };
+        let ptr = unsafe { crate::game::map_server::map_id2fl(id) };
         if ptr.is_null() { return Ok(mlua::Value::Nil); }
         Ok(mlua::Value::UserData(lua.create_userdata(FloorListObject::new(ptr))?))
     })?;
@@ -334,10 +334,10 @@ pub(crate) unsafe fn bl_to_lua(lua: &Lua, bl: *mut std::ffi::c_void) -> mlua::Re
     let bl_ref = &*(bl as *const BlockList);
     let bl_type = bl_ref.bl_type as i32;
     match bl_type {
-        ffi::BL_PC   => lua.pack(PcObject  { id: bl_ref.id }),
-        ffi::BL_MOB  => lua.pack(MobObject { id: bl_ref.id }),
-        ffi::BL_NPC  => lua.pack(NpcObject { ptr: bl }),
-        ffi::BL_ITEM => lua.pack(FloorListObject::new(bl)),
+        BL_PC   => lua.pack(PcObject  { id: bl_ref.id }),
+        BL_MOB  => lua.pack(MobObject { id: bl_ref.id }),
+        BL_NPC  => lua.pack(NpcObject { ptr: bl }),
+        BL_ITEM => lua.pack(FloorListObject::new(bl)),
         other => {
             tracing::warn!("[scripting] bl_to_lua: unhandled bl_type={other:#04x}, returning nil");
             Ok(mlua::Value::Nil)
@@ -460,7 +460,7 @@ pub unsafe fn doscript_coro(
         } else {
             let bl_ref = &*(bl as *const BlockList);
             // Wrap the first player arg through _wrap_player for yielding method support.
-            if i == 0 && bl_ref.bl_type as i32 == ffi::BL_PC {
+            if i == 0 && bl_ref.bl_type as i32 == BL_PC {
                 // Derive the user key (MapSessionData pointer) for thread registry.
                 if let Some(arc) = crate::game::map_server::map_id2sd_pc(bl_ref.id) {
                     user_key = Some(&*arc.read() as *const crate::game::pc::MapSessionData as usize);
@@ -576,104 +576,55 @@ pub unsafe fn sl_updatepeople_impl(_bl: *mut std::ffi::c_void, _ap: *mut std::ff
 }
 
 
-pub unsafe fn rust_sl_init() {
-    ffi_catch!((), sl_init())
-}
-
-pub unsafe fn rust_sl_fixmem() {
-    ffi_catch!((), sl_fixmem())
-}
-
-pub unsafe fn rust_sl_reload() -> i32 {
-    ffi_catch!(-1, sl_reload())
-}
-
-pub unsafe fn rust_sl_luasize(_user: *mut crate::game::pc::MapSessionData) -> i32 {
-    ffi_catch!(0, sl_luasize())
-}
-
-pub unsafe fn rust_sl_doscript_blargs_vec(
-    root:   *const i8,
-    method: *const i8,
-    nargs:  i32,
-    args:   *const *mut std::ffi::c_void,
-) -> i32 {
-    ffi_catch!(0, sl_doscript_blargs_vec(root, method, nargs, args))
-}
-
-pub unsafe fn rust_sl_doscript_strings_vec(
-    root:   *const i8,
-    method: *const i8,
-    nargs:  i32,
-    args:   *const *const i8,
-) -> i32 {
-    ffi_catch!(0, sl_doscript_strings_vec(root, method, nargs, args))
-}
-
-pub unsafe fn rust_sl_doscript_stackargs(
-    root:   *const i8,
-    method: *const i8,
-    nargs:  i32,
-) -> i32 {
-    ffi_catch!(0, sl_doscript_stackargs(root, method, nargs))
-}
-
-pub unsafe fn rust_sl_updatepeople(
-    bl: *mut std::ffi::c_void,
-    ap: *mut std::ffi::c_void,
-) -> i32 {
-    ffi_catch!(0, sl_updatepeople_impl(bl, ap))
-}
-
 /// Direct symbol used as a function pointer callback in map_foreachinarea.
 pub unsafe fn sl_updatepeople(
     bl: *mut std::ffi::c_void,
     ap: *mut std::ffi::c_void,
 ) -> i32 {
-    ffi_catch!(0, sl_updatepeople_impl(bl, ap))
+    sl_updatepeople_impl(bl, ap)
 }
 
-pub unsafe fn rust_sl_resumemenu(selection: u32, sd: *mut crate::game::pc::MapSessionData) {
-    ffi_catch!((), async_coro::resume_menu(selection, sd as *mut std::ffi::c_void))
+pub unsafe fn sl_resumemenu(selection: u32, sd: *mut crate::game::pc::MapSessionData) {
+    async_coro::resume_menu(selection, sd as *mut std::ffi::c_void)
 }
 
-pub unsafe fn rust_sl_resumemenuseq(selection: u32, choice: i32, sd: *mut crate::game::pc::MapSessionData) {
-    ffi_catch!((), async_coro::resume_menuseq(selection, choice, sd as *mut std::ffi::c_void))
+pub unsafe fn sl_resumemenuseq(selection: u32, choice: i32, sd: *mut crate::game::pc::MapSessionData) {
+    async_coro::resume_menuseq(selection, choice, sd as *mut std::ffi::c_void)
 }
 
-pub unsafe fn rust_sl_resumeinputseq(
+pub unsafe fn sl_resumeinputseq(
     choice: u32,
     input:  *mut i8,
     sd:     *mut crate::game::pc::MapSessionData,
 ) {
-    ffi_catch!((), async_coro::resume_inputseq(choice, input, sd as *mut std::ffi::c_void))
+    async_coro::resume_inputseq(choice, input, sd as *mut std::ffi::c_void)
 }
 
-pub unsafe fn rust_sl_resumedialog(choice: u32, sd: *mut crate::game::pc::MapSessionData) {
-    ffi_catch!((), async_coro::resume_dialog(choice, sd as *mut std::ffi::c_void))
+pub unsafe fn sl_resumedialog(choice: u32, sd: *mut crate::game::pc::MapSessionData) {
+    async_coro::resume_dialog(choice, sd as *mut std::ffi::c_void)
 }
 
-pub unsafe fn rust_sl_resumebuy(items: *mut i8, sd: *mut crate::game::pc::MapSessionData) {
-    ffi_catch!((), async_coro::resume_buy(items, sd as *mut std::ffi::c_void))
+pub unsafe fn sl_resumebuy(items: *mut i8, sd: *mut crate::game::pc::MapSessionData) {
+    async_coro::resume_buy(items, sd as *mut std::ffi::c_void)
 }
 
-pub unsafe fn rust_sl_resumeinput(
+pub unsafe fn sl_resumeinput(
     tag:   *mut i8,
     input: *mut i8,
     sd:    *mut crate::game::pc::MapSessionData,
 ) {
-    ffi_catch!((), async_coro::resume_input(tag, input, sd as *mut std::ffi::c_void))
+    async_coro::resume_input(tag, input, sd as *mut std::ffi::c_void)
 }
 
-pub unsafe fn rust_sl_resumesell(choice: u32, sd: *mut crate::game::pc::MapSessionData) {
-    ffi_catch!((), async_coro::resume_sell(choice, sd as *mut std::ffi::c_void))
+pub unsafe fn sl_resumesell(choice: u32, sd: *mut crate::game::pc::MapSessionData) {
+    async_coro::resume_sell(choice, sd as *mut std::ffi::c_void)
 }
 
-pub unsafe fn rust_sl_exec(user: *mut crate::game::pc::MapSessionData, code: *mut i8) {
-    ffi_catch!((), sl_exec_str(user as *mut std::ffi::c_void, code))
+pub unsafe fn sl_exec(_user: *mut crate::game::pc::MapSessionData, code: *mut i8) {
+    sl_exec_str(_user as *mut std::ffi::c_void, code)
 }
 
-pub unsafe fn rust_sl_async_freeco(user: *mut crate::game::pc::MapSessionData) {
+pub unsafe fn sl_async_freeco(user: *mut crate::game::pc::MapSessionData) {
     thread_registry::cancel(user as usize);
     async_coro::clear_menu_opts(user as *mut std::ffi::c_void);
 }

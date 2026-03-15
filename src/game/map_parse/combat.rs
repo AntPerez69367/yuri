@@ -37,12 +37,12 @@ use crate::game::map_parse::chat::{clif_sendmsg, clif_sendminitext, clif_playsou
 use crate::game::map_parse::items::clif_unequipit;
 use crate::game::client::visual::{clif_getequiptype, broadcast_update_state};
 use crate::game::map_server::groups;
-use crate::game::pc::{addtokillreg, rust_pc_calcstat, rust_pc_checklevel, rust_pc_isequip};
+use crate::game::pc::{addtokillreg, pc_calcstat, pc_checklevel, pc_isequip};
 use crate::game::client::handlers::clif_addtokillreg;
 use crate::database::item_db;
 use crate::database::magic_db;
-use crate::game::mob::rust_mob_flushmagic;
-use crate::game::scripting::rust_sl_async_freeco;
+use crate::game::mob::mob_flushmagic;
+use crate::game::scripting::sl_async_freeco;
 
 // map_id2bl returns raw *mut BlockList for legacy unsafe code paths.
 #[inline]
@@ -946,7 +946,7 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
     }
 
     if mob.current_vita == 0 {
-        unsafe { rust_mob_flushmagic(mob as *mut MobSpawnData); }
+        unsafe { mob_flushmagic(mob as *mut MobSpawnData); }
         clif_mob_kill(mob).await;
 
         if !tmob.is_null() && mob.summon == 0 {
@@ -1005,9 +1005,9 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
                 };
 
                 if !tsd2.is_null() {
-                    crate::game::mob::rust_mob_drops(mob as *mut MobSpawnData, tsd2);
+                    crate::game::mob::mobdb_drops(mob as *mut MobSpawnData, tsd2);
                 } else {
-                    crate::game::mob::rust_mob_drops(mob as *mut MobSpawnData, sd);
+                    crate::game::mob::mobdb_drops(mob as *mut MobSpawnData, sd);
                 }
 
                 if (*sd).group_count == 0 {
@@ -1021,13 +1021,13 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
                 sl_doscript_2(b"onGetExp\0".as_ptr() as *const i8, std::ptr::null(), &raw mut (*sd).bl, &raw mut mob.bl);
 
                 if (*sd).group_count == 0 {
-                    rust_pc_checklevel(sd);
+                    pc_checklevel(sd);
                 } else {
                     for x in 0..(*sd).group_count as usize {
                         let tsdg = map_id2sd_local(groups()[(*sd).groupid as usize * 256 + x]);
                         if tsdg.is_null() { continue; }
                         if (*tsdg).bl.m == (*sd).bl.m && (*tsdg).status.state != 1 {
-                            rust_pc_checklevel(tsdg);
+                            pc_checklevel(tsdg);
                         }
                     }
                 }
@@ -1300,14 +1300,14 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
 
             unsafe {
                 if health > 0 || (*tbl).bl_type == BL_PC as u8 {
-                    rust_sl_async_freeco(sd as *mut MapSessionData);
+                    sl_async_freeco(sd as *mut MapSessionData);
                     sl_doscript_2(spell.yname.as_ptr(), b"cast\0".as_ptr() as *const i8, &raw mut sd.bl, tbl);
                 }
             }
         }
     } else {
         unsafe {
-            rust_sl_async_freeco(sd as *mut MapSessionData);
+            sl_async_freeco(sd as *mut MapSessionData);
             sl_doscript_2(spell.yname.as_ptr(), b"cast\0".as_ptr() as *const i8, &raw mut sd.bl, std::ptr::null_mut::<BlockList>());
         }
     }
@@ -1597,7 +1597,7 @@ pub fn clif_deductdura(sd: &mut MapSessionData, equip: i32, val: i32) -> i32 {
 /// Randomly reduce weapon durability by `hit`.
 ///
 pub fn clif_deductweapon(sd: &mut MapSessionData, hit: i32) -> i32 {
-    if unsafe { rust_pc_isequip(sd as *mut MapSessionData, EQ_WEAP) } != 0 {
+    if unsafe { pc_isequip(sd as *mut MapSessionData, EQ_WEAP) } != 0 {
         if rnd(100) > 50 {
             clif_deductdura(sd, EQ_WEAP, hit);
         }
@@ -1612,7 +1612,7 @@ pub fn clif_deductweapon(sd: &mut MapSessionData, hit: i32) -> i32 {
 pub fn clif_deductarmor(sd: &mut MapSessionData, hit: i32) -> i32 {
     macro_rules! maybe_deduct {
         ($slot:expr) => {
-            if unsafe { rust_pc_isequip(sd as *mut MapSessionData, $slot) } != 0 && rnd(100) > 50 {
+            if unsafe { pc_isequip(sd as *mut MapSessionData, $slot) } != 0 && rnd(100) > 50 {
                 clif_deductdura(sd, $slot, hit);
             }
         };
@@ -1720,7 +1720,7 @@ pub fn clif_checkdura(sd: &mut MapSessionData, equip: i32) -> i32 {
         unsafe {
             clif_unequipit(sd as *mut MapSessionData, clif_getequiptype(equip));
             broadcast_update_state(sd as *mut MapSessionData);
-            rust_pc_calcstat(sd as *mut MapSessionData);
+            pc_calcstat(sd as *mut MapSessionData);
             clif_sendstatus(sd as *mut MapSessionData, SFLAG_FULLSTATS | SFLAG_HPMP);
             clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8);
         }
@@ -1831,7 +1831,7 @@ pub fn clif_deductduraequip(sd: &mut MapSessionData) -> i32 {
             unsafe {
                 clif_unequipit(sd as *mut MapSessionData, clif_getequiptype(equip as i32));
                 broadcast_update_state(sd as *mut MapSessionData);
-                rust_pc_calcstat(sd as *mut MapSessionData);
+                pc_calcstat(sd as *mut MapSessionData);
                 clif_sendstatus(sd as *mut MapSessionData, SFLAG_FULLSTATS | SFLAG_HPMP);
                 clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8);
             }

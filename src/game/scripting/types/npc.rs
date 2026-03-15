@@ -4,7 +4,11 @@ use mlua::{MetaMethod, UserData, UserDataMethods};
 use crate::database::map_db::MapData;
 use crate::database::map_db::get_map_ptr;
 use crate::game::npc::{NpcData, npc_move, npc_warp};
-use crate::game::scripting::ffi as sffi;
+use crate::game::scripting::map_globals::{
+    sl_g_sendside, sl_g_sendanimxy, sl_g_talk, sl_g_deliddb, sl_g_addpermanentspawn,
+    sl_g_getusers, sl_g_addnpc,
+};
+use crate::game::mob::mobspawn_onetime;
 use crate::game::scripting::types::mob::MobObject;
 use crate::game::scripting::types::registry::{GameRegObject, MapRegObject, NpcRegObject};
 use crate::game::scripting::types::shared;
@@ -98,7 +102,7 @@ impl UserData for NpcObject {
                     let ptr = this.ptr;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            unsafe { sffi::sl_g_sendside(ptr); }
+                            unsafe { sl_g_sendside(ptr); }
                             Ok(())
                         }
                     )?));
@@ -113,7 +117,7 @@ impl UserData for NpcObject {
                             let x     = a.get(2).map(val_to_int).unwrap_or(0);
                             let y     = a.get(3).map(val_to_int).unwrap_or(0);
                             let times = a.get(4).map(val_to_int).unwrap_or(0);
-                            unsafe { sffi::sl_g_sendanimxy(ptr, anim, x, y, times); }
+                            unsafe { sl_g_sendanimxy(ptr, anim, x, y, times); }
                             Ok(())
                         }
                     )?));
@@ -132,7 +136,7 @@ impl UserData for NpcObject {
                                 _ => String::new(),
                             };
                             match CString::new(msg.as_bytes()) {
-                                Ok(cs) => unsafe { sffi::sl_g_talk(ptr, talk_type, cs.as_ptr()); },
+                                Ok(cs) => unsafe { sl_g_talk(ptr, talk_type, cs.as_ptr()); },
                                 Err(e) => tracing::debug!(
                                     "[scripting] NpcObject::talk: msg contains embedded null \
                                      (ptr={:?}, talk_type={}, err={})",
@@ -209,7 +213,7 @@ impl UserData for NpcObject {
                     let ptr = this.ptr;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            unsafe { sffi::sl_g_deliddb(ptr); }
+                            unsafe { sl_g_deliddb(ptr); }
                             Ok(())
                         }
                     )?));
@@ -218,7 +222,7 @@ impl UserData for NpcObject {
                     let ptr = this.ptr;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            unsafe { sffi::sl_g_addpermanentspawn(ptr); }
+                            unsafe { sl_g_addpermanentspawn(ptr); }
                             Ok(())
                         }
                     )?));
@@ -229,7 +233,7 @@ impl UserData for NpcObject {
                         |lua, _: mlua::MultiValue| {
                             const MAX: usize = 4096;
                             let mut ptrs: Vec<*mut std::ffi::c_void> = vec![std::ptr::null_mut(); MAX];
-                            let count = unsafe { sffi::sl_g_getusers(ptrs.as_mut_ptr(), MAX as i32) } as usize;
+                            let count = unsafe { sl_g_getusers(ptrs.as_mut_ptr(), MAX as i32) } as usize;
                             let tbl = lua.create_table()?;
                             for (i, &bl) in ptrs[..count].iter().enumerate() {
                                 let val = unsafe {
@@ -279,7 +283,7 @@ impl UserData for NpcObject {
                             let tbl = lua.create_table()?;
                             if amount <= 0 { return Ok(mlua::Value::Table(tbl)); }
                             let spawned = unsafe {
-                                sffi::rust_mobspawn_onetime(mob_id, m, x, y, amount, 0, 0, 0, owner)
+                                mobspawn_onetime(mob_id, m, x, y, amount, 0, 0, 0, owner)
                             };
                             if spawned.is_empty() { return Ok(mlua::Value::Table(tbl)); }
                             // Collect IDs before any fallible Lua operations.
@@ -316,7 +320,7 @@ impl UserData for NpcObject {
                             let cyname = yname.as_deref()
                                 .and_then(|s| CString::new(s).ok());
                             unsafe {
-                                sffi::sl_g_addnpc(
+                                sl_g_addnpc(
                                     cname.as_ptr(),
                                     vi(2), vi(3), vi(4), vi(5),
                                     vi(6), vi(7), vi(8), vi(9),

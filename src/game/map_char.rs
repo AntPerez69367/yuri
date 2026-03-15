@@ -39,9 +39,9 @@ use crate::game::map_server::map_fd;
 use crate::session::{session_set_eof, get_session_manager, SessionId};
 use crate::network::crypt::crypt_populate_table;
 use crate::game::pc::{
-    rust_pc_setpos, rust_pc_loadmagic, rust_pc_starttimer, rust_pc_requestmp,
-    rust_pc_loaditem, rust_pc_loadequip, rust_pc_magic_startup,
-    rust_pc_calcstat, rust_pc_checklevel,
+    pc_setpos, pc_loadmagic, pc_starttimer, pc_requestmp,
+    pc_loaditem, pc_loadequip, pc_magic_startup,
+    pc_calcstat, pc_checklevel,
 };
 use crate::game::map_parse::visual::{clif_spawn, clif_mob_look_start, clif_mob_look_close};
 use crate::game::client::visual::broadcast_update_state;
@@ -150,7 +150,7 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
     }
 
     // Place the player on the map (adds to block grid).
-    rust_pc_setpos(
+    pc_setpos(
         sd,
         (*sd).status.last_pos.m as i32,
         (*sd).status.last_pos.x as i32,
@@ -158,9 +158,9 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
     );
 
     // Load magic timers and start session timers.
-    rust_pc_loadmagic(sd);
-    rust_pc_starttimer(sd);
-    rust_pc_requestmp(sd);
+    pc_loadmagic(sd);
+    pc_starttimer(sd);
+    pc_requestmp(sd);
 
     // Send initial login packets to the client.
     // Functions now ported to Rust — call via module path.
@@ -208,13 +208,13 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
 
     // Load inventory and equipment.
     tracing::info!("[map] [login] fd={} step=loaditem", fd);
-    rust_pc_loaditem(sd);
+    pc_loaditem(sd);
     tracing::info!("[map] [login] fd={} step=loadequip", fd);
-    rust_pc_loadequip(sd);
+    pc_loadequip(sd);
 
     // Initialise magic system state for this session.
     tracing::info!("[map] [login] fd={} step=magic_startup", fd);
-    rust_pc_magic_startup(sd);
+    pc_magic_startup(sd);
 
     // Register the player in the global ID database and mark online.
     tracing::info!("[map] [login] fd={} step=addiddb", fd);
@@ -255,8 +255,8 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
 
     // Final stat calculation and state broadcast.
     tracing::info!("[map] [login] fd={} step=calcstat", fd);
-    rust_pc_calcstat(sd);
-    rust_pc_checklevel(sd);
+    pc_calcstat(sd);
+    pc_checklevel(sd);
     tracing::info!("[map] [login] fd={} step=mystaytus_2", fd);
     crate::database::blocking_run_async(clif_mystaytus_by_addr(sd as usize));
 
@@ -304,7 +304,7 @@ pub fn send(data: Vec<u8>) {
 }
 
 /// 0x3003 — Request char data (map→char, 24 bytes).
-pub unsafe fn rust_intif_load(fd: i32, char_id: u32, name: *const i8) {
+pub unsafe fn intif_load(fd: i32, char_id: u32, name: *const i8) {
     if name.is_null() { return; }
     let nb = std::ffi::CStr::from_ptr(name).to_bytes();
     let mut pkt = vec![0u8; 24];
@@ -316,7 +316,7 @@ pub unsafe fn rust_intif_load(fd: i32, char_id: u32, name: *const i8) {
 }
 
 /// 0x3005 — Logout notification (map→char, 6 bytes).
-pub unsafe fn rust_intif_quit(char_id: u32) {
+pub unsafe fn intif_quit(char_id: u32) {
     let mut pkt = vec![0u8; 6];
     pkt[0] = 0x05; pkt[1] = 0x30;
     pkt[2..6].copy_from_slice(&char_id.to_le_bytes());
@@ -324,14 +324,14 @@ pub unsafe fn rust_intif_quit(char_id: u32) {
 }
 
 /// 0x3004 — Save char (map→char, variable).
-pub unsafe fn rust_intif_save(data: *const u8, len: u32) {
+pub unsafe fn intif_save(data: *const u8, len: u32) {
     if data.is_null() || len < 6 { return; }
     let pkt = std::slice::from_raw_parts(data, len as usize).to_vec();
     send(pkt);
 }
 
 /// 0x3007 — Save-and-quit (map→char, variable).
-pub unsafe fn rust_intif_savequit(data: *const u8, len: u32) {
+pub unsafe fn intif_savequit(data: *const u8, len: u32) {
     if data.is_null() || len < 6 { return; }
     let pkt = std::slice::from_raw_parts(data, len as usize).to_vec();
     send(pkt);
@@ -362,7 +362,7 @@ pub mod intif_save_impl {
         Some(pkt)
     }
 
-    pub unsafe fn rust_sl_intif_save(sd: *mut MapSessionData) -> i32 {
+    pub unsafe fn sl_intif_save(sd: *mut MapSessionData) -> i32 {
         if sd.is_null() { return -1; }
         (*sd).status.last_pos.m = (*sd).bl.m;
         (*sd).status.last_pos.x = (*sd).bl.x;
@@ -370,12 +370,12 @@ pub mod intif_save_impl {
         (*sd).status.disguise       = (*sd).disguise;
         (*sd).status.disguise_color = (*sd).disguise_color;
         match compress_status(sd, 0x3004) {
-            Some(pkt) => { rust_intif_save(pkt.as_ptr(), pkt.len() as u32); 0 }
+            Some(pkt) => { intif_save(pkt.as_ptr(), pkt.len() as u32); 0 }
             None      => -1,
         }
     }
 
-    pub unsafe fn rust_sl_intif_savequit(sd: *mut MapSessionData) -> i32 {
+    pub unsafe fn sl_intif_savequit(sd: *mut MapSessionData) -> i32 {
         if sd.is_null() { return -1; }
         if !map_is_loaded((*sd).status.dest_pos.m as i32) {
             if (*sd).status.dest_pos.m == 0 {
@@ -394,7 +394,7 @@ pub mod intif_save_impl {
         (*sd).status.disguise       = (*sd).disguise;
         (*sd).status.disguise_color = (*sd).disguise_color;
         match compress_status(sd, 0x3007) {
-            Some(pkt) => { rust_intif_savequit(pkt.as_ptr(), pkt.len() as u32); 0 }
+            Some(pkt) => { intif_savequit(pkt.as_ptr(), pkt.len() as u32); 0 }
             None      => -1,
         }
     }

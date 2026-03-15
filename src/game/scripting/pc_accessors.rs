@@ -282,18 +282,18 @@ use crate::game::map_parse::player_state::{
     clif_sendstatus, clif_sendminimap, clif_sendxychange,
 };
 use crate::game::client::visual::{clif_sendupdatestatus_onequip, clif_sendurl};
-use crate::game::scripting::rust_sl_async_freeco as sl_async_freeco;
-use crate::game::map_char::intif_save_impl::rust_sl_intif_save as sl_intif_save;
+use crate::game::scripting::sl_async_freeco;
+use crate::game::map_char::intif_save_impl::sl_intif_save;
 use crate::game::pc::{
-    rust_pc_diescript as pc_diescript, rust_pc_res as pc_res,
-    rust_pc_calcstat as pc_calcstat, rust_pc_requestmp as pc_requestmp,
-    rust_pc_warp_sync as pc_warp, rust_pc_setpos as pc_setpos,
-    rust_pc_getitemscript as pc_getitemscript, rust_pc_loaditem as pc_loaditem,
-    rust_pc_equipscript as pc_equipscript, rust_pc_unequipscript as pc_unequipscript,
-    rust_pc_loadmagic as pc_loadmagic, rust_pc_checklevel as pc_checklevel,
-    rust_pc_delitem as pc_delitem, rust_pc_dropitemmap as pc_dropitemmap,
-    rust_pc_isinvenspace as pc_isinvenspace,
-    rust_pc_additem as pc_additem_acc,
+    pc_diescript, pc_res,
+    pc_calcstat, pc_requestmp,
+    pc_warp_sync as pc_warp, pc_setpos,
+    pc_getitemscript, pc_loaditem,
+    pc_equipscript, pc_unequipscript,
+    pc_loadmagic, pc_checklevel,
+    pc_delitem, pc_dropitemmap,
+    pc_isinvenspace,
+    pc_additem as pc_additem_acc,
 };
 use crate::game::map_parse::movement::{
     clif_refreshnoclick, clif_noparsewalk, clif_blockmovement,
@@ -1345,12 +1345,6 @@ pub unsafe fn sl_user_set_coref(sd: &mut MapSessionData, v: u32) {
 pub unsafe fn sl_user_coref_container(sd: &mut MapSessionData) -> u32 {
     sd.coref_container
 }
-pub fn sl_user_map_id2sd(id: u32) -> *mut std::ffi::c_void {
-    crate::game::map_server::map_id2sd_pc(id)
-        .map(|arc| &*arc.write() as *const _ as *mut std::ffi::c_void)
-        .unwrap_or(std::ptr::null_mut())
-}
-
 // ─── Mana / gold / time helpers ────────────────────
 
 /// addMagic / addMana — add `amount` to sd->status.mp and send HP/MP status.
@@ -1661,7 +1655,7 @@ pub unsafe fn sl_pc_removeitem(
         let avail = inv.amount as u32;
         if avail == 0 { continue; }
         let take = avail.min(amount);
-        crate::game::pc::rust_pc_delitem(sd, x as i32, take as i32, type_);
+        crate::game::pc::pc_delitem(sd, x as i32, take as i32, type_);
         amount -= take;
     }
 }
@@ -1681,7 +1675,7 @@ pub unsafe fn sl_pc_removeitemdura(
         let avail = inv.amount as u32;
         if avail == 0 { continue; }
         let take = avail.min(amount);
-        crate::game::pc::rust_pc_delitem(sd, x as i32, take as i32, type_);
+        crate::game::pc::pc_delitem(sd, x as i32, take as i32, type_);
         amount -= take;
     }
 }
@@ -1781,7 +1775,7 @@ pub unsafe fn sl_pc_activespells(sd: &mut MapSessionData, name: *const i8) -> i3
 // ─── Give XP ─────────────────────────────────────────────────────────────────
 
 pub unsafe fn sl_pc_givexp(sd: &mut MapSessionData, amount: u32) {
-    crate::game::pc::rust_pc_givexp(sd, amount, crate::config_globals::XP_RATE.load(std::sync::atomic::Ordering::Relaxed) as u32);
+    crate::game::pc::pc_givexp(sd, amount, crate::config_globals::XP_RATE.load(std::sync::atomic::Ordering::Relaxed) as u32);
 }
 
 // ─── Clan bank reads ──────────────────────────────────────────────────────────
@@ -2003,7 +1997,7 @@ pub fn sl_pc_repairall_send(_sd: &mut MapSessionData, _npc_bl: *mut std::ffi::c_
 
 use crate::game::map_parse::player_state::clif_getchararea;
 use crate::database::item_db;
-use crate::game::pc::rust_pc_unequip as pc_unequip_slot;
+use crate::game::pc::pc_unequip as pc_unequip_slot;
 
 // ─── Parcel removal ───────────────────────────────────────────────────────────
 

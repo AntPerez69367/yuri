@@ -365,7 +365,7 @@ pub unsafe fn clif_sendxy(sd: *mut MapSessionData) -> i32 {
     wfifob(fd, 13, 0x00);
     wfifoset(fd, encrypt(fd) as usize);
 
-    crate::game::pc::rust_pc_runfloor_sub(sd);
+    crate::game::pc::pc_runfloor_sub(sd);
     0
 }
 
@@ -415,7 +415,7 @@ pub unsafe fn clif_sendxynoclick(sd: *mut MapSessionData) -> i32 {
     wfifob(fd, 13, 0x00);
     wfifoset(fd, encrypt(fd) as usize);
 
-    crate::game::pc::rust_pc_runfloor_sub(sd);
+    crate::game::pc::pc_runfloor_sub(sd);
     0
 }
 

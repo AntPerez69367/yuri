@@ -133,7 +133,7 @@ use crate::game::map_parse::visual::{
 };
 use crate::game::map_parse::player_state::{clif_sendxy, clif_sendstatus};
 use crate::game::map_parse::chat::clif_sendminitext;
-use crate::game::pc::{rust_pc_warp_sync as pc_warp, rust_pc_isequip as pc_isequip};
+use crate::game::pc::{pc_warp_sync as pc_warp, pc_isequip as pc_isequip};
 use crate::game::map_parse::groups::{clif_isingroup, clif_canmove_sub_inner};
 use crate::game::time_util::gettick;
 use crate::database::item_db;
@@ -860,7 +860,7 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
     }
 
     sl_doscript_simple(c"onScriptedTile".as_ptr(), ptr::null(), &mut (*sd).bl as *mut BlockList);
-    crate::game::pc::rust_pc_runfloor_sub(sd);
+    crate::game::pc::pc_runfloor_sub(sd);
 
     // Warp check
     do_warp_check(&mut *sd);
@@ -1074,7 +1074,7 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> i32 {
     }
 
     sl_doscript_simple(c"onScriptedTile".as_ptr(), ptr::null(), &mut (*sd).bl as *mut BlockList);
-    crate::game::pc::rust_pc_runfloor_sub(sd);
+    crate::game::pc::pc_runfloor_sub(sd);
 
     do_warp_check(&mut *sd);
     1

@@ -34,14 +34,14 @@ unsafe fn session_alive(fd: SessionId) -> bool {
 use crate::game::map_server::map_name2sd;
 use crate::game::map_parse::combat::clif_sendaction;
 use crate::database::class_db::{name as classdb_name, chat as classdb_chat};
-use crate::game::gm_command::rust_is_command;
+use crate::game::gm_command::is_command;
 use crate::database::magic_db;
 use crate::game::client::handlers::clif_Hacker;
 
-// Alias for the async coroutine freeer (returns () in Rust, was i32 in C — return unused).
+// Alias for the async coroutine freeer (returns () in Rust, was i32 in C -- return unused).
 #[inline]
 unsafe fn sl_async_freeco(sd: *mut MapSessionData) {
-    crate::game::scripting::rust_sl_async_freeco(sd);
+    crate::game::scripting::sl_async_freeco(sd);
 }
 
 /// Dispatch a Lua event with a single block_list argument.
@@ -1026,7 +1026,7 @@ pub unsafe fn clif_sendscriptsay(
         return 0;
     }
 
-    if rust_is_command(sd, msg, msglen) != 0 {
+    if is_command(sd, msg, msglen) != 0 {
         return 0;
     }
 
@@ -1264,7 +1264,7 @@ pub unsafe fn clif_parsesay(sd: *mut MapSessionData) -> i32 {
         return 0;
     }
 
-    if rust_is_command(sd, msg, rfifob((*sd).fd, 6) as i32) != 0 {
+    if is_command(sd, msg, rfifob((*sd).fd, 6) as i32) != 0 {
         return 0;
     }
 

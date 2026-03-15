@@ -59,15 +59,15 @@ use crate::game::map_parse::combat::clif_sendaction;
 use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from};
 use crate::game::map_server::{map_id2name, map_additem};
 use crate::game::pc::{
-    rust_pc_readglobalreg as pc_readglobalreg,
-    rust_pc_useitem, rust_pc_unequip, rust_pc_delitem, rust_pc_loadmagic, rust_pc_reload_aether,
+    pc_readglobalreg,
+    pc_useitem, pc_unequip, pc_delitem, pc_loadmagic, pc_reload_aether,
 };
 use crate::database::item_db;
 use crate::database::magic_db;
 
 
 
-use crate::game::pc::rust_pc_addtocurrent_inner;
+use crate::game::pc::pc_addtocurrent_inner;
 use crate::game::block::AreaType;
 use crate::game::block_grid;
 use crate::game::map_parse::visual::clif_object_look_sub2_inner;
@@ -164,7 +164,7 @@ pub unsafe fn clif_checkinvbod(sd: *mut MapSessionData) -> i32 {
             sl_doscript_simple(b"onBreak\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl);
             sl_doscript_simple(item.yname.as_ptr(), b"on_break\0".as_ptr().cast(), &raw mut (*sd).bl);
 
-            rust_pc_delitem(sd, x as i32, 1, 9);
+            pc_delitem(sd, x as i32, 1, 9);
             clif_sendmsg(sd, 5, buf.as_ptr());
         }
 
@@ -534,7 +534,7 @@ pub unsafe fn clif_sendequip(sd: *mut MapSessionData, id: i32) -> i32 {
 /// Handle a use-item packet from the client.
 ///
 pub unsafe fn clif_parseuseitem(sd: *mut MapSessionData) -> i32 {
-    rust_pc_useitem(sd, rfifob((*sd).fd, 5) as i32 - 1);
+    pc_useitem(sd, rfifob((*sd).fd, 5) as i32 - 1);
     0
 }
 
@@ -547,7 +547,7 @@ pub unsafe fn clif_parseeatitem(sd: *mut MapSessionData) -> i32 {
     let id = (*sd).status.inventory[slot].id;
     // ITM_EAT = 0 (first entry in item_db.h enum)
     if item_db::search(id).typ as i32 == 0 {
-        rust_pc_useitem(sd, slot as i32);
+        pc_useitem(sd, slot as i32);
     } else {
         clif_sendminitext(sd, b"That item is not edible.\0".as_ptr().cast());
     }
@@ -643,7 +643,7 @@ pub unsafe fn clif_parseunequip(sd: *mut MapSessionData) -> i32 {
     let maxinv = (*sd).status.maxinv as usize;
     for x in 0..maxinv {
         if (*sd).status.inventory[x].id == 0 {
-            rust_pc_unequip(sd, eq_type);
+            pc_unequip(sd, eq_type);
             clif_unequipit(sd, slot_byte);
             return 0;
         }
@@ -664,7 +664,7 @@ pub unsafe fn clif_parsewield(sd: *mut MapSessionData) -> i32 {
     let item_type = item_db::search(id).typ as i32;
 
     if item_type >= 3 && item_type <= 16 {
-        rust_pc_useitem(sd, pos as i32);
+        pc_useitem(sd, pos as i32);
     } else {
         clif_sendminitext(sd, b"You cannot wield that!\0".as_ptr().cast());
     }
@@ -873,8 +873,8 @@ pub unsafe fn clif_parsechangespell(sd: *mut MapSessionData) -> i32 {
     (*sd).status.skill[start_pos] = stop_id;
     (*sd).status.skill[stop_pos]  = start_id;
 
-    rust_pc_loadmagic(sd);
-    rust_pc_reload_aether(sd);
+    pc_loadmagic(sd);
+    pc_reload_aether(sd);
 
     0
 }
@@ -949,7 +949,7 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
             let cell_ids = grid.ids_at_tile(x as u16, y as u16);
             for cid in cell_ids {
                 if let Some(fl_ref_arc) = crate::game::map_server::map_id2fl_ref(cid) { let fl_ref = &mut *fl_ref_arc.write();
-                    rust_pc_addtocurrent_inner(&raw mut fl_ref.bl, def.as_mut_ptr(), id as i32, item_type, sd);
+                    pc_addtocurrent_inner(&raw mut fl_ref.bl, def.as_mut_ptr(), id as i32, item_type, sd);
                 }
             }
         }

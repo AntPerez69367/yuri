@@ -2,7 +2,13 @@ use std::ffi::CString;
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
 use crate::game::pc::MapSessionData;
-use crate::game::scripting::ffi as sffi;
+use crate::game::pc::{
+    pc_readglobalreg, pc_setglobalreg, pc_readglobalregstring, pc_setglobalregstring,
+    pc_readquestreg, pc_setquestreg,
+};
+use crate::game::npc::{npc_readglobalreg_ffi, npc_setglobalreg_ffi};
+use crate::game::mob::{mob_readglobalreg, mob_setglobalreg};
+use crate::game::map_server::map_readglobalgamereg;
 use crate::game::scripting::map_globals;
 
 pub struct RegObject       { pub ptr: *mut std::ffi::c_void }
@@ -117,7 +123,7 @@ impl UserData for RegObject {
                 return Err(mlua::Error::external("RegObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            let val = unsafe { sffi::rust_pc_readglobalreg(this.ptr as *mut MapSessionData, ckey.as_ptr()) };
+            let val = unsafe { pc_readglobalreg(this.ptr as *mut MapSessionData, ckey.as_ptr()) };
             Ok(val)
         });
         methods.add_meta_method(MetaMethod::NewIndex, |_, this, (key, val): (String, mlua::Value)| {
@@ -125,7 +131,7 @@ impl UserData for RegObject {
                 return Err(mlua::Error::external("RegObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            unsafe { sffi::rust_pc_setglobalreg(this.ptr as *mut MapSessionData, ckey.as_ptr(), val_to_ulong(&val)?); }
+            unsafe { pc_setglobalreg(this.ptr as *mut MapSessionData, ckey.as_ptr(), val_to_ulong(&val)?); }
             Ok(())
         });
     }
@@ -141,7 +147,7 @@ impl UserData for RegStringObject {
                 return Err(mlua::Error::external("RegStringObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            let raw = unsafe { sffi::rust_pc_readglobalregstring(this.ptr as *mut MapSessionData, ckey.as_ptr()) };
+            let raw = unsafe { pc_readglobalregstring(this.ptr as *mut MapSessionData, ckey.as_ptr()) };
             let s = if raw.is_null() {
                 String::new()
             } else {
@@ -162,7 +168,7 @@ impl UserData for RegStringObject {
             };
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
             let cval = CString::new(sval).map_err(mlua::Error::external)?;
-            unsafe { sffi::rust_pc_setglobalregstring(this.ptr as *mut MapSessionData, ckey.as_ptr(), cval.as_ptr()); }
+            unsafe { pc_setglobalregstring(this.ptr as *mut MapSessionData, ckey.as_ptr(), cval.as_ptr()); }
             Ok(())
         });
     }
@@ -178,7 +184,7 @@ impl UserData for NpcRegObject {
                 return Err(mlua::Error::external("NpcRegObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            let val = unsafe { sffi::npc_readglobalreg_ffi(this.ptr, ckey.as_ptr()) };
+            let val = unsafe { npc_readglobalreg_ffi(this.ptr as *mut _, ckey.as_ptr()) };
             Ok(val)
         });
         methods.add_meta_method(MetaMethod::NewIndex, |_, this, (key, val): (String, mlua::Value)| {
@@ -186,7 +192,7 @@ impl UserData for NpcRegObject {
                 return Err(mlua::Error::external("NpcRegObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            unsafe { sffi::npc_setglobalreg_ffi(this.ptr, ckey.as_ptr(), val_to_int(&val)?); }
+            unsafe { npc_setglobalreg_ffi(this.ptr as *mut _, ckey.as_ptr(), val_to_int(&val)?); }
             Ok(())
         });
     }
@@ -202,7 +208,7 @@ impl UserData for MobRegObject {
                 return Err(mlua::Error::external("MobRegObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            let val = unsafe { sffi::rust_mob_readglobalreg(this.ptr, ckey.as_ptr()) };
+            let val = unsafe { mob_readglobalreg(this.ptr as *mut _, ckey.as_ptr()) };
             Ok(val)
         });
         methods.add_meta_method(MetaMethod::NewIndex, |_, this, (key, val): (String, mlua::Value)| {
@@ -210,7 +216,7 @@ impl UserData for MobRegObject {
                 return Err(mlua::Error::external("MobRegObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            unsafe { sffi::rust_mob_setglobalreg(this.ptr, ckey.as_ptr(), val_to_int(&val)?); }
+            unsafe { mob_setglobalreg(this.ptr as *mut _, ckey.as_ptr(), val_to_int(&val)?); }
             Ok(())
         });
     }
@@ -254,7 +260,7 @@ impl UserData for GameRegObject {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_meta_method(MetaMethod::Index, |_, _this, key: String| {
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            let val = unsafe { sffi::map_readglobalgamereg(ckey.as_ptr()) };
+            let val = unsafe { map_readglobalgamereg(ckey.as_ptr()) };
             Ok(val)
         });
         methods.add_meta_method(MetaMethod::NewIndex, |_, _this, (key, val): (String, mlua::Value)| {
@@ -277,7 +283,7 @@ impl UserData for QuestRegObject {
                 return Err(mlua::Error::external("QuestRegObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            let val = unsafe { sffi::rust_pc_readquestreg(this.ptr as *mut MapSessionData, ckey.as_ptr()) };
+            let val = unsafe { pc_readquestreg(this.ptr as *mut MapSessionData, ckey.as_ptr()) };
             Ok(val)
         });
         methods.add_meta_method(MetaMethod::NewIndex, |_, this, (key, val): (String, mlua::Value)| {
@@ -285,7 +291,7 @@ impl UserData for QuestRegObject {
                 return Err(mlua::Error::external("QuestRegObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            unsafe { sffi::rust_pc_setquestreg(this.ptr as *mut MapSessionData, ckey.as_ptr(), val_to_int(&val)?); }
+            unsafe { pc_setquestreg(this.ptr as *mut MapSessionData, ckey.as_ptr(), val_to_int(&val)?); }
             Ok(())
         });
     }

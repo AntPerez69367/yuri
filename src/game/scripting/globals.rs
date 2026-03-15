@@ -6,7 +6,12 @@ use mlua::{Lua, Value};
 
 use crate::database::get_pool;
 use crate::database::map_db::get_map_ptr;
-use crate::game::scripting::ffi as sffi;
+use crate::game::pc::{BL_PC, BL_MOB, BL_NPC, BL_ITEM};
+use crate::game::map_server::{cur_year, cur_season, cur_day, cur_time, map_changepostcolor};
+use crate::game::map_parse::chat::{clif_broadcast, clif_gmbroadcast};
+use crate::game::scripting::map_globals::{sl_g_setmap, sl_g_throw, sl_g_sendmeta};
+
+const BL_ALL: i32 = 0x0F;
 
 /// Register all 91 Lua globals on the given Lua state.
 pub fn register(lua: &Lua) -> mlua::Result<()> {
@@ -15,11 +20,11 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     // BL type constants — used by getObjectsInCell, foreachincell etc.
     // -----------------------------------------------------------------------
-    g.set("BL_PC",   sffi::BL_PC   as i64)?;
-    g.set("BL_MOB",  sffi::BL_MOB  as i64)?;
-    g.set("BL_NPC",  sffi::BL_NPC  as i64)?;
-    g.set("BL_ITEM", sffi::BL_ITEM as i64)?;
-    g.set("BL_ALL",  sffi::BL_ALL  as i64)?;
+    g.set("BL_PC",   BL_PC   as i64)?;
+    g.set("BL_MOB",  BL_MOB  as i64)?;
+    g.set("BL_NPC",  BL_NPC  as i64)?;
+    g.set("BL_ITEM", BL_ITEM as i64)?;
+    g.set("BL_ALL",  BL_ALL  as i64)?;
 
     // -----------------------------------------------------------------------
     // MOB state constants — used by AI scripts (mob.state comparisons)
@@ -51,23 +56,23 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("curServer", lua.create_function(|_, ()| {
-        Ok(sffi::serverid() as i64)
+        Ok(crate::config::config().server_id as i64)
     })?)?;
 
     g.set("curYear", lua.create_function(|_, ()| {
-        Ok(sffi::cur_year.load(std::sync::atomic::Ordering::Relaxed) as i64)
+        Ok(cur_year.load(std::sync::atomic::Ordering::Relaxed) as i64)
     })?)?;
 
     g.set("curSeason", lua.create_function(|_, ()| {
-        Ok(sffi::cur_season.load(std::sync::atomic::Ordering::Relaxed) as i64)
+        Ok(cur_season.load(std::sync::atomic::Ordering::Relaxed) as i64)
     })?)?;
 
     g.set("curDay", lua.create_function(|_, ()| {
-        Ok(sffi::cur_day.load(std::sync::atomic::Ordering::Relaxed) as i64)
+        Ok(cur_day.load(std::sync::atomic::Ordering::Relaxed) as i64)
     })?)?;
 
     g.set("curTime", lua.create_function(|_, ()| {
-        Ok(sffi::cur_time.load(std::sync::atomic::Ordering::Relaxed) as i64)
+        Ok(cur_time.load(std::sync::atomic::Ordering::Relaxed) as i64)
     })?)?;
 
     g.set("realDay",    lua.create_function(|_, ()| Ok(realtime().0 as i64))?)?;
@@ -80,13 +85,13 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("broadcast", lua.create_function(|_, (m, msg): (i32, String)| {
         let cmsg = CString::new(msg).map_err(mlua::Error::external)?;
-        unsafe { sffi::clif_broadcast(cmsg.as_ptr(), m as i32); }
+        unsafe { clif_broadcast(cmsg.as_ptr(), m as i32); }
         Ok(())
     })?)?;
 
     g.set("gmbroadcast", lua.create_function(|_, (m, msg): (i32, String)| {
         let cmsg = CString::new(msg).map_err(mlua::Error::external)?;
-        unsafe { sffi::clif_gmbroadcast(cmsg.as_ptr(), m as i32); }
+        unsafe { clif_gmbroadcast(cmsg.as_ptr(), m as i32); }
         Ok(())
     })?)?;
 
@@ -96,7 +101,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("sendMeta", lua.create_function(|_, ()| {
-        unsafe { sffi::sl_g_sendmeta(); }
+        unsafe { sl_g_sendmeta(); }
         Ok(())
     })?)?;
 
@@ -397,7 +402,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         let cmapfile = CString::new(vs(&args, 1)).map_err(mlua::Error::external)?;
         let ctitle   = CString::new(vs(&args, 2)).map_err(mlua::Error::external)?;
         unsafe {
-            sffi::sl_g_setmap(
+            sl_g_setmap(
                 vi(&args, 0), cmapfile.as_ptr(), ctitle.as_ptr(),
                 vi(&args, 3), vi(&args, 4), vi(&args, 5), vi(&args, 6),
                 vi(&args, 7) as u8, vi(&args, 8),
@@ -413,14 +418,14 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // setPostColor / throw / saveMap
     // -----------------------------------------------------------------------
     g.set("setPostColor", lua.create_async_function(|_, (board, post, color): (i32, i32, i32)| async move {
-        unsafe { sffi::map_changepostcolor(board as i32, post as i32, color as i32).await };
+        unsafe { map_changepostcolor(board as i32, post as i32, color as i32).await };
         Ok(())
     })?)?;
 
     g.set("throw", lua.create_function(|_, args: mlua::MultiValue| {
         let args: Vec<Value> = args.into_iter().collect();
         unsafe {
-            sffi::sl_g_throw(
+            sl_g_throw(
                 vi(&args, 0), vi(&args, 1), vi(&args, 2), vi(&args, 3),
                 vi(&args, 4), vi(&args, 5), vi(&args, 6), vi(&args, 7), vi(&args, 8),
             );
@@ -536,7 +541,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("addMob", lua.create_async_function(|_, (m, x, y, mobid): (i32, i32, i32, i32)| async move {
         if !unsafe { crate::database::map_db::map_is_loaded(m as u16) } { return Ok(false); }
-        let sid = sffi::serverid();
+        let sid = crate::config::config().server_id;
         let ok = sqlx::query(&format!(
             "INSERT INTO `Spawns{}` (`SpnMapId`,`SpnX`,`SpnY`,`SpnMobId`,\
              `SpnLastDeath`,`SpnStartTime`,`SpnEndTime`,`SpnMobIdReplace`) \
@@ -740,7 +745,9 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
             sd.status.clan = 0;
             sd.status.clan_title[0] = 0;
             sd.status.clan_rank = 0;
-            unsafe { sffi::clif_mystaytus(sd as *mut _); }
+            crate::database::blocking_run_async(
+                        crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *const _ as usize)
+                    );
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaClnId`='0',`ChaClanTitle`='',`ChaClnRank`='0' WHERE `ChaId`=?",
@@ -756,7 +763,9 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
             sd.status.clan = clan as u32;
             sd.status.clan_title[0] = 0;
             sd.status.clan_rank = 1;
-            unsafe { sffi::clif_mystaytus(sd as *mut _); }
+            crate::database::blocking_run_async(
+                        crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *const _ as usize)
+                    );
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaClnId`=?,`ChaClanTitle`='',`ChaClnRank`='1' WHERE `ChaId`=?",
@@ -786,7 +795,9 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
             let copy_len = bytes.len().min(dst.len() - 1);
             for (i, &b) in bytes.iter().take(copy_len).enumerate() { dst[i] = b as i8; }
             dst[copy_len] = 0;
-            unsafe { sffi::clif_mystaytus(sd as *mut _); }
+            crate::database::blocking_run_async(
+                        crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *const _ as usize)
+                    );
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaClanTitle`=? WHERE `ChaId`=?", title, id as u32
@@ -804,7 +815,9 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
             let new_class = crate::database::class_db::path(sd.status.class as i32) as u8;
             sd.status.class = new_class;
             sd.status.class_rank = 0;
-            unsafe { sffi::clif_mystaytus(sd as *mut _); }
+            crate::database::blocking_run_async(
+                        crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *const _ as usize)
+                    );
             let ok = sqlx::query!(
                 "UPDATE `Character` SET `ChaPthId`=?,`ChaPthRank`='0' WHERE `ChaId`=?",
                 new_class as u32, id as u32
@@ -829,7 +842,9 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
             let sd = &mut *arc.write();
             sd.status.class = cls as u8;
             sd.status.class_rank = 0;
-            unsafe { sffi::clif_mystaytus(sd as *mut _); }
+            crate::database::blocking_run_async(
+                        crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *const _ as usize)
+                    );
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaPthId`=?,`ChaPthRank`='0' WHERE `ChaId`=?",

@@ -45,30 +45,30 @@ use crate::game::client::handlers::clif_transfer_test;
 
 // ── pc functions ───────────────────────────────────────────────────────────────
 use crate::game::pc::{
-    rust_pc_warp_sync as pc_warp,
-    rust_pc_additem as pc_additem,
-    rust_pc_delitem as pc_delitem,
-    rust_pc_res as pc_res,
-    rust_pc_loadmagic as pc_loadmagic,
-    rust_pc_readglobalreg as pc_readglobalreg,
+    pc_warp_sync as pc_warp,
+    pc_additem,
+    pc_delitem,
+    pc_res,
+    pc_loadmagic,
+    pc_readglobalreg,
 };
 
 // ── mob functions ──────────────────────────────────────────────────────────────
-use crate::game::mob::rust_mob_respawn as mob_respawn;
+use crate::game::mob::mob_respawn;
 
 // ── scripting functions ────────────────────────────────────────────────────────
 use crate::game::scripting::{
-    rust_sl_reload as sl_reload,
-    rust_sl_exec as sl_exec,
-    rust_sl_fixmem as sl_fixmem,
-    rust_sl_luasize as sl_luasize,
+    sl_reload,
+    sl_exec,
+    sl_fixmem,
+    sl_luasize,
 };
 
 // ── database init functions ────────────────────────────────────────────────────
 use crate::database::item_db;
 use crate::database::{magic_db, mob_db, board_db, clan_db};
 use crate::game::npc::{npc_init, warp_init};
-use crate::game::mob::rust_mobspawn_read as mobspawn_read;
+use crate::game::mob::mobspawn_read;
 
 // ── session helpers ────────────────────────────────────────────────────────────
 use crate::session::session_set_eof;
@@ -599,8 +599,8 @@ fn command_broadcast(_sd: &mut MapSessionData, line: &str) -> i32 {
     0
 }
 
-fn command_luasize(sd: &mut MapSessionData, _line: &str) -> i32 {
-    unsafe { sl_luasize(as_ptr(sd)); }
+fn command_luasize(_sd: &mut MapSessionData, _line: &str) -> i32 {
+    unsafe { sl_luasize(); }
     0
 }
 
@@ -1210,6 +1210,6 @@ unsafe fn dispatch(sd: *mut MapSessionData, p: *const i8, len: i32, log: bool) -
     1
 }
 
-pub unsafe fn rust_is_command(sd: *mut MapSessionData, p: *const i8, len: i32) -> i32 {
+pub unsafe fn is_command(sd: *mut MapSessionData, p: *const i8, len: i32) -> i32 {
     dispatch(sd, p, len, true)
 }
