@@ -141,7 +141,136 @@ pub struct GfxViewer {
     pub name:        [i8; 34],
 }
 
-// ── Size assertions ───────────────────────────────────────────────────────────
+// ── Legend ────────────────────────────────────────────────────────────────────
+
+/// Achievement/legend entry. 328 bytes.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct Legend {
+    pub icon: u16,
+    pub color: u16,
+    pub text: [i8; 255],
+    pub name: [i8; 64],
+    pub _pad0: [u8; 1],
+    pub tchaid: u32,
+}
+
+unsafe impl bytemuck::Zeroable for Legend {}
+unsafe impl bytemuck::Pod for Legend {}
+
+// ── SkillInfo ────────────────────────────────────────────────────────────────
+
+/// Active spell/aether effect. 48 bytes.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct SkillInfo {
+    pub duration: i32,
+    pub aether: i32,
+    pub time: i32,
+    pub id: u16,
+    pub animation: u16,
+    pub caster_id: u32,
+    pub dura_timer: u32,
+    pub aether_timer: u32,
+    pub _pad: u32,
+    pub lasttick_dura: u64,
+    pub lasttick_aether: u64,
+}
+
+unsafe impl bytemuck::Zeroable for SkillInfo {}
+unsafe impl bytemuck::Pod for SkillInfo {}
+
+// ── KillReg ──────────────────────────────────────────────────────────────────
+
+/// Kill counter entry. 8 bytes.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct KillReg {
+    pub mob_id: u32,
+    pub amount: u32,
+}
+
+unsafe impl bytemuck::Zeroable for KillReg {}
+unsafe impl bytemuck::Pod for KillReg {}
+
+// ── GlobalRegString ──────────────────────────────────────────────────────────
+
+/// Registry string entry. 319 bytes.
+#[repr(C)]
+#[derive(Copy, Clone)]
+pub struct GlobalRegString {
+    pub str: [i8; 64],
+    pub val: [i8; 255],
+}
+
+unsafe impl bytemuck::Zeroable for GlobalRegString {}
+unsafe impl bytemuck::Pod for GlobalRegString {}
+
+// ── Default impls ────────────────────────────────────────────────────────────
+
+impl Default for Legend {
+    fn default() -> Self { bytemuck::Zeroable::zeroed() }
+}
+
+impl Default for SkillInfo {
+    fn default() -> Self { bytemuck::Zeroable::zeroed() }
+}
+
+impl Default for KillReg {
+    fn default() -> Self { bytemuck::Zeroable::zeroed() }
+}
+
+impl Default for GlobalRegString {
+    fn default() -> Self { bytemuck::Zeroable::zeroed() }
+}
+
+impl Default for Item {
+    fn default() -> Self { bytemuck::Zeroable::zeroed() }
+}
+
+impl Default for BankData {
+    fn default() -> Self { bytemuck::Zeroable::zeroed() }
+}
+
+// ── Debug impls ──────────────────────────────────────────────────────────────
+
+impl std::fmt::Debug for Legend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Legend").field("icon", &self.icon).field("color", &self.color).finish()
+    }
+}
+
+impl std::fmt::Debug for SkillInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SkillInfo").field("id", &self.id).field("duration", &self.duration).finish()
+    }
+}
+
+impl std::fmt::Debug for KillReg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KillReg").field("mob_id", &self.mob_id).field("amount", &self.amount).finish()
+    }
+}
+
+impl std::fmt::Debug for GlobalRegString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GlobalRegString").finish()
+    }
+}
+
+impl std::fmt::Debug for Item {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Item").field("id", &self.id).field("amount", &self.amount).finish()
+    }
+}
+
+impl std::fmt::Debug for BankData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BankData").field("item_id", &self.item_id).field("amount", &self.amount).finish()
+    }
+}
+
+// ── Size assertions ──────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
@@ -157,4 +286,12 @@ mod tests {
     fn global_reg_size() { assert_eq!(std::mem::size_of::<GlobalReg>(), 68); }
     #[test]
     fn gfx_viewer_size() { assert_eq!(std::mem::size_of::<GfxViewer>(), 72); }
+    #[test]
+    fn legend_size()         { assert_eq!(std::mem::size_of::<Legend>(), 328); }
+    #[test]
+    fn skill_info_size()     { assert_eq!(std::mem::size_of::<SkillInfo>(), 48); }
+    #[test]
+    fn kill_reg_size()       { assert_eq!(std::mem::size_of::<KillReg>(), 8); }
+    #[test]
+    fn global_reg_str_size() { assert_eq!(std::mem::size_of::<GlobalRegString>(), 319); }
 }

@@ -8,61 +8,9 @@
 //! repr(C) padding has been replaced with explicit `_pad` fields (e.g.
 //! `SkillInfo::_pad`) so no struct contains uninitialized padding bytes.
 
-pub use crate::common::types::{BankData, GlobalReg, Item, Point};
-
-// ── Sub-structs ───────────────────────────────────────────────────────────────
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct Legend {
-    pub icon: u16,
-    pub color: u16,
-    pub text: [i8; 255],
-    pub name: [i8; 64],
-    pub _pad0: [u8; 1],
-    pub tchaid: u32,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct SkillInfo {
-    pub duration: i32,
-    pub aether: i32,
-    pub time: i32,
-    pub id: u16,
-    pub animation: u16,
-    pub caster_id: u32,
-    pub dura_timer: u32,
-    pub aether_timer: u32,
-    pub _pad: u32, // explicit padding to 8-byte-align lasttick_dura
-    pub lasttick_dura: u64,
-    pub lasttick_aether: u64,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct KillReg {
-    pub mob_id: u32,
-    pub amount: u32,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone)]
-pub struct GlobalRegString {
-    pub str: [i8; 64],
-    pub val: [i8; 255],
-}
-
-// Safety: all fields are primitive types or arrays of primitive types with
-// no uninitialized padding beyond explicit `_pad` fields.
-unsafe impl bytemuck::Zeroable for Legend {}
-unsafe impl bytemuck::Pod for Legend {}
-unsafe impl bytemuck::Zeroable for SkillInfo {}
-unsafe impl bytemuck::Pod for SkillInfo {}
-unsafe impl bytemuck::Zeroable for KillReg {}
-unsafe impl bytemuck::Pod for KillReg {}
-unsafe impl bytemuck::Zeroable for GlobalRegString {}
-unsafe impl bytemuck::Pod for GlobalRegString {}
+pub use crate::common::types::{
+    BankData, GlobalReg, GlobalRegString, Item, KillReg, Legend, Point, SkillInfo,
+};
 
 // ── Array sizes from mmo.h ────────────────────────────────────────────────────
 
