@@ -118,7 +118,7 @@ fn rnd(x: i32) -> i32 {
 /// Apply a critical hit: run scripts and send health packet.
 ///
 pub fn clif_pc_damage(sd: &mut MapSessionData, src: &mut MapSessionData) -> i32 {
-    if src.status.state == 1 { return 0; }
+    if src.player.combat.state == 1 { return 0; }
 
     unsafe {
         sl_doscript_2(b"hitCritChance\0".as_ptr() as *const i8, std::ptr::null(), &raw mut sd.bl, &raw mut src.bl);
@@ -131,39 +131,39 @@ pub fn clif_pc_damage(sd: &mut MapSessionData, src: &mut MapSessionData) -> i32 
         sd.damage += 0.5f32;
         let damage = sd.damage as i32;
 
-        if sd.status.equip[EQ_WEAP as usize].id > 0 {
+        if sd.player.inventory.equip[EQ_WEAP as usize].id > 0 {
             unsafe {
                 clif_playsound(
                     &raw mut src.bl,
-                    item_db::search(sd.status.equip[EQ_WEAP as usize].id).sound_hit as i32,
+                    item_db::search(sd.player.inventory.equip[EQ_WEAP as usize].id).sound_hit as i32,
                 );
             }
         }
 
         for x in 0..14usize {
-            if sd.status.equip[x].id > 0 {
+            if sd.player.inventory.equip[x].id > 0 {
                 unsafe {
-                    sl_doscript_2(item_db::search(sd.status.equip[x].id).yname.as_ptr(), b"on_hit\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut src.bl);
+                    sl_doscript_2(item_db::search(sd.player.inventory.equip[x].id).yname.as_ptr(), b"on_hit\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut src.bl);
                 }
             }
         }
 
         for x in 0..MAX_SPELLS {
-            if sd.status.skill[x] > 0 {
+            if sd.player.spells.skills[x] > 0 {
                 unsafe {
-                    sl_doscript_2(magic_db::search(sd.status.skill[x] as i32).yname.as_ptr(), b"passive_on_hit\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut src.bl);
+                    sl_doscript_2(magic_db::search(sd.player.spells.skills[x] as i32).yname.as_ptr(), b"passive_on_hit\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut src.bl);
                 }
             }
         }
 
         for x in 0..MAX_MAGIC_TIMERS {
-            if sd.status.dura_aether[x].id > 0 && sd.status.dura_aether[x].duration > 0 {
+            if sd.player.spells.dura_aether[x].id > 0 && sd.player.spells.dura_aether[x].duration > 0 {
                 unsafe {
-                    let tsd = map_id2sd_local(sd.status.dura_aether[x].caster_id);
+                    let tsd = map_id2sd_local(sd.player.spells.dura_aether[x].caster_id);
                     if !tsd.is_null() {
-                        crate::game::scripting::doscript_blargs(magic_db::search(sd.status.dura_aether[x].id as i32).yname.as_ptr(), b"on_hit_while_cast\0".as_ptr() as *const i8, &[&raw mut sd.bl as *mut _, &raw mut src.bl as *mut _, &raw mut (*tsd).bl as *mut _]);
+                        crate::game::scripting::doscript_blargs(magic_db::search(sd.player.spells.dura_aether[x].id as i32).yname.as_ptr(), b"on_hit_while_cast\0".as_ptr() as *const i8, &[&raw mut sd.bl as *mut _, &raw mut src.bl as *mut _, &raw mut (*tsd).bl as *mut _]);
                     } else {
-                        sl_doscript_2(magic_db::search(sd.status.dura_aether[x].id as i32).yname.as_ptr(), b"on_hit_while_cast\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut src.bl);
+                        sl_doscript_2(magic_db::search(sd.player.spells.dura_aether[x].id as i32).yname.as_ptr(), b"on_hit_while_cast\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut src.bl);
                     }
                 }
             }
@@ -211,7 +211,7 @@ pub fn clif_send_pc_healthscript(
     critical: i32,
 ) -> i32 {
     let maxvita = sd.max_hp;
-    let mut currentvita = sd.status.hp;
+    let mut currentvita = sd.player.combat.hp;
 
     let bl = map_id2bl(sd.attacker);
     let mut tsd: *mut MapSessionData = std::ptr::null_mut();
@@ -231,9 +231,9 @@ pub fn clif_send_pc_healthscript(
 
     if damage > 0 {
         for x in 0..MAX_SPELLS {
-            if sd.status.skill[x] > 0 {
+            if sd.player.spells.skills[x] > 0 {
                 unsafe {
-                    sl_doscript_2(magic_db::search(sd.status.skill[x] as i32).yname.as_ptr(), b"passive_on_takingdamage\0".as_ptr() as *const i8, &raw mut sd.bl, bl);
+                    sl_doscript_2(magic_db::search(sd.player.spells.skills[x] as i32).yname.as_ptr(), b"passive_on_takingdamage\0".as_ptr() as *const i8, &raw mut sd.bl, bl);
                 }
             }
         }
@@ -259,7 +259,7 @@ pub fn clif_send_pc_healthscript(
         currentvita = maxvita;
     }
 
-    sd.status.hp = currentvita;
+    sd.player.combat.hp = currentvita;
 
     let mut percentage: f32 = if currentvita == 0 {
         0.0f32
@@ -290,37 +290,37 @@ pub fn clif_send_pc_healthscript(
     buf[13] = (dmg >>  8) as u8;
     buf[14] = dmg as u8;
 
-    if sd.status.state == 2 {
+    if sd.player.combat.state == 2 {
         unsafe { clif_send(buf.as_ptr(), 32, &raw mut sd.bl, SELF); }
     } else {
         unsafe { clif_send(buf.as_ptr(), 32, &raw mut sd.bl, AREA); }
     }
 
-    if sd.status.hp != 0 && damage > 0 {
+    if sd.player.combat.hp != 0 && damage > 0 {
         for x in 0..MAX_SPELLS {
-            if sd.status.skill[x] > 0 {
+            if sd.player.spells.skills[x] > 0 {
                 unsafe {
-                    sl_doscript_2(magic_db::search(sd.status.skill[x] as i32).yname.as_ptr(), b"passive_on_takedamage\0".as_ptr() as *const i8, &raw mut sd.bl, bl);
+                    sl_doscript_2(magic_db::search(sd.player.spells.skills[x] as i32).yname.as_ptr(), b"passive_on_takedamage\0".as_ptr() as *const i8, &raw mut sd.bl, bl);
                 }
             }
         }
         for x in 0..MAX_MAGIC_TIMERS {
-            if sd.status.dura_aether[x].id > 0 && sd.status.dura_aether[x].duration > 0 {
+            if sd.player.spells.dura_aether[x].id > 0 && sd.player.spells.dura_aether[x].duration > 0 {
                 unsafe {
-                    sl_doscript_2(magic_db::search(sd.status.dura_aether[x].id as i32).yname.as_ptr(), b"on_takedamage_while_cast\0".as_ptr() as *const i8, &raw mut sd.bl, bl);
+                    sl_doscript_2(magic_db::search(sd.player.spells.dura_aether[x].id as i32).yname.as_ptr(), b"on_takedamage_while_cast\0".as_ptr() as *const i8, &raw mut sd.bl, bl);
                 }
             }
         }
         for x in 0..14usize {
-            if sd.status.equip[x].id > 0 {
+            if sd.player.inventory.equip[x].id > 0 {
                 unsafe {
-                    sl_doscript_2(item_db::search(sd.status.equip[x].id).yname.as_ptr(), b"on_takedamage\0".as_ptr() as *const i8, &raw mut sd.bl, bl);
+                    sl_doscript_2(item_db::search(sd.player.inventory.equip[x].id).yname.as_ptr(), b"on_takedamage\0".as_ptr() as *const i8, &raw mut sd.bl, bl);
                 }
             }
         }
     }
 
-    if sd.status.hp == 0 {
+    if sd.player.combat.hp == 0 {
         unsafe {
             sl_doscript_simple(b"onDeathPlayer\0".as_ptr() as *const i8, std::ptr::null(), &raw mut sd.bl);
 
@@ -342,13 +342,13 @@ pub fn clif_send_pc_healthscript(
 /// Send the player's own health bar to themselves.
 ///
 pub fn clif_send_selfbar(sd: &mut MapSessionData) {
-    let mut percentage: f32 = if sd.status.hp == 0 {
+    let mut percentage: f32 = if sd.player.combat.hp == 0 {
         0.0f32
     } else {
-        (sd.status.hp as f32 / sd.max_hp as f32) * 100.0f32
+        (sd.player.combat.hp as f32 / sd.max_hp as f32) * 100.0f32
     };
 
-    if (percentage as i32) == 0 && sd.status.hp != 0 {
+    if (percentage as i32) == 0 && sd.player.combat.hp != 0 {
         percentage = 1.0f32;
     }
 
@@ -375,13 +375,13 @@ pub fn clif_send_selfbar(sd: &mut MapSessionData) {
 /// Send another player's health bar to `sd` (group bar update).
 ///
 pub fn clif_send_groupbars(sd: &mut MapSessionData, tsd: &mut MapSessionData) {
-    let mut percentage: f32 = if tsd.status.hp == 0 {
+    let mut percentage: f32 = if tsd.player.combat.hp == 0 {
         0.0f32
     } else {
-        (tsd.status.hp as f32 / tsd.max_hp as f32) * 100.0f32
+        (tsd.player.combat.hp as f32 / tsd.max_hp as f32) * 100.0f32
     };
 
-    if (percentage as i32) == 0 && tsd.status.hp != 0 {
+    if (percentage as i32) == 0 && tsd.player.combat.hp != 0 {
         percentage = 1.0f32;
     }
 
@@ -457,7 +457,7 @@ pub fn clif_send_mobbars_inner(bl: &BlockList, sd: &MapSessionData) -> i32 {
 ///
 pub fn clif_findspell_pos(sd: &mut MapSessionData, id: i32) -> i32 {
     for x in 0..52usize {
-        if sd.status.skill[x] as i32 == id {
+        if sd.player.spells.skills[x] as i32 == id {
             return x as i32;
         }
     }
@@ -478,13 +478,13 @@ pub fn clif_calc_critical(sd: &mut MapSessionData, bl: &mut BlockList) -> i32 {
             let tsd = bl as *mut BlockList as *mut MapSessionData;
             equat = (55 + sd.grace / 2) - (*tsd).grace / 2
                 + (sd.hit as f32 * 1.5f32) as i32
-                + (sd.status.level as i32 - (*tsd).status.level as i32);
+                + (sd.player.progression.level as i32 - (*tsd).player.progression.level as i32);
         } else if bl.bl_type == BL_MOB as u8 {
             let mob = bl as *mut BlockList as *mut MobSpawnData;
             let data: *mut MobDbData = (*mob).data;
             equat = (55 + sd.grace / 2) - (*data).grace / 2
                 + (sd.hit as f32 * 1.5f32) as i32
-                + (sd.status.level as i32 - (*data).level);
+                + (sd.player.progression.level as i32 - (*data).level);
         }
     }
 
@@ -511,8 +511,8 @@ pub fn clif_calc_critical(sd: &mut MapSessionData, bl: &mut BlockList) -> i32 {
 ///
 pub fn clif_has_aethers(sd: &mut MapSessionData, spell: i32) -> i32 {
     for x in 0..MAX_MAGIC_TIMERS {
-        if sd.status.dura_aether[x].id as i32 == spell {
-            return sd.status.dura_aether[x].aether;
+        if sd.player.spells.dura_aether[x].id as i32 == spell {
+            return sd.player.spells.dura_aether[x].aether;
         }
     }
     0
@@ -545,7 +545,7 @@ pub fn clif_send_duration(
         // sprintf(buf, "%s (%s)", name, tsd->status.name)
         unsafe {
             let name_bytes = cstr_bytes(name as *const u8);
-            let char_name_bytes = cstr_bytes((*tsd).status.name.as_ptr() as *const u8);
+            let char_name_bytes = (*tsd).player.identity.name.as_bytes();
             let total = name_bytes.len() + 3 + char_name_bytes.len();
             let total = if total < composed_buf.len() {
                 let mut pos = 0usize;
@@ -638,11 +638,11 @@ pub fn clif_mob_damage(sd: &mut MapSessionData, mob: &mut MobSpawnData) -> i32 {
             sl_doscript_2(b"swingDamage\0".as_ptr() as *const i8, std::ptr::null(), &raw mut sd.bl, &raw mut mob.bl);
         }
 
-        if sd.status.equip[EQ_WEAP as usize].id > 0 {
+        if sd.player.inventory.equip[EQ_WEAP as usize].id > 0 {
             unsafe {
                 clif_playsound(
                     &raw mut mob.bl,
-                    item_db::search(sd.status.equip[EQ_WEAP as usize].id).sound_hit as i32,
+                    item_db::search(sd.player.inventory.equip[EQ_WEAP as usize].id).sound_hit as i32,
                 );
             }
         }
@@ -667,25 +667,25 @@ pub fn clif_mob_damage(sd: &mut MapSessionData, mob: &mut MobSpawnData) -> i32 {
         }
 
         for x in 0..14usize {
-            if sd.status.equip[x].id > 0 {
+            if sd.player.inventory.equip[x].id > 0 {
                 unsafe {
-                    sl_doscript_2(item_db::search(sd.status.equip[x].id).yname.as_ptr(), b"on_hit\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut mob.bl);
+                    sl_doscript_2(item_db::search(sd.player.inventory.equip[x].id).yname.as_ptr(), b"on_hit\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut mob.bl);
                 }
             }
         }
 
         for x in 0..MAX_SPELLS {
-            if sd.status.skill[x] > 0 {
+            if sd.player.spells.skills[x] > 0 {
                 unsafe {
-                    sl_doscript_2(magic_db::search(sd.status.skill[x] as i32).yname.as_ptr(), b"passive_on_hit\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut mob.bl);
+                    sl_doscript_2(magic_db::search(sd.player.spells.skills[x] as i32).yname.as_ptr(), b"passive_on_hit\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut mob.bl);
                 }
             }
         }
 
         for x in 0..MAX_MAGIC_TIMERS {
-            if sd.status.dura_aether[x].id > 0 && sd.status.dura_aether[x].duration > 0 {
+            if sd.player.spells.dura_aether[x].id > 0 && sd.player.spells.dura_aether[x].duration > 0 {
                 unsafe {
-                    sl_doscript_2(magic_db::search(sd.status.dura_aether[x].id as i32).yname.as_ptr(), b"on_hit_while_cast\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut mob.bl);
+                    sl_doscript_2(magic_db::search(sd.player.spells.dura_aether[x].id as i32).yname.as_ptr(), b"on_hit_while_cast\0".as_ptr() as *const i8, &raw mut sd.bl, &raw mut mob.bl);
                 }
             }
         }
@@ -962,15 +962,16 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
         if !sd.is_null() && mob.summon == 0 {
             unsafe {
                 if tmob.is_null() {
+                    let sd_ref = &*sd;
                     for x in 0..MAX_MAGIC_TIMERS {
-                        if (*sd).status.dura_aether[x].id > 0 && (*sd).status.dura_aether[x].duration > 0 {
-                            sl_doscript_2(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), b"on_kill_while_cast\0".as_ptr() as *const i8, &raw mut (*sd).bl, &raw mut mob.bl);
+                        if sd_ref.player.spells.dura_aether[x].id > 0 && sd_ref.player.spells.dura_aether[x].duration > 0 {
+                            sl_doscript_2(magic_db::search(sd_ref.player.spells.dura_aether[x].id as i32).yname.as_ptr(), b"on_kill_while_cast\0".as_ptr() as *const i8, &raw mut (*sd).bl, &raw mut mob.bl);
                         }
                     }
 
                     for x in 0..MAX_SPELLS {
-                        if (*sd).status.skill[x] > 0 {
-                            sl_doscript_2(magic_db::search((*sd).status.skill[x] as i32).yname.as_ptr(), b"passive_on_kill\0".as_ptr() as *const i8, &raw mut (*sd).bl, &raw mut mob.bl);
+                        if sd_ref.player.spells.skills[x] > 0 {
+                            sl_doscript_2(magic_db::search(sd_ref.player.spells.skills[x] as i32).yname.as_ptr(), b"passive_on_kill\0".as_ptr() as *const i8, &raw mut (*sd).bl, &raw mut mob.bl);
                         }
                     }
                 }
@@ -1026,7 +1027,7 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
                     for x in 0..(*sd).group_count as usize {
                         let tsdg = map_id2sd_local(groups()[(*sd).groupid as usize * 256 + x]);
                         if tsdg.is_null() { continue; }
-                        if (*tsdg).bl.m == (*sd).bl.m && (*tsdg).status.state != 1 {
+                        if (*tsdg).bl.m == (*sd).bl.m && (*tsdg).player.combat.state != 1 {
                             pc_checklevel(tsdg);
                         }
                     }
@@ -1137,7 +1138,7 @@ pub fn clif_send_destroy_inner(bl: &BlockList, mob: *const MobSpawnData) -> i32 
 ///
 pub fn clif_sendmagic(sd: &mut MapSessionData, pos: i32) -> i32 {
     unsafe {
-        let id   = sd.status.skill[pos as usize] as i32;
+        let id   = sd.player.spells.skills[pos as usize] as i32;
         let spell = magic_db::search(id);
         let name = spell.name.as_ptr();
         let question = spell.question.as_ptr();
@@ -1185,9 +1186,9 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
     use crate::game::map_parse::packet::{rfifob, rfifol, rfifop};
 
     let pos = (rfifob(sd.fd, 5) as i32) - 1;
-    let spell = magic_db::search(sd.status.skill[pos as usize] as i32);
+    let spell = magic_db::search(sd.player.spells.skills[pos as usize] as i32);
 
-    let i = clif_has_aethers(sd, sd.status.skill[pos as usize] as i32);
+    let i = clif_has_aethers(sd, sd.player.spells.skills[pos as usize] as i32);
     if i > 0 {
         let time = i / 1000;
         unsafe {
@@ -1272,7 +1273,7 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
 
             unsafe {
                 if (*tbl).bl_type == BL_PC as u8 && !tsd2.is_null() {
-                    health = (*tsd2).status.hp as i64;
+                    health = (*tsd2).player.combat.hp as i64;
                     twill = (*tsd2).will;
                     tprotection = (*tsd2).protection as i32;
                 } else if (*tbl).bl_type == BL_MOB as u8 {
@@ -1440,7 +1441,7 @@ pub fn clif_sendanimation_inner(bl: &BlockList, anim: i32, t: *const BlockList, 
     if t.is_null() { return 0; }
 
     unsafe {
-        if (*sd).status.setting_flags as u32 & FLAG_MAGIC != 0 {
+        if (*sd).player.appearance.setting_flags as u32 & FLAG_MAGIC != 0 {
             if !session_exists((*sd).fd) {
                 return 0;
             }
@@ -1476,7 +1477,7 @@ pub fn clif_animation(
 
     unsafe {
         wfifohead(src.fd, 0x0A + 3);
-        if src.status.setting_flags as u32 & FLAG_MAGIC != 0 {
+        if src.player.appearance.setting_flags as u32 & FLAG_MAGIC != 0 {
             let fd = src.fd;
             wfifob(fd, 0, 0xAA);
             wfifow(fd, 1, 0x000Au16.swap_bytes());
@@ -1497,8 +1498,8 @@ pub fn clif_animation(
 ///
 pub fn clif_sendanimations(src: &mut MapSessionData, sd: &mut MapSessionData) -> i32 {
     for x in 0..MAX_MAGIC_TIMERS {
-        if sd.status.dura_aether[x].duration > 0 && sd.status.dura_aether[x].animation != 0 {
-            clif_animation(src, sd, sd.status.dura_aether[x].animation as i32, sd.status.dura_aether[x].duration);
+        if sd.player.spells.dura_aether[x].duration > 0 && sd.player.spells.dura_aether[x].animation != 0 {
+            clif_animation(src, sd, sd.player.spells.dura_aether[x].animation as i32, sd.player.spells.dura_aether[x].duration);
         }
     }
     0
@@ -1516,13 +1517,13 @@ pub fn clif_parseattack(sd: &mut MapSessionData) -> i32 {
         return 0;
     }
 
-    if sd.status.state == 1 || sd.status.state == 3 {
-        tracing::warn!("[attack] clif_parseattack BLOCKED: state={}", sd.status.state);
+    if sd.player.combat.state == 1 || sd.player.combat.state == 3 {
+        tracing::warn!("[attack] clif_parseattack BLOCKED: state={}", sd.player.combat.state);
         return 0;
     }
-    tracing::debug!("[attack] clif_parseattack PASS: id={} atkspd={} state={}", sd.bl.id, attackspeed, sd.status.state);
+    tracing::debug!("[attack] clif_parseattack PASS: id={} atkspd={} state={}", sd.bl.id, attackspeed, sd.player.combat.state);
 
-    let weap_id = sd.status.equip[EQ_WEAP as usize].id;
+    let weap_id = sd.player.inventory.equip[EQ_WEAP as usize].id;
     let weap_item = item_db::search(weap_id);
     let sound = weap_item.sound as i32;
 
@@ -1547,25 +1548,25 @@ pub fn clif_parseattack(sd: &mut MapSessionData) -> i32 {
     }
 
     for x in 0..14usize {
-        if sd.status.equip[x].id > 0 {
+        if sd.player.inventory.equip[x].id > 0 {
             unsafe {
-                sl_doscript_simple(item_db::search(sd.status.equip[x].id).yname.as_ptr(), c"on_swing".as_ptr(), &raw mut sd.bl);
+                sl_doscript_simple(item_db::search(sd.player.inventory.equip[x].id).yname.as_ptr(), c"on_swing".as_ptr(), &raw mut sd.bl);
             }
         }
     }
 
     for x in 0..MAX_SPELLS {
-        if sd.status.skill[x] > 0 {
+        if sd.player.spells.skills[x] > 0 {
             unsafe {
-                sl_doscript_simple(magic_db::search(sd.status.skill[x] as i32).yname.as_ptr(), c"passive_on_swing".as_ptr(), &raw mut sd.bl);
+                sl_doscript_simple(magic_db::search(sd.player.spells.skills[x] as i32).yname.as_ptr(), c"passive_on_swing".as_ptr(), &raw mut sd.bl);
             }
         }
     }
 
     for x in 0..MAX_MAGIC_TIMERS {
-        if sd.status.dura_aether[x].id > 0 && sd.status.dura_aether[x].duration > 0 {
+        if sd.player.spells.dura_aether[x].id > 0 && sd.player.spells.dura_aether[x].duration > 0 {
             unsafe {
-                sl_doscript_simple(magic_db::search(sd.status.dura_aether[x].id as i32).yname.as_ptr(), c"on_swing_while_cast".as_ptr(), &raw mut sd.bl);
+                sl_doscript_simple(magic_db::search(sd.player.spells.dura_aether[x].id as i32).yname.as_ptr(), c"on_swing_while_cast".as_ptr(), &raw mut sd.bl);
             }
         }
     }
@@ -1579,14 +1580,14 @@ pub fn clif_parseattack(sd: &mut MapSessionData) -> i32 {
 ///
 pub fn clif_deductdura(sd: &mut MapSessionData, equip: i32, val: i32) -> i32 {
     let equip_idx = equip as usize;
-    if sd.status.equip[equip_idx].id == 0 { return 0; }
+    if sd.player.inventory.equip[equip_idx].id == 0 { return 0; }
 
     let m = sd.bl.m as usize;
     if unsafe { (*raw_map_ptr().add(m)).pvp } != 0 { return 0; }
 
-    let eth = item_db::search(sd.status.equip[equip_idx].id).ethereal as i32;
+    let eth = item_db::search(sd.player.inventory.equip[equip_idx].id).ethereal as i32;
     if eth == 0 {
-        sd.status.equip[equip_idx].dura -= val;
+        sd.player.inventory.equip[equip_idx].dura -= val;
         clif_checkdura(sd, equip);
     }
     0
@@ -1640,53 +1641,53 @@ pub fn clif_deductarmor(sd: &mut MapSessionData, hit: i32) -> i32 {
 ///
 pub fn clif_checkdura(sd: &mut MapSessionData, equip: i32) -> i32 {
     let equip_idx = equip as usize;
-    if sd.status.equip[equip_idx].id == 0 { return 0; }
+    if sd.player.inventory.equip[equip_idx].id == 0 { return 0; }
 
-    let id = sd.status.equip[equip_idx].id;
+    let id = sd.player.inventory.equip[equip_idx].id;
     let item = item_db::search(id);
     sd.equipslot = equip as u8;
 
     let max_dura = item.dura as f32;
-    let cur_dura = sd.status.equip[equip_idx].dura as f32;
+    let cur_dura = sd.player.inventory.equip[equip_idx].dura as f32;
     let percentage = cur_dura / max_dura;
 
     let mut msg_buf = [0i8; 255];
 
-    if percentage <= 0.5 && sd.status.equip[equip_idx].repair == 0 {
+    if percentage <= 0.5 && sd.player.inventory.equip[equip_idx].repair == 0 {
         unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "50"); }
         unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
-        sd.status.equip[equip_idx].repair = 1;
+        sd.player.inventory.equip[equip_idx].repair = 1;
     }
-    if percentage <= 0.25 && sd.status.equip[equip_idx].repair == 1 {
+    if percentage <= 0.25 && sd.player.inventory.equip[equip_idx].repair == 1 {
         unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "25"); }
         unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
-        sd.status.equip[equip_idx].repair = 2;
+        sd.player.inventory.equip[equip_idx].repair = 2;
     }
-    if percentage <= 0.1 && sd.status.equip[equip_idx].repair == 2 {
+    if percentage <= 0.1 && sd.player.inventory.equip[equip_idx].repair == 2 {
         unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "10"); }
         unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
-        sd.status.equip[equip_idx].repair = 3;
+        sd.player.inventory.equip[equip_idx].repair = 3;
     }
-    if percentage <= 0.05 && sd.status.equip[equip_idx].repair == 3 {
+    if percentage <= 0.05 && sd.player.inventory.equip[equip_idx].repair == 3 {
         unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "5"); }
         unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
-        sd.status.equip[equip_idx].repair = 4;
+        sd.player.inventory.equip[equip_idx].repair = 4;
     }
-    if percentage <= 0.01 && sd.status.equip[equip_idx].repair == 4 {
+    if percentage <= 0.01 && sd.player.inventory.equip[equip_idx].repair == 4 {
         unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "1"); }
         unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
-        sd.status.equip[equip_idx].repair = 5;
+        sd.player.inventory.equip[equip_idx].repair = 5;
     }
 
-    let broken = sd.status.equip[equip_idx].dura <= 0
-        || (sd.status.state == 1 && item.bod == 1);
+    let broken = sd.player.inventory.equip[equip_idx].dura <= 0
+        || (sd.player.combat.state == 1 && item.bod == 1);
 
     if broken {
         if item.protected != 0
-            || sd.status.equip[equip_idx].protected >= 1
+            || sd.player.inventory.equip[equip_idx].protected >= 1
         {
-            sd.status.equip[equip_idx].protected = sd.status.equip[equip_idx].protected.saturating_sub(1);
-            sd.status.equip[equip_idx].dura = item.dura;
+            sd.player.inventory.equip[equip_idx].protected = sd.player.inventory.equip[equip_idx].protected.saturating_sub(1);
+            sd.player.inventory.equip[equip_idx].dura = item.dura;
             unsafe { format_restore_msg(&mut msg_buf, item.name.as_ptr() as *mut i8); }
             unsafe { clif_sendstatus(sd as *mut MapSessionData, SFLAG_FULLSTATS | SFLAG_HPMP); }
             unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
@@ -1703,19 +1704,19 @@ pub fn clif_checkdura(sd: &mut MapSessionData, equip: i32) -> i32 {
             sl_doscript_simple(item.yname.as_ptr(), b"on_break\0".as_ptr() as *const i8, &raw mut sd.bl);
         }
 
-        sd.status.equip[equip_idx].id              = 0;
-        sd.status.equip[equip_idx].dura            = 0;
-        sd.status.equip[equip_idx].amount          = 0;
-        sd.status.equip[equip_idx].protected       = 0;
-        sd.status.equip[equip_idx].owner           = 0;
-        sd.status.equip[equip_idx].custom          = 0;
-        sd.status.equip[equip_idx].custom_look      = 0;
-        sd.status.equip[equip_idx].custom_look_color = 0;
-        sd.status.equip[equip_idx].custom_icon     = 0;
-        sd.status.equip[equip_idx].custom_icon_color = 0;
-        sd.status.equip[equip_idx].time            = 0;
-        sd.status.equip[equip_idx].repair          = 0;
-        sd.status.equip[equip_idx].real_name[0]    = 0;
+        sd.player.inventory.equip[equip_idx].id              = 0;
+        sd.player.inventory.equip[equip_idx].dura            = 0;
+        sd.player.inventory.equip[equip_idx].amount          = 0;
+        sd.player.inventory.equip[equip_idx].protected       = 0;
+        sd.player.inventory.equip[equip_idx].owner           = 0;
+        sd.player.inventory.equip[equip_idx].custom          = 0;
+        sd.player.inventory.equip[equip_idx].custom_look      = 0;
+        sd.player.inventory.equip[equip_idx].custom_look_color = 0;
+        sd.player.inventory.equip[equip_idx].custom_icon     = 0;
+        sd.player.inventory.equip[equip_idx].custom_icon_color = 0;
+        sd.player.inventory.equip[equip_idx].time            = 0;
+        sd.player.inventory.equip[equip_idx].repair          = 0;
+        sd.player.inventory.equip[equip_idx].real_name[0]    = 0;
 
         unsafe {
             clif_unequipit(sd as *mut MapSessionData, clif_getequiptype(equip));
@@ -1738,8 +1739,8 @@ pub fn clif_deductduraequip(sd: &mut MapSessionData) -> i32 {
     if unsafe { (*raw_map_ptr().add(m)).pvp } != 0 { return 0; }
 
     for equip in 0..14usize {
-        if sd.status.equip[equip].id == 0 { continue; }
-        let id = sd.status.equip[equip].id;
+        if sd.player.inventory.equip[equip].id == 0 { continue; }
+        let id = sd.player.inventory.equip[equip].id;
         let item = item_db::search(id);
 
         let eth = item.ethereal as i32;
@@ -1748,49 +1749,49 @@ pub fn clif_deductduraequip(sd: &mut MapSessionData) -> i32 {
         sd.equipslot = equip as u8;
 
         let deduct = (item.dura as f64 * 0.10).floor() as i32;
-        sd.status.equip[equip].dura -= deduct;
+        sd.player.inventory.equip[equip].dura -= deduct;
 
         let max_dura = item.dura as f32;
-        let cur_dura = sd.status.equip[equip].dura as f32;
+        let cur_dura = sd.player.inventory.equip[equip].dura as f32;
         let percentage = cur_dura / max_dura;
 
         let mut msg_buf = [0i8; 255];
 
-        if percentage <= 0.5 && sd.status.equip[equip].repair == 0 {
+        if percentage <= 0.5 && sd.player.inventory.equip[equip].repair == 0 {
             unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "50"); }
             unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
-            sd.status.equip[equip].repair = 1;
+            sd.player.inventory.equip[equip].repair = 1;
         }
-        if percentage <= 0.25 && sd.status.equip[equip].repair == 1 {
+        if percentage <= 0.25 && sd.player.inventory.equip[equip].repair == 1 {
             unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "25"); }
             unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
-            sd.status.equip[equip].repair = 2;
+            sd.player.inventory.equip[equip].repair = 2;
         }
-        if percentage <= 0.1 && sd.status.equip[equip].repair == 2 {
+        if percentage <= 0.1 && sd.player.inventory.equip[equip].repair == 2 {
             unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "10"); }
             unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
-            sd.status.equip[equip].repair = 3;
+            sd.player.inventory.equip[equip].repair = 3;
         }
-        if percentage <= 0.05 && sd.status.equip[equip].repair == 3 {
+        if percentage <= 0.05 && sd.player.inventory.equip[equip].repair == 3 {
             unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "5"); }
             unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
-            sd.status.equip[equip].repair = 4;
+            sd.player.inventory.equip[equip].repair = 4;
         }
-        if percentage <= 0.01 && sd.status.equip[equip].repair == 4 {
+        if percentage <= 0.01 && sd.player.inventory.equip[equip].repair == 4 {
             unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "1"); }
             unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
-            sd.status.equip[equip].repair = 5;
+            sd.player.inventory.equip[equip].repair = 5;
         }
 
-        let broken = sd.status.equip[equip].dura <= 0
-            || (sd.status.state == 1 && item.bod == 1);
+        let broken = sd.player.inventory.equip[equip].dura <= 0
+            || (sd.player.combat.state == 1 && item.bod == 1);
 
         if broken {
             if item.protected != 0
-                || sd.status.equip[equip].protected >= 1
+                || sd.player.inventory.equip[equip].protected >= 1
             {
-                sd.status.equip[equip].protected = sd.status.equip[equip].protected.saturating_sub(1);
-                sd.status.equip[equip].dura = item.dura;
+                sd.player.inventory.equip[equip].protected = sd.player.inventory.equip[equip].protected.saturating_sub(1);
+                sd.player.inventory.equip[equip].dura = item.dura;
                 unsafe { format_restore_msg(&mut msg_buf, item.name.as_ptr() as *mut i8); }
                 unsafe { clif_sendstatus(sd as *mut MapSessionData, SFLAG_FULLSTATS | SFLAG_HPMP); }
                 unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
@@ -1801,7 +1802,7 @@ pub fn clif_deductduraequip(sd: &mut MapSessionData) -> i32 {
             // copy broken item to boditems
             let bod_count = sd.boditems.bod_count as usize;
             if bod_count < sd.boditems.item.len() {
-                sd.boditems.item[bod_count] = sd.status.equip[equip];
+                sd.boditems.item[bod_count] = sd.player.inventory.equip[equip];
                 sd.boditems.bod_count += 1;
             }
 
@@ -1814,19 +1815,19 @@ pub fn clif_deductduraequip(sd: &mut MapSessionData) -> i32 {
                 sl_doscript_simple(item.yname.as_ptr(), b"on_break\0".as_ptr() as *const i8, &raw mut sd.bl);
             }
 
-            sd.status.equip[equip].id              = 0;
-            sd.status.equip[equip].dura            = 0;
-            sd.status.equip[equip].amount          = 0;
-            sd.status.equip[equip].protected       = 0;
-            sd.status.equip[equip].owner           = 0;
-            sd.status.equip[equip].custom          = 0;
-            sd.status.equip[equip].custom_look      = 0;
-            sd.status.equip[equip].custom_look_color = 0;
-            sd.status.equip[equip].custom_icon     = 0;
-            sd.status.equip[equip].custom_icon_color = 0;
-            sd.status.equip[equip].time            = 0;
-            sd.status.equip[equip].repair          = 0;
-            sd.status.equip[equip].real_name[0]    = 0;
+            sd.player.inventory.equip[equip].id              = 0;
+            sd.player.inventory.equip[equip].dura            = 0;
+            sd.player.inventory.equip[equip].amount          = 0;
+            sd.player.inventory.equip[equip].protected       = 0;
+            sd.player.inventory.equip[equip].owner           = 0;
+            sd.player.inventory.equip[equip].custom          = 0;
+            sd.player.inventory.equip[equip].custom_look      = 0;
+            sd.player.inventory.equip[equip].custom_look_color = 0;
+            sd.player.inventory.equip[equip].custom_icon     = 0;
+            sd.player.inventory.equip[equip].custom_icon_color = 0;
+            sd.player.inventory.equip[equip].time            = 0;
+            sd.player.inventory.equip[equip].repair          = 0;
+            sd.player.inventory.equip[equip].real_name[0]    = 0;
 
             unsafe {
                 clif_unequipit(sd as *mut MapSessionData, clif_getequiptype(equip as i32));

@@ -862,10 +862,10 @@ pub unsafe fn npc_helper_pc_is_skip(bl: *mut BlockList, npc_bl: *mut BlockList) 
     } else {
         0
     };
-    let state = (*sd).status.state;
+    let state = (*sd).player.combat.state;
     if (show_ghosts != 0 && state == PC_DIE as i8)
         || state == -1
-        || (*sd).status.gm_level >= 50
+        || (*sd).player.identity.gm_level >= 50
     {
         1
     } else {

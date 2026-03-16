@@ -81,7 +81,7 @@ pub unsafe fn is_alive(bl: *mut BlockList) -> bool {
         (*mob).state != MOB_DEAD
     } else if bl_type == BL_PC {
         let sd = bl as *mut MapSessionData;
-        let dead = (*sd).status.state == PC_DIE as i8;
+        let dead = (*sd).player.combat.state == PC_DIE as i8;
         let stealth = ((*sd).optFlags & OPT_FLAG_STEALTH) != 0;
         !dead && !stealth
     } else {

@@ -321,7 +321,7 @@ pub unsafe fn clif_closeit(sd: *mut MapSessionData) -> i32 {
     std::ptr::copy_nonoverlapping(xor_bytes.as_ptr(), dst, xor_len);
     *dst.add(xor_len) = 0;
     let mut len = 11usize;
-    let name_ptr = (*sd).status.name.as_ptr();
+    let name_ptr = (*sd).player.identity.name.as_ptr();
     let name_len = cstrlen(name_ptr as *const i8);
     wfifob(fd, len + 11, name_len as u8);
     libc::strcpy(
@@ -778,8 +778,8 @@ pub unsafe fn clif_scriptmenuseq(
             let sd_ref = &*sd;
             let g = &sd_ref.gfx;
             wfifob(fd, 11, 1);
-            wfifow(fd, 12, swap16(sd_ref.status.sex as u16));
-            wfifob(fd, 14, sd_ref.status.state as u8);
+            wfifow(fd, 12, swap16(sd_ref.player.identity.sex as u16));
+            wfifob(fd, 14, sd_ref.player.combat.state as u8);
             wfifob(fd, 15, 0);
             wfifow(fd, 16, swap16(g.armor));
             wfifob(fd, 18, 0);
@@ -968,11 +968,11 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
         let raw_id = swap32(rfifol(fd, 6));
         if raw_id == 0xFFFFFFFE {
             // subpath chat toggle
-            if (*sd).status.subpath_chat == 0 {
-                (*sd).status.subpath_chat = 1;
+            if (*sd).player.social.subpath_chat == 0 {
+                (*sd).player.social.subpath_chat = 1;
                 clif_sendminitext(sd, b"Subpath Chat: ON\0".as_ptr() as *const i8);
             } else {
-                (*sd).status.subpath_chat = 0;
+                (*sd).player.social.subpath_chat = 0;
                 clif_sendminitext(sd, b"Subpath Chat: OFF\0".as_ptr() as *const i8);
             }
             return 0;
@@ -996,7 +996,7 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
                 && (sd_ref.bl.x as i32 - tsd_ref.bl.x as i32).abs() <= 21
                 && (sd_ref.bl.y as i32 - tsd_ref.bl.y as i32).abs() <= 21
             {
-                if sd_ref.status.gm_level != 0
+                if sd_ref.player.identity.gm_level != 0
                     || (tsd_ref.optFlags & 64 == 0      // !optFlag_noclick
                         && tsd_ref.optFlags & 32 == 0)  // !optFlag_stealth
                 {
@@ -1020,7 +1020,7 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
             (*sd).last_click = (*bl).id;
             sl_async_freeco(sd);
 
-            if (*sd).status.karma <= -3.0f32 {
+            if (*sd).player.social.karma <= -3.0f32 {
                 let nd_name = (*nd).name.as_ptr();
                 let is_f1npc = libc::strcmp(nd_name, b"f1npc\0".as_ptr() as *const i8) == 0;
                 let is_totem = libc::strcmp(nd_name, b"totem_npc\0".as_ptr() as *const i8) == 0;

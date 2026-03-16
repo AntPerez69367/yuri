@@ -77,15 +77,15 @@ unsafe fn ww_be(p: *mut u8, pos: usize, val: u16) {
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 pub unsafe fn clif_getLevelTNL(sd: *mut MapSessionData) -> i32 {
     let sd = &*sd;
-    let mut path = sd.status.class as i32;
-    let level = sd.status.level as i32;
+    let mut path = sd.player.progression.class as i32;
+    let level = sd.player.progression.level as i32;
 
     if path > 5 {
         path = class_db::path(path);
     }
 
     if level < 99 {
-        class_db::level(path, level) as i32 - sd.status.exp as i32
+        class_db::level(path, level) as i32 - sd.player.progression.exp as i32
     } else {
         0
     }
@@ -103,14 +103,14 @@ pub unsafe fn clif_getXPBarPercent(sd: *mut MapSessionData) -> f32 {
 
     // C normalises path twice — the first assignment is overwritten immediately;
     // reproduced faithfully. The `let _ = path` silences the dead-assignment lint.
-    let mut path = sd.status.class as i32;
+    let mut path = sd.player.progression.class as i32;
     if path > 5 {
         path = class_db::path(path);
     }
     let _ = path; // dead assignment; C re-reads sd->status.class next
 
-    path = sd.status.class as i32;
-    let level = sd.status.level as i32;
+    path = sd.player.progression.class as i32;
+    let level = sd.player.progression.level as i32;
     if path > 5 {
         path = class_db::path(path);
     }
@@ -118,26 +118,26 @@ pub unsafe fn clif_getXPBarPercent(sd: *mut MapSessionData) -> f32 {
     if level < 99 {
         let exp_in_level = class_db::level(path, level) as i32
             - class_db::level(path, level - 1) as i32;
-        let tnl = class_db::level(path, level) as i32 - sd.status.exp as i32;
+        let tnl = class_db::level(path, level) as i32 - sd.player.progression.exp as i32;
         let percentage = (exp_in_level - tnl) as f32 / exp_in_level as f32 * 100.0;
 
         if sd.underLevelFlag == 0
-            && sd.status.exp < class_db::level(path, level - 1)
+            && sd.player.progression.exp < class_db::level(path, level - 1)
         {
-            sd.underLevelFlag = sd.status.level as i8;
+            sd.underLevelFlag = sd.player.progression.level as i8;
         }
 
-        if sd.underLevelFlag as u8 != sd.status.level {
+        if sd.underLevelFlag as u8 != sd.player.progression.level {
             sd.underLevelFlag = 0;
         }
 
         if sd.underLevelFlag != 0 {
-            return sd.status.exp as f32 / class_db::level(path, level) as f32 * 100.0;
+            return sd.player.progression.exp as f32 / class_db::level(path, level) as f32 * 100.0;
         }
 
         percentage
     } else {
-        sd.status.exp as f32 / 4_294_967_295_f32 * 100.0
+        sd.player.progression.exp as f32 / 4_294_967_295_f32 * 100.0
     }
 }
 
@@ -171,10 +171,10 @@ pub unsafe fn clif_sendupdatestatus(sd: *mut MapSessionData) -> i32 {
     wb(p, 3, 0x08);
     // byte 4: not written in C (left as-is after WFIFOHEAD zeroing)
     wb(p, 5, 0x38);
-    wl_be(p, 6, sd.status.hp);
-    wl_be(p, 10, sd.status.mp);
-    wl_be(p, 14, sd.status.exp);
-    wl_be(p, 18, sd.status.money);
+    wl_be(p, 6, sd.player.combat.hp);
+    wl_be(p, 10, sd.player.combat.mp);
+    wl_be(p, 14, sd.player.progression.exp);
+    wl_be(p, 18, sd.player.inventory.money);
     wl_be(p, 22, 0x00);
     wb(p, 26, 0x00);
     wb(p, 27, 0x00);
@@ -220,8 +220,8 @@ pub unsafe fn clif_sendupdatestatus2(sd: *mut MapSessionData) -> i32 {
     wb(p, 3, 0x08);
     // byte 4: not written in C
     wb(p, 5, 0x18);
-    wl_be(p, 6, sd.status.exp);
-    wl_be(p, 10, sd.status.money);
+    wl_be(p, 6, sd.player.progression.exp);
+    wl_be(p, 10, sd.player.inventory.money);
     wb(p, 14, percentage as u8); // saturates to 0/255 for NaN or out-of-range (Rust 1.45+)
     wb(p, 15, sd.drunk as u8);
     wb(p, 16, sd.blind as u8);
@@ -231,7 +231,7 @@ pub unsafe fn clif_sendupdatestatus2(sd: *mut MapSessionData) -> i32 {
     // sd->flags is u64 (64-bit on Linux x86-64); C WFIFOB truncates to low byte.
     wb(p, 20, sd.flags as u8);
     wb(p, 21, 0x01);
-    wl_be(p, 22, sd.status.setting_flags as u32);
+    wl_be(p, 22, sd.player.appearance.setting_flags as u32);
 
     // encrypt() returns 1 on error or pkt_len (≥ 3) on success; never negative.
     wfifoset(fd, encrypt(fd) as usize);
@@ -271,8 +271,8 @@ pub unsafe fn clif_sendupdatestatus_onkill(sd: *mut MapSessionData) -> i32 {
     wb(p, 3, 0x08);
     // byte 4: not written in C
     wb(p, 5, 0x19);
-    wl_be(p, 6, sdr.status.exp);
-    wl_be(p, 10, sdr.status.money);
+    wl_be(p, 6, sdr.player.progression.exp);
+    wl_be(p, 10, sdr.player.inventory.money);
     wb(p, 14, percentage as u8); // saturates to 0/255 for NaN or out-of-range (Rust 1.45+)
     wb(p, 15, sdr.drunk as u8);
     wb(p, 16, sdr.blind as u8);
@@ -282,7 +282,7 @@ pub unsafe fn clif_sendupdatestatus_onkill(sd: *mut MapSessionData) -> i32 {
     // sd->flags is u64 (64-bit on Linux x86-64); C WFIFOB truncates to low byte.
     wb(p, 20, sdr.flags as u8);
     wb(p, 21, 0);
-    wl_be(p, 22, sdr.status.setting_flags as u32);
+    wl_be(p, 22, sdr.player.appearance.setting_flags as u32);
     wl_be(p, 26, tnl as u32);
     wb(p, 30, sdr.armor as u8);
     wb(p, 31, sdr.dam as u8);
@@ -326,10 +326,10 @@ pub unsafe fn clif_sendupdatestatus_onequip(sd: *mut MapSessionData) -> i32 {
     // byte 4: not written in C
     wb(p, 5, 89);
     wb(p, 6, 0x00);
-    wb(p, 7, sdr.status.country as u8);
-    wb(p, 8, sdr.status.totem);
+    wb(p, 7, sdr.player.progression.country as u8);
+    wb(p, 8, sdr.player.progression.totem);
     wb(p, 9, 0x00);
-    wb(p, 10, sdr.status.level);
+    wb(p, 10, sdr.player.progression.level);
     wl_be(p, 11, sdr.max_hp);
     wl_be(p, 15, sdr.max_mp);
     wb(p, 19, sdr.might as u8);
@@ -347,9 +347,9 @@ pub unsafe fn clif_sendupdatestatus_onequip(sd: *mut MapSessionData) -> i32 {
     wb(p, 31, 0);
     wb(p, 32, 0);
     wb(p, 33, 0);
-    wb(p, 34, sdr.status.maxinv);
-    wl_be(p, 35, sdr.status.exp);
-    wl_be(p, 39, sdr.status.money);
+    wb(p, 34, sdr.player.inventory.max_inv);
+    wl_be(p, 35, sdr.player.progression.exp);
+    wl_be(p, 39, sdr.player.inventory.money);
     wb(p, 43, percentage as u8); // saturates to 0/255 for NaN or out-of-range (Rust 1.45+)
     wb(p, 44, sdr.drunk as u8);
     wb(p, 45, sdr.blind as u8);
@@ -359,7 +359,7 @@ pub unsafe fn clif_sendupdatestatus_onequip(sd: *mut MapSessionData) -> i32 {
     // sd->flags is u64 (64-bit on Linux x86-64); C WFIFOB truncates to low byte.
     wb(p, 49, sdr.flags as u8);
     wb(p, 50, 0x00);
-    wl_be(p, 51, sdr.status.setting_flags as u32);
+    wl_be(p, 51, sdr.player.appearance.setting_flags as u32);
     wl_be(p, 55, tnl as u32);
     wb(p, 59, sdr.armor as u8);
     wb(p, 60, sdr.dam as u8);
@@ -411,8 +411,8 @@ pub unsafe fn clif_sendupdatestatus_onunequip(sd: *mut MapSessionData) -> i32 {
     wb(p, 9, 0x00);
     wb(p, 10, 0x00);
     // No SWAP32 in C → little-endian store.
-    wl_le(p, 11, sdr.status.hp);
-    wl_le(p, 15, sdr.status.mp);
+    wl_le(p, 11, sdr.player.combat.hp);
+    wl_le(p, 15, sdr.player.combat.mp);
     wb(p, 19, 0);
     wb(p, 20, 0);
     wb(p, 21, 0);
@@ -429,8 +429,8 @@ pub unsafe fn clif_sendupdatestatus_onunequip(sd: *mut MapSessionData) -> i32 {
     wb(p, 32, 0);
     wb(p, 33, 0);
     wb(p, 34, 0);
-    wl_be(p, 35, sdr.status.exp);
-    wl_be(p, 39, sdr.status.money);
+    wl_be(p, 35, sdr.player.progression.exp);
+    wl_be(p, 39, sdr.player.inventory.money);
     wb(p, 43, percentage as u8); // saturates to 0/255 for NaN or out-of-range (Rust 1.45+)
     wb(p, 44, sdr.drunk as u8);
     wb(p, 45, sdr.blind as u8);
@@ -781,7 +781,7 @@ pub unsafe fn clif_sendweather(
 
     // FLAG_WEATHER = 32 (mmo.h line 45). setting_flags is u16.
     const FLAG_WEATHER: u16 = 32;
-    let weather_byte: u8 = if sdr.status.setting_flags & FLAG_WEATHER != 0 {
+    let weather_byte: u8 = if sdr.player.appearance.setting_flags & FLAG_WEATHER != 0 {
         let map_ptr = crate::database::map_db::raw_map_ptr();
         if map_ptr.is_null() {
             0
@@ -840,7 +840,7 @@ pub unsafe fn clif_show_ghost(
     let sdr = &*sd;
     let tsdr = &*tsd;
 
-    if sdr.status.gm_level != 0 {
+    if sdr.player.identity.gm_level != 0 {
         return 1;
     }
 
@@ -851,14 +851,14 @@ pub unsafe fn clif_show_ghost(
     let map_slot = &*map_ptr.add(sdr.bl.m as usize);
 
     // If map shows ghosts, tsd is not a ghost (state != 1), or same entity → visible.
-    if map_slot.show_ghosts != 0 || tsdr.status.state != 1 || sdr.bl.id == tsdr.bl.id {
+    if map_slot.show_ghosts != 0 || tsdr.player.combat.state != 1 || sdr.bl.id == tsdr.bl.id {
         return 1;
     }
 
     if map_slot.pvp != 0 {
         // optFlag_ghosts = 256 (map_server.h line 34). optFlags is u64 (64-bit on Linux).
         const OPT_FLAG_GHOSTS: u64 = 256;
-        if sdr.status.state == 1 && (sdr.optFlags as u64 & OPT_FLAG_GHOSTS) != 0 {
+        if sdr.player.combat.state == 1 && (sdr.optFlags as u64 & OPT_FLAG_GHOSTS) != 0 {
             1
         } else {
             0
@@ -1019,10 +1019,7 @@ pub unsafe fn clif_timeout(fd: SessionId) -> i32 {
     let c = (raw_ip >> 16) & 0xff;
     let d = (raw_ip >> 24) & 0xff;
 
-    // sd->status.name is [i8; 16] — interior pointer from a fixed array, never null.
-    let name_display = std::ffi::CStr::from_ptr(sdr.status.name.as_ptr() as *const i8)
-        .to_string_lossy()
-        .into_owned();
+    let name_display = sdr.player.identity.name.clone();
 
     tracing::info!(
         "{} (IP: {}.{}.{}.{}) timed out!",
@@ -1281,11 +1278,11 @@ pub unsafe fn clif_paperpopupwrite_save(sd: *mut MapSessionData) -> i32 {
     std::ptr::copy_nonoverlapping(src, input.as_mut_ptr(), copy_len);
     // Remaining bytes stay zero.
 
-    let note = &(*sd).status.inventory[slot].note;
+    let note = &(&(*sd).player.inventory.inventory)[slot].note;
 
     // Only update if the note actually changed.
     if *note != input {
-        std::ptr::copy_nonoverlapping(input.as_ptr(), (*sd).status.inventory[slot].note.as_mut_ptr(), 300);
+        std::ptr::copy_nonoverlapping(input.as_ptr(), (&mut (*sd).player.inventory.inventory)[slot].note.as_mut_ptr(), 300);
     }
     0
 }
@@ -1483,24 +1480,24 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
     // WFIFOL(src_sd->fd, 5) = SWAP32(sd->bl.id)  — big-endian
     wl_be(p, 5, sd_r.bl.id as u32);
 
-    if sd_r.status.state == 4 {
+    if sd_r.player.combat.state == 4 {
         // Disguised state: compact packet with name only.
         wb(p, 9, 1);
         wb(p, 10, 15);
-        wb(p, 11, sd_r.status.state as u8);
+        wb(p, 11, sd_r.player.combat.state as u8);
         // WFIFOW(src_sd->fd, 12) = SWAP16(sd->disguise + 32768)
         ww_be(p, 12, sd_r.disguise.wrapping_add(32768));
         wb(p, 14, sd_r.disguise_color as u8);
 
-        let name_ptr = sd_r.status.name.as_ptr() as *const i8;
-        let name_len = libc::strlen(name_ptr);
+        let name_bytes = sd_r.player.identity.name.as_bytes();
+        let name_len = name_bytes.len();
 
         wb(p, 16, name_len as u8);
         // len += strlen(name) + 1
         let len = name_len + 1;
         let dst = wfifop(src_fd, 17);
         if !dst.is_null() {
-            std::ptr::copy_nonoverlapping(name_ptr as *const u8, dst, name_len);
+            std::ptr::copy_nonoverlapping(name_bytes.as_ptr(), dst, name_len);
         }
 
         // WFIFOW(src_sd->fd, 1) = SWAP16(len + 13)
@@ -1510,14 +1507,14 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
         // Normal / stealth / invisible states.
 
         // WFIFOW(src_sd->fd, 9) = SWAP16(sd->status.sex)
-        ww_be(p, 9, sd_r.status.sex as u16);
+        ww_be(p, 9, sd_r.player.identity.sex as u16);
 
         // Invisibility/stealth state: show invisible state (5) to GMs and group members;
         // non-GMs see the raw state.
-        let invis_cond = (sd_r.status.state == 2
+        let invis_cond = (sd_r.player.combat.state == 2
             || (sd_r.optFlags & OPT_FLAG_STEALTH) != 0)
             && sd_r.bl.id != src_r.bl.id
-            && (src_r.status.gm_level != 0
+            && (src_r.player.identity.gm_level != 0
                 || clif_isingroup_us(src_sd_mut, sd_mut) != 0
                 || (sd_r.gfx.dye == src_r.gfx.dye
                     && sd_r.gfx.dye != 0
@@ -1526,20 +1523,20 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
         if invis_cond {
             wb(p, 11, 5);
         } else {
-            wb(p, 11, sd_r.status.state as u8);
+            wb(p, 11, sd_r.player.combat.state as u8);
         }
 
         // Stealth-without-state override: show as "invisible" state 2.
         // Note: clif_charlook_sub has || bl.id == src_sd.bl.id; C original did not — that port may have an extra clause.
         if (sd_r.optFlags & OPT_FLAG_STEALTH) != 0
-            && sd_r.status.state == 0
-            && src_r.status.gm_level == 0
+            && sd_r.player.combat.state == 0
+            && src_r.player.identity.gm_level == 0
         {
             wb(p, 11, 2);
         }
 
         // Disguise id.
-        if sd_r.status.state == 3 {
+        if sd_r.player.combat.state == 3 {
             ww_be(p, 12, sd_r.disguise);
         } else {
             ww_be(p, 12, 0u16);
@@ -1547,33 +1544,33 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
 
         wb(p, 14, sd_r.speed as u8);
         wb(p, 15, 0);
-        wb(p, 16, sd_r.status.face as u8);
-        wb(p, 17, sd_r.status.hair as u8);
-        wb(p, 18, sd_r.status.hair_color as u8);
-        wb(p, 19, sd_r.status.face_color as u8);
-        wb(p, 20, sd_r.status.skin_color as u8);
+        wb(p, 16, sd_r.player.appearance.face as u8);
+        wb(p, 17, sd_r.player.appearance.hair as u8);
+        wb(p, 18, sd_r.player.appearance.hair_color as u8);
+        wb(p, 19, sd_r.player.appearance.face_color as u8);
+        wb(p, 20, sd_r.player.appearance.skin_color as u8);
 
         // armor / coat  (offsets 21–23)
         if pc_isequip_us(sd_mut,EQ_ARMOR) == 0 {
-            ww_be(p, 21, sd_r.status.sex as u16);
+            ww_be(p, 21, sd_r.player.identity.sex as u16);
         } else {
-            if sd_r.status.equip[EQ_ARMOR as usize].custom_look != 0 {
-                ww_be(p, 21, sd_r.status.equip[EQ_ARMOR as usize].custom_look as u16);
+            if sd_r.player.inventory.equip[EQ_ARMOR as usize].custom_look != 0 {
+                ww_be(p, 21, sd_r.player.inventory.equip[EQ_ARMOR as usize].custom_look as u16);
             } else {
                 ww_be(p, 21, item_db::search(pc_isequip_us(sd_mut,EQ_ARMOR) as u32).look as u16);
             }
-            if sd_r.status.armor_color > 0 {
-                wb(p, 23, sd_r.status.armor_color as u8);
-            } else if sd_r.status.equip[EQ_ARMOR as usize].custom_look != 0 {
-                wb(p, 23, sd_r.status.equip[EQ_ARMOR as usize].custom_look_color as u8);
+            if sd_r.player.appearance.armor_color > 0 {
+                wb(p, 23, sd_r.player.appearance.armor_color as u8);
+            } else if sd_r.player.inventory.equip[EQ_ARMOR as usize].custom_look != 0 {
+                wb(p, 23, sd_r.player.inventory.equip[EQ_ARMOR as usize].custom_look_color as u8);
             } else {
                 wb(p, 23, item_db::search(pc_isequip_us(sd_mut,EQ_ARMOR) as u32).look_color as u8);
             }
         }
         if pc_isequip_us(sd_mut,EQ_COAT) != 0 {
             ww_be(p, 21, item_db::search(pc_isequip_us(sd_mut,EQ_COAT) as u32).look as u16);
-            if sd_r.status.armor_color > 0 {
-                wb(p, 23, sd_r.status.armor_color as u8);
+            if sd_r.player.appearance.armor_color > 0 {
+                wb(p, 23, sd_r.player.appearance.armor_color as u8);
             } else {
                 wb(p, 23, item_db::search(pc_isequip_us(sd_mut,EQ_COAT) as u32).look_color as u8);
             }
@@ -1583,9 +1580,9 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
         if pc_isequip_us(sd_mut,EQ_WEAP) == 0 {
             ww_be(p, 24, 0xFFFF);
             wb(p, 26, 0x0);
-        } else if sd_r.status.equip[EQ_WEAP as usize].custom_look != 0 {
-            ww_be(p, 24, sd_r.status.equip[EQ_WEAP as usize].custom_look as u16);
-            wb(p, 26, sd_r.status.equip[EQ_WEAP as usize].custom_look_color as u8);
+        } else if sd_r.player.inventory.equip[EQ_WEAP as usize].custom_look != 0 {
+            ww_be(p, 24, sd_r.player.inventory.equip[EQ_WEAP as usize].custom_look as u16);
+            wb(p, 26, sd_r.player.inventory.equip[EQ_WEAP as usize].custom_look_color as u8);
         } else {
             ww_be(p, 24, item_db::search(pc_isequip_us(sd_mut,EQ_WEAP) as u32).look as u16);
             wb(p, 26, item_db::search(pc_isequip_us(sd_mut,EQ_WEAP) as u32).look_color as u8);
@@ -1595,9 +1592,9 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
         if pc_isequip_us(sd_mut,EQ_SHIELD) == 0 {
             ww_be(p, 27, 0xFFFF);
             wb(p, 29, 0);
-        } else if sd_r.status.equip[EQ_SHIELD as usize].custom_look != 0 {
-            ww_be(p, 27, sd_r.status.equip[EQ_SHIELD as usize].custom_look as u16);
-            wb(p, 29, sd_r.status.equip[EQ_SHIELD as usize].custom_look_color as u8);
+        } else if sd_r.player.inventory.equip[EQ_SHIELD as usize].custom_look != 0 {
+            ww_be(p, 27, sd_r.player.inventory.equip[EQ_SHIELD as usize].custom_look as u16);
+            wb(p, 29, sd_r.player.inventory.equip[EQ_SHIELD as usize].custom_look_color as u8);
         } else {
             ww_be(p, 27, item_db::search(pc_isequip_us(sd_mut,EQ_SHIELD) as u32).look as u16);
             wb(p, 29, item_db::search(pc_isequip_us(sd_mut,EQ_SHIELD) as u32).look_color as u8);
@@ -1605,16 +1602,16 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
 
         // helm  (offsets 30–32)
         if pc_isequip_us(sd_mut,EQ_HELM) == 0
-            || (sd_r.status.setting_flags & FLAG_HELM as u16) == 0
+            || (sd_r.player.appearance.setting_flags & FLAG_HELM as u16) == 0
             || item_db::search(pc_isequip_us(sd_mut,EQ_HELM) as u32).look == -1
         {
             wb(p, 30, 0);
             ww_be(p, 31, 0xFFFF);
         } else {
             wb(p, 30, 1);
-            if sd_r.status.equip[EQ_HELM as usize].custom_look != 0 {
-                wb(p, 31, sd_r.status.equip[EQ_HELM as usize].custom_look as u8);
-                wb(p, 32, sd_r.status.equip[EQ_HELM as usize].custom_look_color as u8);
+            if sd_r.player.inventory.equip[EQ_HELM as usize].custom_look != 0 {
+                wb(p, 31, sd_r.player.inventory.equip[EQ_HELM as usize].custom_look as u8);
+                wb(p, 32, sd_r.player.inventory.equip[EQ_HELM as usize].custom_look_color as u8);
             } else {
                 wb(p, 31, item_db::search(pc_isequip_us(sd_mut,EQ_HELM) as u32).look as u8);
                 wb(p, 32, item_db::search(pc_isequip_us(sd_mut,EQ_HELM) as u32).look_color as u8);
@@ -1636,9 +1633,9 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
             wb(p, 38, 0x0);
         } else {
             wb(p, 30, 0); // crown overrides helm flag at byte 30
-            if sd_r.status.equip[EQ_CROWN as usize].custom_look != 0 {
-                ww_be(p, 36, sd_r.status.equip[EQ_CROWN as usize].custom_look as u16);
-                wb(p, 38, sd_r.status.equip[EQ_CROWN as usize].custom_look_color as u8);
+            if sd_r.player.inventory.equip[EQ_CROWN as usize].custom_look != 0 {
+                ww_be(p, 36, sd_r.player.inventory.equip[EQ_CROWN as usize].custom_look as u16);
+                wb(p, 38, sd_r.player.inventory.equip[EQ_CROWN as usize].custom_look_color as u8);
             } else {
                 ww_be(p, 36, item_db::search(pc_isequip_us(sd_mut,EQ_CROWN) as u32).look as u16);
                 wb(p, 38, item_db::search(pc_isequip_us(sd_mut,EQ_CROWN) as u32).look_color as u8);
@@ -1665,7 +1662,7 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
 
         // necklace  (offsets 45–47)
         if pc_isequip_us(sd_mut,EQ_NECKLACE) == 0
-            || (sd_r.status.setting_flags & FLAG_NECKLACE as u16) == 0
+            || (sd_r.player.appearance.setting_flags & FLAG_NECKLACE as u16) == 0
             || item_db::search(pc_isequip_us(sd_mut,EQ_NECKLACE) as u32).look == -1
         {
             ww_be(p, 45, 0xFFFF);
@@ -1677,11 +1674,11 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
 
         // boots  (offsets 48–50)
         if pc_isequip_us(sd_mut,EQ_BOOTS) == 0 {
-            ww_be(p, 48, sd_r.status.sex as u16);
+            ww_be(p, 48, sd_r.player.identity.sex as u16);
             wb(p, 50, 0x0);
-        } else if sd_r.status.equip[EQ_BOOTS as usize].custom_look != 0 {
-            ww_be(p, 48, sd_r.status.equip[EQ_BOOTS as usize].custom_look as u16);
-            wb(p, 50, sd_r.status.equip[EQ_BOOTS as usize].custom_look_color as u8);
+        } else if sd_r.player.inventory.equip[EQ_BOOTS as usize].custom_look != 0 {
+            ww_be(p, 48, sd_r.player.inventory.equip[EQ_BOOTS as usize].custom_look as u16);
+            wb(p, 50, sd_r.player.inventory.equip[EQ_BOOTS as usize].custom_look_color as u8);
         } else {
             ww_be(p, 48, item_db::search(pc_isequip_us(sd_mut,EQ_BOOTS) as u32).look as u16);
             wb(p, 50, item_db::search(pc_isequip_us(sd_mut,EQ_BOOTS) as u32).look_color as u8);
@@ -1695,7 +1692,7 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
         // Title color: hidden for invisible chars unless matching dye group.
         if sd_r.gfx.dye != 0 && src_r.gfx.dye != 0
             && src_r.gfx.dye != sd_r.gfx.dye
-            && sd_r.status.state == 2
+            && sd_r.player.combat.state == 2
         {
             wb(p, 51, 0);
         } else if sd_r.gfx.dye != 0 {
@@ -1705,26 +1702,26 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
         }
 
         // Name field (offset 54 = length, 55+ = name bytes).
-        let name_ptr = sd_r.status.name.as_ptr() as *const i8;
-        let name_len = libc::strlen(name_ptr);
+        let name_bytes = sd_r.player.identity.name.as_bytes();
+        let name_len = name_bytes.len();
 
         // Clan and group color at byte 53.
-        if src_r.status.clan == sd_r.status.clan && src_r.status.clan > 0
-            && src_r.status.id != sd_r.status.id
+        if src_r.player.social.clan == sd_r.player.social.clan && src_r.player.social.clan > 0
+            && src_r.player.identity.id != sd_r.player.identity.id
         {
             wb(p, 53, 3);
         }
         if clif_isingroup_us(src_sd_mut, sd_mut) != 0 {
-            if sd_r.status.id != src_r.status.id {
+            if sd_r.player.identity.id != src_r.player.identity.id {
                 wb(p, 53, 2);
             }
         }
 
-        let len = if sd_r.status.state != 5 && sd_r.status.state != 2 {
+        let len = if sd_r.player.combat.state != 5 && sd_r.player.combat.state != 2 {
             wb(p, 54, name_len as u8);
             let dst = wfifop(src_fd, 55);
             if !dst.is_null() {
-                std::ptr::copy_nonoverlapping(name_ptr as *const u8, dst, name_len);
+                std::ptr::copy_nonoverlapping(name_bytes.as_ptr(), dst, name_len);
             }
             name_len
         } else {
@@ -1733,7 +1730,7 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
         };
 
         // GM/clone gfx override: overwrite appearance fields.
-        if (sd_r.status.gm_level != 0 && sd_r.gfx.toggle != 0) || sd_r.clone != 0 {
+        if (sd_r.player.identity.gm_level != 0 && sd_r.gfx.toggle != 0) || sd_r.clone != 0 {
             let gfx = &sd_r.gfx;
             wb(p, 16, gfx.face);
             wb(p, 17, gfx.hair);
@@ -1777,7 +1774,7 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
             // gfx name override.
             let gfx_name_ptr = gfx.name.as_ptr() as *const i8;
             let gfx_name_len = libc::strlen(gfx_name_ptr);
-            let visible = sd_r.status.state != 2 && sd_r.status.state != 5;
+            let visible = sd_r.player.combat.state != 2 && sd_r.player.combat.state != 5;
             let gfx_name_empty = gfx_name_len == 0;
             let final_len = if visible && !gfx_name_empty {
                 wb(p, 52, gfx_name_len as u8);
@@ -1807,11 +1804,11 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
             let sd_r = &*sd;
             let src_r = &*src_sd;
             let slot = &*map_ptr.add(sd_r.bl.m as usize);
-            if slot.show_ghosts != 0 && sd_r.status.state == 1
+            if slot.show_ghosts != 0 && sd_r.player.combat.state == 1
                 && src_r.bl.id != sd_r.bl.id
             {
                 let src_fd = src_r.fd;
-                if src_r.status.state != 1
+                if src_r.player.combat.state != 1
                     && (src_r.optFlags as u64 & OPT_FLAG_GHOSTS) == 0
                 {
                     // Send a 9-byte "ghost" packet to src_sd.
@@ -1953,11 +1950,11 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
 
     // ── Title ─────────────────────────────────────────────────────────────────
     {
-        let title_ptr = (*tsd).status.title.as_ptr() as *const i8;
-        let title_len = libc::strlen(title_ptr);
+        let title_bytes = (*tsd).player.identity.title.as_bytes();
+        let title_len = title_bytes.len();
         if title_len > 0 {
             wb(p, len + 5, title_len as u8);
-            std::ptr::copy_nonoverlapping(title_ptr as *const u8, p.add(len + 6), title_len);
+            std::ptr::copy_nonoverlapping(title_bytes.as_ptr(), p.add(len + 6), title_len);
             len += title_len + 1;
         } else {
             wb(p, len + 5, 0);
@@ -1967,8 +1964,8 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
 
     // ── Clan name ─────────────────────────────────────────────────────────────
     {
-        if (*tsd).status.clan > 0 {
-            let clan_name = clan_db::name((*tsd).status.clan as i32);
+        if (*tsd).player.social.clan > 0 {
+            let clan_name = clan_db::name((*tsd).player.social.clan as i32);
             if !clan_name.is_null() {
                 let clan_len = libc::strlen(clan_name);
                 wb(p, len + 5, clan_len as u8);
@@ -1986,11 +1983,11 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
 
     // ── Clan title ────────────────────────────────────────────────────────────
     {
-        let ctitle_ptr = (*tsd).status.clan_title.as_ptr() as *const i8;
-        let ctitle_len = libc::strlen(ctitle_ptr);
+        let ctitle_bytes = (*tsd).player.social.clan_title.as_bytes();
+        let ctitle_len = ctitle_bytes.len();
         if ctitle_len > 0 {
             wb(p, len + 5, ctitle_len as u8);
-            std::ptr::copy_nonoverlapping(ctitle_ptr as *const u8, p.add(len + 6), ctitle_len);
+            std::ptr::copy_nonoverlapping(ctitle_bytes.as_ptr(), p.add(len + 6), ctitle_len);
             len += ctitle_len + 1;
         } else {
             wb(p, len + 5, 0);
@@ -2001,8 +1998,8 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
     // ── Class name ────────────────────────────────────────────────────────────
     {
         let cn = classdb_name_fn(
-            (*tsd).status.class as i32,
-            (*tsd).status.mark  as i32,
+            (*tsd).player.progression.class as i32,
+            (*tsd).player.progression.mark  as i32,
         );
         let cn_bytes = cn.as_bytes();
         if !cn_bytes.is_empty() {
@@ -2017,53 +2014,53 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
 
     // ── Player name ───────────────────────────────────────────────────────────
     {
-        let name_ptr = (*tsd).status.name.as_ptr() as *const i8;
-        let name_len = libc::strlen(name_ptr);
+        let name_bytes = (*tsd).player.identity.name.as_bytes();
+        let name_len = name_bytes.len();
         wb(p, len + 5, name_len as u8);
-        std::ptr::copy_nonoverlapping(name_ptr as *const u8, p.add(len + 6), name_len);
+        std::ptr::copy_nonoverlapping(name_bytes.as_ptr(), p.add(len + 6), name_len);
         len += name_len; // C: len += strlen(name)  (no +1 here, intentional)
     }
 
     // ── Fixed appearance fields (offsets relative to len+6 after name) ────────
     // WFIFOW(fd, len+6) = SWAP16(sex)
-    ww_be(p, len + 6, (*tsd).status.sex as u16);
+    ww_be(p, len + 6, (*tsd).player.identity.sex as u16);
     // WFIFOB(fd, len+8) = state
-    wb(p, len + 8, (*tsd).status.state as u8);
+    wb(p, len + 8, (*tsd).player.combat.state as u8);
     // WFIFOW(fd, len+9) = SWAP16(0)  — default (overridden below for disguise states)
     ww_be(p, len + 9, 0);
     // WFIFOB(fd, len+11) = speed
     wb(p, len + 11, (*tsd).speed as u8);
 
-    if (*tsd).status.state == 3 {
+    if (*tsd).player.combat.state == 3 {
         ww_be(p, len + 9, (*tsd).disguise);
-    } else if (*tsd).status.state == 4 {
+    } else if (*tsd).player.combat.state == 4 {
         ww_be(p, len + 9, (*tsd).disguise.wrapping_add(32768));
         wb(p, len + 11, (*tsd).disguise_color as u8);
     }
 
     wb(p, len + 12, 0);
-    wb(p, len + 13, (*tsd).status.face as u8);
-    wb(p, len + 14, (*tsd).status.hair as u8);
-    wb(p, len + 15, (*tsd).status.hair_color as u8);
-    wb(p, len + 16, (*tsd).status.face_color as u8);
-    wb(p, len + 17, (*tsd).status.skin_color as u8);
+    wb(p, len + 13, (*tsd).player.appearance.face as u8);
+    wb(p, len + 14, (*tsd).player.appearance.hair as u8);
+    wb(p, len + 15, (*tsd).player.appearance.hair_color as u8);
+    wb(p, len + 16, (*tsd).player.appearance.face_color as u8);
+    wb(p, len + 17, (*tsd).player.appearance.skin_color as u8);
 
     len += 14; // advances past the 14-byte fixed block (bytes 6..17 = 12 bytes + 2 for sw)
 
     // ── Armor / coat slot (look + color) ──────────────────────────────────────
     // Writes at len+4 (ww) and len+6 (wb), then len += 3.
     if pc_isequip_us(tsd, EQ_ARMOR) == 0 {
-        ww_be(p, len + 4, (*tsd).status.sex as u16);
+        ww_be(p, len + 4, (*tsd).player.identity.sex as u16);
     } else {
-        if (*tsd).status.equip[EQ_ARMOR as usize].custom_look != 0 {
-            ww_be(p, len + 4, (*tsd).status.equip[EQ_ARMOR as usize].custom_look as u16);
+        if (&(*tsd).player.inventory.equip)[EQ_ARMOR as usize].custom_look != 0 {
+            ww_be(p, len + 4, (&(*tsd).player.inventory.equip)[EQ_ARMOR as usize].custom_look as u16);
         } else {
             ww_be(p, len + 4, item_db::search(pc_isequip_us(tsd, EQ_ARMOR) as u32).look as u16);
         }
-        if (*tsd).status.armor_color > 0 {
-            wb(p, len + 6, (*tsd).status.armor_color as u8);
-        } else if (*tsd).status.equip[EQ_ARMOR as usize].custom_look != 0 {
-            wb(p, len + 6, (*tsd).status.equip[EQ_ARMOR as usize].custom_look_color as u8);
+        if (*tsd).player.appearance.armor_color > 0 {
+            wb(p, len + 6, (*tsd).player.appearance.armor_color as u8);
+        } else if (&(*tsd).player.inventory.equip)[EQ_ARMOR as usize].custom_look != 0 {
+            wb(p, len + 6, (&(*tsd).player.inventory.equip)[EQ_ARMOR as usize].custom_look_color as u8);
         } else {
             wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_ARMOR) as u32).look_color as u8);
         }
@@ -2071,8 +2068,8 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
     // EQ_COAT overrides armor look if equipped.
     if pc_isequip_us(tsd, EQ_COAT) != 0 {
         ww_be(p, len + 4, item_db::search(pc_isequip_us(tsd, EQ_COAT) as u32).look as u16);
-        if (*tsd).status.armor_color > 0 {
-            wb(p, len + 6, (*tsd).status.armor_color as u8);
+        if (*tsd).player.appearance.armor_color > 0 {
+            wb(p, len + 6, (*tsd).player.appearance.armor_color as u8);
         } else {
             wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_COAT) as u32).look_color as u8);
         }
@@ -2083,9 +2080,9 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
     if pc_isequip_us(tsd, EQ_WEAP) == 0 {
         ww_be(p, len + 4, 0xFFFF);
         wb(p, len + 6, 0);
-    } else if (*tsd).status.equip[EQ_WEAP as usize].custom_look != 0 {
-        ww_be(p, len + 4, (*tsd).status.equip[EQ_WEAP as usize].custom_look as u16);
-        wb(p, len + 6, (*tsd).status.equip[EQ_WEAP as usize].custom_look_color as u8);
+    } else if (&(*tsd).player.inventory.equip)[EQ_WEAP as usize].custom_look != 0 {
+        ww_be(p, len + 4, (&(*tsd).player.inventory.equip)[EQ_WEAP as usize].custom_look as u16);
+        wb(p, len + 6, (&(*tsd).player.inventory.equip)[EQ_WEAP as usize].custom_look_color as u8);
     } else {
         ww_be(p, len + 4, item_db::search(pc_isequip_us(tsd, EQ_WEAP) as u32).look as u16);
         wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_WEAP) as u32).look_color as u8);
@@ -2096,9 +2093,9 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
     if pc_isequip_us(tsd, EQ_SHIELD) == 0 {
         ww_be(p, len + 4, 0xFFFF);
         wb(p, len + 6, 0);
-    } else if (*tsd).status.equip[EQ_SHIELD as usize].custom_look != 0 {
-        ww_be(p, len + 4, (*tsd).status.equip[EQ_SHIELD as usize].custom_look as u16);
-        wb(p, len + 6, (*tsd).status.equip[EQ_SHIELD as usize].custom_look_color as u8);
+    } else if (&(*tsd).player.inventory.equip)[EQ_SHIELD as usize].custom_look != 0 {
+        ww_be(p, len + 4, (&(*tsd).player.inventory.equip)[EQ_SHIELD as usize].custom_look as u16);
+        wb(p, len + 6, (&(*tsd).player.inventory.equip)[EQ_SHIELD as usize].custom_look_color as u8);
     } else {
         ww_be(p, len + 4, item_db::search(pc_isequip_us(tsd, EQ_SHIELD) as u32).look as u16);
         wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_SHIELD) as u32).look_color as u8);
@@ -2107,17 +2104,17 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
 
     // ── Helm slot ─────────────────────────────────────────────────────────────
     if pc_isequip_us(tsd, EQ_HELM) == 0
-        || ((*tsd).status.setting_flags & FLAG_HELM as u16) == 0
+        || ((*tsd).player.appearance.setting_flags & FLAG_HELM as u16) == 0
         || item_db::search(pc_isequip_us(tsd, EQ_HELM) as u32).look == -1
     {
         wb(p, len + 4, 0);
         ww_be(p, len + 5, 0xFFFF);
     } else {
         wb(p, len + 4, 1);
-        if (*tsd).status.equip[EQ_HELM as usize].custom_look != 0 {
+        if (&(*tsd).player.inventory.equip)[EQ_HELM as usize].custom_look != 0 {
             // C writes customLook as byte (WFIFOB) and customLookColor as byte — helm uses bytes not words.
-            wb(p, len + 5, (*tsd).status.equip[EQ_HELM as usize].custom_look as u8);
-            wb(p, len + 6, (*tsd).status.equip[EQ_HELM as usize].custom_look_color as u8);
+            wb(p, len + 5, (&(*tsd).player.inventory.equip)[EQ_HELM as usize].custom_look as u8);
+            wb(p, len + 6, (&(*tsd).player.inventory.equip)[EQ_HELM as usize].custom_look_color as u8);
         } else {
             wb(p, len + 5, item_db::search(pc_isequip_us(tsd, EQ_HELM) as u32).look as u8);
             wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_HELM) as u32).look_color as u8);
@@ -2141,9 +2138,9 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
         wb(p, len + 6, 0);
     } else {
         wb(p, len, 0); // C: WFIFOB(fd, len) = 0 (extra byte written before the crown data)
-        if (*tsd).status.equip[EQ_CROWN as usize].custom_look != 0 {
-            ww_be(p, len + 4, (*tsd).status.equip[EQ_CROWN as usize].custom_look as u16);
-            wb(p, len + 6, (*tsd).status.equip[EQ_CROWN as usize].custom_look_color as u8);
+        if (&(*tsd).player.inventory.equip)[EQ_CROWN as usize].custom_look != 0 {
+            ww_be(p, len + 4, (&(*tsd).player.inventory.equip)[EQ_CROWN as usize].custom_look as u16);
+            wb(p, len + 6, (&(*tsd).player.inventory.equip)[EQ_CROWN as usize].custom_look_color as u8);
         } else {
             ww_be(p, len + 4, item_db::search(pc_isequip_us(tsd, EQ_CROWN) as u32).look as u16);
             wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_CROWN) as u32).look_color as u8);
@@ -2173,7 +2170,7 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
 
     // ── Necklace slot ─────────────────────────────────────────────────────────
     if pc_isequip_us(tsd, EQ_NECKLACE) == 0
-        || ((*tsd).status.setting_flags & FLAG_NECKLACE as u16) == 0
+        || ((*tsd).player.appearance.setting_flags & FLAG_NECKLACE as u16) == 0
         || item_db::search(pc_isequip_us(tsd, EQ_NECKLACE) as u32).look == -1
     {
         ww_be(p, len + 4, 0xFFFF);
@@ -2186,11 +2183,11 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
 
     // ── Boots slot ────────────────────────────────────────────────────────────
     if pc_isequip_us(tsd, EQ_BOOTS) == 0 {
-        ww_be(p, len + 4, (*tsd).status.sex as u16);
+        ww_be(p, len + 4, (*tsd).player.identity.sex as u16);
         wb(p, len + 6, 0);
-    } else if (*tsd).status.equip[EQ_BOOTS as usize].custom_look != 0 {
-        ww_be(p, len + 4, (*tsd).status.equip[EQ_BOOTS as usize].custom_look as u16);
-        wb(p, len + 6, (*tsd).status.equip[EQ_BOOTS as usize].custom_look_color as u8);
+    } else if (&(*tsd).player.inventory.equip)[EQ_BOOTS as usize].custom_look != 0 {
+        ww_be(p, len + 4, (&(*tsd).player.inventory.equip)[EQ_BOOTS as usize].custom_look as u16);
+        wb(p, len + 6, (&(*tsd).player.inventory.equip)[EQ_BOOTS as usize].custom_look_color as u8);
     } else {
         ww_be(p, len + 4, item_db::search(pc_isequip_us(tsd, EQ_BOOTS) as u32).look as u16);
         wb(p, len + 6, item_db::search(pc_isequip_us(tsd, EQ_BOOTS) as u32).look_color as u8);
@@ -2203,7 +2200,7 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
     let mut equip_status_len: usize = 0;
 
     for x in 0..14usize {
-        let eq = &(*tsd).status.equip[x];
+        let eq = &(&(*tsd).player.inventory.equip)[x];
         if eq.id > 0 {
             let eq_db = item_db::search(eq.id);
 
@@ -2305,9 +2302,9 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
     len += 4;
 
     // ── Group / exchange / gender flags ───────────────────────────────────────
-    wb(p, len + 6, if ((*tsd).status.setting_flags & FLAG_GROUP as u16) != 0 { 1 } else { 0 });
-    wb(p, len + 7, if ((*tsd).status.setting_flags & FLAG_EXCHANGE as u16) != 0 { 1 } else { 0 });
-    wb(p, len + 8, (2u8).wrapping_sub((*tsd).status.sex as u8));
+    wb(p, len + 6, if ((*tsd).player.appearance.setting_flags & FLAG_GROUP as u16) != 0 { 1 } else { 0 });
+    wb(p, len + 7, if ((*tsd).player.appearance.setting_flags & FLAG_EXCHANGE as u16) != 0 { 1 } else { 0 });
+    wb(p, len + 8, (2u8).wrapping_sub((*tsd).player.identity.sex as u8));
     len += 3;
 
     ww_be(p, len + 6, 0);
@@ -2333,7 +2330,7 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
     // ── Legends ───────────────────────────────────────────────────────────────
     let mut legend_count: u16 = 0;
     for x in 0..MAX_LEGENDS {
-        let lg = &(*tsd).status.legends[x];
+        let lg = &(&(*tsd).player.legends.legends)[x];
         if lg.text[0] != 0 && lg.name[0] != 0 {
             legend_count += 1;
         }
@@ -2342,7 +2339,7 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
     len += 2;
 
     for x in 0..MAX_LEGENDS {
-        let lg = &(*tsd).status.legends[x];
+        let lg = &(&(*tsd).player.legends.legends)[x];
         if lg.text[0] == 0 || lg.name[0] == 0 {
             continue;
         }
@@ -2370,8 +2367,8 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
     }
 
     // ── Gender byte + registered flag ─────────────────────────────────────────
-    wb(p, len + 6, (3u8).wrapping_sub((*tsd).status.sex as u8));
-    let tsd_id = (*tsd).status.id;
+    wb(p, len + 6, (3u8).wrapping_sub((*tsd).player.identity.sex as u8));
+    let tsd_id = (*tsd).player.identity.id;
     wb(p, len + 7, if clif_isregistered(tsd_id).await > 0 { 1 } else { 0 });
     len += 5;
 
@@ -2447,10 +2444,10 @@ pub unsafe fn clif_showboards(sd: *mut MapSessionData) -> i32 {
     let mut len: usize = 15;
     let mut b_count: u8 = 0;
 
-    let player_level   = sd_ref.status.level as i32;
-    let player_gmlevel = sd_ref.status.gm_level as i32;
-    let player_path    = sd_ref.status.class as i32;
-    let player_clan    = sd_ref.status.clan as i32;
+    let player_level   = sd_ref.player.progression.level as i32;
+    let player_gmlevel = sd_ref.player.identity.gm_level as i32;
+    let player_path    = sd_ref.player.progression.class as i32;
+    let player_clan    = sd_ref.player.social.clan as i32;
 
     // Double-loop: outer = sort order 0..256, inner = board id 0..256.
     // Uses `searchexist` (returns null for missing ids) so no new API is needed.

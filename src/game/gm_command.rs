@@ -20,7 +20,6 @@ const UFLAG_IMMORTAL: u64 = 8;
 const UFLAG_UNPHYS:   u64 = 16;
 
 const MAX_MAP_PER_SERVER: i32 = 65535;
-const MAX_KILLREG: usize = 5000;
 
 use crate::config_globals::{XP_RATE, D_RATE};
 use crate::database::map_db::map_n;
@@ -290,14 +289,14 @@ fn command_item(sd: &mut MapSessionData, line: &str) -> i32 {
 }
 
 fn command_res(sd: &mut MapSessionData, _line: &str) -> i32 {
-    if sd.status.state == PC_DIE as i8 { unsafe { pc_res(as_ptr(sd)); } }
+    if sd.player.combat.state == PC_DIE as i8 { unsafe { pc_res(as_ptr(sd)); } }
     0
 }
 
 fn command_hair(sd: &mut MapSessionData, line: &str) -> i32 {
     let (hair, hair_color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
-    sd.status.hair = hair as u16;
-    sd.status.hair_color = hair_color as u16;
+    sd.player.appearance.hair = hair as u16;
+    sd.player.appearance.hair_color = hair_color as u16;
     unsafe { clif_sendchararea(as_ptr(sd)); clif_getchararea(as_ptr(sd)); }
     0
 }
@@ -307,7 +306,7 @@ fn command_checkdupes(sd: &mut MapSessionData, _line: &str) -> i32 {
     crate::game::map_server::for_each_player(|tsd| {
         let n = unsafe { pc_readglobalreg(tsd as *mut MapSessionData, c"goldbardupe".as_ptr() as *const i8) };
         if n != 0 {
-            let name_str = carray_to_str(&tsd.status.name);
+            let name_str = tsd.player.identity.name.as_str();
             let msg = format!("{} gold bar {} times", name_str, n);
             if let Ok(cs) = CString::new(msg) {
                 unsafe { clif_sendminitext(sd_ptr, cs.as_ptr()); }
@@ -322,7 +321,7 @@ fn command_checkwpe(sd: &mut MapSessionData, _line: &str) -> i32 {
     crate::game::map_server::for_each_player(|tsd| {
         let n = unsafe { pc_readglobalreg(tsd as *mut MapSessionData, c"WPEtimes".as_ptr() as *const i8) };
         if n != 0 {
-            let name_str = carray_to_str(&tsd.status.name);
+            let name_str = tsd.player.identity.name.as_str();
             let msg = format!("{} WPE attempt {} times", name_str, n);
             if let Ok(cs) = CString::new(msg) {
                 unsafe { clif_sendminitext(sd_ptr, cs.as_ptr()); }
@@ -347,7 +346,7 @@ fn command_kill(sd: &mut MapSessionData, line: &str) -> i32 {
 fn command_killall(sd: &mut MapSessionData, _line: &str) -> i32 {
     let manager = crate::session::get_session_manager();
     crate::game::map_server::for_each_player(|tsd| {
-        if tsd.status.gm_level == 0 && tsd.fd.raw() > 0 {
+        if tsd.player.identity.gm_level == 0 && tsd.fd.raw() > 0 {
             if let Some(arc) = manager.get_session(tsd.fd) {
                 if let Ok(mut guard) = arc.try_lock() {
                     guard.eof = 1;
@@ -364,7 +363,7 @@ fn command_deletespell(sd: &mut MapSessionData, line: &str) -> i32 {
     if spell_name.is_empty() { return -1; }
     let spell = magic_db::id_by_name(spell_name);
     if (0..52).contains(&spell) {
-        sd.status.skill[spell as usize] = 0;
+        sd.player.spells.skills[spell as usize] = 0;
         unsafe { pc_loadmagic(as_ptr(sd)); }
     }
     0
@@ -378,15 +377,15 @@ fn command_xprate(sd: &mut MapSessionData, line: &str) -> i32 {
 }
 
 fn command_heal(sd: &mut MapSessionData, _line: &str) -> i32 {
-    sd.status.hp = sd.max_hp;
-    sd.status.mp = sd.max_mp;
+    sd.player.combat.hp = sd.max_hp;
+    sd.player.combat.mp = sd.max_mp;
     unsafe { clif_sendstatus(as_ptr(sd), SFLAG_HPMP); }
     0
 }
 
 fn command_level(sd: &mut MapSessionData, line: &str) -> i32 {
     let level = match parse_int(line) { Some(v) => v, None => return -1 };
-    sd.status.level = level as u8;
+    sd.player.progression.level = level as u8;
     unsafe { clif_sendstatus(as_ptr(sd), SFLAG_FULLSTATS); }
     0
 }
@@ -431,10 +430,10 @@ fn command_val(sd: &mut MapSessionData, _line: &str) -> i32 {
 
 fn command_disguise(sd: &mut MapSessionData, line: &str) -> i32 {
     let (d, e) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
-    let os = sd.status.state;
-    sd.status.state = 0;
+    let os = sd.player.combat.state;
+    sd.player.combat.state = 0;
     unsafe { broadcast_update_state(as_ptr(sd)); }
-    sd.status.state = os;
+    sd.player.combat.state = os;
     sd.disguise = d as u16;
     sd.disguise_color = e as u16;
     unsafe { broadcast_update_state(as_ptr(sd)); }
@@ -452,29 +451,29 @@ fn command_givespell(sd: &mut MapSessionData, line: &str) -> i32 {
     if word.is_empty() { return -1; }
     let spell = magic_db::id_by_name(word);
     for x in 0..52usize {
-        if sd.status.skill[x] == 0 {
-            sd.status.skill[x] = spell as u16;
+        if sd.player.spells.skills[x] == 0 {
+            sd.player.spells.skills[x] = spell as u16;
             unsafe { pc_loadmagic(as_ptr(sd)); }
             break;
         }
-        if sd.status.skill[x] == spell as u16 { break; }
+        if sd.player.spells.skills[x] == spell as u16 { break; }
     }
     0
 }
 
 fn command_side(sd: &mut MapSessionData, line: &str) -> i32 {
     let side = match parse_int(line) { Some(v) => v, None => return -1 };
-    sd.status.side = side as i8;
+    sd.player.combat.side = side as i8;
     unsafe { clif_sendchararea(as_ptr(sd)); clif_getchararea(as_ptr(sd)); }
     0
 }
 
 fn command_state(sd: &mut MapSessionData, line: &str) -> i32 {
     let state_val = match parse_int(line) { Some(v) => v, None => return -1 };
-    if sd.status.state == 1 && state_val != 1 {
+    if sd.player.combat.state == 1 && state_val != 1 {
         unsafe { pc_res(as_ptr(sd)); }
     } else {
-        sd.status.state = (state_val % 5) as i8;
+        sd.player.combat.state = (state_val % 5) as i8;
         unsafe { broadcast_update_state(as_ptr(sd)); }
     }
     0
@@ -482,7 +481,7 @@ fn command_state(sd: &mut MapSessionData, line: &str) -> i32 {
 
 fn command_armorcolor(sd: &mut MapSessionData, line: &str) -> i32 {
     let ac = match parse_int(line) { Some(v) => v, None => return -1 };
-    sd.status.armor_color = ac as u16;
+    sd.player.appearance.armor_color = ac as u16;
     unsafe { clif_sendchararea(as_ptr(sd)); clif_getchararea(as_ptr(sd)); }
     0
 }
@@ -493,7 +492,7 @@ fn command_makegm(_sd: &mut MapSessionData, line: &str) -> i32 {
     let name = str_to_cname(word);
     let tsd = unsafe { map_name2sd(name.as_ptr()) };
     if !tsd.is_null() {
-        unsafe { (*tsd).status.gm_level = 99; }
+        unsafe { (*tsd).player.identity.gm_level = 99; }
     }
     0
 }
@@ -504,11 +503,11 @@ fn command_who(sd: &mut MapSessionData, _line: &str) -> i32 {
 }
 
 fn command_legend(sd: &mut MapSessionData, _line: &str) -> i32 {
-    sd.status.legends[0].icon = 12;
-    sd.status.legends[0].color = 128;
+    sd.player.legends.legends[0].icon = 12;
+    sd.player.legends.legends[0].color = 128;
     let text = b"Blessed by a GM\0";
     for (i, &b) in text.iter().enumerate() {
-        sd.status.legends[0].text[i] = b as i8;
+        sd.player.legends.legends[0].text[i] = b as i8;
     }
     0
 }
@@ -662,9 +661,10 @@ fn command_unban(_sd: &mut MapSessionData, line: &str) -> i32 {
 }
 
 fn command_kc(sd: &mut MapSessionData, _line: &str) -> i32 {
-    for x in 0..MAX_KILLREG {
-        let mob_id = sd.status.killreg[x].mob_id;
-        let amount = sd.status.killreg[x].amount;
+    let entries: Vec<(u32, u32)> = sd.player.registries.kill_reg.iter()
+        .map(|(&mob_id, &amount)| (mob_id, amount))
+        .collect();
+    for (mob_id, amount) in entries {
         send_minitext(sd, &format!("{} ({})", mob_id, amount));
     }
     0
@@ -902,10 +902,10 @@ fn command_light(sd: &mut MapSessionData, line: &str) -> i32 {
 }
 
 fn command_gm(sd: &mut MapSessionData, line: &str) -> i32 {
-    let name_str = carray_to_str(&sd.status.name);
+    let name_str = sd.player.identity.name.as_str();
     let msg = format!("<GM>{}: {}", name_str, line);
     crate::game::map_server::for_each_player(|tsd| {
-        if tsd.status.gm_level != 0 {
+        if tsd.player.identity.gm_level != 0 {
             if let Ok(cs) = CString::new(msg.as_str()) {
                 unsafe { clif_sendmsg(tsd as *mut MapSessionData, 11, cs.as_ptr()); }
             }
@@ -915,10 +915,10 @@ fn command_gm(sd: &mut MapSessionData, line: &str) -> i32 {
 }
 
 fn command_report(sd: &mut MapSessionData, line: &str) -> i32 {
-    let name_str = carray_to_str(&sd.status.name);
+    let name_str = sd.player.identity.name.as_str();
     let msg = format!("<REPORT>{}: {}", name_str, line);
     crate::game::map_server::for_each_player(|tsd| {
-        if tsd.status.gm_level > 0 {
+        if tsd.player.identity.gm_level > 0 {
             if let Ok(cs) = CString::new(msg.as_str()) {
                 unsafe { clif_sendmsg(tsd as *mut MapSessionData, 12, cs.as_ptr()); }
             }
@@ -947,8 +947,8 @@ fn command_cinv(sd: &mut MapSessionData, line: &str) -> i32 {
     let (start, end) = parse_two_ints(line).unwrap_or((0, 51));
     for x in start..=end {
         let x = x as usize;
-        if x < 52 && sd.status.inventory[x].id > 0 && sd.status.inventory[x].amount > 0 {
-            unsafe { pc_delitem(as_ptr(sd), x as i32, sd.status.inventory[x].amount, 0); }
+        if x < 52 && sd.player.inventory.inventory[x].id > 0 && sd.player.inventory.inventory[x].amount > 0 {
+            unsafe { pc_delitem(as_ptr(sd), x as i32, sd.player.inventory.inventory[x].amount, 0); }
         }
     }
     0
@@ -962,8 +962,8 @@ fn command_cspells(sd: &mut MapSessionData, line: &str) -> i32 {
         None => (0, 51),
     };
     for x in start..=end {
-        if x < 52 && sd.status.skill[x] > 0 {
-            sd.status.skill[x] = 0;
+        if x < 52 && sd.player.spells.skills[x] > 0 {
+            sd.player.spells.skills[x] = 0;
             unsafe { pc_loadmagic(as_ptr(sd)); }
         }
     }
@@ -986,11 +986,11 @@ fn command_job(sd: &mut MapSessionData, line: &str) -> i32 {
     let (mut job, mut subjob) = parse_two_ints(line).unwrap_or((0, 0));
     if job < 0 { job = 5; }
     if !(0..=16).contains(&subjob) { subjob = 0; }
-    sd.status.class = job as u8;
-    sd.status.mark = subjob as u8;
-    let class_val = sd.status.class as u32;
-    let mark_val = sd.status.mark as u32;
-    let char_id = sd.status.id;
+    sd.player.progression.class = job as u8;
+    sd.player.progression.mark = subjob as u8;
+    let class_val = sd.player.progression.class as u32;
+    let mark_val = sd.player.progression.mark as u32;
+    let char_id = sd.player.identity.id;
     crate::database::blocking_run_async(set_job_class(class_val, mark_val, char_id));
     let sd_usize = as_ptr(sd) as usize;
     crate::database::blocking_run_async(clif_mystaytus_by_addr(sd_usize));
@@ -1199,7 +1199,7 @@ unsafe fn dispatch(sd: *mut MapSessionData, p: *const i8, len: i32, log: bool) -
         None => return 0,
     };
 
-    if ((*sd).status.gm_level as i32) < entry.level { return 0; }
+    if ((*sd).player.identity.gm_level as i32) < entry.level { return 0; }
 
     if log {
         tracing::info!("[command] gm command used cmd={}", cmd_name);

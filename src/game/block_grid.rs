@@ -274,7 +274,7 @@ fn entity_is_alive(ent: &GameEntity) -> bool {
         GameEntity::Player(arc) => {
             match arc.try_read() {
                 Some(sd) => {
-                    let dead = sd.status.state == PC_DIE as i8;
+                    let dead = sd.player.combat.state == PC_DIE as i8;
                     let stealth = (sd.optFlags & OPT_FLAG_STEALTH) != 0;
                     !dead && !stealth
                 }

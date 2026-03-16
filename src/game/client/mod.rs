@@ -483,8 +483,8 @@ unsafe fn should_send_to(
     // If source is stealthed, only send to GMs or to the source themselves.
     if !tsd.is_null() {
         if ((*tsd).optFlags & OPT_FLAG_STEALTH) != 0
-            && (*sd).status.gm_level == 0
-            && (*sd).status.id != (*tsd).status.id
+            && (*sd).player.identity.gm_level == 0
+            && (*sd).player.identity.id != (*tsd).player.identity.id
         {
             return false;
         }
@@ -496,9 +496,9 @@ unsafe fn should_send_to(
         if !raw_map_ptr().is_null() && m_idx < MAP_SLOTS {
             let map_slot = &*raw_map_ptr().add(m_idx);
             if map_slot.show_ghosts != 0
-                && (*tsd).status.state == 1
+                && (*tsd).player.combat.state == 1
                 && (*tsd).bl.id != (*sd).bl.id
-                && (*sd).status.state != 1
+                && (*sd).player.combat.state != 1
                 && ((*sd).optFlags & OPT_FLAG_GHOSTS) == 0
             {
                 return false;

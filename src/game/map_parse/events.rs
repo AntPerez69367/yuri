@@ -173,7 +173,7 @@ pub async unsafe fn sendRewardParcel(
 ) -> i32 {
     let _ = eventid; // used in reward message only (via sprintf); not in SQL directly
 
-    let receiver = (*sd).status.id as u32;
+    let receiver = (*sd).player.identity.id as u32;
     let rewarditem_u = rewarditem as u32;
 
     // Build escape string: "name,\nCongratulations on attaining Rank N!\nHere is your reward: (amount) name"
@@ -184,7 +184,7 @@ pub async unsafe fn sendRewardParcel(
             escape.as_mut_ptr(),
             b"%s,\nCongratulations on attaining Rank %i!\nHere is your reward: (%i) %s\0"
                 .as_ptr() as *const i8,
-            (*sd).status.name.as_ptr(),
+            (*sd).player.identity.name.as_ptr() as *const i8,
             rank,
             rewardamount,
             item_name,
@@ -367,8 +367,8 @@ pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: SessionId) -> i3
     _5thPlaceReward2_Amount = er.r5_amt2 as i32;
 
     // Query 2: player's rank for this event
-    // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
-    let cha_id = (*sd).status.id as i32;
+    // ChaId is int(10) signed — bind as i32; player.identity.id is u32 so cast
+    let cha_id = (*sd).player.identity.id as i32;
     let Some(rank) = sqlx::query_scalar::<_, i32>(
             "SELECT `Rank` FROM `RankingScores` WHERE `ChaId` = ? AND `EventId` = ?"
         )
@@ -446,20 +446,20 @@ pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: SessionId) -> i3
     // Assign legend slot
     use crate::servers::char::charstatus::MAX_LEGENDS;
     for i in 0..MAX_LEGENDS {
-        let leg_name_ptr  = (*sd).status.legends[i].name.as_ptr();
-        let leg_name1_ptr = if i + 1 < MAX_LEGENDS { (*sd).status.legends[i + 1].name.as_ptr() } else { b"\0".as_ptr() as *const i8 };
+        let leg_name_ptr  = (&(*sd).player.legends.legends)[i].name.as_ptr();
+        let leg_name1_ptr = if i + 1 < MAX_LEGENDS { (&(*sd).player.legends.legends)[i + 1].name.as_ptr() } else { b"\0".as_ptr() as *const i8 };
 
         if libc::strcmp(leg_name_ptr, b"\0".as_ptr() as *const i8) == 0
             && libc::strcasecmp(leg_name1_ptr, b"\0".as_ptr() as *const i8) == 0
         {
-            libc::strcpy((*sd).status.legends[i].text.as_mut_ptr(), legendbuf.as_ptr());
+            libc::strcpy((&mut (*sd).player.legends.legends)[i].text.as_mut_ptr(), legendbuf.as_ptr());
             libc::sprintf(
-                (*sd).status.legends[i].name.as_mut_ptr(),
+                (&mut (*sd).player.legends.legends)[i].name.as_mut_ptr(),
                 b"Event %i Place: %i\0".as_ptr() as *const i8,
                 eventid, rank,
             );
-            (*sd).status.legends[i].icon  = legendicon as u16;
-            (*sd).status.legends[i].color = legendiconcolor as u16;
+            (&mut (*sd).player.legends.legends)[i].icon  = legendicon as u16;
+            (&mut (*sd).player.legends.legends)[i].color = legendiconcolor as u16;
             break;
         }
     }
@@ -487,7 +487,7 @@ pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: SessionId) -> i3
                 b"Congratulations on winning the %s Event, %s!\n\nYou have been rewarded: \
 (%i) %s, (%i) %s.\n\nPlease continue to play for more great rewards!\0"
                     .as_ptr() as *const i8,
-                eventname.as_ptr(), (*sd).status.name.as_ptr(),
+                eventname.as_ptr(), (*sd).player.identity.name.as_ptr() as *const i8,
                 reward1amount, item_db::search(reward1item as u32).name.as_ptr(),
                 reward2amount, item_db::search(reward2item as u32).name.as_ptr(),
             );
@@ -495,16 +495,16 @@ pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: SessionId) -> i3
                 msg.as_mut_ptr(),
                 b"Congratulations on winning the event, %s! Please visit your post office to collect your winnings.\0"
                     .as_ptr() as *const i8,
-                (*sd).status.name.as_ptr(),
+                (*sd).player.identity.name.as_ptr() as *const i8,
             );
-            nmail_sendmail(sd, (*sd).status.name.as_ptr(), topic.as_ptr(), message.as_ptr());
+            nmail_sendmail(sd, (*sd).player.identity.name.as_ptr() as *const i8, topic.as_ptr(), message.as_ptr());
         } else {
             libc::sprintf(
                 message.as_mut_ptr(),
                 b"Thanks for participating in the %s Event, %s.\n\nRank:%s Place\n\n\
 You have been rewarded: (%i) %s, (%i) %s.\n\nPlease continue to play for more great rewards!\0"
                     .as_ptr() as *const i8,
-                eventname.as_ptr(), (*sd).status.name.as_ptr(), rankname.as_ptr(),
+                eventname.as_ptr(), (*sd).player.identity.name.as_ptr() as *const i8, rankname.as_ptr(),
                 reward1amount, item_db::search(reward1item as u32).name.as_ptr(),
                 reward2amount, item_db::search(reward2item as u32).name.as_ptr(),
             );
@@ -512,9 +512,9 @@ You have been rewarded: (%i) %s, (%i) %s.\n\nPlease continue to play for more gr
                 msg.as_mut_ptr(),
                 b"Thanks for participating in the Event, %s! Please visit your post office to collect your winnings.\0"
                     .as_ptr() as *const i8,
-                (*sd).status.name.as_ptr(),
+                (*sd).player.identity.name.as_ptr() as *const i8,
             );
-            nmail_sendmail(sd, (*sd).status.name.as_ptr(), topic.as_ptr(), message.as_ptr());
+            nmail_sendmail(sd, (*sd).player.identity.name.as_ptr() as *const i8, topic.as_ptr(), message.as_ptr());
         }
     }
 
@@ -525,32 +525,32 @@ You have been rewarded: (%i) %s, (%i) %s.\n\nPlease continue to play for more gr
                 b"Congratulations on winning the %s Event, %s!\n\nYou have been rewarded: \
 (%i) %s.\n\nPlease continue to play for more great rewards!\0"
                     .as_ptr() as *const i8,
-                eventname.as_ptr(), (*sd).status.name.as_ptr(),
+                eventname.as_ptr(), (*sd).player.identity.name.as_ptr() as *const i8,
                 reward1amount, item_db::search(reward1item as u32).name.as_ptr(),
             );
             libc::sprintf(
                 msg.as_mut_ptr(),
                 b"Congratulations on winning the event, %s! Please visit your post office to collect your winnings.\0"
                     .as_ptr() as *const i8,
-                (*sd).status.name.as_ptr(),
+                (*sd).player.identity.name.as_ptr() as *const i8,
             );
-            nmail_sendmail(sd, (*sd).status.name.as_ptr(), topic.as_ptr(), message.as_ptr());
+            nmail_sendmail(sd, (*sd).player.identity.name.as_ptr() as *const i8, topic.as_ptr(), message.as_ptr());
         } else {
             libc::sprintf(
                 message.as_mut_ptr(),
                 b"Thanks for participating in the %s Event, %s.\n\nRank:%s Place\n\n\
 You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewards!\0"
                     .as_ptr() as *const i8,
-                eventname.as_ptr(), (*sd).status.name.as_ptr(), rankname.as_ptr(),
+                eventname.as_ptr(), (*sd).player.identity.name.as_ptr() as *const i8, rankname.as_ptr(),
                 reward1amount, item_db::search(reward1item as u32).name.as_ptr(),
             );
             libc::sprintf(
                 msg.as_mut_ptr(),
                 b"Thanks for participating in the event, %s. Please visit your post office to collect your winnings.\0"
                     .as_ptr() as *const i8,
-                (*sd).status.name.as_ptr(),
+                (*sd).player.identity.name.as_ptr() as *const i8,
             );
-            nmail_sendmail(sd, (*sd).status.name.as_ptr(), topic.as_ptr(), message.as_ptr());
+            nmail_sendmail(sd, (*sd).player.identity.name.as_ptr() as *const i8, topic.as_ptr(), message.as_ptr());
         }
     }
 
@@ -559,7 +559,7 @@ You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewar
             msg.as_mut_ptr(),
             b"Sorry %s, there was an error encountered while attempting to send your rewards in a parcel. Please contact a GM for assistance.\0"
                 .as_ptr() as *const i8,
-            (*sd).status.name.as_ptr(),
+            (*sd).player.identity.name.as_ptr() as *const i8,
         );
     }
 
@@ -568,8 +568,8 @@ You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewar
     if sent_parcel_success >= 1 {
         // EventId is int(10) signed — i32 bind is correct
         let eventid_i32 = eventid;
-        // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
-        let cha_id_i32  = (*sd).status.id as i32;
+        // ChaId is int(10) signed — bind as i32; player.identity.id is u32 so cast
+        let cha_id_i32  = (*sd).player.identity.id as i32;
         let _ = sqlx::query(
                 "UPDATE `RankingScores` SET `EventClaim` = 2 WHERE `EventId` = ? AND `ChaId` = ?"
             )
@@ -858,8 +858,8 @@ pub async unsafe fn retrieveEventDates(eventid: i32, pos: i32, fd: SessionId) {
 pub async unsafe fn checkPlayerScore(eventid: i32, sd: *mut MapSessionData) -> i32 {
     // EventId is int(10) signed — i32 bind is correct
     let event_id_i = eventid;
-    // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
-    let cha_id = (*sd).status.id as i32;
+    // ChaId is int(10) signed — bind as i32; player.identity.id is u32 so cast
+    let cha_id = (*sd).player.identity.id as i32;
     sqlx::query_scalar::<_, i32>(
             "SELECT `Score` FROM `RankingScores` WHERE `EventId` = ? AND `ChaId` = ?"
         )
@@ -899,8 +899,8 @@ pub async unsafe fn updateRanks(eventid: i32) {
 pub async unsafe fn checkPlayerRank(eventid: i32, sd: *mut MapSessionData) -> i32 {
     // EventId is int(10) signed — i32 bind is correct
     let event_id_i = eventid;
-    // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
-    let cha_id = (*sd).status.id as i32;
+    // ChaId is int(10) signed — bind as i32; player.identity.id is u32 so cast
+    let cha_id = (*sd).player.identity.id as i32;
     sqlx::query_scalar::<_, i32>(
             "SELECT `Rank` FROM `RankingScores` WHERE `EventId` = ? AND `ChaId` = ?"
         )
@@ -920,8 +920,8 @@ pub async unsafe fn checkPlayerRank(eventid: i32, sd: *mut MapSessionData) -> i3
 ///
 /// SQL: SELECT EventClaim FROM RankingScores WHERE EventId=? AND ChaId=?
 pub async unsafe fn checkevent_claim(eventid: i32, _fd: SessionId, sd: *mut MapSessionData) -> i32 {
-    // ChaId is int(10) signed — bind as i32; status.id is u32 so cast
-    let cha_id = (*sd).status.id as i32;
+    // ChaId is int(10) signed — bind as i32; player.identity.id is u32 so cast
+    let cha_id = (*sd).player.identity.id as i32;
     // EventId is int(10) signed — i32 bind is correct
     let event_id = eventid;
 
@@ -1162,7 +1162,7 @@ pub async unsafe fn clif_parseranking(sd: *mut MapSessionData, fd: SessionId) ->
 ///
 /// Pure logic — no SQL.
 pub unsafe fn canusepowerboards(sd: *mut MapSessionData) -> i32 {
-    if (*sd).status.gm_level != 0 { return 1; }
+    if (*sd).player.identity.gm_level != 0 { return 1; }
     if pc_readglobalreg(sd, c"carnagehost".as_ptr()) == 0 { return 0; }
     if (*sd).bl.m >= 2001 && (*sd).bl.m <= 2099 { return 1; }
     0

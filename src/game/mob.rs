@@ -1048,7 +1048,7 @@ unsafe fn mob_resolve_target(mob: *mut MobSpawnData) -> *mut BlockList {
     } else if (*bl).bl_type == BL_PC as u8 {
         use crate::game::pc::{MapSessionData, PC_DIE};
         let sd = bl as *mut MapSessionData;
-        if (*sd).status.state == PC_DIE as i8 {
+        if (*sd).player.combat.state == PC_DIE as i8 {
             (*mob).target = 0;
             (*mob).attacker = 0;
             return std::ptr::null_mut();
@@ -1404,8 +1404,8 @@ unsafe fn check_pc_collision(moving_mob: *mut MobSpawnData, m: i32, x: i32, y: i
             if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
                 let sd = sd_arc.read();
                 if sd.bl.x as i32 == x && sd.bl.y as i32 == y {
-                    let state  = sd.status.state;
-                    let gm_lvl = sd.status.gm_level;
+                    let state  = sd.player.combat.state;
+                    let gm_lvl = sd.player.identity.gm_level;
                     let passable = (show_ghosts != 0 && state == PC_DIE as i8)
                         || state == -1
                         || gm_lvl >= 50;
@@ -1913,8 +1913,8 @@ pub unsafe fn mob_find_target_inner(bl: *mut BlockList, mob: *mut MobSpawnData) 
     };
     let mut invis: u8 = 0;
     for i in 0..MAX_MAGIC_TIMERS {
-        if (*sd).status.dura_aether[i].duration > 0 {
-            let name = magicdb_name((*sd).status.dura_aether[i].id as i32);
+        if (&(*sd).player.spells.dura_aether)[i].duration > 0 {
+            let name = magicdb_name((&(*sd).player.spells.dura_aether)[i].id as i32);
             if !name.is_null() {
                 if libc::strcasecmp(name, c"sneak".as_ptr()) == 0 {
                     invis = 1;
@@ -1946,7 +1946,7 @@ pub unsafe fn mob_find_target_inner(bl: *mut BlockList, mob: *mut MobSpawnData) 
         }
         _ => {}
     }
-    if (*sd).status.state == PC_DIE as i8 {
+    if (*sd).player.combat.state == PC_DIE as i8 {
         return 0;
     }
     if (*mob).confused != 0 && (*mob).confused_target == (*sd).bl.id {
@@ -1954,11 +1954,11 @@ pub unsafe fn mob_find_target_inner(bl: *mut BlockList, mob: *mut MobSpawnData) 
     }
     if (*mob).target != 0 {
         let num = (rand::random::<u32>() & 0x00FF_FFFF) % 1000;
-        if num <= 499 && (*sd).status.gm_level < 50 {
-            (*mob).target = (*sd).status.id;
+        if num <= 499 && (*sd).player.identity.gm_level < 50 {
+            (*mob).target = (*sd).player.identity.id;
         }
-    } else if (*sd).status.gm_level < 50 {
-        (*mob).target = (*sd).status.id;
+    } else if (*sd).player.identity.gm_level < 50 {
+        (*mob).target = (*sd).player.identity.id;
     }
     0
 }
@@ -2048,8 +2048,8 @@ pub unsafe fn mob_calc_critical(
         return 0;
     }
     let equat = ((*db).hit + (*db).level + ((*db).might / 5) + 20)
-        - ((*sd).status.level as i32 + ((*sd).grace / 2));
-    let mut equat = equat - ((*sd).grace / 4) + (*sd).status.level as i32;
+        - ((*sd).player.progression.level as i32 + ((*sd).grace / 2));
+    let mut equat = equat - ((*sd).grace / 4) + (*sd).player.progression.level as i32;
     let chance = ((rand::random::<u32>() & 0x00FF_FFFF) % 100) as i32;
     if equat < 5 {
         equat = 5;
@@ -2098,9 +2098,9 @@ pub unsafe fn mob_move_inner(bl: *mut BlockList, mob: *mut MobSpawnData) -> i32 
         } else {
             0
         };
-        if (show_ghosts != 0 && (*sd).status.state == PC_DIE as i8)
-            || (*sd).status.state == -1
-            || (*sd).status.gm_level >= 50
+        if (show_ghosts != 0 && (*sd).player.combat.state == PC_DIE as i8)
+            || (*sd).player.combat.state == -1
+            || (*sd).player.identity.gm_level >= 50
         {
             return 0;
         }
@@ -2259,7 +2259,7 @@ pub unsafe fn sl_mob_setinddmg(mob: *mut MobSpawnData, player_id: u32, dmg: f32)
     if mob.is_null() { return 0; }
     let sd = map_id2sd_mob(player_id);
     if sd.is_null() { return 0; }
-    let cid = (*sd).status.id;
+    let cid = (*sd).player.identity.id;
     for x in 0..MAX_THREATCOUNT {
         if (*mob).dmgindtable[x][0] as u32 == cid || (*mob).dmgindtable[x][0] == 0.0 {
             (*mob).dmgindtable[x][0] = cid as f64;

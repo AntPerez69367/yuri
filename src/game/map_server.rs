@@ -501,8 +501,11 @@ pub unsafe fn map_name2sd(name: *const i8) -> *mut MapSessionData {
         if session_get_eof(fd) != 0 { continue; }
         let sd = session_get_data(fd);
         if sd.is_null() { continue; }
-        if libc::strcasecmp((*sd).status.name.as_ptr(), name) == 0 {
-            return sd;
+        {
+            let target = std::ffi::CStr::from_ptr(name).to_string_lossy();
+            if (*sd).player.identity.name.eq_ignore_ascii_case(&target) {
+                return sd;
+            }
         }
     }
     std::ptr::null_mut()
@@ -590,8 +593,7 @@ pub unsafe fn isPlayerActive(sd: *mut MapSessionData) -> i32 {
     let fd = (*sd).fd;
     if fd.raw() == 0 { return 0; }
     if !session_exists(fd) {
-        let name = std::ffi::CStr::from_ptr((*sd).status.name.as_ptr());
-        tracing::warn!("[map] isPlayerActive: player exists but session does not ({})", name.to_string_lossy());
+        tracing::warn!("[map] isPlayerActive: player exists but session does not ({})", (*sd).player.identity.name);
         return 0;
     }
     1
@@ -858,11 +860,16 @@ pub unsafe fn boards_delete(sd: *mut MapSessionData, board: i32) -> i32 {
     let mut pkt = vec![0u8; 28];
     pkt[0..2].copy_from_slice(&0x3008u16.to_le_bytes());
     pkt[2..4].copy_from_slice(&((*sd).fd.raw() as u16).to_le_bytes());
-    pkt[4..6].copy_from_slice(&((*sd).status.gm_level as u8 as u16).to_le_bytes());
+    pkt[4..6].copy_from_slice(&((*sd).player.identity.gm_level as u8 as u16).to_le_bytes());
     pkt[6..8].copy_from_slice(&((*sd).board_candel as u16).to_le_bytes());
     pkt[8..10].copy_from_slice(&(board as u16).to_le_bytes());
     pkt[10..12].copy_from_slice(&(post as u16).to_le_bytes());
-    std::ptr::copy_nonoverlapping((*sd).status.name.as_ptr() as *const u8, pkt[12..].as_mut_ptr(), 16);
+    {
+        let name = (*sd).player.identity.name.as_bytes();
+        let n = name.len().min(15);
+        std::ptr::copy_nonoverlapping(name.as_ptr(), pkt[12..].as_mut_ptr(), n);
+        // remaining bytes stay zero from vec![0u8; 28]
+    }
     crate::game::map_char::send(pkt);
     0
 }
@@ -895,7 +902,7 @@ pub unsafe fn boards_showposts(
         } else {
             (*sd).board_canwrite = 1;
         }
-        if (*sd).status.gm_level == 99 {
+        if (*sd).player.identity.gm_level == 99 {
             (*sd).board_canwrite = 1;
             (*sd).board_candel   = 1;
         }
@@ -925,11 +932,11 @@ pub unsafe fn boards_showposts(
         popup:  (*sd).board_popup as i8,
         name:   [0i8; 16],
     };
-    std::ptr::copy_nonoverlapping(
-        (*sd).status.name.as_ptr(),
-        a.name.as_mut_ptr(),
-        16,
-    );
+    {
+        let name = (*sd).player.identity.name.as_bytes();
+        let n = name.len().min(15);
+        std::ptr::copy_nonoverlapping(name.as_ptr() as *const i8, a.name.as_mut_ptr(), n);
+    }
     std::ptr::copy_nonoverlapping(
         std::ptr::addr_of!(a) as *const u8,
         pkt[2..].as_mut_ptr(),
@@ -959,7 +966,7 @@ pub unsafe fn boards_readpost(
         } else {
             (*sd).board_canwrite = 1;
         }
-        if (*sd).status.gm_level == 99 {
+        if (*sd).player.identity.gm_level == 99 {
             (*sd).board_canwrite = 1;
             (*sd).board_candel   = 1;
         }
@@ -976,11 +983,11 @@ pub unsafe fn boards_readpost(
         board,
         flags,
     };
-    std::ptr::copy_nonoverlapping(
-        (*sd).status.name.as_ptr(),
-        header.name.as_mut_ptr(),
-        16,
-    );
+    {
+        let name = (*sd).player.identity.name.as_bytes();
+        let n = name.len().min(15);
+        std::ptr::copy_nonoverlapping(name.as_ptr() as *const i8, header.name.as_mut_ptr(), n);
+    }
 
     let struct_size = std::mem::size_of::<BoardsReadPost0>();
     let mut pkt = vec![0u8; 2 + struct_size];
@@ -1007,8 +1014,12 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
 
     let topiclen = rfifob(fd, 8) as usize;
     if topiclen > 52 {
+        let mut name_buf = [0u8; 16];
+        let name_bytes = (*sd).player.identity.name.as_bytes();
+        let n = name_bytes.len().min(15);
+        name_buf[..n].copy_from_slice(&name_bytes[..n]);
         clif_Hacker(
-            (*sd).status.name.as_mut_ptr() as *mut i8,
+            name_buf.as_mut_ptr() as *mut i8,
             b"Board hacking: TOPIC HACK\0".as_ptr() as *const i8,
         );
         return 0;
@@ -1020,8 +1031,12 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
         u16::from_be(p.read_unaligned()) as usize
     };
     if postlen > 4000 {
+        let mut name_buf = [0u8; 16];
+        let name_bytes = (*sd).player.identity.name.as_bytes();
+        let n = name_bytes.len().min(15);
+        name_buf[..n].copy_from_slice(&name_bytes[..n]);
         clif_Hacker(
-            (*sd).status.name.as_mut_ptr() as *mut i8,
+            name_buf.as_mut_ptr() as *mut i8,
             b"Board hacking: POST(BODY) HACK\0".as_ptr() as *const i8,
         );
         return 0;
@@ -1052,7 +1067,11 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
         topic: [0i8; 53],
         post:  [0i8; 4001],
     };
-    std::ptr::copy_nonoverlapping((*sd).status.name.as_ptr(), header.name.as_mut_ptr(), 16);
+    {
+        let name = (*sd).player.identity.name.as_bytes();
+        let n = name.len().min(15);
+        std::ptr::copy_nonoverlapping(name.as_ptr() as *const i8, header.name.as_mut_ptr(), n);
+    }
     std::ptr::copy_nonoverlapping(
         rfifop(fd, 9) as *const i8,
         header.topic.as_mut_ptr(),
@@ -1064,7 +1083,7 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
         postlen,
     );
 
-    if (*sd).status.gm_level != 0 {
+    if (*sd).player.identity.gm_level != 0 {
         header.nval = 1;
     }
 
@@ -1112,8 +1131,7 @@ pub async unsafe fn nmail_luascript(
         msg as usize,
     );
 
-    let cha_name = std::ffi::CStr::from_ptr((*sd).status.name.as_ptr())
-        .to_str().unwrap_or("").to_owned();
+    let cha_name = (*sd).player.identity.name.clone();
     let body = std::ffi::CStr::from_ptr(message.as_ptr())
         .to_str().unwrap_or("").to_owned();
 
@@ -1151,7 +1169,7 @@ pub async unsafe fn nmail_poemscript(
     let month = now.month0() as i32;
     let day   = now.day()    as i32;
 
-    let char_id = (*sd).status.id as i32;
+    let char_id = (*sd).player.identity.id as i32;
 
     // Check whether the player already submitted a poem this cycle.
     let already_submitted = sqlx::query_scalar::<_, Option<u32>>(
@@ -1242,7 +1260,12 @@ pub unsafe fn nmail_sendmailcopy(
     let mut pkt = vec![0u8; PKT_LEN];
     pkt[0..2].copy_from_slice(&0x300Fu16.to_le_bytes());
     pkt[2..4].copy_from_slice(&((*sd).fd.raw() as u16).to_le_bytes());
-    std::ptr::copy_nonoverlapping((*sd).status.name.as_ptr() as *const u8, pkt[4..].as_mut_ptr(), 16);
+    {
+        let name = (*sd).player.identity.name.as_bytes();
+        let n = name.len().min(15);
+        std::ptr::copy_nonoverlapping(name.as_ptr(), pkt[4..].as_mut_ptr(), n);
+        // remaining bytes stay zero from vec![0u8; PKT_LEN]
+    }
     std::ptr::copy_nonoverlapping(to_user as *const u8, pkt[20..].as_mut_ptr(), 16);
     std::ptr::copy_nonoverlapping(topic   as *const u8, pkt[72..].as_mut_ptr(), 52);
     std::ptr::copy_nonoverlapping(message as *const u8, pkt[124..].as_mut_ptr(), 4000);
@@ -1261,16 +1284,24 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
 
     let tolen = rfifob(fd, 8) as usize;
     if tolen > 52 {
+        let mut name_buf = [0u8; 16];
+        let name_bytes = (*sd).player.identity.name.as_bytes();
+        let n = name_bytes.len().min(15);
+        name_buf[..n].copy_from_slice(&name_bytes[..n]);
         clif_Hacker(
-            (*sd).status.name.as_mut_ptr() as *mut i8,
+            name_buf.as_mut_ptr() as *mut i8,
             b"NMAIL: To User\0".as_ptr() as *const i8,
         );
         return 0;
     }
     let topiclen = rfifob(fd, tolen + 9) as usize;
     if topiclen > 52 {
+        let mut name_buf = [0u8; 16];
+        let name_bytes = (*sd).player.identity.name.as_bytes();
+        let n = name_bytes.len().min(15);
+        name_buf[..n].copy_from_slice(&name_bytes[..n]);
         clif_Hacker(
-            (*sd).status.name.as_mut_ptr() as *mut i8,
+            name_buf.as_mut_ptr() as *mut i8,
             b"NMAIL: Topic\0".as_ptr() as *const i8,
         );
         return 0;
@@ -1281,8 +1312,12 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
         u16::from_be(p.read_unaligned()) as usize
     };
     if messagelen > 4000 {
+        let mut name_buf = [0u8; 16];
+        let name_bytes = (*sd).player.identity.name.as_bytes();
+        let n = name_bytes.len().min(15);
+        name_buf[..n].copy_from_slice(&name_bytes[..n]);
         clif_Hacker(
-            (*sd).status.name.as_mut_ptr() as *mut i8,
+            name_buf.as_mut_ptr() as *mut i8,
             b"NMAIL: Message\0".as_ptr() as *const i8,
         );
         return 0;
@@ -1318,7 +1353,7 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
         );
         (*sd).luaexec = 0;
         sl_doscript_simple(b"canRunLuaMail\0".as_ptr() as *const i8, std::ptr::null(), std::ptr::addr_of_mut!((*sd).bl));
-        if (*sd).status.gm_level == 99 || (*sd).luaexec != 0 {
+        if (*sd).player.identity.gm_level == 99 || (*sd).luaexec != 0 {
             nmail_luascript(sd, tolen as i32, topiclen as i32, messagelen as i32).await;
             nmail_sendmessage(
                 sd,
@@ -1395,9 +1430,10 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
         let mut a_topic = format!("[To {}] {}", to_str, tp_str);
         a_topic.truncate(51);
         let a_topic_c = std::ffi::CString::new(a_topic).unwrap_or_default();
+        let self_name_c = std::ffi::CString::new((*sd).player.identity.name.as_str()).unwrap_or_default();
         nmail_sendmailcopy(
             sd,
-            (*sd).status.name.as_ptr() as *const i8,
+            self_name_c.as_ptr(),
             a_topic_c.as_ptr(),
             message.as_ptr(),
         );
@@ -1429,7 +1465,12 @@ pub unsafe fn nmail_sendmail(
     let mut pkt = vec![0u8; PKT_LEN];
     pkt[0..2].copy_from_slice(&0x300Du16.to_le_bytes());
     pkt[2..4].copy_from_slice(&((*sd).fd.raw() as u16).to_le_bytes());
-    std::ptr::copy_nonoverlapping((*sd).status.name.as_ptr() as *const u8, pkt[4..].as_mut_ptr(), 16);
+    {
+        let name = (*sd).player.identity.name.as_bytes();
+        let n = name.len().min(15);
+        std::ptr::copy_nonoverlapping(name.as_ptr(), pkt[4..].as_mut_ptr(), n);
+        // remaining bytes stay zero from vec![0u8; PKT_LEN]
+    }
     std::ptr::copy_nonoverlapping(to_user as *const u8, pkt[20..].as_mut_ptr(), 16);
     std::ptr::copy_nonoverlapping(topic   as *const u8, pkt[72..].as_mut_ptr(), 52);
     std::ptr::copy_nonoverlapping(message as *const u8, pkt[124..].as_mut_ptr(), 4000);

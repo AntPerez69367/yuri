@@ -150,8 +150,8 @@ pub unsafe fn clif_exchange_finalize(
         let it = (*sd).exchange.item[i];
         pc_additem(tsd, &it as *const _ as *mut _);
     }
-    (*tsd).status.money = (*tsd).status.money.saturating_add((*sd).exchange.gold);
-    (*sd).status.money  = (*sd).status.money.saturating_sub((*sd).exchange.gold);
+    (*tsd).player.inventory.money = (*tsd).player.inventory.money.saturating_add((*sd).exchange.gold);
+    (*sd).player.inventory.money  = (*sd).player.inventory.money.saturating_sub((*sd).exchange.gold);
     (*sd).exchange.gold = 0;
 
     // Transfer tsd's items to sd
@@ -160,8 +160,8 @@ pub unsafe fn clif_exchange_finalize(
         let it = (*tsd).exchange.item[i];
         pc_additem(sd, &it as *const _ as *mut _);
     }
-    (*sd).status.money   = (*sd).status.money.saturating_add((*tsd).exchange.gold);
-    (*tsd).status.money  = (*tsd).status.money.saturating_sub((*tsd).exchange.gold);
+    (*sd).player.inventory.money   = (*sd).player.inventory.money.saturating_add((*tsd).exchange.gold);
+    (*tsd).player.inventory.money  = (*tsd).player.inventory.money.saturating_sub((*tsd).exchange.gold);
     (*tsd).exchange.gold = 0;
 
     clif_sendstatus(sd,  SFLAG_XPMONEY);
@@ -220,13 +220,13 @@ pub unsafe fn clif_startexchange(
     (*sd).exchange.target  = target;
     (*tsd).exchange.target = (*sd).bl.id;
 
-    if (*tsd).status.setting_flags as u32 & FLAG_EXCHANGE != 0 {
+    if (*tsd).player.appearance.setting_flags as u32 & FLAG_EXCHANGE != 0 {
         let mut buff = [0i8; 256];
 
         // Build name string for sd (to send to tsd)
-        let tsd_class_name = classdb_name((*tsd).status.class as i32, (*tsd).status.mark as i32);
+        let tsd_class_name = classdb_name((*tsd).player.progression.class as i32, (*tsd).player.progression.mark as i32);
         {
-            let tsd_name = std::ffi::CStr::from_ptr((*tsd).status.name.as_ptr()).to_string_lossy();
+            let tsd_name = &(*tsd).player.identity.name;
             let formatted = format!("{}({})\0", tsd_name, tsd_class_name);
             let copy_len = formatted.len().min(buff.len());
             std::ptr::copy_nonoverlapping(formatted.as_ptr() as *const i8, buff.as_mut_ptr(), copy_len);
@@ -254,7 +254,7 @@ pub unsafe fn clif_startexchange(
         len += buf_len + 1;
         // WFIFOW(sd->fd, len+6) = SWAP16(tsd->status.level)
         let p2 = wfifop((*sd).fd, len + 6) as *mut u16;
-        if !p2.is_null() { p2.write_unaligned(((*tsd).status.level as u16).to_be()); }
+        if !p2.is_null() { p2.write_unaligned(((*tsd).player.progression.level as u16).to_be()); }
         len += 2;
         // WFIFOW(sd->fd, 1) = SWAP16(len + 3)
         let ph = wfifop((*sd).fd, 1) as *mut u16;
@@ -266,9 +266,9 @@ pub unsafe fn clif_startexchange(
         }
 
         // Build name string for tsd (to send to sd)
-        let sd_class_name = classdb_name((*sd).status.class as i32, (*sd).status.mark as i32);
+        let sd_class_name = classdb_name((*sd).player.progression.class as i32, (*sd).player.progression.mark as i32);
         {
-            let sd_name = std::ffi::CStr::from_ptr((*sd).status.name.as_ptr()).to_string_lossy();
+            let sd_name = &(*sd).player.identity.name;
             let formatted = format!("{}({})\0", sd_name, sd_class_name);
             let copy_len = formatted.len().min(buff.len());
             std::ptr::copy_nonoverlapping(formatted.as_ptr() as *const i8, buff.as_mut_ptr(), copy_len);
@@ -292,14 +292,14 @@ pub unsafe fn clif_startexchange(
         len += buf_len + 1;
         // WFIFOW(tsd->fd, len+6) = SWAP16(sd->status.level)
         let p4 = wfifop((*tsd).fd, len + 6) as *mut u16;
-        if !p4.is_null() { p4.write_unaligned(((*sd).status.level as u16).to_be()); }
+        if !p4.is_null() { p4.write_unaligned(((*sd).player.progression.level as u16).to_be()); }
         len += 2;
         let ph2 = wfifop((*tsd).fd, 1) as *mut u16;
         if !ph2.is_null() { ph2.write_unaligned(((len + 3) as u16).to_be()); }
         wfifoset((*tsd).fd, encrypt((*tsd).fd) as usize);
 
-        (*sd).status.setting_flags ^= FLAG_EXCHANGE as u16;
-        (*tsd).status.setting_flags ^= FLAG_EXCHANGE as u16;
+        (*sd).player.appearance.setting_flags ^= FLAG_EXCHANGE as u16;
+        (*tsd).player.appearance.setting_flags ^= FLAG_EXCHANGE as u16;
 
         (*sd).exchange.item_count  = 0;
         (*tsd).exchange.item_count = 0;
@@ -403,10 +403,10 @@ pub unsafe fn clif_exchange_additem(
     if tsd.is_null() { return 0; }
 
     let slot = id as usize;
-    if slot >= (*sd).status.maxinv as usize {
+    if slot >= (*sd).player.inventory.max_inv as usize {
         return 0;
     }
-    let item_id = (*sd).status.inventory[slot].id;
+    let item_id = (&(*sd).player.inventory.inventory)[slot].id;
 
     if item_id != 0 {
         if item_db::search(item_id).exchangeable != 0 {
@@ -417,7 +417,7 @@ pub unsafe fn clif_exchange_additem(
     }
 
     // Check target has inventory space
-    let inv = &(*sd).status.inventory[slot];
+    let inv = &(&(*sd).player.inventory.inventory)[slot];
     let space = pc_isinvenspace(
         tsd,
         item_id as i32,
@@ -428,7 +428,7 @@ pub unsafe fn clif_exchange_additem(
         inv.custom_icon,
         inv.custom_icon_color,
     );
-    if space >= (*tsd).status.maxinv as i32 {
+    if space >= (*tsd).player.inventory.max_inv as i32 {
         let msg = b"Receiving player does not have enough inventory space.\0".as_ptr() as *const i8;
         clif_sendminitext(sd, msg);
         return 0;
@@ -436,7 +436,7 @@ pub unsafe fn clif_exchange_additem(
 
     // Copy item into exchange slot
     let xcount = (*sd).exchange.item_count as usize;
-    (*sd).exchange.item[xcount] = (*sd).status.inventory[slot];
+    (*sd).exchange.item[xcount] = (&(*sd).player.inventory.inventory)[slot];
     (*sd).exchange.item[xcount].amount = amount;
 
     // Build display name (nameof = itemdb_name, truncate to 15)
@@ -733,7 +733,7 @@ pub unsafe fn clif_handgold(sd: *mut MapSessionData) -> i32 {
     // C: if (gold < 0) gold = 0; (gold is unsigned so this is a no-op, but kept for fidelity)
     let gold = gold;
     if gold == 0 { return 0; }
-    let gold = gold.min((*sd).status.money);
+    let gold = gold.min((*sd).player.inventory.money);
 
     // Compute adjacent cell based on facing direction
     let (x, y) = side_cell(&*sd);
@@ -748,7 +748,7 @@ pub unsafe fn clif_handgold(sd: *mut MapSessionData) -> i32 {
             if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc((*bl).id) {
                 let mut tsd_guard = tsd_arc.write();
                 let tsd = &mut *tsd_guard as *mut MapSessionData;
-                if (*tsd).status.setting_flags as u32 & FLAG_EXCHANGE != 0 {
+                if (*tsd).player.appearance.setting_flags as u32 & FLAG_EXCHANGE != 0 {
                     clif_startexchange(sd, (*bl).id);
                     clif_exchange_money(sd, tsd);
                 } else {
@@ -772,7 +772,7 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
     let amount: i32 = if handgive == 0 {
         1
     } else {
-        (*sd).status.inventory[slot].amount
+        (&(*sd).player.inventory.inventory)[slot].amount
     };
 
     let (x, y) = side_cell(&*sd);
@@ -789,7 +789,7 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
         if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc((*bl).id) {
             let mut tsd_guard = tsd_arc.write();
             let tsd = &mut *tsd_guard as *mut MapSessionData;
-            if (*tsd).status.setting_flags as u32 & FLAG_EXCHANGE != 0 {
+            if (*tsd).player.appearance.setting_flags as u32 & FLAG_EXCHANGE != 0 {
                 clif_startexchange(sd, (*bl).id);
                 clif_exchange_additem(sd, tsd, slot as i32, amount);
             } else {
@@ -806,12 +806,12 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
         let mut mob_guard = mob_arc.write();
         let mob = &mut *mob_guard as *mut crate::game::mob::MobSpawnData;
 
-        if item_db::search((*sd).status.inventory[slot].id).exchangeable == 1 { return 0; }
+        if item_db::search((&(*sd).player.inventory.inventory)[slot].id).exchangeable == 1 { return 0; }
 
-        let inv_id   = (*sd).status.inventory[slot].id;
-        let inv_dura = (*sd).status.inventory[slot].dura;
-        let inv_own  = (*sd).status.inventory[slot].owner;
-        let inv_prot = (*sd).status.inventory[slot].protected;
+        let inv_id   = (&(*sd).player.inventory.inventory)[slot].id;
+        let inv_dura = (&(*sd).player.inventory.inventory)[slot].dura;
+        let inv_own  = (&(*sd).player.inventory.inventory)[slot].owner;
+        let inv_prot = (&(*sd).player.inventory.inventory)[slot].protected;
 
         let mut found = false;
         for i in 0..MAX_INVENTORY {
@@ -854,7 +854,7 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
         }
         let nd_min = nd as *mut NpcMinimal;
 
-        let inv_id = (*sd).status.inventory[slot].id;
+        let inv_id = (&(*sd).player.inventory.inventory)[slot].id;
         let inv_item = item_db::search(inv_id);
         if inv_item.exchangeable != 0 || inv_item.droppable != 0 {
             return 0;
@@ -926,7 +926,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             if (*sd).bl.m != tsd.bl.m || tsd.bl.bl_type as i32 != BL_PC {
                 return 0;
             }
-            if (*sd).status.gm_level != 0 || (tsd.optFlags & OPT_FLAG_STEALTH) == 0 {
+            if (*sd).player.identity.gm_level != 0 || (tsd.optFlags & OPT_FLAG_STEALTH) == 0 {
                 drop(_tsd_guard);
                 clif_startexchange(sd, target_id);
             }
@@ -934,10 +934,10 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
         1 => {
             // Add item — check if it needs an amount prompt
             let id = rfifob((*sd).fd, 10).saturating_sub(1) as usize;
-            if id >= (*sd).status.maxinv as usize {
+            if id >= (*sd).player.inventory.max_inv as usize {
                 return 0;
             }
-            if (*sd).status.inventory[id].amount > 1 {
+            if (&(*sd).player.inventory.inventory)[id].amount > 1 {
                 if !session_exists((*sd).fd) {
                     return 0;
                 }
@@ -952,7 +952,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
                 wfifob((*sd).fd, 5, 0x01);
                 wfifob((*sd).fd, 6, (id + 1) as u8);
                 wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
-            } else if (*sd).status.inventory[id].id != 0 {
+            } else if (&(*sd).player.inventory.inventory)[id].id != 0 {
                 let raw = rfifol((*sd).fd, 6);
                 let target_id = u32::from_be_bytes(raw.to_le_bytes());
                 let tsd_arc = match crate::game::map_server::map_id2sd_pc(target_id) {
@@ -967,7 +967,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
         2 => {
             // Add item with explicit amount
             let id     = rfifob((*sd).fd, 10).saturating_sub(1) as usize;
-            if id >= (*sd).status.maxinv as usize {
+            if id >= (*sd).player.inventory.max_inv as usize {
                 return 0;
             }
             let amount = rfifob((*sd).fd, 11) as i32;
@@ -979,8 +979,8 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             let mut _tsd_guard = tsd_arc.write();
             let tsd = &mut *_tsd_guard as *mut MapSessionData;
             if amount > 0
-                && (*sd).status.inventory[id].id != 0
-                && amount <= (*sd).status.inventory[id].amount
+                && (&(*sd).player.inventory.inventory)[id].id != 0
+                && amount <= (&(*sd).player.inventory.inventory)[id].amount
             {
                 clif_exchange_additem(sd, tsd, id as i32, amount);
             }
@@ -997,7 +997,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             };
             let mut _tsd_guard = tsd_arc.write();
             let tsd = &mut *_tsd_guard as *mut MapSessionData;
-            if amount > (*sd).status.money {
+            if amount > (*sd).player.inventory.money {
                 clif_exchange_money(sd, tsd);
             } else {
                 (*sd).exchange.gold = amount;
@@ -1041,7 +1041,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             }
             let msg_no_gold = b"You do not have that amount.\0".as_ptr() as *const i8;
             let msg_cancel  = b"Exchange cancelled.\0".as_ptr() as *const i8;
-            if (*sd).exchange.gold > (*sd).status.money {
+            if (*sd).exchange.gold > (*sd).player.inventory.money {
                 clif_exchange_message(sd, msg_no_gold, 4, 0);
                 if let Some(ref arc) = tsd_arc {
                     let mut guard = arc.write();
@@ -1065,10 +1065,10 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
 
 // ─── side_cell: compute adjacent cell from facing direction ──────────────────
 
-/// Return the (x, y) of the cell in front of the player based on `status.side`.
+/// Return the (x, y) of the cell in front of the player based on `player.combat.side`.
 /// Matches the repeated side==0..3 pattern in clif_handgold / clif_handitem.
 unsafe fn side_cell(sd: &MapSessionData) -> (i32, i32) {
-    match sd.status.side {
+    match sd.player.combat.side {
         0 => (sd.bl.x as i32,     sd.bl.y as i32 - 1),
         1 => (sd.bl.x as i32 + 1, sd.bl.y as i32),
         2 => (sd.bl.x as i32,     sd.bl.y as i32 + 1),
