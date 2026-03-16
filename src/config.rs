@@ -17,20 +17,7 @@ pub const META_MAX: usize = 20;
 /// Maximum number of towns supported
 pub const TOWN_MAX: usize = 255;
 
-/// A point in 3D space (map, x, y)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Point {
-    pub m: u16,
-    pub x: u16,
-    pub y: u16,
-}
-
-impl Point {
-    /// Create a new point
-    pub fn new(m: u16, x: u16, y: u16) -> Self {
-        Self { m, x, y }
-    }
-}
+pub use crate::common::types::Point;
 
 /// Main server configuration
 ///
@@ -38,18 +25,6 @@ impl Point {
 /// Just add a field here, and serde handles the rest!
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerConfig {
-    // ============================================
-    // MySQL Database Configuration
-    // ============================================
-    pub sql_ip: String,
-
-    #[serde(default = "default_sql_port")]
-    pub sql_port: u16,
-
-    pub sql_id: String,
-    pub sql_pw: String,
-    pub sql_db: String,
-
     // ============================================
     // Login Server Configuration
     // ============================================
@@ -161,10 +136,6 @@ pub struct ServerConfig {
 // These are called by serde when a field is missing
 // ============================================
 
-fn default_sql_port() -> u16 {
-    3306
-}
-
 fn default_login_port() -> u16 {
     2000
 }
@@ -222,7 +193,7 @@ impl ServerConfig {
     ///
     /// let config = ServerConfig::from_file("conf/server.yaml")
     ///     .expect("Failed to load config");
-    /// println!("SQL DB: {}", config.sql_db);
+    /// println!("Map IP: {}", config.map_ip);
     /// ```
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
@@ -258,9 +229,6 @@ impl ServerConfig {
     /// Checks that required fields are set and values are reasonable
     fn validate(&self) -> Result<()> {
         // Check required fields aren't empty
-        anyhow::ensure!(!self.sql_ip.is_empty(), "sql_ip cannot be empty");
-        anyhow::ensure!(!self.sql_id.is_empty(), "sql_id cannot be empty");
-        anyhow::ensure!(!self.sql_db.is_empty(), "sql_db cannot be empty");
         anyhow::ensure!(!self.map_ip.is_empty(), "map_ip cannot be empty");
         anyhow::ensure!(!self.char_ip.is_empty(), "char_ip cannot be empty");
         anyhow::ensure!(!self.login_ip.is_empty(), "login_ip cannot be empty");
@@ -314,11 +282,6 @@ mod tests {
     /// Helper to create a minimal valid config
     fn minimal_config() -> &'static str {
         r#"
-sql_ip: "127.0.0.1"
-sql_id: "user"
-sql_pw: "pass"
-sql_db: "testdb"
-
 login_id: "loginid"
 login_pw: "loginpw"
 login_ip: "127.0.0.1"
@@ -347,11 +310,6 @@ start_point:
     #[test]
     fn test_minimal_config() {
         let config = ServerConfig::from_str(minimal_config()).unwrap();
-
-        assert_eq!(config.sql_ip, "127.0.0.1");
-        assert_eq!(config.sql_id, "user");
-        assert_eq!(config.sql_pw, "pass");
-        assert_eq!(config.sql_db, "testdb");
         assert_eq!(config.start_point, Point::new(0, 1, 1));
     }
 
@@ -360,7 +318,6 @@ start_point:
         let config = ServerConfig::from_str(minimal_config()).unwrap();
 
         // All these should have defaults
-        assert_eq!(config.sql_port, 3306);
         assert_eq!(config.login_port, 2000);
         assert_eq!(config.char_port, 2005);
         assert_eq!(config.map_port, 2001);
@@ -376,12 +333,6 @@ start_point:
     #[test]
     fn test_custom_ports() {
         let config_str = r#"
-sql_ip: "127.0.0.1"
-sql_port: 5432
-sql_id: "user"
-sql_pw: "pass"
-sql_db: "testdb"
-
 login_id: "loginid"
 login_pw: "loginpw"
 login_ip: "127.0.0.1"
@@ -402,7 +353,6 @@ start_point:
 "#;
 
         let config = ServerConfig::from_str(config_str).unwrap();
-        assert_eq!(config.sql_port, 5432);
         assert_eq!(config.login_port, 3000);
         assert_eq!(config.char_port, 3005);
         assert_eq!(config.map_port, 3001);
@@ -411,10 +361,6 @@ start_point:
     #[test]
     fn test_meta_files_as_list() {
         let config_str = r#"
-sql_ip: "127.0.0.1"
-sql_id: "user"
-sql_pw: "pass"
-sql_db: "testdb"
 login_id: "loginid"
 login_pw: "loginpw"
 login_ip: "127.0.0.1"
@@ -443,10 +389,6 @@ meta:
     #[test]
     fn test_towns_as_list() {
         let config_str = r#"
-sql_ip: "127.0.0.1"
-sql_id: "user"
-sql_pw: "pass"
-sql_db: "testdb"
 login_id: "loginid"
 login_pw: "loginpw"
 login_ip: "127.0.0.1"
@@ -474,10 +416,6 @@ town:
     #[test]
     fn test_missing_required_field() {
         let config_str = r#"
-sql_ip: "127.0.0.1"
-sql_id: "user"
-# Missing sql_pw!
-sql_db: "testdb"
 "#;
 
         let result = ServerConfig::from_str(config_str);
@@ -485,13 +423,13 @@ sql_db: "testdb"
 
         let err = result.unwrap_err();
         let err_msg = format!("{:?}", err);
-        assert!(err_msg.contains("sql_pw") || err_msg.contains("missing field"));
+        assert!(err_msg.contains("missing field") || err_msg.contains("map_ip") || err_msg.contains("login_ip"));
     }
 
     #[test]
     fn test_invalid_yaml() {
         let config_str = r#"
-sql_ip: [this is not valid yaml
+login_id: [this is not valid yaml
 "#;
 
         let result = ServerConfig::from_str(config_str);
@@ -501,11 +439,6 @@ sql_ip: [this is not valid yaml
     #[test]
     fn test_wrong_type() {
         let config_str = r#"
-sql_ip: "127.0.0.1"
-sql_port: "not_a_number"
-sql_id: "user"
-sql_pw: "pass"
-sql_db: "testdb"
 login_id: "loginid"
 login_pw: "loginpw"
 login_ip: "127.0.0.1"
@@ -513,6 +446,7 @@ char_id: "charid"
 char_pw: "charpw"
 char_ip: "127.0.0.1"
 map_ip: "127.0.0.1"
+map_port: "not_a_number"
 start_point:
   m: 0
   x: 1
@@ -521,33 +455,6 @@ start_point:
 
         let result = ServerConfig::from_str(config_str);
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validation_empty_sql_ip() {
-        let config_str = r#"
-sql_ip: ""
-sql_id: "user"
-sql_pw: "pass"
-sql_db: "testdb"
-login_id: "loginid"
-login_pw: "loginpw"
-login_ip: "127.0.0.1"
-char_id: "charid"
-char_pw: "charpw"
-char_ip: "127.0.0.1"
-map_ip: "127.0.0.1"
-start_point:
-  m: 0
-  x: 1
-  y: 1
-"#;
-
-        let result = ServerConfig::from_str(config_str);
-        assert!(result.is_err());
-
-        let err_msg = format!("{}", result.unwrap_err());
-        assert!(err_msg.contains("sql_ip"));
     }
 
     #[test]
@@ -570,10 +477,6 @@ start_point:
     #[test]
     fn test_xor_key_too_long() {
         let config_str = r#"
-sql_ip: "127.0.0.1"
-sql_id: "user"
-sql_pw: "pass"
-sql_db: "testdb"
 login_id: "loginid"
 login_pw: "loginpw"
 login_ip: "127.0.0.1"
@@ -599,12 +502,6 @@ start_point:
     fn test_full_config() {
         let config_str = r#"
 # Full server configuration
-sql_ip: "192.168.1.2"
-sql_port: 3306
-sql_id: "gameuser"
-sql_pw: "gamepass"
-sql_db: "gamedb"
-
 login_id: "2d8ae0cc4ef940848d885e2493cd8d8a"
 login_pw: "d6ed86ed53a749639b215436916c8c1e"
 login_ip: "127.0.0.1"
@@ -652,8 +549,6 @@ town:
         let config = ServerConfig::from_str(config_str).unwrap();
 
         // Verify all fields
-        assert_eq!(config.sql_ip, "192.168.1.2");
-        assert_eq!(config.sql_id, "gameuser");
         assert_eq!(config.xor_key, "TestKey");
         assert_eq!(config.meta.len(), 5);
         assert_eq!(config.town.len(), 6);
@@ -671,9 +566,6 @@ town:
 
         // Load it back
         let loaded = ServerConfig::from_file(&temp_file).unwrap();
-
-        assert_eq!(config.sql_ip, loaded.sql_ip);
-        assert_eq!(config.sql_db, loaded.sql_db);
         assert_eq!(config.start_point, loaded.start_point);
 
         // Cleanup
@@ -683,331 +575,38 @@ town:
 
 // ─── Public API exports ────────────────────────────────────────────────────
 
-use std::ffi::{CStr, CString};
-use std::net::Ipv4Addr;
-use std::ptr;
 use std::sync::OnceLock;
 
 /// Global config instance
 static CONFIG: OnceLock<ServerConfig> = OnceLock::new();
 
-fn get_config() -> Option<&'static ServerConfig> {
-    CONFIG.get()
-}
-
-/// Public accessor for the loaded config — used by game modules (e.g. scripting).
+/// Public accessor for the loaded config -- used by game modules (e.g. scripting).
 pub fn config() -> &'static ServerConfig {
-    CONFIG.get().expect("config not loaded — rust_config_read must be called first")
+    CONFIG.get().expect("config not loaded — config_read must be called first")
 }
 
-pub unsafe fn rust_config_read(cfg_file: *const i8) -> i32 {
-    if cfg_file.is_null() {
-        tracing::error!("[rust_config_read] cfg_file is null");
-        return -1;
-    }
-
-    let c_str = unsafe { CStr::from_ptr(cfg_file) };
-    let file_path = match c_str.to_str() {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("[rust_config_read] invalid UTF-8 in path: {}", e);
-            return -1;
-        }
-    };
-
+pub fn config_read(file_path: &str) -> i32 {
     match ServerConfig::from_file(file_path) {
-        Ok(config) => {
-            tracing::info!("[rust_config_read] loaded config from: {}", file_path);
+        Ok(parsed) => {
+            tracing::info!("[config_read] loaded config from: {}", file_path);
 
-            if CONFIG.set(config).is_err() {
-                tracing::error!("[rust_config_read] config already loaded");
+            if CONFIG.set(parsed).is_err() {
+                tracing::error!("[config_read] config already loaded");
                 return -1;
             }
 
-            unsafe { rust_config_populate_c_globals(); }
+            // Initialise runtime-mutable rate atomics from the loaded config.
+            use crate::config_globals::{XP_RATE, D_RATE};
+            use std::sync::atomic::Ordering;
+            let cfg = config();
+            XP_RATE.store(cfg.xprate, Ordering::Relaxed);
+            D_RATE.store(cfg.droprate, Ordering::Relaxed);
+
             0
         }
         Err(e) => {
-            tracing::error!("[rust_config_read] failed to load config: {}", e);
+            tracing::error!("[config_read] failed to load config: {}", e);
             -1
         }
     }
-}
-
-pub fn rust_config_get_sql_ip() -> *const i8 {
-    match get_config() {
-        Some(cfg) => match CString::new(cfg.sql_ip.clone()) {
-            Ok(s) => s.into_raw(),
-            Err(_) => ptr::null(),
-        },
-        None => ptr::null(),
-    }
-}
-
-pub fn rust_config_get_sql_port() -> u16 {
-    get_config().map(|c| c.sql_port).unwrap_or(3306)
-}
-
-pub fn rust_config_get_sql_id() -> *const i8 {
-    match get_config() {
-        Some(cfg) => match CString::new(cfg.sql_id.clone()) {
-            Ok(s) => s.into_raw(),
-            Err(_) => ptr::null(),
-        },
-        None => ptr::null(),
-    }
-}
-
-pub fn rust_config_get_sql_pw() -> *const i8 {
-    match get_config() {
-        Some(cfg) => match CString::new(cfg.sql_pw.clone()) {
-            Ok(s) => s.into_raw(),
-            Err(_) => ptr::null(),
-        },
-        None => ptr::null(),
-    }
-}
-
-pub fn rust_config_get_sql_db() -> *const i8 {
-    match get_config() {
-        Some(cfg) => match CString::new(cfg.sql_db.clone()) {
-            Ok(s) => s.into_raw(),
-            Err(_) => ptr::null(),
-        },
-        None => ptr::null(),
-    }
-}
-
-pub fn rust_config_get_map_ip() -> u32 {
-    match get_config() {
-        Some(cfg) => {
-            if let Ok(addr) = cfg.map_ip.parse::<std::net::Ipv4Addr>() {
-                u32::from(addr)
-            } else { 0 }
-        }
-        None => 0,
-    }
-}
-
-pub fn rust_config_get_map_port() -> u16 {
-    get_config().map(|c| c.map_port).unwrap_or(2001)
-}
-
-pub fn rust_config_get_char_ip() -> u32 {
-    match get_config() {
-        Some(cfg) => {
-            if let Ok(addr) = cfg.char_ip.parse::<std::net::Ipv4Addr>() {
-                u32::from(addr)
-            } else { 0 }
-        }
-        None => 0,
-    }
-}
-
-pub fn rust_config_get_char_port() -> u16 {
-    get_config().map(|c| c.char_port).unwrap_or(2005)
-}
-
-pub fn rust_config_get_login_ip() -> u32 {
-    match get_config() {
-        Some(cfg) => {
-            if let Ok(addr) = cfg.login_ip.parse::<std::net::Ipv4Addr>() {
-                u32::from(addr)
-            } else { 0 }
-        }
-        None => 0,
-    }
-}
-
-pub fn rust_config_get_login_port() -> u16 {
-    get_config().map(|c| c.login_port).unwrap_or(2000)
-}
-
-pub fn rust_config_get_xor_key() -> *const i8 {
-    match get_config() {
-        Some(cfg) => match CString::new(cfg.xor_key.clone()) {
-            Ok(s) => s.into_raw(),
-            Err(_) => ptr::null(),
-        },
-        None => ptr::null(),
-    }
-}
-
-pub fn rust_config_get_start_point() -> Point {
-    get_config().map(|c| c.start_point).unwrap_or(Point::new(0, 0, 0))
-}
-
-pub fn rust_config_get_server_id() -> i32 {
-    get_config().map(|c| c.server_id).unwrap_or(0)
-}
-
-pub fn rust_config_get_meta_count() -> i32 {
-    get_config().map(|c| c.meta.len() as i32).unwrap_or(0)
-}
-
-pub fn rust_config_get_meta_file(index: i32) -> *const i8 {
-    match get_config() {
-        Some(cfg) => {
-            if index >= 0 && (index as usize) < cfg.meta.len() {
-                match CString::new(cfg.meta[index as usize].clone()) {
-                    Ok(s) => s.into_raw(),
-                    Err(_) => ptr::null(),
-                }
-            } else { ptr::null() }
-        }
-        None => ptr::null(),
-    }
-}
-
-pub fn rust_config_get_town_count() -> i32 {
-    get_config().map(|c| c.town.len() as i32).unwrap_or(0)
-}
-
-pub fn rust_config_get_town_name(index: i32) -> *const i8 {
-    match get_config() {
-        Some(cfg) => {
-            if index >= 0 && (index as usize) < cfg.town.len() {
-                match CString::new(cfg.town[index as usize].clone()) {
-                    Ok(s) => s.into_raw(),
-                    Err(_) => ptr::null(),
-                }
-            } else { ptr::null() }
-        }
-        None => ptr::null(),
-    }
-}
-
-pub unsafe fn rust_config_free_string(ptr: *mut i8) {
-    if !ptr.is_null() {
-        unsafe { let _ = CString::from_raw(ptr); }
-    }
-}
-
-pub unsafe fn rust_config_populate_c_globals() {
-    use crate::config_globals::{GlobalConfig, TownData, set_global_config, XP_RATE, D_RATE};
-    use std::sync::atomic::Ordering;
-
-    unsafe fn copy_cstr<const N: usize>(ptr: *const i8, buf: &mut [i8; N]) {
-        if !ptr.is_null() {
-            let cstr = CStr::from_ptr(ptr);
-            let bytes = cstr.to_bytes();
-            let len = bytes.len().min(N - 1);
-            ptr::copy_nonoverlapping(bytes.as_ptr(), buf.as_mut_ptr() as *mut u8, len);
-            buf[len] = 0;
-            rust_config_free_string(ptr as *mut i8);
-        }
-    }
-
-    let mut cfg = GlobalConfig {
-        xor_key:     [0; 10],
-        start_pos:   crate::config::Point { m: 0, x: 0, y: 0 },
-        login_id:    [0; 33],
-        login_pw:    [0; 33],
-        login_ip:    0,
-        login_port:  2000,
-        char_id:     [0; 33],
-        char_pw:     [0; 33],
-        char_ip:     0,
-        char_port:   2005,
-        map_ip:      0,
-        map_port:    0,
-        sql_id:      [0; 32],
-        sql_pw:      [0; 32],
-        sql_ip:      [0; 32],
-        sql_db:      [0; 32],
-        sql_port:    3306,
-        serverid:    0,
-        require_reg: 1,
-        nex_version: 0,
-        nex_deep:    0,
-        save_time:   60000,
-        meta_file:   [[0; 256]; 20],
-        metamax:     0,
-        towns:       [TownData { name: [0; 32] }; 255],
-        town_n:      0,
-        data_dir:    String::from("./data/"),
-        lua_dir:     String::from("./data/lua/"),
-        maps_dir:    String::from("./data/maps/"),
-        meta_dir:    String::from("./data/meta/"),
-    };
-
-    unsafe {
-        copy_cstr(rust_config_get_sql_id(), &mut cfg.sql_id);
-        copy_cstr(rust_config_get_sql_pw(), &mut cfg.sql_pw);
-        copy_cstr(rust_config_get_sql_ip(), &mut cfg.sql_ip);
-        copy_cstr(rust_config_get_sql_db(), &mut cfg.sql_db);
-        cfg.sql_port = rust_config_get_sql_port() as i32;
-
-        let config_opt = get_config();
-        if let Some(config) = config_opt {
-            if let Ok(s) = CString::new(config.login_id.clone()) {
-                copy_cstr(s.into_raw(), &mut cfg.login_id);
-            }
-            if let Ok(s) = CString::new(config.login_pw.clone()) {
-                copy_cstr(s.into_raw(), &mut cfg.login_pw);
-            }
-            cfg.login_port = config.login_port as i32;
-            if let Ok(addr) = config.login_ip.parse::<Ipv4Addr>() {
-                cfg.login_ip = u32::from_le_bytes(addr.octets()) as i32;
-            }
-
-            if let Ok(s) = CString::new(config.char_id.clone()) {
-                copy_cstr(s.into_raw(), &mut cfg.char_id);
-            }
-            if let Ok(s) = CString::new(config.char_pw.clone()) {
-                copy_cstr(s.into_raw(), &mut cfg.char_pw);
-            }
-            cfg.char_port = config.char_port as i32;
-            if let Ok(addr) = config.char_ip.parse::<Ipv4Addr>() {
-                cfg.char_ip = u32::from_le_bytes(addr.octets()) as i32;
-            }
-
-            cfg.map_port = config.map_port as u32;
-            if let Ok(addr) = config.map_ip.parse::<Ipv4Addr>() {
-                cfg.map_ip = u32::from_le_bytes(addr.octets());
-            }
-
-            if let Ok(s) = CString::new(config.xor_key.clone()) {
-                copy_cstr(s.into_raw(), &mut cfg.xor_key);
-            }
-
-            cfg.start_pos   = config.start_point;
-            cfg.serverid    = config.server_id as i32;
-            cfg.require_reg = config.require_reg as i32;
-            cfg.nex_version = config.version as i32;
-            cfg.nex_deep    = config.deep as i32;
-            cfg.save_time   = (config.save_time * 1000) as i32;
-
-            // XP_RATE and D_RATE are AtomicI32 (written at runtime by GM commands).
-            XP_RATE.store(config.xprate as i32, Ordering::Relaxed);
-            D_RATE.store(config.droprate as i32, Ordering::Relaxed);
-
-            cfg.metamax = config.meta.len().min(20) as i32;
-            for (i, meta) in config.meta.iter().take(20).enumerate() {
-                if let Ok(s) = CString::new(meta.clone()) {
-                    let bytes = s.as_bytes();
-                    let len = bytes.len().min(255);
-                    ptr::copy_nonoverlapping(bytes.as_ptr(), cfg.meta_file[i].as_mut_ptr() as *mut u8, len);
-                    cfg.meta_file[i][len] = 0;
-                }
-            }
-
-            cfg.town_n = config.town.len().min(255) as i32;
-            for (i, town) in config.town.iter().take(255).enumerate() {
-                if let Ok(s) = CString::new(town.clone()) {
-                    let bytes = s.as_bytes();
-                    let len = bytes.len().min(31);
-                    ptr::copy_nonoverlapping(bytes.as_ptr(), cfg.towns[i].name.as_mut_ptr() as *mut u8, len);
-                    cfg.towns[i].name[len] = 0;
-                }
-            }
-
-            cfg.data_dir  = config.data_dir.clone();
-            cfg.lua_dir   = config.lua_dir.clone();
-            cfg.maps_dir  = config.maps_dir.clone();
-            cfg.meta_dir  = config.meta_dir.clone();
-        }
-    }
-
-    set_global_config(cfg);
 }

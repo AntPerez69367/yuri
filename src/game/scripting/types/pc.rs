@@ -5,7 +5,23 @@
 use mlua::{MetaMethod, UserData, UserDataMethods};
 use std::ffi::{CStr, CString};
 
-use crate::game::scripting::ffi as sffi;
+use crate::game::scripting::pc_accessors::{
+    sl_pc_getpk, sl_pc_getgroup,
+    sl_pc_input_send, sl_pc_dialog_send, sl_pc_dialogseq_send,
+    sl_pc_menu_send, sl_pc_menuseq_send,
+    sl_pc_menustring_send, sl_pc_menustring2_send,
+    sl_pc_buy_send, sl_pc_buydialog_send, sl_pc_buyextend_send,
+    sl_pc_sell_send, sl_pc_sell2_send, sl_pc_sellextend_send,
+    sl_pc_showbank_send, sl_pc_showbankadd_send,
+    sl_pc_bankaddmoney_send, sl_pc_bankwithdrawmoney_send,
+    sl_pc_clanshowbank_send, sl_pc_clanshowbankadd_send,
+    sl_pc_clanbankaddmoney_send, sl_pc_clanbankwithdrawmoney_send,
+    sl_pc_clanviewbank_send,
+    sl_pc_repairextend_send, sl_pc_repairall_send,
+};
+use crate::game::scripting::map_globals::{
+    sl_g_getusers, sl_g_deliddb, sl_g_addpermanentspawn,
+};
 use crate::game::scripting::types::mob::MobObject;
 use crate::game::scripting::types::registry::{
     GameRegObject, MapRegObject, NpcRegObject, QuestRegObject, RegObject, RegStringObject,
@@ -89,10 +105,14 @@ fn cstring_ptrs(v: &[CString]) -> Vec<*const i8> {
 impl PcObject {
     /// Get raw pointer to the session data, or null if the session no longer exists.
     /// Used in method bodies as a drop-in for the old `this.sd_ptr()` field.
+    ///
+    /// SAFETY: The game server is single-threaded. The Arc keeps the allocation alive,
+    /// and the RwLock guard is momentarily acquired to obtain the pointer. No concurrent
+    /// mutation is possible because all Lua scripts run on the same LocalSet thread.
     #[inline]
     fn sd_ptr(&self) -> *mut crate::game::pc::MapSessionData {
         crate::game::map_server::map_id2sd_pc(self.id)
-            .map(|sd| sd as *mut crate::game::pc::MapSessionData)
+            .map(|arc| arc.data_ptr())
             .unwrap_or(std::ptr::null_mut())
     }
 }
@@ -101,10 +121,11 @@ impl UserData for PcObject {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         // ── __index: read PC attributes ───────────────────────────────────────
         methods.add_meta_method(MetaMethod::Index, |lua, this, key: String| {
-            let sd = match crate::game::map_server::map_id2sd_pc(this.id) {
-                Some(sd) => sd,
+            let arc = match crate::game::map_server::map_id2sd_pc(this.id) {
+                Some(arc) => arc,
                 None => return Ok(mlua::Value::Nil),
             };
+            let sd = unsafe { &mut *arc.data_ptr() };
             let sd_ptr = sd as *mut crate::game::pc::MapSessionData;
             let sd_void = sd_ptr as *mut std::ffi::c_void;
             macro_rules! int_ {
@@ -120,6 +141,12 @@ impl UserData for PcObject {
             macro_rules! str_ {
                 ($f:expr) => {
                     unsafe { cstr_to_lua(lua, $f(sd)) }
+                };
+            }
+            // New — for migrated &str getters (no unsafe, no CStr parsing)
+            macro_rules! str_ref {
+                ($f:expr) => {
+                    Ok(mlua::Value::String(lua.create_string($f(sd))?))
                 };
             }
             // Shared map properties (pvp, mapTitle, bgm, etc.) handled before the type-specific match.
@@ -156,8 +183,8 @@ impl UserData for PcObject {
                 "totem" => int_!(sl_pc_status_totem),
                 "tier" => int_!(sl_pc_status_tier),
                 "mark" => int_!(sl_pc_status_mark),
-                "name" => str_!(sl_pc_status_name),
-                "title" => str_!(sl_pc_status_title),
+                "name" => str_ref!(sl_pc_status_name),
+                "title" => str_ref!(sl_pc_status_title),
                 "sex" => int_!(sl_pc_status_sex),
                 "country" => int_!(sl_pc_status_country),
                 "side" => int_!(sl_pc_status_side),
@@ -169,7 +196,7 @@ impl UserData for PcObject {
                 "ipaddress" => str_!(sl_pc_ipaddress),
                 "clan" => int_!(sl_pc_status_clan),
                 "clanName" => str_!(sl_pc_clanname),
-                "clanTitle" => str_!(sl_pc_status_clan_title),
+                "clanTitle" => str_ref!(sl_pc_status_clan_title),
                 "clanRank" => int_!(sl_pc_status_clanRank),
                 "actId" => Ok(mlua::Value::Integer(unsafe { sl_pc_actid(sd) } as i64)),
                 "gmLevel" => int_!(sl_pc_status_gm_level),
@@ -229,7 +256,7 @@ impl UserData for PcObject {
                 "afk" => bool_!(sl_pc_afk),
                 "afkTime" => int_!(sl_pc_afktime),
                 "afkTimeTotal" => int_!(sl_pc_totalafktime),
-                "afkMessage" => str_!(sl_pc_status_afkmessage),
+                "afkMessage" => str_ref!(sl_pc_status_afkmessage),
                 "backstab" => bool_!(sl_pc_backstab),
                 "flank" => bool_!(sl_pc_flank),
                 "spotTraps" => bool_!(sl_pc_spottraps),
@@ -285,7 +312,7 @@ impl UserData for PcObject {
                 "timerTick" => int_!(sl_pc_scripttick),
                 "displayTimeLeft" => int_!(sl_pc_disptimertick),
                 "fury" => int_!(sl_pc_fury),
-                "f1Name" => str_!(sl_pc_status_f1name),
+                "f1Name" => str_ref!(sl_pc_status_f1name),
                 "mail" => str_!(sl_pc_mail),
                 "cursed" => int_!(sl_pc_cursed),
                 "dialogType" => int_!(sl_pc_dialogtype),
@@ -338,7 +365,7 @@ impl UserData for PcObject {
                     const MAX_MEMBERS: usize = 256;
                     let mut ids = [0u32; MAX_MEMBERS];
                     let n = unsafe {
-                        sffi::sl_pc_getgroup(sd, ids.as_mut_ptr(), MAX_MEMBERS as i32)
+                        sl_pc_getgroup(sd, ids.as_mut_ptr(), MAX_MEMBERS as i32)
                     };
                     let t = lua.create_table()?;
                     for i in 0..n.max(0) as usize {
@@ -369,7 +396,7 @@ impl UserData for PcObject {
                             const MAX: usize = 4096;
                             let mut ptrs: Vec<*mut std::ffi::c_void> = vec![std::ptr::null_mut(); MAX];
                             let count =
-                                unsafe { sffi::sl_g_getusers(ptrs.as_mut_ptr(), MAX as i32) }
+                                unsafe { sl_g_getusers(ptrs.as_mut_ptr(), MAX as i32) }
                                     as usize;
                             let tbl = lua.create_table()?;
                             for (i, &bl) in ptrs[..count].iter().enumerate() {
@@ -397,11 +424,12 @@ impl UserData for PcObject {
                     let capture_id = this.id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_lua, (_this, id): (mlua::AnyUserData, i32)| {
-                            let sd = match crate::game::map_server::map_id2sd_pc(capture_id) {
-                                Some(sd) => sd,
+                            let arc = match crate::game::map_server::map_id2sd_pc(capture_id) {
+                                Some(arc) => arc,
                                 None => return Ok(false),
                             };
-                            Ok(sffi::sl_pc_getpk(sd, id) != 0)
+                            let sd = unsafe { &mut *arc.data_ptr() };
+                            Ok(sl_pc_getpk(sd, id) != 0)
                         },
                     )?));
                 }
@@ -423,8 +451,9 @@ impl UserData for PcObject {
                     let capture_id = this.id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if let Some(sd) = crate::game::map_server::map_id2sd_pc(capture_id) {
-                                unsafe { sffi::sl_g_deliddb(sd as *mut _ as *mut std::ffi::c_void); }
+                            if let Some(arc) = crate::game::map_server::map_id2sd_pc(capture_id) {
+                                let sd = unsafe { &mut *arc.data_ptr() };
+                                unsafe { sl_g_deliddb(sd as *mut _ as *mut std::ffi::c_void); }
                             }
                             Ok(())
                         }
@@ -434,8 +463,9 @@ impl UserData for PcObject {
                     let capture_id = this.id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if let Some(sd) = crate::game::map_server::map_id2sd_pc(capture_id) {
-                                unsafe { sffi::sl_g_addpermanentspawn(sd as *mut _ as *mut std::ffi::c_void); }
+                            if let Some(arc) = crate::game::map_server::map_id2sd_pc(capture_id) {
+                                let sd = unsafe { &mut *arc.data_ptr() };
+                                unsafe { sl_g_addpermanentspawn(sd as *mut _ as *mut std::ffi::c_void); }
                             }
                             Ok(())
                         }
@@ -460,10 +490,11 @@ impl UserData for PcObject {
         methods.add_meta_method_mut(
             MetaMethod::NewIndex,
             |_lua, this, (key, val): (String, mlua::Value)| {
-                let sd = match crate::game::map_server::map_id2sd_pc(this.id) {
-                    Some(sd) => sd,
+                let arc = match crate::game::map_server::map_id2sd_pc(this.id) {
+                    Some(arc) => arc,
                     None => return Ok(()),
                 };
+                let sd = unsafe { &mut *arc.data_ptr() };
                 let v = val_to_int(&val);
                 match key.as_str() {
                     "actionTime" => sl_pc_set_time(sd, v),
@@ -901,7 +932,7 @@ impl UserData for PcObject {
                 mlua::Value::UserData(ud) => {
                     if let Ok(mob) = ud.borrow::<MobObject>() {
                         match crate::game::map_server::map_id2mob_ref(mob.id) {
-                            Some(mob_data) => mob_data.bl.id as i32,
+                            Some(arc) => arc.read().bl.id as i32,
                             None => return Ok(()),
                         }
                     } else if let Ok(pc) = ud.borrow::<PcObject>() {
@@ -912,10 +943,11 @@ impl UserData for PcObject {
                 }
                 _ => return Ok(()),
             };
-            let sd = match crate::game::map_server::map_id2sd_pc(this.id) {
-                Some(sd) => sd,
+            let arc = match crate::game::map_server::map_id2sd_pc(this.id) {
+                Some(arc) => arc,
                 None => return Ok(()),
             };
+            let sd = unsafe { &mut *arc.data_ptr() };
             unsafe { sl_pc_swingtarget(sd, target_id) };
             Ok(())
         });
@@ -1403,7 +1435,7 @@ impl UserData for PcObject {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
-            unsafe { sffi::sl_pc_input_send(&mut *sd, cs.as_ptr()); }
+            unsafe { sl_pc_input_send(&mut *sd, cs.as_ptr()); }
             Ok(())
         });
 
@@ -1431,7 +1463,7 @@ impl UserData for PcObject {
                 }
             }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
-            unsafe { sffi::sl_pc_dialog_send(&mut *sd, cs.as_ptr(), has_prev, has_next); }
+            unsafe { sl_pc_dialog_send(&mut *sd, cs.as_ptr(), has_prev, has_next); }
             Ok(())
         });
 
@@ -1451,7 +1483,7 @@ impl UserData for PcObject {
                 .unwrap_or(false);
             let strs = lua_table_to_cstrings_from(&entries_tbl, 2).unwrap_or_default();
             let ptrs = cstring_ptrs(&strs);
-            unsafe { sffi::sl_pc_dialogseq_send(&mut *sd, ptrs.as_ptr(), ptrs.len() as i32, can_continue as i32); }
+            unsafe { sl_pc_dialogseq_send(&mut *sd, ptrs.as_ptr(), ptrs.len() as i32, can_continue as i32); }
             Ok(())
         });
 
@@ -1461,7 +1493,7 @@ impl UserData for PcObject {
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let strs = lua_table_to_cstrings(&opts_tbl).unwrap_or_default();
             let ptrs = cstring_ptrs(&strs);
-            unsafe { sffi::sl_pc_menu_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32); }
+            unsafe { sl_pc_menu_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32); }
             Ok(())
         });
 
@@ -1471,7 +1503,7 @@ impl UserData for PcObject {
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let strs = lua_table_to_cstrings(&opts_tbl).unwrap_or_default();
             let ptrs = cstring_ptrs(&strs);
-            unsafe { sffi::sl_pc_menuseq_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32); }
+            unsafe { sl_pc_menuseq_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32); }
             Ok(())
         });
 
@@ -1485,8 +1517,8 @@ impl UserData for PcObject {
                 .collect();
             let ptrs = cstring_ptrs(&strs);
             unsafe {
-                sffi::sl_pc_menustring_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
-                crate::game::scripting::async_coro::store_menu_opts(sd as *mut std::ffi::c_void, strings);
+                sl_pc_menustring_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
+                crate::game::scripting::async_coro::store_menu_opts(sd as *const _ as *mut std::ffi::c_void, strings);
             }
             Ok(())
         });
@@ -1501,8 +1533,8 @@ impl UserData for PcObject {
                 .collect();
             let ptrs = cstring_ptrs(&strs);
             unsafe {
-                sffi::sl_pc_menustring2_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
-                crate::game::scripting::async_coro::store_menu_opts(sd as *mut std::ffi::c_void, strings);
+                sl_pc_menustring2_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
+                crate::game::scripting::async_coro::store_menu_opts(sd as *const _ as *mut std::ffi::c_void, strings);
             }
             Ok(())
         });
@@ -1519,7 +1551,7 @@ impl UserData for PcObject {
             let dn_p = cstring_ptrs(&dn);
             let bt_p = cstring_ptrs(&bt);
             unsafe {
-                sffi::sl_pc_buy_send(&mut *sd, cs.as_ptr(),
+                sl_pc_buy_send(&mut *sd, cs.as_ptr(),
                     items.as_ptr(), values.as_ptr(),
                     dn_p.as_ptr(), bt_p.as_ptr(), items.len() as i32);
             }
@@ -1531,7 +1563,7 @@ impl UserData for PcObject {
             if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let items = lua_table_to_ints(&items_tbl).unwrap_or_default();
-            unsafe { sffi::sl_pc_buydialog_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
+            unsafe { sl_pc_buydialog_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
             Ok(())
         });
 
@@ -1544,7 +1576,7 @@ impl UserData for PcObject {
             let prices = lua_table_to_ints(&prices_tbl).unwrap_or_default();
             let maxs   = lua_table_to_ints(&max_tbl).unwrap_or_default();
             unsafe {
-                sffi::sl_pc_buyextend_send(&mut *sd, cs.as_ptr(),
+                sl_pc_buyextend_send(&mut *sd, cs.as_ptr(),
                     items.as_ptr(), prices.as_ptr(), maxs.as_ptr(), items.len() as i32);
             }
             Ok(())
@@ -1555,7 +1587,7 @@ impl UserData for PcObject {
             if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let items = lua_table_to_ints(&items_tbl).unwrap_or_default();
-            unsafe { sffi::sl_pc_sell_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
+            unsafe { sl_pc_sell_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
             Ok(())
         });
 
@@ -1564,7 +1596,7 @@ impl UserData for PcObject {
             if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let items = lua_table_to_ints(&items_tbl).unwrap_or_default();
-            unsafe { sffi::sl_pc_sell2_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
+            unsafe { sl_pc_sell2_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
             Ok(())
         });
 
@@ -1573,7 +1605,7 @@ impl UserData for PcObject {
             if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let items = lua_table_to_ints(&items_tbl).unwrap_or_default();
-            unsafe { sffi::sl_pc_sellextend_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
+            unsafe { sl_pc_sellextend_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
             Ok(())
         });
 
@@ -1581,28 +1613,28 @@ impl UserData for PcObject {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
-            unsafe { sffi::sl_pc_showbank_send(&mut *sd, cs.as_ptr()); }
+            unsafe { sl_pc_showbank_send(&mut *sd, cs.as_ptr()); }
             Ok(())
         });
 
         methods.add_method("_showBankAdd_send", |_, this, ()| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            unsafe { sffi::sl_pc_showbankadd_send(&mut *sd); }
+            unsafe { sl_pc_showbankadd_send(&mut *sd); }
             Ok(())
         });
 
         methods.add_method("_bankAddMoney_send", |_, this, ()| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            unsafe { sffi::sl_pc_bankaddmoney_send(&mut *sd); }
+            unsafe { sl_pc_bankaddmoney_send(&mut *sd); }
             Ok(())
         });
 
         methods.add_method("_bankWithdrawMoney_send", |_, this, ()| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            unsafe { sffi::sl_pc_bankwithdrawmoney_send(&mut *sd); }
+            unsafe { sl_pc_bankwithdrawmoney_send(&mut *sd); }
             Ok(())
         });
 
@@ -1610,42 +1642,42 @@ impl UserData for PcObject {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
-            unsafe { sffi::sl_pc_clanshowbank_send(&mut *sd, cs.as_ptr()); }
+            unsafe { sl_pc_clanshowbank_send(&mut *sd, cs.as_ptr()); }
             Ok(())
         });
 
         methods.add_method("_clanShowBankAdd_send", |_, this, ()| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            unsafe { sffi::sl_pc_clanshowbankadd_send(&mut *sd); }
+            unsafe { sl_pc_clanshowbankadd_send(&mut *sd); }
             Ok(())
         });
 
         methods.add_method("_clanBankAddMoney_send", |_, this, ()| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            unsafe { sffi::sl_pc_clanbankaddmoney_send(&mut *sd); }
+            unsafe { sl_pc_clanbankaddmoney_send(&mut *sd); }
             Ok(())
         });
 
         methods.add_method("_clanBankWithdrawMoney_send", |_, this, ()| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            unsafe { sffi::sl_pc_clanbankwithdrawmoney_send(&mut *sd); }
+            unsafe { sl_pc_clanbankwithdrawmoney_send(&mut *sd); }
             Ok(())
         });
 
         methods.add_method("_clanViewBank_send", |_, this, ()| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            unsafe { sffi::sl_pc_clanviewbank_send(&mut *sd); }
+            unsafe { sl_pc_clanviewbank_send(&mut *sd); }
             Ok(())
         });
 
         methods.add_method("_repairExtend_send", |_, this, ()| {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
-            unsafe { sffi::sl_pc_repairextend_send(&mut *sd); }
+            unsafe { sl_pc_repairextend_send(&mut *sd); }
             Ok(())
         });
 
@@ -1657,7 +1689,7 @@ impl UserData for PcObject {
             } else {
                 std::ptr::null_mut()
             };
-            unsafe { sffi::sl_pc_repairall_send(&mut *sd, npc_ptr); }
+            unsafe { sl_pc_repairall_send(&mut *sd, npc_ptr); }
             Ok(())
         });
     }
@@ -1667,7 +1699,7 @@ fn extract_bl_ptr(ud: &mlua::AnyUserData) -> *mut std::ffi::c_void {
     if let Ok(pc) = ud.borrow::<PcObject>() { return pc.sd_ptr() as *mut std::ffi::c_void; }
     if let Ok(mob) = ud.borrow::<crate::game::scripting::types::mob::MobObject>() {
         return crate::game::map_server::map_id2mob_ref(mob.id)
-            .map(|m| m as *mut crate::game::mob::MobSpawnData as *mut std::ffi::c_void)
+            .map(|arc| arc.data_ptr() as *mut std::ffi::c_void)
             .unwrap_or(std::ptr::null_mut());
     }
     if let Ok(npc) = ud.borrow::<crate::game::scripting::types::npc::NpcObject>() { return npc.ptr; }

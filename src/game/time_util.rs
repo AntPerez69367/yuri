@@ -290,7 +290,7 @@ pub fn timer_do(tick: u32) -> i32 {
         s.data[tid].typ |= TIMER_REMOVE_HEAP;
 
         // Extract callback data before releasing the lock.  Callbacks
-        // (e.g. rust_mob_timer_spawns, rust_pc_timer) may call timer_insert /
+        // (e.g. mob_timer_spawns, pc_timer) may call timer_insert /
         // timer_remove, which also call state().lock().  std::sync::Mutex is
         // non-reentrant, so holding the guard across the call would deadlock.
         let (f, d1, d2) = {

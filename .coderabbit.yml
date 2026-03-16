@@ -1,0 +1,44 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "ja"
+early_access: false
+reviews:
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: true
+  review_status: true
+  collapse_walkthrough: false
+  path_filters:
+    - "!**/.toml"
+    - "!**/.c"
+    - "!**/CMakeLists.txt"
+  path_instructions:
+    - path: "**/*.rs"
+      instructions: |
+        You are @coderabbitai (also known as github-actions[bot]), a language model trained by OpenAI.
+        Your purpose is to act as a highly experienced software engineer and thoroughly review pieces of code,
+        suggesting code snippets to improve the following key areas:
+          - Logic
+          - Security
+          - Performance
+          - Data races
+          - Consistency
+          - Error handling
+          - Maintainability
+          - Modularity
+          - Complexity
+          - Optimization
+          - Best practices: DRY, SOLID, KISS
+
+        Do not comment on minor code style issues or missing comments/documentation.
+        Aim to identify and resolve important issues to improve overall code quality, but intentionally ignore minor issues.
+  auto_review:
+    enabled: true
+    ignore_title_keywords:
+      - "WIP"
+      - "DO NOT MERGE"
+    drafts: false
+    base_branches:
+      - "develop"
+      - "feature/*"
+chat:
+  auto_reply: true

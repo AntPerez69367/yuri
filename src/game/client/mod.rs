@@ -86,8 +86,8 @@ use crate::game::scripting::pc_accessors::{
     sl_pc_paralyzed, sl_pc_sleep, sl_pc_status_id, sl_pc_status_gm_level,
     sl_pc_status_mute, sl_pc_inventory_id, sl_pc_bl_m, sl_map_spell,
 };
-use crate::database::item_db::rust_itemdb_thrownconfirm;
-use crate::game::pc::rust_pc_atkspeed;
+use crate::database::item_db;
+use crate::game::pc::pc_atkspeed;
 use crate::game::time_util::timer_insert;
 
 // Dispatcher wrappers — match dispatcher's *mut std::ffi::c_void calling convention.
@@ -141,7 +141,7 @@ type SD = *mut crate::game::pc::MapSessionData;
 #[inline] unsafe fn clif_paperpopupwrite_save(sd: SD) { crate::game::client::visual::clif_paperpopupwrite_save(sd); }
 #[inline] unsafe fn clif_parsechangespell(sd: SD) { crate::game::map_parse::items::clif_parsechangespell(sd); }
 #[inline] unsafe fn clif_parsechangepos(sd: SD) { crate::game::client::handlers::clif_parsechangepos(sd); }
-#[inline] async unsafe fn rust_pc_warp(sd: SD, m: i32, x: i32, y: i32) -> i32 { crate::game::pc::rust_pc_warp(sd as SD, m, x, y).await }
+#[inline] async unsafe fn pc_warp(sd: SD, m: i32, x: i32, y: i32) -> i32 { crate::game::pc::pc_warp(sd as SD, m, x, y).await }
 #[inline] unsafe fn clif_changeprofile(sd: SD) { crate::game::client::visual::clif_changeprofile(sd); }
 #[inline] async unsafe fn clif_handle_boards(sd: SD) { crate::game::client::handlers::clif_handle_boards(sd).await; }
 #[inline] unsafe fn clif_handle_powerboards(sd: SD) { crate::game::client::handlers::clif_handle_powerboards(sd); }
@@ -483,8 +483,8 @@ unsafe fn should_send_to(
     // If source is stealthed, only send to GMs or to the source themselves.
     if !tsd.is_null() {
         if ((*tsd).optFlags & OPT_FLAG_STEALTH) != 0
-            && (*sd).status.gm_level == 0
-            && (*sd).status.id != (*tsd).status.id
+            && (*sd).player.identity.gm_level == 0
+            && (*sd).player.identity.id != (*tsd).player.identity.id
         {
             return false;
         }
@@ -496,9 +496,9 @@ unsafe fn should_send_to(
         if !raw_map_ptr().is_null() && m_idx < MAP_SLOTS {
             let map_slot = &*raw_map_ptr().add(m_idx);
             if map_slot.show_ghosts != 0
-                && (*tsd).status.state == 1
+                && (*tsd).player.combat.state == 1
                 && (*tsd).bl.id != (*sd).bl.id
-                && (*sd).status.state != 1
+                && (*sd).player.combat.state != 1
                 && ((*sd).optFlags & OPT_FLAG_GHOSTS) == 0
             {
                 return false;
@@ -568,8 +568,8 @@ unsafe fn send_to_area(
 
     let mut _send_count = 0i32;
     for id in ids {
-        let Some(sd_ref) = crate::game::map_server::map_id2sd_pc(id) else { continue; };
-        let sd = sd_ref as *mut MapSessionData;
+        let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) else { continue; };
+        let sd = &mut *sd_arc.write() as *mut MapSessionData;
         let bl = &raw mut (*sd).bl;
         if !should_send_to(sd, src_bl, send_type, buf as *const u8, len) {
             continue;
@@ -589,7 +589,7 @@ unsafe fn send_to_area(
                 if ch_byte == ch_val {
                     // Check if player has this channel enabled (global_reg >= 1).
                     let reg_cstr = std::ffi::CString::new(reg_name).unwrap_or_default();
-                    let v = crate::game::pc::rust_pc_readglobalreg(
+                    let v = crate::game::pc::pc_readglobalreg(
                         sd,
                         reg_cstr.as_ptr() as *const i8,
                     );
@@ -691,7 +691,7 @@ unsafe fn check_dual_login(fd: SessionId, sd: *mut crate::game::pc::MapSessionDa
 
 /// Rust replacement for C `clif_parse(int fd)`.
 /// Registered as the default parse callback at map_server startup.
-pub async fn rust_clif_parse(fd: SessionId) -> i32 {
+pub async fn clif_parse(fd: SessionId) -> i32 {
     unsafe {
         if !session_exists(fd) {
             return 0;
@@ -831,7 +831,7 @@ pub async fn rust_clif_parse(fd: SessionId) -> i32 {
                     let delay = ((spd_val * 1000) / 60) as u32;
                     tracing::debug!("[attack] id={} delay={}ms — entering clif_parseattack", sd_pc.bl.id, delay);
                     timer_insert(
-                        delay, delay, Some(rust_pc_atkspeed), sd_pc.bl.id as i32, 0,
+                        delay, delay, Some(pc_atkspeed), sd_pc.bl.id as i32, 0,
                     );
                     clif_parseattack(sd);
                 } else {
@@ -842,7 +842,7 @@ pub async fn rust_clif_parse(fd: SessionId) -> i32 {
                 clif_cancelafk(sd);
                 let pos = rbyte(fd, 6) as i32;
                 let confirm = rbyte(fd, 5);
-                if rust_itemdb_thrownconfirm(sl_pc_inventory_id(sd_pc, pos - 1)) == 1 {
+                if item_db::search(sl_pc_inventory_id(sd_pc, pos - 1)).thrownconfirm == 1 {
                     if confirm == 1 { clif_parsethrow(sd); } else { clif_throwconfirm(sd); }
                 } else {
                     clif_parsethrow(sd);
@@ -952,7 +952,7 @@ pub async fn rust_clif_parse(fd: SessionId) -> i32 {
                 clif_handle_boards(sd).await;
             }
             0x3F => {
-                rust_pc_warp(sd, rword_be(fd, 5) as i32, rword_be(fd, 7) as i32, rword_be(fd, 9) as i32).await;
+                pc_warp(sd, rword_be(fd, 5) as i32, rword_be(fd, 7) as i32, rword_be(fd, 9) as i32).await;
             }
             0x41 => {
                 clif_cancelafk(sd);

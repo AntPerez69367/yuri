@@ -17,7 +17,7 @@ use crate::game::pc::{
     // SFLAG_* constants (from map_server.h)
     SFLAG_ALWAYSON, SFLAG_FULLSTATS, SFLAG_GMON, SFLAG_HPMP, SFLAG_XPMONEY,
 };
-use crate::servers::char::charstatus::MAX_LEGENDS;
+use crate::common::player::legends::MAX_LEGENDS;
 
 use super::packet::{
     encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow,
@@ -30,39 +30,36 @@ const BL_ALL:  i32 = 0x0F;  // all block-list types
 // ─── Local helpers ────────────────────────────────────────────────────────────
 
 /// Replace the first occurrence of `orig` (NUL-terminated) in `src` with
-/// `rep` (NUL-terminated).  Uses a 4096-byte module-local static buffer —
-
-/// Not thread-safe (single-threaded map server loop).
-#[allow(static_mut_refs)]
-unsafe fn replace_str_local(src: *const i8, orig: &[u8], rep: *const i8) -> *const i8 {
+/// `rep` (NUL-terminated).  Writes into the caller-provided 4096-byte buffer.
+///
+/// Returns a pointer into `buf` containing the result, or `src` unchanged if
+/// `orig` is not found.
+unsafe fn replace_str_local(src: *const i8, orig: &[u8], rep: *const i8, buf: &mut [u8; 4096]) -> *const i8 {
     let orig_bytes = match orig.iter().position(|&b| b == 0) {
         Some(n) => &orig[..n],
         None => orig,
     };
     let p = libc::strstr(src, orig_bytes.as_ptr() as *const i8);
     if p.is_null() { return src; }
-    static mut REPL_BUF: [u8; 4096] = [0u8; 4096];
     let prefix_len = (p as usize).saturating_sub(src as usize);
     let rep_len = libc::strlen(rep);
     let tail = p.add(orig_bytes.len());
-    std::ptr::copy_nonoverlapping(src as *const u8, REPL_BUF.as_mut_ptr(), prefix_len.min(4095));
+    std::ptr::copy_nonoverlapping(src as *const u8, buf.as_mut_ptr(), prefix_len.min(4095));
     let after_prefix = prefix_len.min(4095);
     let copy_rep = rep_len.min(4095 - after_prefix);
-    std::ptr::copy_nonoverlapping(rep as *const u8, REPL_BUF.as_mut_ptr().add(after_prefix), copy_rep);
+    std::ptr::copy_nonoverlapping(rep as *const u8, buf.as_mut_ptr().add(after_prefix), copy_rep);
     let after_rep = after_prefix + copy_rep;
     let tail_len = libc::strlen(tail).min(4095 - after_rep);
-    std::ptr::copy_nonoverlapping(tail as *const u8, REPL_BUF.as_mut_ptr().add(after_rep), tail_len);
-    REPL_BUF[after_rep + tail_len] = 0;
-    REPL_BUF.as_ptr() as *const i8
+    std::ptr::copy_nonoverlapping(tail as *const u8, buf.as_mut_ptr().add(after_rep), tail_len);
+    buf[after_rep + tail_len] = 0;
+    buf.as_ptr() as *const i8
 }
 
 
 use crate::game::map_server::{cur_time, cur_year};
-use crate::database::class_db::rust_classdb_name;
-use crate::database::clan_db::rust_clandb_name;
-use crate::database::item_db::{
-    rust_itemdb_name, rust_itemdb_icon, rust_itemdb_iconcolor, rust_itemdb_protected,
-};
+use crate::database::class_db::name as classdb_name;
+use crate::database::clan_db;
+use crate::database::item_db;
 use crate::game::map_server::map_id2name;
 use crate::game::client::handlers::clif_getName;
 use crate::game::client::visual::{
@@ -72,7 +69,7 @@ use crate::game::map_parse::visual::{clif_mob_look_start, clif_mob_look_close};
 use crate::game::map_parse::movement::clif_sendchararea;
 use crate::game::map_parse::groups::{clif_grouphealth_update, clif_leavegroup};
 use crate::game::map_parse::chat::clif_sendminitext;
-use crate::network::crypt::rust_crypt_set_packet_indexes;
+use crate::network::crypt::crypt_set_packet_indexes;
 
 use crate::game::block::AreaType;
 use crate::game::block_grid;
@@ -217,7 +214,7 @@ pub unsafe fn clif_sendid(sd: *mut MapSessionData) -> i32 {
     wfifob(fd, 1, 0x00);
     wfifob(fd, 2, 0x0E);
     wfifob(fd, 3, 0x05);
-    wfifol(fd, 5, (*sd).status.id.swap_bytes()); // SWAP32
+    wfifol(fd, 5, (*sd).player.identity.id.swap_bytes()); // SWAP32
     wfifow(fd, 9, 0);
     wfifob(fd, 11, 0);
     wfifob(fd, 12, 2);
@@ -244,7 +241,7 @@ pub unsafe fn clif_sendmapinfo(sd: *mut MapSessionData) -> i32 {
     let fd = (*sd).fd;
     let m  = (*sd).bl.m as usize;
 
-    // Safety: map[] is initialised by rust_map_init before any player can reach
+    // Safety: map[] is initialised by map_init before any player can reach
     // Accessing map[sd->bl.m]:
     let md = &*raw_map_ptr().add(m);
 
@@ -267,10 +264,10 @@ pub unsafe fn clif_sendmapinfo(sd: *mut MapSessionData) -> i32 {
     wfifow(fd, 7, md.xs.swap_bytes());
     wfifow(fd, 9, md.ys.swap_bytes());
     // spell/weather flag at [11]
-    let spell_flag: u8 = if (*sd).status.setting_flags as u32 & FLAG_WEATHER != 0 { 4 } else { 5 };
+    let spell_flag: u8 = if (*sd).player.appearance.setting_flags as u32 & FLAG_WEATHER != 0 { 4 } else { 5 };
     wfifob(fd, 11, spell_flag);
     // realm flag at [12]
-    let realm_flag: u8 = if (*sd).status.setting_flags as u32 & FLAG_REALM != 0 { 0x01 } else { 0x00 };
+    let realm_flag: u8 = if (*sd).player.appearance.setting_flags as u32 & FLAG_REALM != 0 { 0x01 } else { 0x00 };
     wfifob(fd, 12, realm_flag);
     // title length at [13], then title bytes at [14..14+len]
     wfifob(fd, 13, len);
@@ -305,7 +302,7 @@ pub unsafe fn clif_sendmapinfo(sd: *mut MapSessionData) -> i32 {
     wfifob(fd, 11, 0x64);
     // SWAP32(sd->status.settingFlags) — C accesses the 4-byte unsigned int field.
     // Rust stores it as u16; zero-extend to u32 for the wire format.
-    wfifol(fd, 12, ((*sd).status.setting_flags as u32).swap_bytes());
+    wfifol(fd, 12, ((*sd).player.appearance.setting_flags as u32).swap_bytes());
     wfifob(fd, 16, 0);
     wfifob(fd, 17, 0);
     wfifoset(fd, encrypt(fd) as usize);
@@ -368,7 +365,7 @@ pub unsafe fn clif_sendxy(sd: *mut MapSessionData) -> i32 {
     wfifob(fd, 13, 0x00);
     wfifoset(fd, encrypt(fd) as usize);
 
-    crate::game::pc::rust_pc_runfloor_sub(sd);
+    crate::game::pc::pc_runfloor_sub(sd);
     0
 }
 
@@ -418,7 +415,7 @@ pub unsafe fn clif_sendxynoclick(sd: *mut MapSessionData) -> i32 {
     wfifob(fd, 13, 0x00);
     wfifoset(fd, encrypt(fd) as usize);
 
-    crate::game::pc::rust_pc_runfloor_sub(sd);
+    crate::game::pc::pc_runfloor_sub(sd);
     0
 }
 
@@ -488,7 +485,7 @@ pub unsafe fn clif_sendstatus(sd: *mut MapSessionData, flags: i32) -> i32 {
     // within the current level band using classdb_level DB lookups.
     let percentage: f32 = clif_getXPBarPercent(sd) as f32;
 
-    if (*sd).status.gm_level != 0 && (*sd).optFlags & OPT_WALKTHROUGH != 0 {
+    if (*sd).player.identity.gm_level != 0 && (*sd).optFlags & OPT_WALKTHROUGH != 0 {
         f |= SFLAG_GMON;
     }
 
@@ -506,10 +503,10 @@ pub unsafe fn clif_sendstatus(sd: *mut MapSessionData, flags: i32) -> i32 {
 
     if f & SFLAG_FULLSTATS != 0 {
         wfifob(fd, 6,  0);                           // Unknown
-        wfifob(fd, 7,  (*sd).status.country as u8);  // Nation
-        wfifob(fd, 8,  (*sd).status.totem);          // Totem
+        wfifob(fd, 7,  (*sd).player.progression.country as u8);  // Nation
+        wfifob(fd, 8,  (*sd).player.progression.totem);          // Totem
         wfifob(fd, 9,  0);                           // Unknown
-        wfifob(fd, 10, (*sd).status.level);
+        wfifob(fd, 10, (*sd).player.progression.level);
         wfifol(fd, 11, (*sd).max_hp.swap_bytes());
         wfifol(fd, 15, (*sd).max_mp.swap_bytes());
         wfifob(fd, 19, (*sd).might as u8);
@@ -527,19 +524,19 @@ pub unsafe fn clif_sendstatus(sd: *mut MapSessionData, flags: i32) -> i32 {
         wfifob(fd, 31, 0);
         wfifob(fd, 32, 0);
         wfifob(fd, 33, 0);
-        wfifob(fd, 34, (*sd).status.maxinv);
+        wfifob(fd, 34, (*sd).player.inventory.max_inv);
         len += 29;
     }
 
     if f & SFLAG_HPMP != 0 {
-        wfifol(fd, len + 6,  (*sd).status.hp.swap_bytes());
-        wfifol(fd, len + 10, (*sd).status.mp.swap_bytes());
+        wfifol(fd, len + 6,  (*sd).player.combat.hp.swap_bytes());
+        wfifol(fd, len + 10, (*sd).player.combat.mp.swap_bytes());
         len += 8;
     }
 
     if f & SFLAG_XPMONEY != 0 {
-        wfifol(fd, len + 6,  (*sd).status.exp.swap_bytes());
-        wfifol(fd, len + 10, (*sd).status.money.swap_bytes());
+        wfifol(fd, len + 6,  (*sd).player.progression.exp.swap_bytes());
+        wfifol(fd, len + 10, (*sd).player.inventory.money.swap_bytes());
         wfifob(fd, len + 14, percentage as u8);
         len += 9;
     }
@@ -551,7 +548,7 @@ pub unsafe fn clif_sendstatus(sd: *mut MapSessionData, flags: i32) -> i32 {
     wfifob(fd, len + 10, 0);
     wfifob(fd, len + 11, (*sd).flags as u8); // 1=New parcel, 16=new Message
     wfifob(fd, len + 12, 0);                 // nothing
-    wfifol(fd, len + 13, ((*sd).status.setting_flags as u32).swap_bytes());
+    wfifol(fd, len + 13, ((*sd).player.appearance.setting_flags as u32).swap_bytes());
     len += 11;
 
     // Write big-endian packet size at [1..2]: len + 3
@@ -577,7 +574,7 @@ pub unsafe fn clif_sendoptions(sd: *mut MapSessionData) -> i32 {
         return 0;
     }
     let fd  = (*sd).fd;
-    let sf  = (*sd).status.setting_flags as u32;
+    let sf  = (*sd).player.appearance.setting_flags as u32;
 
     wfifohead(fd, 12);
     wfifob(fd, 0, 0xAA);
@@ -624,10 +621,10 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     // for level-capped (>=99) characters and does the classdb_level DB lookup.
     let tnl: u32 = clif_getLevelTNL(sd) as u32;
 
-    // Get class name (may return null).
-    let class_name = rust_classdb_name(
-        (*sd).status.class as i32,
-        (*sd).status.mark  as i32,
+    // Get class name.
+    let class_name = classdb_name(
+        (*sd).player.progression.class as i32,
+        (*sd).player.progression.mark  as i32,
     );
 
     if !session_exists((*sd).fd) {
@@ -646,11 +643,11 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     let mut len: usize = 0;
 
     // ── Clan name ────────────────────────────────────────────────────────────
-    if (*sd).status.clan == 0 {
+    if (*sd).player.social.clan == 0 {
         wfifob(fd, 8 + len, 0);
         len += 1;
     } else {
-        let cname = rust_clandb_name((*sd).status.clan as i32);
+        let cname = clan_db::name((*sd).player.social.clan as i32);
         if cname.is_null() {
             wfifob(fd, 8 + len, 0);
             len += 1;
@@ -663,10 +660,10 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     }
 
     // ── Clan title ───────────────────────────────────────────────────────────
-    let clan_title_len = cstr_len((*sd).status.clan_title.as_ptr() as *const u8);
+    let clan_title_len = (&(*sd).player.social.clan_title).len();
     if clan_title_len > 0 {
         wfifob(fd, 8 + len, clan_title_len as u8);
-        copy_cstr_to_wfifo(fd, 9 + len, (*sd).status.clan_title.as_ptr() as *const u8, clan_title_len);
+        copy_cstr_to_wfifo(fd, 9 + len, (&(*sd).player.social.clan_title).as_ptr(), clan_title_len);
         len += clan_title_len + 1;
     } else {
         wfifob(fd, 8 + len, 0);
@@ -674,10 +671,10 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     }
 
     // ── Title ─────────────────────────────────────────────────────────────────
-    let title_len = cstr_len((*sd).status.title.as_ptr() as *const u8);
+    let title_len = (&(*sd).player.identity.title).len();
     if title_len > 0 {
         wfifob(fd, 8 + len, title_len as u8);
-        copy_cstr_to_wfifo(fd, 9 + len, (*sd).status.title.as_ptr() as *const u8, title_len);
+        copy_cstr_to_wfifo(fd, 9 + len, (&(*sd).player.identity.title).as_ptr(), title_len);
         len += title_len + 1;
     } else {
         wfifob(fd, 8 + len, 0);
@@ -685,8 +682,8 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     }
 
     // ── Partner ───────────────────────────────────────────────────────────────
-    if (*sd).status.partner != 0 {
-        let pname = map_id2name((*sd).status.partner).await;
+    if (*sd).player.social.partner != 0 {
+        let pname = map_id2name((*sd).player.social.partner).await;
         let mut buf = [0i8; 128];
         if !pname.is_empty() {
             // sprintf(buf, "Partner: %s", pname)
@@ -708,7 +705,7 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     }
 
     // ── Group flag ────────────────────────────────────────────────────────────
-    let sf = (*sd).status.setting_flags as u32;
+    let sf = (*sd).player.appearance.setting_flags as u32;
     wfifob(fd, 8 + len, if sf & FLAG_GROUP != 0 { 1 } else { 0 });
 
     // ── TNL (u32 BE) ──────────────────────────────────────────────────────────
@@ -716,32 +713,39 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     len += 5;
 
     // ── Class name ────────────────────────────────────────────────────────────
-    if !class_name.is_null() {
-        let cn_len = cstr_len(class_name as *const u8);
-        wfifob(fd, 8 + len, cn_len as u8);
-        copy_cstr_to_wfifo(fd, 9 + len, class_name as *const u8, cn_len);
-        len += cn_len + 1;
-    } else {
-        wfifob(fd, 8 + len, 0);
-        len += 1;
+    {
+        let cn_bytes = class_name.as_bytes();
+        let cn_len = cn_bytes.len();
+        if cn_len > 0 {
+            wfifob(fd, 8 + len, cn_len as u8);
+            let dst = wfifop(fd, 9 + len) as *mut u8;
+            if !dst.is_null() {
+                std::ptr::copy_nonoverlapping(cn_bytes.as_ptr(), dst, cn_len);
+            }
+            len += cn_len + 1;
+        } else {
+            wfifob(fd, 8 + len, 0);
+            len += 1;
+        }
     }
 
     // ── Equipment (14 slots) ──────────────────────────────────────────────────
     for x in 0..14usize {
-        let eq = &(*sd).status.equip[x];
+        let eq = &(&(*sd).player.inventory.equip)[x];
         if eq.id > 0 {
+            let eq_item = item_db::search(eq.id);
             // Icon
             let icon_w: u16 = if eq.custom_icon != 0 {
                 (eq.custom_icon + 49152) as u16
             } else {
-                rust_itemdb_icon(eq.id) as u16
+                eq_item.icon as u16
             };
             wfifow(fd, 8 + len, icon_w.swap_bytes());
 
             let icon_color: u8 = if eq.custom_icon != 0 {
                 eq.custom_icon_color as u8
             } else {
-                rust_itemdb_iconcolor(eq.id) as u8
+                eq_item.icon_color
             };
             wfifob(fd, 10 + len, icon_color);
             len += 3;
@@ -750,8 +754,7 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
             let name_ptr: *const u8 = if !eq.real_name.is_empty() && eq.real_name[0] != 0 {
                 eq.real_name.as_ptr() as *const u8
             } else {
-                let n = rust_itemdb_name(eq.id);
-                if n.is_null() { b"\0".as_ptr() } else { n as *const u8 }
+                eq_item.name.as_ptr() as *const u8
             };
             let name_len = cstr_len(name_ptr);
             wfifob(fd, 8 + len, name_len as u8);
@@ -759,8 +762,7 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
             len += name_len + 1;
 
             // DB name (always from itemdb)
-            let dbname = rust_itemdb_name(eq.id);
-            let dbname_ptr: *const u8 = if dbname.is_null() { b"\0".as_ptr() } else { dbname as *const u8 };
+            let dbname_ptr: *const u8 = eq_item.name.as_ptr() as *const u8;
             let dbname_len = cstr_len(dbname_ptr);
             wfifob(fd, 8 + len, dbname_len as u8);
             copy_cstr_to_wfifo(fd, 9 + len, dbname_ptr, dbname_len);
@@ -768,7 +770,7 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
 
             // Dura (u32 BE) + protection byte
             wfifol(fd, 8 + len, (eq.dura as u32).swap_bytes());
-            let db_prot = rust_itemdb_protected(eq.id) as u32;
+            let db_prot = eq_item.protected as u32;
             let eq_prot = eq.protected;
             let prot_byte: u8 = if eq_prot >= db_prot { eq_prot as u8 } else { db_prot as u8 };
             wfifob(fd, 12 + len, prot_byte);
@@ -797,7 +799,7 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     // ── Legends ───────────────────────────────────────────────────────────────
     let mut count: u16 = 0;
     for x in 0..MAX_LEGENDS {
-        let lg = &(*sd).status.legends[x];
+        let lg = &(&(*sd).player.legends.legends)[x];
         if lg.text[0] != 0 && lg.name[0] != 0 {
             count += 1;
         }
@@ -807,7 +809,7 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
     len += 3;
 
     for x in 0..MAX_LEGENDS {
-        let lg = &(*sd).status.legends[x];
+        let lg = &(&(*sd).player.legends.legends)[x];
         if lg.text[0] == 0 || lg.name[0] == 0 { continue; }
 
         wfifob(fd, 8 + len, lg.icon as u8);
@@ -817,7 +819,8 @@ pub async unsafe fn clif_mystaytus(sd: *mut MapSessionData) -> i32 {
             let tchaid = lg.tchaid;
             let char_name = clif_getName(tchaid).await;
             let text_ptr  = lg.text.as_ptr() as *const i8;
-            let buff      = replace_str_local(text_ptr, b"$player\0", char_name);
+            let mut repl_buf = [0u8; 4096];
+            let buff      = replace_str_local(text_ptr, b"$player\0", char_name, &mut repl_buf);
             let buff_ptr  = buff as *const u8;
             let buff_len  = if buff.is_null() { 0 } else { cstr_len(buff_ptr) };
             wfifob(fd, 10 + len, buff_len as u8);
@@ -907,12 +910,12 @@ pub unsafe fn clif_getchararea(sd: *mut MapSessionData) -> i32 {
         let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_charlook_inner(&raw mut pc.bl, LOOK_GET, sd);
-            } else if let Some(npc) = crate::game::map_server::map_id2npc_ref(id) {
-                clif_cnpclook_inner(&raw mut npc.bl, LOOK_GET, sd as *mut BlockList);
-            } else if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
-                clif_cmoblook_inner(&raw mut mob.bl, LOOK_GET, sd as *mut BlockList);
+            if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
+                clif_charlook_inner(&raw const pc_arc.read().bl, LOOK_GET, sd as *const MapSessionData);
+            } else if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(id) {
+                clif_cnpclook_inner(&raw const npc_arc.read().bl, LOOK_GET, sd as *const BlockList);
+            } else if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(id) {
+                clif_cmoblook_inner(&raw const mob_arc.read().bl, LOOK_GET, sd as *const BlockList);
             }
         }
     }
@@ -936,9 +939,9 @@ pub unsafe fn clif_refresh(sd: *mut MapSessionData) -> i32 {
         let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).bl.m as usize);
         let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            let bl_ptr = crate::game::map_server::map_id2bl(id);
+            let bl_ptr = crate::game::map_server::map_id2bl_ref(id);
             if !bl_ptr.is_null() {
-                clif_object_look_sub_inner(bl_ptr as *mut BlockList, LOOK_GET, sd as *mut BlockList);
+                clif_object_look_sub_inner(bl_ptr, LOOK_GET, sd as *mut BlockList);
             }
         }
     }
@@ -958,10 +961,10 @@ pub unsafe fn clif_refresh(sd: *mut MapSessionData) -> i32 {
     wfifow(fd, 1, 2_u16.swap_bytes()); // SWAP16(2)
     wfifob(fd, 3, 0x22);
     wfifob(fd, 4, 0x03);
-    // set_packet_indexes — shim for rust_crypt_set_packet_indexes
+    // set_packet_indexes — shim for crypt_set_packet_indexes
     let pkt_ptr = wfifop(fd, 0);
     if !pkt_ptr.is_null() {
-        rust_crypt_set_packet_indexes(pkt_ptr);
+        crypt_set_packet_indexes(pkt_ptr);
     }
     wfifoset(fd, 5 + 3);
 
@@ -969,10 +972,10 @@ pub unsafe fn clif_refresh(sd: *mut MapSessionData) -> i32 {
     let m = (*sd).bl.m as usize;
     let can_group = (*raw_map_ptr().add(m)).can_group;
     if can_group == 0 {
-        let sf = (*sd).status.setting_flags as u32;
+        let sf = (*sd).player.appearance.setting_flags as u32;
         // XOR toggles the flag.
-        (*sd).status.setting_flags = (sf ^ FLAG_GROUP) as u16;
-        let sf_new = (*sd).status.setting_flags as u32;
+        (*sd).player.appearance.setting_flags = (sf ^ FLAG_GROUP) as u16;
+        let sf_new = (*sd).player.appearance.setting_flags as u32;
         if sf_new & FLAG_GROUP == 0 {
             // Group flag turned off — disband if in a group.
             if (*sd).group_count > 0 {

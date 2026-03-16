@@ -40,23 +40,13 @@ const BL_ALL: i32 = 0x0F;
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::map_server::{map_name2sd, groups as groups_raw};
 use crate::game::map_parse::movement::clif_object_canmove;
-use crate::database::class_db::{rust_classdb_path as classdb_path, rust_classdb_level as classdb_level};
-use crate::database::item_db::{
-    rust_itemdb_look as itemdb_look, rust_itemdb_lookcolor as itemdb_lookcolor,
-};
-
-// map_id2sd_local: typed lookup returning raw pointer for use in unsafe context.
-#[inline]
-fn map_id2sd_local(id: u32) -> *mut MapSessionData {
-    crate::game::map_server::map_id2sd_pc(id)
-        .map(|r| r as *mut MapSessionData)
-        .unwrap_or(std::ptr::null_mut())
-}
+use crate::database::class_db::{path as classdb_path, level as classdb_level};
+use crate::database::item_db;
 
 // pc_isequip returns i32; usage here expects u32 — wrap with cast.
 #[inline]
 unsafe fn pc_isequip(sd: *mut MapSessionData, slot: i32) -> u32 {
-    crate::game::pc::rust_pc_isequip(sd, slot) as u32
+    crate::game::pc::pc_isequip(sd, slot) as u32
 }
 
 /// Dispatch a Lua event with two block_list arguments.
@@ -69,14 +59,14 @@ unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::dat
 // ─── inline helper: groups array access ──────────────────────────────────────
 
 #[inline]
-unsafe fn groups_get(groupid: usize, slot: usize) -> u32 {
-    groups_raw[groupid.min(MAX_GROUPS - 1) * MAX_GROUP_MEMBERS + slot.min(MAX_GROUP_MEMBERS - 1)]
+fn groups_get(groupid: usize, slot: usize) -> u32 {
+    groups_raw()[groupid.min(MAX_GROUPS - 1) * MAX_GROUP_MEMBERS + slot.min(MAX_GROUP_MEMBERS - 1)]
 }
 
 #[allow(dead_code)]
 #[inline]
-unsafe fn groups_set(groupid: usize, slot: usize, val: u32) {
-    groups_raw[groupid.min(MAX_GROUPS - 1) * MAX_GROUP_MEMBERS + slot.min(MAX_GROUP_MEMBERS - 1)] = val;
+fn groups_set(groupid: usize, slot: usize, val: u32) {
+    groups_raw()[groupid.min(MAX_GROUPS - 1) * MAX_GROUP_MEMBERS + slot.min(MAX_GROUP_MEMBERS - 1)] = val;
 }
 
 // ─── wfifop_copy: write a counted string into the send buffer ─────────────────
@@ -137,31 +127,34 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
     while (n + w + r + m + p + g) < group_count {
         let member_id = groups_get(groupid, x);
         x += 1;
-        let tsd = map_id2sd_local(member_id);
-        if tsd.is_null() { continue; }
+        let tsd_arc = match crate::game::map_server::map_id2sd_pc(member_id) {
+            Some(a) => a, None => continue,
+        };
+        let mut _tsd_guard = tsd_arc.write();
+        let tsd = &mut *_tsd_guard as *mut MapSessionData;
 
         // TNL calculation mirrors C exactly
-        if (*tsd).status.level < 99 {
-            (*tsd).status.maxtnl = classdb_level((*tsd).status.class as i32, (*tsd).status.level as i32);
-            (*tsd).status.maxtnl = (*tsd).status.maxtnl.saturating_sub(
-                classdb_level((*tsd).status.class as i32, (*tsd).status.level as i32 - 1)
+        if (*tsd).player.progression.level < 99 {
+            (*tsd).player.progression.max_tnl = classdb_level((*tsd).player.progression.class as i32, (*tsd).player.progression.level as i32);
+            (*tsd).player.progression.max_tnl = (*tsd).player.progression.max_tnl.saturating_sub(
+                classdb_level((*tsd).player.progression.class as i32, (*tsd).player.progression.level as i32 - 1)
             );
-            let lvl_xp = classdb_level((*tsd).status.class as i32, (*tsd).status.level as i32);
-            (*tsd).status.tnl = lvl_xp.saturating_sub((*tsd).status.exp);
-            let maxtnl = (*tsd).status.maxtnl as f32;
-            let tnl    = (*tsd).status.tnl as f32;
+            let lvl_xp = classdb_level((*tsd).player.progression.class as i32, (*tsd).player.progression.level as i32);
+            (*tsd).player.progression.tnl = lvl_xp.saturating_sub((*tsd).player.progression.exp);
+            let maxtnl = (*tsd).player.progression.max_tnl as f32;
+            let tnl    = (*tsd).player.progression.tnl as f32;
             if maxtnl > 0.0 {
-                (*tsd).status.percentage = ((maxtnl - tnl) / maxtnl * 100.0 + 0.5) + 0.5;
+                (*tsd).player.progression.percentage = ((maxtnl - tnl) / maxtnl * 100.0 + 0.5) + 0.5;
             } else {
-                (*tsd).status.percentage = 0.5 + 0.5;
+                (*tsd).player.progression.percentage = 0.5 + 0.5;
             }
         } else {
-            (*tsd).status.percentage =
-                ((*tsd).status.exp as f32 / 4_294_967_295.0 * 100.0) + 0.5;
+            (*tsd).player.progression.percentage =
+                ((*tsd).player.progression.exp as f32 / 4_294_967_295.0 * 100.0) + 0.5;
         }
-        (*tsd).status.int_percentage = (*tsd).status.percentage as i32;
+        (*tsd).player.progression.int_percentage = (*tsd).player.progression.percentage as i32;
 
-        match classdb_path((*tsd).status.class as i32) {
+        match classdb_path((*tsd).player.progression.class as i32) {
             0 => { peasant[n] = member_id; n += 1; }
             1 => { warrior[w] = member_id; w += 1; }
             2 => { rogue[r]   = member_id; r += 1; }
@@ -175,26 +168,31 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
     let (mut n, mut w, mut r, mut m, mut p, mut g) = (0usize, 0, 0, 0, 0, 0);
     let mut len = 0usize;
     while (n + w + r + m + p + g) < group_count {
-        let tsd = if rogue[r] != 0 {
-            let t = map_id2sd_local(rogue[r]); r += 1; t
+        let member_id = if rogue[r] != 0 {
+            let id = rogue[r]; r += 1; id
         } else if warrior[w] != 0 {
-            let t = map_id2sd_local(warrior[w]); w += 1; t
+            let id = warrior[w]; w += 1; id
         } else if mage[m] != 0 {
-            let t = map_id2sd_local(mage[m]); m += 1; t
+            let id = mage[m]; m += 1; id
         } else if poet[p] != 0 {
-            let t = map_id2sd_local(poet[p]); p += 1; t
+            let id = poet[p]; p += 1; id
         } else if peasant[n] != 0 {
-            let t = map_id2sd_local(peasant[n]); n += 1; t
+            let id = peasant[n]; n += 1; id
         } else if gm_arr[g] != 0 {
-            let t = map_id2sd_local(gm_arr[g]); g += 1; t
+            let id = gm_arr[g]; g += 1; id
         } else {
             break;
         };
-        if tsd.is_null() { continue; }
+        let tsd_arc = match crate::game::map_server::map_id2sd_pc(member_id) {
+            Some(a) => a, None => continue,
+        };
+        let _tsd_guard = tsd_arc.write();
+        let tsd = &*_tsd_guard as *const MapSessionData as *mut MapSessionData;
 
-        // Name (null-terminated string from status.name)
-        let name_ptr = (*tsd).status.name.as_ptr();
-        let name_len = libc::strlen(name_ptr);
+        // Name bytes from player.identity.name (String)
+        let name_bytes = (*tsd).player.identity.name.as_bytes();
+        let name_ptr = name_bytes.as_ptr();
+        let name_len = name_bytes.len();
 
         wfifol_be((*sd).fd, len + 7, (*tsd).bl.id);
         wfifob((*sd).fd, len + 11, name_len as u8);
@@ -204,36 +202,38 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
         len += name_len + 1;
 
         // Leader flag
-        if (*sd).group_leader == (*tsd).status.id {
+        if (*sd).group_leader == (*tsd).player.identity.id {
             wfifob((*sd).fd, len, 1);
         } else {
             wfifob((*sd).fd, len, 0);
         }
 
-        wfifob((*sd).fd, len + 1, (*tsd).status.state as u8);
-        wfifob((*sd).fd, len + 2, (*tsd).status.face as u8);
-        wfifob((*sd).fd, len + 3, (*tsd).status.hair as u8);
-        wfifob((*sd).fd, len + 4, (*tsd).status.hair_color as u8);
+        wfifob((*sd).fd, len + 1, (*tsd).player.combat.state as u8);
+        wfifob((*sd).fd, len + 2, (*tsd).player.appearance.face as u8);
+        wfifob((*sd).fd, len + 3, (*tsd).player.appearance.hair as u8);
+        wfifob((*sd).fd, len + 4, (*tsd).player.appearance.hair_color as u8);
         wfifob((*sd).fd, len + 5, 0);
 
         // Helm slot
         let helm_id = pc_isequip(tsd, EQ_HELM);
-        if helm_id == 0 || (*tsd).status.setting_flags as u32 & crate::game::pc::FLAG_HELM == 0
-            || itemdb_look(helm_id) == -1
+        let helm_item = if helm_id != 0 { Some(item_db::search(helm_id)) } else { None };
+        let helm_look = helm_item.as_ref().map_or(-1, |i| i.look);
+        if helm_id == 0 || (*tsd).player.appearance.setting_flags as u32 & crate::game::pc::FLAG_HELM == 0
+            || helm_look == -1
         {
             wfifob((*sd).fd, len + 6, 0);
             wfifow_be((*sd).fd, len + 7, 0xFFFF);
             wfifob((*sd).fd, len + 9, 0);
         } else {
             wfifob((*sd).fd, len + 6, 1);
-            if (*tsd).status.equip[EQ_HELM as usize].custom_look != 0 {
+            if (&(*tsd).player.inventory.equip)[EQ_HELM as usize].custom_look != 0 {
                 wfifow_be((*sd).fd, len + 7,
-                    (*tsd).status.equip[EQ_HELM as usize].custom_look as u16);
+                    (&(*tsd).player.inventory.equip)[EQ_HELM as usize].custom_look as u16);
                 wfifob((*sd).fd, len + 9,
-                    (*tsd).status.equip[EQ_HELM as usize].custom_look_color as u8);
+                    (&(*tsd).player.inventory.equip)[EQ_HELM as usize].custom_look_color as u8);
             } else {
-                wfifow_be((*sd).fd, len + 7, itemdb_look(helm_id) as u16);
-                wfifob((*sd).fd, len + 9, itemdb_lookcolor(helm_id) as u8);
+                wfifow_be((*sd).fd, len + 7, helm_look as u16);
+                wfifob((*sd).fd, len + 9, helm_item.as_ref().unwrap().look_color as u8);
             }
         }
 
@@ -243,8 +243,9 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
             wfifow_be((*sd).fd, len + 10, 0xFFFF);
             wfifob((*sd).fd, len + 12, 0);
         } else {
-            wfifow_be((*sd).fd, len + 10, itemdb_look(faceacc_id) as u16);
-            wfifob((*sd).fd, len + 12, itemdb_lookcolor(faceacc_id) as u8);
+            let faceacc_item = item_db::search(faceacc_id);
+            wfifow_be((*sd).fd, len + 10, faceacc_item.look as u16);
+            wfifob((*sd).fd, len + 12, faceacc_item.look_color as u8);
         }
 
         // Crown slot
@@ -254,14 +255,15 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
             wfifob((*sd).fd, len + 15, 0);
         } else {
             wfifob((*sd).fd, len + 6, 0); // clears helm flag when crown is present
-            if (*tsd).status.equip[EQ_CROWN as usize].custom_look != 0 {
+            if (&(*tsd).player.inventory.equip)[EQ_CROWN as usize].custom_look != 0 {
                 wfifow_be((*sd).fd, len + 13,
-                    (*tsd).status.equip[EQ_CROWN as usize].custom_look as u16);
+                    (&(*tsd).player.inventory.equip)[EQ_CROWN as usize].custom_look as u16);
                 wfifob((*sd).fd, len + 15,
-                    (*tsd).status.equip[EQ_CROWN as usize].custom_look_color as u8);
+                    (&(*tsd).player.inventory.equip)[EQ_CROWN as usize].custom_look_color as u8);
             } else {
-                wfifow_be((*sd).fd, len + 13, itemdb_look(crown_id) as u16);
-                wfifob((*sd).fd, len + 15, itemdb_lookcolor(crown_id) as u8);
+                let crown_item = item_db::search(crown_id);
+                wfifow_be((*sd).fd, len + 13, crown_item.look as u16);
+                wfifob((*sd).fd, len + 15, crown_item.look_color as u8);
             }
         }
 
@@ -271,19 +273,20 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
             wfifow_be((*sd).fd, len + 16, 0xFFFF);
             wfifob((*sd).fd, len + 18, 0);
         } else {
-            wfifow_be((*sd).fd, len + 16, itemdb_look(faceacc2_id) as u16);
-            wfifob((*sd).fd, len + 18, itemdb_lookcolor(faceacc2_id) as u8);
+            let faceacc2_item = item_db::search(faceacc2_id);
+            wfifow_be((*sd).fd, len + 16, faceacc2_item.look as u16);
+            wfifob((*sd).fd, len + 18, faceacc2_item.look_color as u8);
         }
 
         len += 12; // move past the equipment bytes
 
         wfifol_be((*sd).fd, len + 7, (*tsd).max_hp);
         len += 4;
-        wfifol_be((*sd).fd, len + 7, (*tsd).status.hp);
+        wfifol_be((*sd).fd, len + 7, (*tsd).player.combat.hp);
         len += 4;
         wfifol_be((*sd).fd, len + 7, (*tsd).max_mp);
         len += 4;
-        wfifol_be((*sd).fd, len + 7, (*tsd).status.mp);
+        wfifol_be((*sd).fd, len + 7, (*tsd).player.combat.mp);
         len += 4;
     }
 
@@ -305,8 +308,11 @@ pub unsafe fn clif_grouphealth_update(sd: *mut MapSessionData) -> i32 {
     let groupid     = (*sd).groupid as usize;
 
     for x in 0..group_count {
-        let tsd = map_id2sd_local(groups_get(groupid, x));
-        if tsd.is_null() { continue; }
+        let tsd_arc = match crate::game::map_server::map_id2sd_pc(groups_get(groupid, x)) {
+            Some(a) => a, None => continue,
+        };
+        let _tsd_guard = tsd_arc.write();
+        let tsd = &*_tsd_guard as *const MapSessionData as *mut MapSessionData;
 
         if !session_exists((*sd).fd) {
             return 0;
@@ -320,16 +326,16 @@ pub unsafe fn clif_grouphealth_update(sd: *mut MapSessionData) -> i32 {
 
         wfifol_be((*sd).fd, 6, (*tsd).bl.id);
 
-        let name_ptr = (*tsd).status.name.as_ptr();
-        let name_len = libc::strlen(name_ptr);
+        let name_bytes = (*tsd).player.identity.name.as_bytes();
+        let name_len = name_bytes.len();
         wfifob((*sd).fd, 10, name_len as u8);
-        wfifop_copy((*sd).fd, 11, name_ptr as *const u8, name_len);
+        wfifop_copy((*sd).fd, 11, name_bytes.as_ptr(), name_len);
 
         let mut len = 10usize + name_len + 1;
 
-        wfifol_be((*sd).fd, len, (*tsd).status.hp);
+        wfifol_be((*sd).fd, len, (*tsd).player.combat.hp);
         len += 4;
-        wfifol_be((*sd).fd, len, (*tsd).status.mp);
+        wfifol_be((*sd).fd, len, (*tsd).player.combat.mp);
         len += 4;
 
         wfifow_be((*sd).fd, 1, (len + 3) as u16);
@@ -356,11 +362,11 @@ pub unsafe fn clif_addgroup(sd: *mut MapSessionData) -> i32 {
     let tsd = map_name2sd(nameof.as_ptr());
     if tsd.is_null() { return 0; }
 
-    if (*sd).status.gm_level == 0 && ((*tsd).optFlags & OPT_FLAG_STEALTH) != 0 {
+    if (*sd).player.identity.gm_level == 0 && ((*tsd).optFlags & OPT_FLAG_STEALTH) != 0 {
         return 0;
     }
 
-    if (*tsd).status.id == (*sd).status.id {
+    if (*tsd).player.identity.id == (*sd).player.identity.id {
         clif_sendminitext(sd, b"You can't group yourself...\0".as_ptr() as *const i8);
         return 0;
     }
@@ -377,7 +383,7 @@ pub unsafe fn clif_addgroup(sd: *mut MapSessionData) -> i32 {
         return 0;
     }
 
-    if (*tsd).status.state == 1 {
+    if (*tsd).player.combat.state == 1 {
         clif_sendminitext(sd, b"They are unable to join your party.\0".as_ptr() as *const i8);
         return 0;
     }
@@ -401,7 +407,7 @@ pub unsafe fn clif_addgroup(sd: *mut MapSessionData) -> i32 {
         return 0;
     }
 
-    if (*tsd).status.setting_flags as u32 & FLAG_GROUP == 0 {
+    if (*tsd).player.appearance.setting_flags as u32 & FLAG_GROUP == 0 {
         clif_sendminitext(sd, b"They have refused to join your party.\0".as_ptr() as *const i8);
         return 0;
     }
@@ -424,25 +430,24 @@ pub unsafe fn clif_addgroup(sd: *mut MapSessionData) -> i32 {
                 b"All groups are currently occupied, please try again later.\0".as_ptr() as *const i8);
             return 0;
         }
-        groups_set(x, 0, (*sd).status.id);
+        groups_set(x, 0, (*sd).player.identity.id);
         (*sd).group_leader = groups_get(x, 0);
-        groups_set(x, 1, (*tsd).status.id);
+        groups_set(x, 1, (*tsd).player.identity.id);
         (*sd).group_count = 2;
         (*sd).groupid = x as u32;
         (*tsd).groupid = (*sd).groupid;
     } else {
         let gc = (*sd).group_count as usize;
-        groups_set(groupid, gc, (*tsd).status.id);
+        groups_set(groupid, gc, (*tsd).player.identity.id);
         (*sd).group_count += 1;
         (*tsd).groupid = (*sd).groupid;
     }
 
     let mut buff = [0i8; 256];
-    libc::snprintf(
-        buff.as_mut_ptr(), buff.len(),
-        b"%s is joining the group.\0".as_ptr() as *const i8,
-        (*tsd).status.name.as_ptr(),
-    );
+    {
+        let join_msg = format!("{} is joining the group.", (*tsd).player.identity.name);
+        for (i, b) in join_msg.bytes().take(255).enumerate() { buff[i] = b as i8; }
+    }
 
     clif_updategroup(sd, buff.as_mut_ptr());
     clif_groupstatus(sd);
@@ -462,8 +467,11 @@ pub unsafe fn clif_updategroup(
     let groupid     = (*sd).groupid as usize;
 
     for x in 0..group_count {
-        let tsd = map_id2sd_local(groups_get(groupid, x));
-        if tsd.is_null() { continue; }
+        let tsd_arc = match crate::game::map_server::map_id2sd_pc(groups_get(groupid, x)) {
+            Some(a) => a, None => continue,
+        };
+        let mut _tsd_guard = tsd_arc.write();
+        let tsd = &mut *_tsd_guard as *mut MapSessionData;
 
         (*tsd).group_count  = (*sd).group_count;
         (*tsd).group_leader = (*sd).group_leader;
@@ -495,10 +503,10 @@ pub unsafe fn clif_leavegroup(sd: *mut MapSessionData) -> i32 {
         if taken == 1 {
             let val = groups_get(groupid, x);
             groups_set(groupid, x - 1, val);
-        } else if groups_get(groupid, x) == (*sd).status.id {
+        } else if groups_get(groupid, x) == (*sd).player.identity.id {
             groups_set(groupid, x, 0);
             taken = 1;
-            if (*sd).group_leader == (*sd).status.id {
+            if (*sd).group_leader == (*sd).player.identity.id {
                 (*sd).group_leader = groups_get(groupid, 0);
             }
         }
@@ -509,11 +517,10 @@ pub unsafe fn clif_leavegroup(sd: *mut MapSessionData) -> i32 {
     }
 
     let mut buff = [0i8; 256];
-    libc::snprintf(
-        buff.as_mut_ptr(), buff.len(),
-        b"%s is leaving the group.\0".as_ptr() as *const i8,
-        (*sd).status.name.as_ptr(),
-    );
+    {
+        let leave_msg = format!("{} is leaving the group.", (*sd).player.identity.name);
+        for (i, b) in leave_msg.bytes().take(255).enumerate() { buff[i] = b as i8; }
+    }
     (*sd).group_count -= 1;
     clif_updategroup(sd, buff.as_mut_ptr());
 
@@ -533,7 +540,7 @@ pub unsafe fn clif_findmount(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
     let (mut x, mut y) = ((*sd).bl.x as i32, (*sd).bl.y as i32);
-    match (*sd).status.side {
+    match (*sd).player.combat.side {
         0 => { y -= 1; }
         1 => { x += 1; }
         2 => { y += 1; }
@@ -545,17 +552,19 @@ pub unsafe fn clif_findmount(sd: *mut MapSessionData) -> i32 {
         Some(id) => id,
         None => return 0,
     };
-    let mob = match crate::game::map_server::map_id2mob_ref(mob_id) {
-        Some(m) => m as *mut MobSpawnData,
+    let mob_arc = match crate::game::map_server::map_id2mob_ref(mob_id) {
+        Some(a) => a,
         None => return 0,
     };
+    let mut mob_guard = mob_arc.write();
+    let mob = &mut *mob_guard as *mut MobSpawnData;
 
-    if (*sd).status.state != 0 { return 0; }
+    if (*sd).player.combat.state != 0 { return 0; }
 
     let can_mount = if map_is_loaded((*sd).bl.m) {
         (*get_map_ptr((*sd).bl.m)).can_mount
     } else { 0 };
-    if can_mount == 0 && (*sd).status.gm_level == 0 {
+    if can_mount == 0 && (*sd).player.identity.gm_level == 0 {
         clif_sendminitext(sd, b"You cannot mount here.\0".as_ptr() as *const i8);
         return 0;
     }
@@ -606,12 +615,12 @@ pub unsafe fn clif_canmove_sub_inner(
             } else { 0 };
 
             if (show_ghosts != 0
-                && (*tsd).status.state == 1       // tsd is dead (ghost)
-                && (*tsd).bl.id != (*sd).bl.id    // not self
-                && (*sd).status.state != 1        // sd is alive
+                && (*tsd).player.combat.state == 1    // tsd is dead (ghost)
+                && (*tsd).bl.id != (*sd).bl.id        // not self
+                && (*sd).player.combat.state != 1     // sd is alive
                 && ((*sd).optFlags & OPT_FLAG_GHOSTS) == 0)
-                || ((*tsd).status.state == -1)
-                || ((*tsd).status.gm_level != 0 && ((*tsd).optFlags & OPT_FLAG_STEALTH) != 0)
+                || ((*tsd).player.combat.state == -1)
+                || ((*tsd).player.identity.gm_level != 0 && ((*tsd).optFlags & OPT_FLAG_STEALTH) != 0)
             {
                 return 0;
             }
@@ -646,7 +655,7 @@ pub unsafe fn clif_canmove(
 ) -> i32 {
     if sd.is_null() { return 0; }
 
-    if (*sd).status.gm_level != 0 { return 0; }
+    if (*sd).player.identity.gm_level != 0 { return 0; }
 
     let (mut nx, mut ny) = (0i32, 0i32);
     match direct {
@@ -660,16 +669,19 @@ pub unsafe fn clif_canmove(
     if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
         let cell_ids = grid.ids_at_tile((*sd).bl.x, (*sd).bl.y);
         for id in cell_ids {
-            if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
-                clif_canmove_sub_inner(&raw mut mob.bl, sd);
-            } else if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_canmove_sub_inner(&raw mut pc.bl, sd);
+            if let Some(arc) = crate::game::map_server::map_id2mob_ref(id) {
+                let mut guard = arc.write();
+                clif_canmove_sub_inner(&mut guard.bl as *mut BlockList, sd);
+            } else if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
+                let mut guard = arc.write();
+                clif_canmove_sub_inner(&mut guard.bl as *mut BlockList, sd);
             }
         }
         let cell_ids2 = grid.ids_at_tile(nx as u16, ny as u16);
         for id in cell_ids2 {
-            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_canmove_sub_inner(&raw mut pc.bl, sd);
+            if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
+                let mut guard = arc.write();
+                clif_canmove_sub_inner(&mut guard.bl as *mut BlockList, sd);
             }
         }
     }
@@ -766,24 +778,24 @@ pub unsafe fn clif_pb_sub_inner(
     if sd.is_null() { return 0; }
     if len_ptr.is_null() { return 0; }
 
-    let mut path = classdb_path((*tsd).status.class as i32);
+    let mut path = classdb_path((*tsd).player.progression.class as i32);
     if path == 5 { path = 2; }
     if path == 50 || path == 0 { return 0; }
 
     let power_rating: u32 =
-        (*tsd).status.basehp.saturating_add((*tsd).status.basemp);
+        (*tsd).player.combat.max_hp.saturating_add((*tsd).player.combat.max_mp);
 
     let offset = *len_ptr as usize;
 
     wfifol_be((*sd).fd, offset + 8, (*tsd).bl.id);
     wfifob((*sd).fd, offset + 12, path as u8);
     wfifol_be((*sd).fd, offset + 13, power_rating);
-    wfifob((*sd).fd, offset + 17, (*tsd).status.armor_color as u8);
+    wfifob((*sd).fd, offset + 17, (*tsd).player.appearance.armor_color as u8);
 
-    let name_ptr = (*tsd).status.name.as_ptr();
-    let name_len = libc::strlen(name_ptr);
+    let name_bytes = (*tsd).player.identity.name.as_bytes();
+    let name_len = name_bytes.len();
     wfifob((*sd).fd, offset + 18, name_len as u8);
-    wfifop_copy((*sd).fd, offset + 19, name_ptr as *const u8, name_len);
+    wfifop_copy((*sd).fd, offset + 19, name_bytes.as_ptr(), name_len);
 
     *len_ptr += (name_len + 11) as i32;
     // len[1] is the count — stored at len_ptr + 1
@@ -814,8 +826,9 @@ pub unsafe fn clif_sendpowerboard(sd: *mut MapSessionData) -> i32 {
         let slot = &*get_map_ptr((*sd).bl.m);
         let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_pb_sub_inner(&raw mut pc.bl, sd, len_ptr);
+            if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
+                let mut guard = arc.write();
+                clif_pb_sub_inner(&mut guard.bl as *mut BlockList, sd, len_ptr);
             }
         }
     }
@@ -855,7 +868,7 @@ pub async unsafe fn clif_huntertoggle(sd: *mut MapSessionData) -> i32 {
     }
 
     let hunter_val = (*sd).hunter;
-    let char_id = (*sd).status.id as i32;
+    let char_id = (*sd).player.identity.id as i32;
     let hunter_tag_str = std::ffi::CStr::from_ptr(hunter_tag.as_ptr())
         .to_str()
         .unwrap_or("")
@@ -897,7 +910,9 @@ pub async unsafe fn clif_sendhunternote(sd: *mut MapSessionData) -> i32 {
     }
 
     // Don't send your own hunter note to yourself
-    if libc::strcasecmp((*sd).status.name.as_ptr(), huntername.as_ptr()) == 0 {
+    let sd_name_cstr = std::ffi::CString::new((*sd).player.identity.name.as_bytes())
+        .unwrap_or_default();
+    if libc::strcasecmp(sd_name_cstr.as_ptr(), huntername.as_ptr()) == 0 {
         return 1;
     }
 

@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::CStr;
-use std::ptr::null_mut;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use sqlx::Row;
 
@@ -11,7 +10,7 @@ use super::item_db::str_to_fixed;
 pub struct RecipeData {
     pub id: i32,
     pub tokens_required: i32,
-    /// Alternating [material_id, amount] pairs × 5: [mat1, amt1, mat2, amt2, ...]
+    /// Alternating [material_id, amount] pairs x 5: [mat1, amt1, mat2, amt2, ...]
     pub materials: [i32; 10],
     pub superior_materials: [i32; 2],
     pub identifier: [i8; 64],
@@ -29,14 +28,14 @@ pub struct RecipeData {
 unsafe impl Send for RecipeData {}
 unsafe impl Sync for RecipeData {}
 
-static RECIPE_DB: OnceLock<Mutex<HashMap<u32, Box<RecipeData>>>> = OnceLock::new();
+static RECIPE_DB: OnceLock<Mutex<HashMap<u32, Arc<RecipeData>>>> = OnceLock::new();
 
-fn db() -> &'static Mutex<HashMap<u32, Box<RecipeData>>> {
+fn db() -> &'static Mutex<HashMap<u32, Arc<RecipeData>>> {
     RECIPE_DB.get().expect("[recipe_db] not initialized")
 }
 
-fn make_default(id: u32) -> Box<RecipeData> {
-    let mut r = Box::new(RecipeData {
+fn make_default(id: u32) -> RecipeData {
+    let mut r = RecipeData {
         id: id as i32,
         tokens_required: 0,
         materials: [0; 10],
@@ -51,7 +50,7 @@ fn make_default(id: u32) -> Box<RecipeData> {
         crit_rate: 0,
         bonus: 0,
         skill_required: 0,
-    });
+    };
     str_to_fixed(&mut r.identifier, "??");
     str_to_fixed(&mut r.description, "??");
     str_to_fixed(&mut r.crit_identifier, "??");
@@ -80,7 +79,8 @@ async fn load_recipes() -> Result<usize, sqlx::Error> {
     for row in rows {
         let id: i32 = row.try_get(0)?;
         let key = id as u32;
-        let r = map.entry(key).or_insert_with(|| make_default(key));
+        let entry = map.entry(key).or_insert_with(|| Arc::new(make_default(key)));
+        let r = Arc::get_mut(entry).expect("exclusive during init");
         r.id = id;
         str_to_fixed(&mut r.identifier, &row.try_get::<String, _>(1).unwrap_or_default());
         str_to_fixed(&mut r.description, &row.try_get::<String, _>(2).unwrap_or_default());
@@ -102,7 +102,7 @@ async fn load_recipes() -> Result<usize, sqlx::Error> {
     Ok(count)
 }
 
-// ─── Public interface ────────────────────────────────────────────────────────
+// ---- Public interface -------------------------------------------------------
 
 pub fn init() -> i32 {
     RECIPE_DB.get_or_init(|| Mutex::new(HashMap::new()));
@@ -118,56 +118,32 @@ pub fn term() {
     }
 }
 
-/// Returns a raw pointer to the `RecipeData` for `id`, inserting a default entry if absent.
-///
-/// # Safety
-///
-/// The returned pointer is valid only while the database is initialized and the map entry
-/// remains present. Callers **must not** hold this pointer across any call that may modify
-/// or clear the cache (e.g. `term()`). A safer alternative would be to return
-/// `Arc<RecipeData>` or confine access to within the lock scope.
-pub fn search(id: u32) -> *mut RecipeData {
+/// Returns the `RecipeData` for `id`, inserting a default entry if absent.
+pub fn search(id: u32) -> Arc<RecipeData> {
     let mut map = db().lock().unwrap();
-    let r = map.entry(id).or_insert_with(|| make_default(id));
-    r.as_mut() as *mut RecipeData
+    let entry = map.entry(id).or_insert_with(|| Arc::new(make_default(id)));
+    Arc::clone(entry)
 }
 
-pub fn searchexist(id: u32) -> *mut RecipeData {
+/// Returns the `RecipeData` for `id` if it exists.
+pub fn searchexist(id: u32) -> Option<Arc<RecipeData>> {
     let map = db().lock().unwrap();
-    match map.get(&id) {
-        Some(r) => r.as_ref() as *const RecipeData as *mut RecipeData,
-        None => null_mut(),
-    }
+    map.get(&id).cloned()
 }
 
-pub unsafe fn searchname(s: *const i8) -> *mut RecipeData {
-    if s.is_null() { return null_mut(); }
-    let target = unsafe { CStr::from_ptr(s) }.to_string_lossy().to_lowercase();
+/// Searches by identifier, description, crit_identifier, or crit_description (case-insensitive).
+pub fn searchname(name: &str) -> Option<Arc<RecipeData>> {
+    let target = name.to_lowercase();
     let map = db().lock().unwrap();
     for r in map.values() {
-        // SAFETY: str_to_fixed always writes a NUL at index `len` (≤ N-1), so these
-        // fixed-size arrays are guaranteed to be NUL-terminated within their bounds.
         let ident = unsafe { CStr::from_ptr(r.identifier.as_ptr()) }.to_string_lossy().to_lowercase();
         let desc = unsafe { CStr::from_ptr(r.description.as_ptr()) }.to_string_lossy().to_lowercase();
         let crit_ident = unsafe { CStr::from_ptr(r.crit_identifier.as_ptr()) }.to_string_lossy().to_lowercase();
         let crit_desc = unsafe { CStr::from_ptr(r.crit_description.as_ptr()) }.to_string_lossy().to_lowercase();
         if ident == target || desc == target || crit_ident == target || crit_desc == target {
-            return r.as_ref() as *const RecipeData as *mut RecipeData;
+            return Some(Arc::clone(r));
         }
     }
-    null_mut()
+    None
 }
 
-
-pub fn rust_recipedb_init() -> i32 { ffi_catch!(-1, init()) }
-
-pub fn rust_recipedb_term() { ffi_catch!((), term()) }
-
-pub fn rust_recipedb_search(id: u32) -> *mut RecipeData { ffi_catch!(null_mut(), search(id)) }
-
-pub fn rust_recipedb_searchexist(id: u32) -> *mut RecipeData { ffi_catch!(null_mut(), searchexist(id)) }
-
-pub unsafe fn rust_recipedb_searchname(s: *const i8) -> *mut RecipeData {
-    if s.is_null() { return null_mut(); }
-    ffi_catch!(null_mut(), unsafe { searchname(s) })
-}

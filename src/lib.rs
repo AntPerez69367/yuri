@@ -1,18 +1,9 @@
 //! Yuri - MMORPG Server
-//!
-//! A Rust reimplementation of a legacy C MMORPG server.
-//! Migrating incrementally from C to Rust for memory safety and performance.
 
-/// Catch any Rust panic at the FFI boundary and return `$default` instead.
-/// Panics must not unwind across FFI boundaries — doing so is undefined behavior.
-macro_rules! ffi_catch {
-    ($default:expr, $body:expr) => {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| $body)) {
-            Ok(v) => v,
-            Err(_) => $default,
-        }
-    };
-}
+// ============================================
+// Shared types
+// ============================================
+pub mod common;
 
 // ============================================
 // Core Modules (Pure Rust)
@@ -20,7 +11,7 @@ macro_rules! ffi_catch {
 
 /// Server configuration (replaces config.c)
 pub mod config;
-/// C-compatible global variables from config.c (replaces config.c globals)
+/// Runtime-mutable rate globals (XP_RATE, D_RATE)
 pub mod config_globals;
 /// Core utilities and server lifecycle (replaces core.c)
 pub mod core;
@@ -32,6 +23,8 @@ pub mod database;
 pub mod servers;
 /// Session management (replaces session.c)
 pub mod session;
+/// Shared world state for single-binary mode
+pub mod world;
 
 // ============================================
 // Game Logic Modules (Phase 3)

@@ -42,16 +42,12 @@ use crate::game::client::clif_send;
 use crate::game::block::map_addblock;
 use crate::game::map_parse::groups::clif_isingroup;
 use crate::game::map_parse::movement::clif_sendchararea;
-use crate::database::item_db::{
-    rust_itemdb_look, rust_itemdb_lookcolor, rust_itemdb_icon, rust_itemdb_iconcolor,
-    rust_itemdb_type,
-};
-use crate::game::pc::rust_pc_isequip;
+use crate::database::item_db;
+use crate::game::pc::pc_isequip;
 
-// map_id2bl returns *mut std::ffi::c_void in map_server — wrap with cast.
 #[inline]
-unsafe fn map_id2bl(id: u32) -> *mut BlockList {
-    crate::game::map_server::map_id2bl(id) as *mut BlockList
+fn map_id2bl(id: u32) -> *mut BlockList {
+    crate::game::map_server::map_id2bl_ref(id)
 }
 
 use crate::game::map_parse::combat::clif_sendanimations;
@@ -60,7 +56,7 @@ use crate::game::map_parse::combat::clif_sendanimations;
 
 /// Send an object-despawn packet to all nearby clients.
 ///
-pub unsafe fn clif_lookgone(bl: *mut BlockList) -> i32 {
+pub unsafe fn clif_lookgone(bl: *const BlockList) -> i32 {
     let mut buf = [0u8; 16];
 
     let bl_ref = &*bl;
@@ -94,7 +90,8 @@ pub unsafe fn clif_lookgone(bl: *mut BlockList) -> i32 {
         buf[8] = id_bytes[3];
     }
 
-    clif_send(buf.as_ptr(), 16, bl, AREA_WOS);
+    // SAFETY: clif_send only reads bl for area broadcast
+    clif_send(buf.as_ptr(), 16, bl as *const BlockList as *mut BlockList, AREA_WOS);
     0
 }
 
@@ -235,10 +232,12 @@ pub unsafe fn clif_object_look_sub_inner(bl: *mut BlockList, look_type: i32, arg
 
             let mut in_table = false;
             for &spotter in (*item).data.traps_table.iter() {
-                if spotter == (*sd).status.id { in_table = true; break; }
+                if spotter == (*sd).player.identity.id { in_table = true; break; }
             }
 
-            if rust_itemdb_type((*item).data.id) == ITM_TRAPS && !in_table {
+            let item_entry = item_db::search((*item).data.id);
+
+            if item_entry.typ as i32 == ITM_TRAPS && !in_table {
                 return 0;
             }
 
@@ -248,8 +247,8 @@ pub unsafe fn clif_object_look_sub_inner(bl: *mut BlockList, look_type: i32, arg
                 wfifow((*sd).fd, len + 16, (((*item).data.custom_icon as u16).wrapping_add(49152)).swap_bytes());
                 wfifob((*sd).fd, len + 18, (*item).data.custom_icon_color as u8);
             } else {
-                wfifow((*sd).fd, len + 16, (rust_itemdb_icon((*item).data.id) as u16).swap_bytes());
-                wfifob((*sd).fd, len + 18, rust_itemdb_iconcolor((*item).data.id) as u8);
+                wfifow((*sd).fd, len + 16, (item_entry.icon as u16).swap_bytes());
+                wfifob((*sd).fd, len + 18, item_entry.icon_color as u8);
             }
 
             wfifob((*sd).fd, len + 19, 0);
@@ -271,15 +270,15 @@ pub unsafe fn clif_object_look_sub_inner(bl: *mut BlockList, look_type: i32, arg
 /// Send a single-object look packet immediately (not batched).
 /// Same argument layout as `clif_object_look_sub_inner`.
 /// Mirrors `clif_object_look_sub2` (~line 1592).
-pub unsafe fn clif_object_look_sub2_inner(bl: *mut BlockList, look_type: i32, arg: *mut BlockList) -> i32 {
-    let (sd, b): (*mut MapSessionData, *mut BlockList) = if look_type == LOOK_SEND {
+pub unsafe fn clif_object_look_sub2_inner(bl: *const BlockList, look_type: i32, arg: *const BlockList) -> i32 {
+    let (sd, b): (*const MapSessionData, *const BlockList) = if look_type == LOOK_SEND {
         if bl.is_null() { return 0; }
         if arg.is_null() { return 0; }
-        (bl as *mut MapSessionData, arg)
+        (bl as *const MapSessionData, arg)
     } else {
         if bl.is_null() { return 0; }
         if arg.is_null() { return 0; }
-        (arg as *mut MapSessionData, bl)
+        (arg as *const MapSessionData, bl)
     };
 
     if !session_exists((*sd).fd) {
@@ -302,7 +301,7 @@ pub unsafe fn clif_object_look_sub2_inner(bl: *mut BlockList, look_type: i32, ar
 
     match (*b).bl_type {
         t if t == BL_MOB_U8 => {
-            let mob = b as *mut MobSpawnData;
+            let mob = b as *const MobSpawnData;
             if (*mob).state == MOB_DEAD || (*(*mob).data).mobtype == 1 { return 0; }
 
             if (*(*mob).data).isnpc == 0 {
@@ -334,7 +333,7 @@ pub unsafe fn clif_object_look_sub2_inner(bl: *mut BlockList, look_type: i32, ar
             }
         }
         t if t == BL_NPC_U8 => {
-            let nd = b as *mut NpcData;
+            let nd = b as *const NpcData;
             if (*b).subtype != 0 || (*nd).bl.subtype != 0 || (*nd).npctype == 1 { return 0; }
 
             wfifob((*sd).fd, 11, 12);
@@ -345,14 +344,16 @@ pub unsafe fn clif_object_look_sub2_inner(bl: *mut BlockList, look_type: i32, ar
             wfifob((*sd).fd, 22, 0);
         }
         t if t == BL_ITEM_U8 => {
-            let item = b as *mut FloorItemData;
+            let item = b as *const FloorItemData;
 
             let mut in_table = false;
             for &spotter in (*item).data.traps_table.iter() {
-                if spotter == (*sd).status.id { in_table = true; break; }
+                if spotter == (*sd).player.identity.id { in_table = true; break; }
             }
 
-            if rust_itemdb_type((*item).data.id) == ITM_TRAPS && !in_table {
+            let item_entry = item_db::search((*item).data.id);
+
+            if item_entry.typ as i32 == ITM_TRAPS && !in_table {
                 return 0;
             }
 
@@ -362,8 +363,8 @@ pub unsafe fn clif_object_look_sub2_inner(bl: *mut BlockList, look_type: i32, ar
                 wfifow((*sd).fd, 16, (((*item).data.custom_icon as u16).wrapping_add(49152)).swap_bytes());
                 wfifob((*sd).fd, 18, (*item).data.custom_icon_color as u8);
             } else {
-                wfifow((*sd).fd, 16, (rust_itemdb_icon((*item).data.id) as u16).swap_bytes());
-                wfifob((*sd).fd, 18, rust_itemdb_iconcolor((*item).data.id) as u8);
+                wfifow((*sd).fd, 16, (item_entry.icon as u16).swap_bytes());
+                wfifob((*sd).fd, 18, item_entry.icon_color as u8);
             }
 
             wfifob((*sd).fd, 19, 0);
@@ -435,10 +436,12 @@ pub unsafe fn clif_object_look_specific(sd: *mut MapSessionData, id: u32) -> i32
 
             let mut in_table = false;
             for &spotter in (*item).data.traps_table.iter() {
-                if spotter == (*sd).status.id { in_table = true; break; }
+                if spotter == (*sd).player.identity.id { in_table = true; break; }
             }
 
-            if rust_itemdb_type((*item).data.id) == ITM_TRAPS && !in_table {
+            let item_entry = item_db::search((*item).data.id);
+
+            if item_entry.typ as i32 == ITM_TRAPS && !in_table {
                 return 0;
             }
 
@@ -448,8 +451,8 @@ pub unsafe fn clif_object_look_specific(sd: *mut MapSessionData, id: u32) -> i32
                 wfifow((*sd).fd, 16, (((*item).data.custom_icon as u16).wrapping_add(49152)).swap_bytes());
                 wfifob((*sd).fd, 18, (*item).data.custom_icon_color as u8);
             } else {
-                wfifow((*sd).fd, 16, (rust_itemdb_icon((*item).data.id) as u16).swap_bytes());
-                wfifob((*sd).fd, 18, rust_itemdb_iconcolor((*item).data.id) as u8);
+                wfifow((*sd).fd, 16, (item_entry.icon as u16).swap_bytes());
+                wfifob((*sd).fd, 18, item_entry.icon_color as u8);
             }
 
             wfifob((*sd).fd, 19, 0);
@@ -515,16 +518,16 @@ pub unsafe fn clif_mob_look_close(sd: *mut MapSessionData) -> i32 {
 ///                  if `LOOK_SEND`, `bl` is the player and `arg` is cast to `*mut NpcData`.
 ///
 /// Mirrors `clif_cnpclook_sub` (~line 2773).
-pub unsafe fn clif_cnpclook_inner(bl: *mut BlockList, look_type: i32, arg: *mut BlockList) -> i32 {
-    let (nd, sd): (*mut NpcData, *mut MapSessionData) = if look_type == LOOK_GET {
+pub unsafe fn clif_cnpclook_inner(bl: *const BlockList, look_type: i32, arg: *const BlockList) -> i32 {
+    let (nd, sd): (*const NpcData, *const MapSessionData) = if look_type == LOOK_GET {
         if bl.is_null() { return 0; }
         if arg.is_null() { return 0; }
-        (bl as *mut NpcData, arg as *mut MapSessionData)
+        (bl as *const NpcData, arg as *const MapSessionData)
     } else {
         // LOOK_SEND
         if bl.is_null() { return 0; }
         if arg.is_null() { return 0; }
-        (arg as *mut NpcData, bl as *mut MapSessionData)
+        (arg as *const NpcData, bl as *const MapSessionData)
     };
 
     if (*nd).bl.m != (*sd).bl.m || (*nd).npctype != 1 {
@@ -550,7 +553,7 @@ pub unsafe fn clif_cnpclook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         wfifob((*sd).fd, 15, 15);
     }
 
-    if (*nd).state == 2 && (*sd).status.gm_level != 0 {
+    if (*nd).state == 2 && (*sd).player.identity.gm_level != 0 {
         wfifob((*sd).fd, 16, 5);
     } else {
         wfifob((*sd).fd, 16, (*nd).state as u8);
@@ -777,16 +780,16 @@ pub unsafe fn clif_cnpclook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
 ///                  if `LOOK_SEND`, `bl` is the player and `arg` is cast to `*mut MobSpawnData`.
 ///
 /// Mirrors `clif_cmoblook_sub` (~line 3016).
-pub unsafe fn clif_cmoblook_inner(bl: *mut BlockList, look_type: i32, arg: *mut BlockList) -> i32 {
-    let (mob, sd): (*mut MobSpawnData, *mut MapSessionData) = if look_type == LOOK_GET {
+pub unsafe fn clif_cmoblook_inner(bl: *const BlockList, look_type: i32, arg: *const BlockList) -> i32 {
+    let (mob, sd): (*const MobSpawnData, *const MapSessionData) = if look_type == LOOK_GET {
         if bl.is_null() { return 0; }
         if arg.is_null() { return 0; }
-        (bl as *mut MobSpawnData, arg as *mut MapSessionData)
+        (bl as *const MobSpawnData, arg as *const MapSessionData)
     } else {
         // LOOK_SEND
         if bl.is_null() { return 0; }
         if arg.is_null() { return 0; }
-        (arg as *mut MobSpawnData, bl as *mut MapSessionData)
+        (arg as *const MobSpawnData, bl as *const MapSessionData)
     };
 
     if (*mob).bl.m != (*sd).bl.m || (*(*mob).data).mobtype != 1 || (*mob).state == 1 {
@@ -812,7 +815,7 @@ pub unsafe fn clif_cmoblook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         wfifob((*sd).fd, 15, 15);
     }
 
-    if (*mob).charstate == 2 && (*sd).status.gm_level != 0 {
+    if (*mob).charstate == 2 && (*sd).player.identity.gm_level != 0 {
         wfifob((*sd).fd, 16, 5);
     } else {
         wfifob((*sd).fd, 16, (*mob).charstate as u8);
@@ -1037,26 +1040,28 @@ pub unsafe fn clif_cmoblook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
 ///                  if `LOOK_SEND`, `bl` is the viewer and `arg` is the player whose appearance we send.
 ///
 /// Mirrors `clif_charlook_sub` (~line 3285).
-pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut MapSessionData) -> i32 {
+pub unsafe fn clif_charlook_inner(bl: *const BlockList, look_type: i32, arg: *const MapSessionData) -> i32 {
     // sd  = the player whose appearance we send
     // src_sd = the player receiving the packet
+    // SAFETY: locals are *mut for callees (clif_isingroup, pc_isequip) that still expect *mut.
+    // This function is verified read-only — no field mutations.
     let (sd, src_sd): (*mut MapSessionData, *mut MapSessionData) = if look_type == LOOK_GET {
         if bl.is_null() { return 0; }
         if arg.is_null() { return 0; }
         // C: sd=(USER*)bl, src_sd=va_arg — if src_sd==sd return 0
-        if bl as *mut MapSessionData == arg { return 0; }
-        (bl as *mut MapSessionData, arg)
+        if bl as *const MapSessionData == arg { return 0; }
+        (bl as *const MapSessionData as *mut MapSessionData, arg as *const MapSessionData as *mut MapSessionData)
     } else {
         if bl.is_null() { return 0; }
         if arg.is_null() { return 0; }
-        (arg, bl as *mut MapSessionData)
+        (arg as *const MapSessionData as *mut MapSessionData, bl as *const MapSessionData as *mut MapSessionData)
     };
 
     if (*sd).bl.m != (*src_sd).bl.m { return 0; }
 
     if ((*sd).optFlags & OPT_FLAG_STEALTH) != 0
-        && (*src_sd).status.gm_level == 0
-        && (*sd).status.id != (*src_sd).status.id
+        && (*src_sd).player.identity.gm_level == 0
+        && (*sd).player.identity.id != (*src_sd).player.identity.id
     {
         return 0;
     }
@@ -1066,10 +1071,10 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         let slot = crate::database::map_db::get_map_ptr((*sd).bl.m);
         if !slot.is_null()
             && (*slot).show_ghosts != 0
-            && (*sd).status.state == 1
+            && (*sd).player.combat.state == 1
             && (*sd).bl.id != (*src_sd).bl.id
         {
-            if (*src_sd).status.state != 1
+            if (*src_sd).player.combat.state != 1
                 && ((*src_sd).optFlags & crate::game::pc::OPT_FLAG_GHOSTS) == 0
             {
                 return 0;
@@ -1086,20 +1091,20 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     wfifob((*src_sd).fd, 3, 0x33);
     wfifow((*src_sd).fd, 5, ((*sd).bl.x as u16).swap_bytes());
     wfifow((*src_sd).fd, 7, ((*sd).bl.y as u16).swap_bytes());
-    wfifob((*src_sd).fd, 9, (*sd).status.side as u8);
-    wfifol((*src_sd).fd, 10, (*sd).status.id.swap_bytes());
+    wfifob((*src_sd).fd, 9, (*sd).player.combat.side as u8);
+    wfifol((*src_sd).fd, 10, (*sd).player.identity.id.swap_bytes());
 
-    if (*sd).status.state < 4 {
-        wfifow((*src_sd).fd, 14, ((*sd).status.sex as u16).swap_bytes());
+    if (*sd).player.combat.state < 4 {
+        wfifow((*src_sd).fd, 14, ((*sd).player.identity.sex as u16).swap_bytes());
     } else {
         wfifob((*src_sd).fd, 14, 1);
         wfifob((*src_sd).fd, 15, 15);
     }
 
     // Invisibility / stealth state
-    let invis_cond = ((*sd).status.state == 2 || ((*sd).optFlags & OPT_FLAG_STEALTH) != 0)
+    let invis_cond = ((*sd).player.combat.state == 2 || ((*sd).optFlags & OPT_FLAG_STEALTH) != 0)
         && (*sd).bl.id != (*src_sd).bl.id
-        && ((*src_sd).status.gm_level != 0
+        && ((*src_sd).player.identity.gm_level != 0
             || clif_isingroup(src_sd, sd) != 0
             || ((*sd).gfx.dye == (*src_sd).gfx.dye
                 && (*sd).gfx.dye != 0
@@ -1108,21 +1113,21 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     if invis_cond {
         wfifob((*src_sd).fd, 16, 5);
     } else {
-        wfifob((*src_sd).fd, 16, (*sd).status.state as u8);
+        wfifob((*src_sd).fd, 16, (*sd).player.combat.state as u8);
     }
 
     if ((*sd).optFlags & OPT_FLAG_STEALTH) != 0
-        && (*sd).status.state == 0
-        && ((*src_sd).status.gm_level == 0 || (*sd).bl.id == (*src_sd).bl.id)
+        && (*sd).player.combat.state == 0
+        && ((*src_sd).player.identity.gm_level == 0 || (*sd).bl.id == (*src_sd).bl.id)
     {
         wfifob((*src_sd).fd, 16, 2);
     }
 
     wfifob((*src_sd).fd, 19, (*sd).speed as u8);
 
-    if (*sd).status.state == 3 {
+    if (*sd).player.combat.state == 3 {
         wfifow((*src_sd).fd, 17, (*sd).disguise.swap_bytes());
-    } else if (*sd).status.state == 4 {
+    } else if (*sd).player.combat.state == 4 {
         wfifow((*src_sd).fd, 17, (*sd).disguise.wrapping_add(32768).swap_bytes());
         wfifob((*src_sd).fd, 19, (*sd).disguise_color as u8);
     } else {
@@ -1131,146 +1136,168 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
 
     wfifob((*src_sd).fd, 20, 0);
 
-    wfifob((*src_sd).fd, 21, (*sd).status.face as u8);
-    wfifob((*src_sd).fd, 22, (*sd).status.hair as u8);
-    wfifob((*src_sd).fd, 23, (*sd).status.hair_color as u8);
-    wfifob((*src_sd).fd, 24, (*sd).status.face_color as u8);
-    wfifob((*src_sd).fd, 25, (*sd).status.skin_color as u8);
+    wfifob((*src_sd).fd, 21, (*sd).player.appearance.face as u8);
+    wfifob((*src_sd).fd, 22, (*sd).player.appearance.hair as u8);
+    wfifob((*src_sd).fd, 23, (*sd).player.appearance.hair_color as u8);
+    wfifob((*src_sd).fd, 24, (*sd).player.appearance.face_color as u8);
+    wfifob((*src_sd).fd, 25, (*sd).player.appearance.skin_color as u8);
 
     // armor
-    if rust_pc_isequip(sd, EQ_ARMOR) == 0 {
-        wfifow((*src_sd).fd, 26, ((*sd).status.sex as u16).swap_bytes());
+    let armor_id = pc_isequip(sd, EQ_ARMOR) as u32;
+    if armor_id == 0 {
+        wfifow((*src_sd).fd, 26, ((*sd).player.identity.sex as u16).swap_bytes());
     } else {
-        if (*sd).status.equip[EQ_ARMOR as usize].custom_look != 0 {
-            wfifow((*src_sd).fd, 26, ((*sd).status.equip[EQ_ARMOR as usize].custom_look as u16).swap_bytes());
+        let armor_item = item_db::search(armor_id);
+        if (&(*sd).player.inventory.equip)[EQ_ARMOR as usize].custom_look != 0 {
+            wfifow((*src_sd).fd, 26, ((&(*sd).player.inventory.equip)[EQ_ARMOR as usize].custom_look as u16).swap_bytes());
         } else {
-            wfifow((*src_sd).fd, 26, (rust_itemdb_look(rust_pc_isequip(sd, EQ_ARMOR) as u32) as u16).swap_bytes());
+            wfifow((*src_sd).fd, 26, (armor_item.look as u16).swap_bytes());
         }
-        if (*sd).status.armor_color > 0 {
-            wfifob((*src_sd).fd, 28, (*sd).status.armor_color as u8);
-        } else if (*sd).status.equip[EQ_ARMOR as usize].custom_look != 0 {
-            wfifob((*src_sd).fd, 28, (*sd).status.equip[EQ_ARMOR as usize].custom_look_color as u8);
+        if (*sd).player.appearance.armor_color > 0 {
+            wfifob((*src_sd).fd, 28, (*sd).player.appearance.armor_color as u8);
+        } else if (&(*sd).player.inventory.equip)[EQ_ARMOR as usize].custom_look != 0 {
+            wfifob((*src_sd).fd, 28, (&(*sd).player.inventory.equip)[EQ_ARMOR as usize].custom_look_color as u8);
         } else {
-            wfifob((*src_sd).fd, 28, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_ARMOR) as u32) as u8);
+            wfifob((*src_sd).fd, 28, armor_item.look_color as u8);
         }
     }
 
     // coat
-    if rust_pc_isequip(sd, EQ_COAT) != 0 {
-        wfifow((*src_sd).fd, 26, (rust_itemdb_look(rust_pc_isequip(sd, EQ_COAT) as u32) as u16).swap_bytes());
-        if (*sd).status.armor_color > 0 {
-            wfifob((*src_sd).fd, 28, (*sd).status.armor_color as u8);
+    let coat_id = pc_isequip(sd, EQ_COAT) as u32;
+    if coat_id != 0 {
+        let coat_item = item_db::search(coat_id);
+        wfifow((*src_sd).fd, 26, (coat_item.look as u16).swap_bytes());
+        if (*sd).player.appearance.armor_color > 0 {
+            wfifob((*src_sd).fd, 28, (*sd).player.appearance.armor_color as u8);
         } else {
-            wfifob((*src_sd).fd, 28, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_COAT) as u32) as u8);
+            wfifob((*src_sd).fd, 28, coat_item.look_color as u8);
         }
     }
 
     // weapon
-    if rust_pc_isequip(sd, EQ_WEAP) == 0 {
+    let weap_id = pc_isequip(sd, EQ_WEAP) as u32;
+    if weap_id == 0 {
         wfifow((*src_sd).fd, 29, 0xFFFF);
         wfifob((*src_sd).fd, 31, 0x0);
-    } else if (*sd).status.equip[EQ_WEAP as usize].custom_look != 0 {
-        wfifow((*src_sd).fd, 29, ((*sd).status.equip[EQ_WEAP as usize].custom_look as u16).swap_bytes());
-        wfifob((*src_sd).fd, 31, (*sd).status.equip[EQ_WEAP as usize].custom_look_color as u8);
+    } else if (&(*sd).player.inventory.equip)[EQ_WEAP as usize].custom_look != 0 {
+        wfifow((*src_sd).fd, 29, ((&(*sd).player.inventory.equip)[EQ_WEAP as usize].custom_look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 31, (&(*sd).player.inventory.equip)[EQ_WEAP as usize].custom_look_color as u8);
     } else {
-        wfifow((*src_sd).fd, 29, (rust_itemdb_look(rust_pc_isequip(sd, EQ_WEAP) as u32) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 31, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_WEAP) as u32) as u8);
+        let weap_item = item_db::search(weap_id);
+        wfifow((*src_sd).fd, 29, (weap_item.look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 31, weap_item.look_color as u8);
     }
 
     // shield
-    if rust_pc_isequip(sd, EQ_SHIELD) == 0 {
+    let shield_id = pc_isequip(sd, EQ_SHIELD) as u32;
+    if shield_id == 0 {
         wfifow((*src_sd).fd, 32, 0xFFFF);
         wfifob((*src_sd).fd, 34, 0);
-    } else if (*sd).status.equip[EQ_SHIELD as usize].custom_look != 0 {
-        wfifow((*src_sd).fd, 32, ((*sd).status.equip[EQ_SHIELD as usize].custom_look as u16).swap_bytes());
-        wfifob((*src_sd).fd, 34, (*sd).status.equip[EQ_SHIELD as usize].custom_look_color as u8);
+    } else if (&(*sd).player.inventory.equip)[EQ_SHIELD as usize].custom_look != 0 {
+        wfifow((*src_sd).fd, 32, ((&(*sd).player.inventory.equip)[EQ_SHIELD as usize].custom_look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 34, (&(*sd).player.inventory.equip)[EQ_SHIELD as usize].custom_look_color as u8);
     } else {
-        wfifow((*src_sd).fd, 32, (rust_itemdb_look(rust_pc_isequip(sd, EQ_SHIELD) as u32) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 34, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_SHIELD) as u32) as u8);
+        let shield_item = item_db::search(shield_id);
+        wfifow((*src_sd).fd, 32, (shield_item.look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 34, shield_item.look_color as u8);
     }
 
     // helm
-    if rust_pc_isequip(sd, EQ_HELM) == 0
-        || ((*sd).status.setting_flags & FLAG_HELM as u16) == 0
-        || rust_itemdb_look(rust_pc_isequip(sd, EQ_HELM) as u32) == -1
+    let helm_id = pc_isequip(sd, EQ_HELM) as u32;
+    let helm_item = item_db::search(helm_id);
+    if helm_id == 0
+        || ((*sd).player.appearance.setting_flags & FLAG_HELM as u16) == 0
+        || helm_item.look == -1
     {
         wfifob((*src_sd).fd, 35, 0);
         wfifow((*src_sd).fd, 36, 0xFFFF);
     } else {
         wfifob((*src_sd).fd, 35, 1);
-        if (*sd).status.equip[EQ_HELM as usize].custom_look != 0 {
-            wfifob((*src_sd).fd, 36, (*sd).status.equip[EQ_HELM as usize].custom_look as u8);
-            wfifob((*src_sd).fd, 37, (*sd).status.equip[EQ_HELM as usize].custom_look_color as u8);
+        if (&(*sd).player.inventory.equip)[EQ_HELM as usize].custom_look != 0 {
+            wfifob((*src_sd).fd, 36, (&(*sd).player.inventory.equip)[EQ_HELM as usize].custom_look as u8);
+            wfifob((*src_sd).fd, 37, (&(*sd).player.inventory.equip)[EQ_HELM as usize].custom_look_color as u8);
         } else {
-            wfifob((*src_sd).fd, 36, rust_itemdb_look(rust_pc_isequip(sd, EQ_HELM) as u32) as u8);
-            wfifob((*src_sd).fd, 37, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_HELM) as u32) as u8);
+            wfifob((*src_sd).fd, 36, helm_item.look as u8);
+            wfifob((*src_sd).fd, 37, helm_item.look_color as u8);
         }
     }
 
     // beard (face acc)
-    if rust_pc_isequip(sd, EQ_FACEACC) == 0 {
+    let faceacc_id = pc_isequip(sd, EQ_FACEACC) as u32;
+    if faceacc_id == 0 {
         wfifow((*src_sd).fd, 38, 0xFFFF);
         wfifob((*src_sd).fd, 40, 0);
     } else {
-        wfifow((*src_sd).fd, 38, (rust_itemdb_look(rust_pc_isequip(sd, EQ_FACEACC) as u32) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 40, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_FACEACC) as u32) as u8);
+        let faceacc_item = item_db::search(faceacc_id);
+        wfifow((*src_sd).fd, 38, (faceacc_item.look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 40, faceacc_item.look_color as u8);
     }
 
     // crown
-    if rust_pc_isequip(sd, EQ_CROWN) == 0 {
+    let crown_id = pc_isequip(sd, EQ_CROWN) as u32;
+    if crown_id == 0 {
         wfifow((*src_sd).fd, 41, 0xFFFF);
         wfifob((*src_sd).fd, 43, 0);
     } else {
         wfifob((*src_sd).fd, 35, 0xFF);
-        if (*sd).status.equip[EQ_CROWN as usize].custom_look != 0 {
-            wfifow((*src_sd).fd, 41, ((*sd).status.equip[EQ_CROWN as usize].custom_look as u16).swap_bytes());
-            wfifob((*src_sd).fd, 43, (*sd).status.equip[EQ_CROWN as usize].custom_look_color as u8);
+        if (&(*sd).player.inventory.equip)[EQ_CROWN as usize].custom_look != 0 {
+            wfifow((*src_sd).fd, 41, ((&(*sd).player.inventory.equip)[EQ_CROWN as usize].custom_look as u16).swap_bytes());
+            wfifob((*src_sd).fd, 43, (&(*sd).player.inventory.equip)[EQ_CROWN as usize].custom_look_color as u8);
         } else {
-            wfifow((*src_sd).fd, 41, (rust_itemdb_look(rust_pc_isequip(sd, EQ_CROWN) as u32) as u16).swap_bytes());
-            wfifob((*src_sd).fd, 43, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_CROWN) as u32) as u8);
+            let crown_item = item_db::search(crown_id);
+            wfifow((*src_sd).fd, 41, (crown_item.look as u16).swap_bytes());
+            wfifob((*src_sd).fd, 43, crown_item.look_color as u8);
         }
     }
 
     // second face acc
-    if rust_pc_isequip(sd, EQ_FACEACCTWO) == 0 {
+    let faceacctwo_id = pc_isequip(sd, EQ_FACEACCTWO) as u32;
+    if faceacctwo_id == 0 {
         wfifow((*src_sd).fd, 44, 0xFFFF);
         wfifob((*src_sd).fd, 46, 0);
     } else {
-        wfifow((*src_sd).fd, 44, (rust_itemdb_look(rust_pc_isequip(sd, EQ_FACEACCTWO) as u32) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 46, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_FACEACCTWO) as u32) as u8);
+        let faceacctwo_item = item_db::search(faceacctwo_id);
+        wfifow((*src_sd).fd, 44, (faceacctwo_item.look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 46, faceacctwo_item.look_color as u8);
     }
 
     // mantle
-    if rust_pc_isequip(sd, EQ_MANTLE) == 0 {
+    let mantle_id = pc_isequip(sd, EQ_MANTLE) as u32;
+    if mantle_id == 0 {
         wfifow((*src_sd).fd, 47, 0xFFFF);
         wfifob((*src_sd).fd, 49, 0xFF);
     } else {
-        wfifow((*src_sd).fd, 47, (rust_itemdb_look(rust_pc_isequip(sd, EQ_MANTLE) as u32) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 49, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_MANTLE) as u32) as u8);
+        let mantle_item = item_db::search(mantle_id);
+        wfifow((*src_sd).fd, 47, (mantle_item.look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 49, mantle_item.look_color as u8);
     }
 
     // necklace
-    if rust_pc_isequip(sd, EQ_NECKLACE) == 0
-        || ((*sd).status.setting_flags & FLAG_NECKLACE as u16) == 0
-        || rust_itemdb_look(rust_pc_isequip(sd, EQ_NECKLACE) as u32) == -1
+    let necklace_id = pc_isequip(sd, EQ_NECKLACE) as u32;
+    let necklace_item = item_db::search(necklace_id);
+    if necklace_id == 0
+        || ((*sd).player.appearance.setting_flags & FLAG_NECKLACE as u16) == 0
+        || necklace_item.look == -1
     {
         wfifow((*src_sd).fd, 50, 0xFFFF);
         wfifob((*src_sd).fd, 52, 0);
     } else {
-        wfifow((*src_sd).fd, 50, (rust_itemdb_look(rust_pc_isequip(sd, EQ_NECKLACE) as u32) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 52, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_NECKLACE) as u32) as u8);
+        wfifow((*src_sd).fd, 50, (necklace_item.look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 52, necklace_item.look_color as u8);
     }
 
     // boots
-    if rust_pc_isequip(sd, EQ_BOOTS) == 0 {
-        wfifow((*src_sd).fd, 53, ((*sd).status.sex as u16).swap_bytes());
+    let boots_id = pc_isequip(sd, EQ_BOOTS) as u32;
+    if boots_id == 0 {
+        wfifow((*src_sd).fd, 53, ((*sd).player.identity.sex as u16).swap_bytes());
         wfifob((*src_sd).fd, 55, 0);
-    } else if (*sd).status.equip[EQ_BOOTS as usize].custom_look != 0 {
-        wfifow((*src_sd).fd, 53, ((*sd).status.equip[EQ_BOOTS as usize].custom_look as u16).swap_bytes());
-        wfifob((*src_sd).fd, 55, (*sd).status.equip[EQ_BOOTS as usize].custom_look_color as u8);
+    } else if (&(*sd).player.inventory.equip)[EQ_BOOTS as usize].custom_look != 0 {
+        wfifow((*src_sd).fd, 53, ((&(*sd).player.inventory.equip)[EQ_BOOTS as usize].custom_look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 55, (&(*sd).player.inventory.equip)[EQ_BOOTS as usize].custom_look_color as u8);
     } else {
-        wfifow((*src_sd).fd, 53, (rust_itemdb_look(rust_pc_isequip(sd, EQ_BOOTS) as u32) as u16).swap_bytes());
-        wfifob((*src_sd).fd, 55, rust_itemdb_lookcolor(rust_pc_isequip(sd, EQ_BOOTS) as u32) as u8);
+        let boots_item = item_db::search(boots_id);
+        wfifow((*src_sd).fd, 53, (boots_item.look as u16).swap_bytes());
+        wfifob((*src_sd).fd, 55, boots_item.look_color as u8);
     }
 
     // 56 = title colour, 57 = outline colour (128=black), 58 = normal colour
@@ -1288,12 +1315,12 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     }
 
     // name
-    let name_ptr = (*sd).status.name.as_ptr() as *const i8;
+    let name_ptr = (*sd).player.identity.name.as_ptr() as *const i8;
     let name_len = libc_strlen(name_ptr);
 
     // colour byte 58: clan=3, group=2, pk=1
-    if (*src_sd).status.clan == (*sd).status.clan && (*src_sd).status.clan > 0
-        && (*src_sd).status.id != (*sd).status.id
+    if (*src_sd).player.social.clan == (*sd).player.social.clan && (*src_sd).player.social.clan > 0
+        && (*src_sd).player.identity.id != (*sd).player.identity.id
     {
         wfifob((*src_sd).fd, 58, 3);
     }
@@ -1310,12 +1337,12 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         }
     }
 
-    if (*sd).status.pk > 0 || exist != -1 {
+    if (*sd).player.social.pk > 0 || exist != -1 {
         wfifob((*src_sd).fd, 58, 1);
     }
 
     // name field
-    if (*sd).status.state != 2 && (*sd).status.state != 5 {
+    if (*sd).player.combat.state != 2 && (*sd).player.combat.state != 5 {
         wfifob((*src_sd).fd, 59, name_len as u8);
         let dst = wfifop((*src_sd).fd, 60);
         if !dst.is_null() {
@@ -1324,10 +1351,10 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
     } else {
         wfifob((*src_sd).fd, 59, 0);
     }
-    let len = if (*sd).status.state != 2 && (*sd).status.state != 5 { name_len } else { 0 };
+    let len = if (*sd).player.combat.state != 2 && (*sd).player.combat.state != 5 { name_len } else { 0 };
 
     // gm/clone gfx override
-    if ((*sd).status.gm_level != 0 && (*sd).gfx.toggle != 0) || (*sd).clone != 0 {
+    if ((*sd).player.identity.gm_level != 0 && (*sd).gfx.toggle != 0) || (*sd).clone != 0 {
         let gfx = &(*sd).gfx;
         wfifob((*src_sd).fd, 21, gfx.face);
         wfifob((*src_sd).fd, 22, gfx.hair);
@@ -1384,7 +1411,7 @@ pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
         let gfx_name_ptr = gfx.name.as_ptr() as *const i8;
         let gfx_name_len = libc_strlen(gfx_name_ptr);
         let gfx_name_empty = gfx_name_len == 0 || *gfx_name_ptr == 0;
-        let visible = (*sd).status.state != 2 && (*sd).status.state != 5;
+        let visible = (*sd).player.combat.state != 2 && (*sd).player.combat.state != 5;
         if visible && !gfx_name_empty {
             wfifob((*src_sd).fd, 59, gfx_name_len as u8);
             let dst = wfifop((*src_sd).fd, 60);

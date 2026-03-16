@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::ffi::{CStr, CString};
 use std::fs;
 use std::path::PathBuf;
-use std::ptr::null_mut;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use sqlx::Row;
@@ -106,11 +104,7 @@ fn load_leveldb(data_dir: &str) -> Result<usize, std::io::Error> {
     Ok(count)
 }
 
-// ─── Public interface (called by ffi::class_db) ─────────────────────────────
-
-pub unsafe fn init(data_dir: *const i8) -> i32 {
-    // Issue 3: clear stale entries on re-initialization so old data does not
-    // persist if init() is called more than once.
+pub fn init(data_dir: &str) -> i32 {
     let lock = CLASS_DB.get_or_init(|| Mutex::new(HashMap::new()));
     lock.lock().unwrap().clear();
 
@@ -119,12 +113,7 @@ pub unsafe fn init(data_dir: *const i8) -> i32 {
         Err(e) => { tracing::error!("[class_db] load failed: {e}"); return -1; }
     }
 
-    let dir = if data_dir.is_null() {
-        String::new()
-    } else {
-        unsafe { CStr::from_ptr(data_dir) }.to_string_lossy().into_owned()
-    };
-    match load_leveldb(&dir) {
+    match load_leveldb(data_dir) {
         Ok(n) => tracing::info!("[leveldb] read done count={n}"),
         Err(_) => return -1,
     }
@@ -159,24 +148,16 @@ pub fn level(path: i32, lvl: i32) -> u32 {
     }
 }
 
-/// Returns an owned CString (allocated on the Rust heap). The returned pointer
-/// must be freed by the caller via rust_classdb_free_name().
-pub fn name(id: i32, rank: i32) -> *mut i8 {
-    // Issue 1: clone the rank bytes while holding the lock, then release the
-    // lock before constructing CString, so the returned pointer is fully
-    // caller-owned and not tied to the HashMap's lifetime.
-    let bytes: Option<Vec<u8>> = {
-        let map = db().lock().unwrap();
-        map.get(&(id as u32)).map(|c| {
+pub fn name(id: i32, rank: i32) -> String {
+    let map = db().lock().unwrap();
+    match map.get(&(id as u32)) {
+        Some(c) => {
             let idx = (rank as usize).min(15);
             let slice = &c.ranks[idx];
             let len = slice.iter().position(|&b| b == 0).unwrap_or(slice.len());
-            slice[..len].iter().map(|&b| b as u8).collect()
-        })
-    };
-    match bytes {
-        Some(b) => CString::new(b).map(|s| s.into_raw()).unwrap_or(null_mut()),
-        None => null_mut(),
+            String::from_utf8_lossy(&slice[..len].iter().map(|&b| b as u8).collect::<Vec<_>>()).into_owned()
+        }
+        None => String::from("??"),
     }
 }
 
@@ -198,62 +179,4 @@ pub fn chat(id: i32) -> i32 {
 pub fn icon(id: i32) -> i32 {
     let map = db().lock().unwrap();
     map.get(&(id as u32)).map(|c| c.icon).unwrap_or(0)
-}
-
-
-pub unsafe fn rust_classdb_init(data_dir: *const i8) -> i32 {
-    ffi_catch!(-1, unsafe { init(data_dir) })
-}
-
-pub fn rust_classdb_term() {
-    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(term));
-}
-
-pub fn rust_classdb_search(id: i32) -> *mut ClassData {
-    ffi_catch!(null_mut(), Arc::into_raw(search(id)) as *mut ClassData)
-}
-
-pub fn rust_classdb_searchexist(id: i32) -> *mut ClassData {
-    ffi_catch!(null_mut(), match searchexist(id) {
-        Some(arc) => Arc::into_raw(arc) as *mut ClassData,
-        None => null_mut(),
-    })
-}
-
-/// Decrements the Arc reference count for a pointer returned by
-/// rust_classdb_search or rust_classdb_searchexist.
-pub fn rust_classdb_free(ptr: *mut ClassData) {
-    if !ptr.is_null() {
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            unsafe { drop(Arc::from_raw(ptr as *const ClassData)); }
-        }));
-    }
-}
-
-pub fn rust_classdb_level(path: i32, lvl: i32) -> u32 {
-    ffi_catch!(0, level(path, lvl))
-}
-
-pub fn rust_classdb_name(id: i32, rank: i32) -> *mut i8 {
-    ffi_catch!(null_mut(), name(id, rank))
-}
-
-pub unsafe fn rust_classdb_free_name(ptr: *mut i8) {
-    if !ptr.is_null() {
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            unsafe { drop(std::ffi::CString::from_raw(ptr)); }
-        }));
-    }
-}
-
-pub fn rust_classdb_path(id: i32) -> i32 {
-    ffi_catch!(0, path(id))
-}
-
-pub fn rust_classdb_chat(id: i32) -> i32 {
-    ffi_catch!(0, chat(id))
-}
-
-pub fn rust_classdb_icon(id: i32) -> i32 {
-    ffi_catch!(0, icon(id))
 }

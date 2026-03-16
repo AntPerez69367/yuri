@@ -19,11 +19,7 @@ const UFLAG_SILENCED: u64 = 1;
 const UFLAG_IMMORTAL: u64 = 8;
 const UFLAG_UNPHYS:   u64 = 16;
 
-const MAX_MAP_PER_SERVER: i32 = 65535;
-const MAX_KILLREG: usize = 5000;
-
 use crate::config_globals::{XP_RATE, D_RATE};
-use crate::database::map_db::map_n;
 use crate::game::mob::{MOB_SPAWN_START, MOB_SPAWN_MAX, MOB_ONETIME_START, MOB_ONETIME_MAX};
 
 use crate::game::map_server::userlist;
@@ -45,33 +41,30 @@ use crate::game::client::handlers::clif_transfer_test;
 
 // ── pc functions ───────────────────────────────────────────────────────────────
 use crate::game::pc::{
-    rust_pc_warp_sync as pc_warp,
-    rust_pc_additem as pc_additem,
-    rust_pc_delitem as pc_delitem,
-    rust_pc_res as pc_res,
-    rust_pc_loadmagic as pc_loadmagic,
-    rust_pc_readglobalreg as pc_readglobalreg,
+    pc_warp_sync as pc_warp,
+    pc_additem,
+    pc_delitem,
+    pc_res,
+    pc_loadmagic,
+    pc_readglobalreg,
 };
 
 // ── mob functions ──────────────────────────────────────────────────────────────
-use crate::game::mob::rust_mob_respawn as mob_respawn;
+use crate::game::mob::mob_respawn;
 
 // ── scripting functions ────────────────────────────────────────────────────────
 use crate::game::scripting::{
-    rust_sl_reload as sl_reload,
-    rust_sl_exec as sl_exec,
-    rust_sl_fixmem as sl_fixmem,
-    rust_sl_luasize as sl_luasize,
+    sl_reload,
+    sl_exec,
+    sl_fixmem,
+    sl_luasize,
 };
 
 // ── database init functions ────────────────────────────────────────────────────
-use crate::database::item_db::{rust_itemdb_init as itemdb_read, rust_itemdb_id as itemdb_id, rust_itemdb_dura as itemdb_dura};
-use crate::database::magic_db::rust_magicdb_id as magicdb_id;
-use crate::database::board_db::{rust_boarddb_term as boarddb_term, rust_boarddb_init as boarddb_init};
-use crate::database::clan_db::rust_clandb_init as clandb_init;
+use crate::database::item_db;
+use crate::database::{magic_db, mob_db, board_db, clan_db};
 use crate::game::npc::{npc_init, warp_init};
-use crate::database::mob_db::{rust_mobdb_term, rust_mobdb_init};
-use crate::game::mob::rust_mobspawn_read as mobspawn_read;
+use crate::game::mob::mobspawn_read;
 
 // ── session helpers ────────────────────────────────────────────────────────────
 use crate::session::session_set_eof;
@@ -262,7 +255,7 @@ fn command_debug(sd: &mut MapSessionData, line: &str) -> i32 {
 }
 
 fn command_item(sd: &mut MapSessionData, line: &str) -> i32 {
-    use crate::servers::char::charstatus::Item;
+    use crate::common::types::Item;
     let mut itemnum: u32 = 0;
     let mut itemid: u32 = 0;
 
@@ -275,7 +268,7 @@ fn command_item(sd: &mut MapSessionData, line: &str) -> i32 {
         if let Some(name) = parts.next() {
             itemnum = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
             let namebuf = str_to_cname(name);
-            itemid = unsafe { itemdb_id(namebuf.as_ptr()) };
+            itemid = item_db::id_by_name(carray_to_str(&namebuf));
         }
     }
     if itemid == 0 { return -1; }
@@ -284,7 +277,7 @@ fn command_item(sd: &mut MapSessionData, line: &str) -> i32 {
     unsafe {
         let mut it: Item = std::mem::zeroed();
         it.id = itemid;
-        it.dura = itemdb_dura(itemid);
+        it.dura = item_db::search(itemid).dura;
         it.amount = itemnum as i32;
         it.owner = 0;
         pc_additem(as_ptr(sd), &mut it);
@@ -293,14 +286,14 @@ fn command_item(sd: &mut MapSessionData, line: &str) -> i32 {
 }
 
 fn command_res(sd: &mut MapSessionData, _line: &str) -> i32 {
-    if sd.status.state == PC_DIE as i8 { unsafe { pc_res(as_ptr(sd)); } }
+    if sd.player.combat.state == PC_DIE as i8 { unsafe { pc_res(as_ptr(sd)); } }
     0
 }
 
 fn command_hair(sd: &mut MapSessionData, line: &str) -> i32 {
     let (hair, hair_color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
-    sd.status.hair = hair as u16;
-    sd.status.hair_color = hair_color as u16;
+    sd.player.appearance.hair = hair as u16;
+    sd.player.appearance.hair_color = hair_color as u16;
     unsafe { clif_sendchararea(as_ptr(sd)); clif_getchararea(as_ptr(sd)); }
     0
 }
@@ -310,7 +303,7 @@ fn command_checkdupes(sd: &mut MapSessionData, _line: &str) -> i32 {
     crate::game::map_server::for_each_player(|tsd| {
         let n = unsafe { pc_readglobalreg(tsd as *mut MapSessionData, c"goldbardupe".as_ptr() as *const i8) };
         if n != 0 {
-            let name_str = carray_to_str(&tsd.status.name);
+            let name_str = tsd.player.identity.name.as_str();
             let msg = format!("{} gold bar {} times", name_str, n);
             if let Ok(cs) = CString::new(msg) {
                 unsafe { clif_sendminitext(sd_ptr, cs.as_ptr()); }
@@ -325,7 +318,7 @@ fn command_checkwpe(sd: &mut MapSessionData, _line: &str) -> i32 {
     crate::game::map_server::for_each_player(|tsd| {
         let n = unsafe { pc_readglobalreg(tsd as *mut MapSessionData, c"WPEtimes".as_ptr() as *const i8) };
         if n != 0 {
-            let name_str = carray_to_str(&tsd.status.name);
+            let name_str = tsd.player.identity.name.as_str();
             let msg = format!("{} WPE attempt {} times", name_str, n);
             if let Ok(cs) = CString::new(msg) {
                 unsafe { clif_sendminitext(sd_ptr, cs.as_ptr()); }
@@ -350,7 +343,7 @@ fn command_kill(sd: &mut MapSessionData, line: &str) -> i32 {
 fn command_killall(sd: &mut MapSessionData, _line: &str) -> i32 {
     let manager = crate::session::get_session_manager();
     crate::game::map_server::for_each_player(|tsd| {
-        if tsd.status.gm_level == 0 && tsd.fd.raw() > 0 {
+        if tsd.player.identity.gm_level == 0 && tsd.fd.raw() > 0 {
             if let Some(arc) = manager.get_session(tsd.fd) {
                 if let Ok(mut guard) = arc.try_lock() {
                     guard.eof = 1;
@@ -365,10 +358,9 @@ fn command_killall(sd: &mut MapSessionData, _line: &str) -> i32 {
 fn command_deletespell(sd: &mut MapSessionData, line: &str) -> i32 {
     let spell_name = parse_first_word(line);
     if spell_name.is_empty() { return -1; }
-    let name = str_to_cname(spell_name);
-    let spell = unsafe { magicdb_id(name.as_ptr()) };
+    let spell = magic_db::id_by_name(spell_name);
     if (0..52).contains(&spell) {
-        sd.status.skill[spell as usize] = 0;
+        sd.player.spells.skills[spell as usize] = 0;
         unsafe { pc_loadmagic(as_ptr(sd)); }
     }
     0
@@ -382,15 +374,15 @@ fn command_xprate(sd: &mut MapSessionData, line: &str) -> i32 {
 }
 
 fn command_heal(sd: &mut MapSessionData, _line: &str) -> i32 {
-    sd.status.hp = sd.max_hp;
-    sd.status.mp = sd.max_mp;
+    sd.player.combat.hp = sd.max_hp;
+    sd.player.combat.mp = sd.max_mp;
     unsafe { clif_sendstatus(as_ptr(sd), SFLAG_HPMP); }
     0
 }
 
 fn command_level(sd: &mut MapSessionData, line: &str) -> i32 {
     let level = match parse_int(line) { Some(v) => v, None => return -1 };
-    sd.status.level = level as u8;
+    sd.player.progression.level = level as u8;
     unsafe { clif_sendstatus(as_ptr(sd), SFLAG_FULLSTATS); }
     0
 }
@@ -417,8 +409,9 @@ fn command_spell(sd: &mut MapSessionData, line: &str) -> i32 {
         let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(sd.bl.m as usize) };
         let ids = block_grid::ids_in_area(grid, sd.bl.x as i32, sd.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_sendanimation_inner(&mut pc.bl, anim, sd_bl, times);
+            if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
+                let pc = arc.read();
+                clif_sendanimation_inner(&pc.bl, anim, sd_bl, times);
             }
         }
     }
@@ -434,10 +427,10 @@ fn command_val(sd: &mut MapSessionData, _line: &str) -> i32 {
 
 fn command_disguise(sd: &mut MapSessionData, line: &str) -> i32 {
     let (d, e) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
-    let os = sd.status.state;
-    sd.status.state = 0;
+    let os = sd.player.combat.state;
+    sd.player.combat.state = 0;
     unsafe { broadcast_update_state(as_ptr(sd)); }
-    sd.status.state = os;
+    sd.player.combat.state = os;
     sd.disguise = d as u16;
     sd.disguise_color = e as u16;
     unsafe { broadcast_update_state(as_ptr(sd)); }
@@ -453,32 +446,31 @@ fn command_warp(sd: &mut MapSessionData, line: &str) -> i32 {
 fn command_givespell(sd: &mut MapSessionData, line: &str) -> i32 {
     let word = parse_first_word(line);
     if word.is_empty() { return -1; }
-    let name = str_to_cname(word);
-    let spell = unsafe { magicdb_id(name.as_ptr()) };
+    let spell = magic_db::id_by_name(word);
     for x in 0..52usize {
-        if sd.status.skill[x] == 0 {
-            sd.status.skill[x] = spell as u16;
+        if sd.player.spells.skills[x] == 0 {
+            sd.player.spells.skills[x] = spell as u16;
             unsafe { pc_loadmagic(as_ptr(sd)); }
             break;
         }
-        if sd.status.skill[x] == spell as u16 { break; }
+        if sd.player.spells.skills[x] == spell as u16 { break; }
     }
     0
 }
 
 fn command_side(sd: &mut MapSessionData, line: &str) -> i32 {
     let side = match parse_int(line) { Some(v) => v, None => return -1 };
-    sd.status.side = side as i8;
+    sd.player.combat.side = side as i8;
     unsafe { clif_sendchararea(as_ptr(sd)); clif_getchararea(as_ptr(sd)); }
     0
 }
 
 fn command_state(sd: &mut MapSessionData, line: &str) -> i32 {
     let state_val = match parse_int(line) { Some(v) => v, None => return -1 };
-    if sd.status.state == 1 && state_val != 1 {
+    if sd.player.combat.state == 1 && state_val != 1 {
         unsafe { pc_res(as_ptr(sd)); }
     } else {
-        sd.status.state = (state_val % 5) as i8;
+        sd.player.combat.state = (state_val % 5) as i8;
         unsafe { broadcast_update_state(as_ptr(sd)); }
     }
     0
@@ -486,7 +478,7 @@ fn command_state(sd: &mut MapSessionData, line: &str) -> i32 {
 
 fn command_armorcolor(sd: &mut MapSessionData, line: &str) -> i32 {
     let ac = match parse_int(line) { Some(v) => v, None => return -1 };
-    sd.status.armor_color = ac as u16;
+    sd.player.appearance.armor_color = ac as u16;
     unsafe { clif_sendchararea(as_ptr(sd)); clif_getchararea(as_ptr(sd)); }
     0
 }
@@ -497,23 +489,22 @@ fn command_makegm(_sd: &mut MapSessionData, line: &str) -> i32 {
     let name = str_to_cname(word);
     let tsd = unsafe { map_name2sd(name.as_ptr()) };
     if !tsd.is_null() {
-        unsafe { (*tsd).status.gm_level = 99; }
+        unsafe { (*tsd).player.identity.gm_level = 99; }
     }
     0
 }
 
-#[allow(static_mut_refs)]
 fn command_who(sd: &mut MapSessionData, _line: &str) -> i32 {
-    send_minitext(sd, &format!("There are {} users online.", unsafe { userlist.user_count }));
+    send_minitext(sd, &format!("There are {} users online.", userlist().user_count));
     0
 }
 
 fn command_legend(sd: &mut MapSessionData, _line: &str) -> i32 {
-    sd.status.legends[0].icon = 12;
-    sd.status.legends[0].color = 128;
+    sd.player.legends.legends[0].icon = 12;
+    sd.player.legends.legends[0].color = 128;
     let text = b"Blessed by a GM\0";
     for (i, &b) in text.iter().enumerate() {
-        sd.status.legends[0].text[i] = b as i8;
+        sd.player.legends.legends[0].text[i] = b as i8;
     }
     0
 }
@@ -556,7 +547,7 @@ fn command_speed(sd: &mut MapSessionData, line: &str) -> i32 {
 }
 
 fn command_reloaditem(sd: &mut MapSessionData, _line: &str) -> i32 {
-    itemdb_read();
+    item_db::init();
     send_minitext(sd, "Item DB Reloaded!");
     0
 }
@@ -567,8 +558,8 @@ fn command_reloadcreations(sd: &mut MapSessionData, _line: &str) -> i32 {
 }
 
 fn command_reloadmob(sd: &mut MapSessionData, _line: &str) -> i32 {
-    rust_mobdb_term();
-    rust_mobdb_init();
+    mob_db::term();
+    mob_db::init();
     send_minitext(sd, "Mob DB Reloaded");
     0
 }
@@ -604,8 +595,8 @@ fn command_broadcast(_sd: &mut MapSessionData, line: &str) -> i32 {
     0
 }
 
-fn command_luasize(sd: &mut MapSessionData, _line: &str) -> i32 {
-    unsafe { sl_luasize(as_ptr(sd)); }
+fn command_luasize(_sd: &mut MapSessionData, _line: &str) -> i32 {
+    unsafe { sl_luasize(); }
     0
 }
 
@@ -618,9 +609,10 @@ fn command_respawn(sd: &mut MapSessionData, _line: &str) -> i32 {
     if let Some(grid) = block_grid::get_grid(sd.bl.m as usize) {
         let all_ids: Vec<u32> = grid.all_ids().collect();
         for id in all_ids {
-            if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
+            if let Some(arc) = crate::game::map_server::map_id2mob_ref(id) {
+                let mob = arc.write();
                 if mob.state == MOB_DEAD && mob.onetime == 0 {
-                    unsafe { mob_respawn(mob as *mut MobSpawnData); }
+                    unsafe { mob_respawn(&*mob as *const MobSpawnData as *mut MobSpawnData); }
                 }
             }
         }
@@ -666,9 +658,10 @@ fn command_unban(_sd: &mut MapSessionData, line: &str) -> i32 {
 }
 
 fn command_kc(sd: &mut MapSessionData, _line: &str) -> i32 {
-    for x in 0..MAX_KILLREG {
-        let mob_id = sd.status.killreg[x].mob_id;
-        let amount = sd.status.killreg[x].amount;
+    let entries: Vec<(u32, u32)> = sd.player.registries.kill_reg.iter()
+        .map(|(&mob_id, &amount)| (mob_id, amount))
+        .collect();
+    for (mob_id, amount) in entries {
         send_minitext(sd, &format!("{} ({})", mob_id, amount));
     }
     0
@@ -682,7 +675,7 @@ fn command_stealth(sd: &mut MapSessionData, _line: &str) -> i32 {
         unsafe { clif_refresh(as_ptr(sd)); }
         send_minitext(sd, "Stealth :OFF");
     } else {
-        unsafe { clif_lookgone(&mut sd.bl); }
+        unsafe { clif_lookgone(&sd.bl); }
         sd.optFlags ^= OPT_STEALTH;
         unsafe { clif_refresh(as_ptr(sd)); }
         send_minitext(sd, "Stealth :ON");
@@ -906,10 +899,10 @@ fn command_light(sd: &mut MapSessionData, line: &str) -> i32 {
 }
 
 fn command_gm(sd: &mut MapSessionData, line: &str) -> i32 {
-    let name_str = carray_to_str(&sd.status.name);
+    let name_str = sd.player.identity.name.as_str();
     let msg = format!("<GM>{}: {}", name_str, line);
     crate::game::map_server::for_each_player(|tsd| {
-        if tsd.status.gm_level != 0 {
+        if tsd.player.identity.gm_level != 0 {
             if let Ok(cs) = CString::new(msg.as_str()) {
                 unsafe { clif_sendmsg(tsd as *mut MapSessionData, 11, cs.as_ptr()); }
             }
@@ -919,10 +912,10 @@ fn command_gm(sd: &mut MapSessionData, line: &str) -> i32 {
 }
 
 fn command_report(sd: &mut MapSessionData, line: &str) -> i32 {
-    let name_str = carray_to_str(&sd.status.name);
+    let name_str = sd.player.identity.name.as_str();
     let msg = format!("<REPORT>{}: {}", name_str, line);
     crate::game::map_server::for_each_player(|tsd| {
-        if tsd.status.gm_level > 0 {
+        if tsd.player.identity.gm_level > 0 {
             if let Ok(cs) = CString::new(msg.as_str()) {
                 unsafe { clif_sendmsg(tsd as *mut MapSessionData, 12, cs.as_ptr()); }
             }
@@ -951,8 +944,8 @@ fn command_cinv(sd: &mut MapSessionData, line: &str) -> i32 {
     let (start, end) = parse_two_ints(line).unwrap_or((0, 51));
     for x in start..=end {
         let x = x as usize;
-        if x < 52 && sd.status.inventory[x].id > 0 && sd.status.inventory[x].amount > 0 {
-            unsafe { pc_delitem(as_ptr(sd), x as i32, sd.status.inventory[x].amount, 0); }
+        if x < 52 && sd.player.inventory.inventory[x].id > 0 && sd.player.inventory.inventory[x].amount > 0 {
+            unsafe { pc_delitem(as_ptr(sd), x as i32, sd.player.inventory.inventory[x].amount, 0); }
         }
     }
     0
@@ -966,8 +959,8 @@ fn command_cspells(sd: &mut MapSessionData, line: &str) -> i32 {
         None => (0, 51),
     };
     for x in start..=end {
-        if x < 52 && sd.status.skill[x] > 0 {
-            sd.status.skill[x] = 0;
+        if x < 52 && sd.player.spells.skills[x] > 0 {
+            sd.player.spells.skills[x] = 0;
             unsafe { pc_loadmagic(as_ptr(sd)); }
         }
     }
@@ -990,11 +983,11 @@ fn command_job(sd: &mut MapSessionData, line: &str) -> i32 {
     let (mut job, mut subjob) = parse_two_ints(line).unwrap_or((0, 0));
     if job < 0 { job = 5; }
     if !(0..=16).contains(&subjob) { subjob = 0; }
-    sd.status.class = job as u8;
-    sd.status.mark = subjob as u8;
-    let class_val = sd.status.class as u32;
-    let mark_val = sd.status.mark as u32;
-    let char_id = sd.status.id;
+    sd.player.progression.class = job as u8;
+    sd.player.progression.mark = subjob as u8;
+    let class_val = sd.player.progression.class as u32;
+    let mark_val = sd.player.progression.mark as u32;
+    let char_id = sd.player.identity.id;
     crate::database::blocking_run_async(set_job_class(class_val, mark_val, char_id));
     let sd_usize = as_ptr(sd) as usize;
     crate::database::blocking_run_async(clif_mystaytus_by_addr(sd_usize));
@@ -1083,8 +1076,9 @@ fn command_nspell(sd: &mut MapSessionData, _line: &str) -> i32 {
         let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(sd.bl.m as usize) };
         let ids = block_grid::ids_in_area(grid, sd.bl.x as i32, sd.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_sendanimation_inner(&mut pc.bl, anim, sd_bl, times);
+            if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
+                let pc = arc.read();
+                clif_sendanimation_inner(&pc.bl, anim, sd_bl, times);
             }
         }
     }
@@ -1101,8 +1095,9 @@ fn command_pspell(sd: &mut MapSessionData, _line: &str) -> i32 {
         let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(sd.bl.m as usize) };
         let ids = block_grid::ids_in_area(grid, sd.bl.x as i32, sd.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(pc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_sendanimation_inner(&mut pc.bl, anim, sd_bl, times);
+            if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
+                let pc = arc.read();
+                clif_sendanimation_inner(&pc.bl, anim, sd_bl, times);
             }
         }
     }
@@ -1115,14 +1110,14 @@ fn command_spellq(sd: &mut MapSessionData, _line: &str) -> i32 {
 }
 
 fn command_reloadboard(sd: &mut MapSessionData, _line: &str) -> i32 {
-    boarddb_term();
-    boarddb_init();
+    board_db::term();
+    board_db::init();
     send_minitext(sd, "Board DB reloaded!");
     0
 }
 
 fn command_reloadclan(sd: &mut MapSessionData, _line: &str) -> i32 {
-    clandb_init();
+    clan_db::init();
     send_minitext(sd, "Clan DB reloaded!");
     0
 }
@@ -1135,24 +1130,6 @@ fn command_reloadnpc(sd: &mut MapSessionData, _line: &str) -> i32 {
 
 fn command_reloadmaps(sd: &mut MapSessionData, _line: &str) -> i32 {
     unsafe { map_reload(); }
-    let map_n_val = map_n.load(Ordering::Relaxed) as usize;
-    let pkt_len = map_n_val * 2 + 8;
-    let mut pkt = vec![0u8; pkt_len];
-    pkt[0..2].copy_from_slice(&0x3001u16.to_le_bytes());
-    pkt[2..6].copy_from_slice(&(pkt_len as u32).to_le_bytes());
-    pkt[6..8].copy_from_slice(&(map_n_val as u16).to_le_bytes());
-    let mut j: usize = 0;
-    for i in 0..MAX_MAP_PER_SERVER {
-        unsafe {
-            let mp = crate::database::map_db::get_map_ptr(i as u16);
-            if !mp.is_null() && !(*mp).tile.is_null() {
-                pkt[j * 2 + 8..j * 2 + 10].copy_from_slice(&(i as u16).to_le_bytes());
-                j += 1;
-            }
-        }
-        if j >= map_n_val { break; }
-    }
-    crate::game::map_char::send(pkt);
     send_minitext(sd, "Maps reloaded!");
     0
 }
@@ -1201,7 +1178,7 @@ unsafe fn dispatch(sd: *mut MapSessionData, p: *const i8, len: i32, log: bool) -
         None => return 0,
     };
 
-    if ((*sd).status.gm_level as i32) < entry.level { return 0; }
+    if ((*sd).player.identity.gm_level as i32) < entry.level { return 0; }
 
     if log {
         tracing::info!("[command] gm command used cmd={}", cmd_name);
@@ -1212,6 +1189,6 @@ unsafe fn dispatch(sd: *mut MapSessionData, p: *const i8, len: i32, log: bool) -
     1
 }
 
-pub unsafe fn rust_is_command(sd: *mut MapSessionData, p: *const i8, len: i32) -> i32 {
+pub unsafe fn is_command(sd: *mut MapSessionData, p: *const i8, len: i32) -> i32 {
     dispatch(sd, p, len, true)
 }

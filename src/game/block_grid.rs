@@ -263,11 +263,23 @@ fn entity_bl_type(ent: &GameEntity) -> i32 {
 /// - NPCs / Items: always alive.
 fn entity_is_alive(ent: &GameEntity) -> bool {
     match ent {
-        GameEntity::Mob(mob) => mob.state != MOB_DEAD,
-        GameEntity::Player(sd) => {
-            let dead = sd.status.state == PC_DIE as i8;
-            let stealth = (sd.optFlags & OPT_FLAG_STEALTH) != 0;
-            !dead && !stealth
+        GameEntity::Mob(arc) => {
+            // Use try_read to avoid deadlocking if already write-locked on this thread.
+            // If locked, conservatively assume alive.
+            match arc.try_read() {
+                Some(mob) => mob.state != MOB_DEAD,
+                None => true,
+            }
+        }
+        GameEntity::Player(arc) => {
+            match arc.try_read() {
+                Some(sd) => {
+                    let dead = sd.player.combat.state == PC_DIE as i8;
+                    let stealth = (sd.optFlags & OPT_FLAG_STEALTH) != 0;
+                    !dead && !stealth
+                }
+                None => true,
+            }
         }
         GameEntity::Npc(_) | GameEntity::Item(_) => true,
     }

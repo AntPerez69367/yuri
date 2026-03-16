@@ -6,27 +6,17 @@
 //! # Safety
 //! All public functions are `unsafe` because they dereference raw pointers into
 //! the map grid. Callers must ensure:
-//! - The `map` global is initialized (via `rust_map_init` + `map_initblock`).
+//! - The `map` global is initialized (via `map_init` + `map_initblock`).
 //! - `m` is a valid, loaded map slot index.
 #![allow(non_upper_case_globals)]
-#![allow(static_mut_refs)]
 
 use crate::database::map_db::{BlockList, MAP_SLOTS};
 use crate::game::mob::{BL_MOB, MOB_DEAD, MobSpawnData};
 
-// Module-level map pointer override.
-// In production, this is null and `map_ptr()` delegates to `raw_map_ptr()`.
-// In tests, this can be set via `test_set_map()` to inject a custom map without
-// touching the global OnceLock.
-// SAFETY: Only written in test code from a single test thread (guarded by MAP_MUTEX).
-static mut map: *mut crate::database::map_db::MapData = std::ptr::null_mut();
-
-/// Returns the live map pointer.
-/// Checks the module-local override first (used by tests); otherwise delegates
-/// to `map_db::raw_map_ptr()` (backed by `OnceLock<MapPtr>`).
+/// Returns the live map pointer (delegates to `map_db::raw_map_ptr()`).
 #[inline(always)]
 unsafe fn map_ptr() -> *mut crate::database::map_db::MapData {
-    if !map.is_null() { map } else { crate::database::map_db::raw_map_ptr() }
+    crate::database::map_db::raw_map_ptr()
 }
 
 // ─── Area type ───────────────────────────────────────────────────────────────
@@ -91,7 +81,7 @@ pub unsafe fn is_alive(bl: *mut BlockList) -> bool {
         (*mob).state != MOB_DEAD
     } else if bl_type == BL_PC {
         let sd = bl as *mut MapSessionData;
-        let dead = (*sd).status.state == PC_DIE as i8;
+        let dead = (*sd).player.combat.state == PC_DIE as i8;
         let stealth = ((*sd).optFlags & OPT_FLAG_STEALTH) != 0;
         !dead && !stealth
     } else {
@@ -202,115 +192,3 @@ pub fn map_user_count(m: usize) -> i32 {
     crate::game::block_grid::get_grid(m).map(|g| g.user_count).unwrap_or(0)
 }
 
-// ─── Test helpers (pub(crate) so sibling test modules can reuse them) ─────────
-
-/// Set the module-level `map` static to `ptr`.  Only available in test builds.
-/// Used by sibling modules (e.g. `game::scripting::object_collect`) that call
-/// block functions and need to inject a test map.
-///
-/// # Safety
-/// The caller must ensure `ptr` stays valid for the lifetime of the test and
-/// that no other thread concurrently reads the `map` global.
-#[cfg(test)]
-pub(crate) unsafe fn test_set_map(ptr: *mut crate::database::map_db::MapData) {
-    map = ptr;
-}
-
-/// Allocate a zeroed `MapData` on the heap, set up minimum block-grid fields
-/// for a `xs x ys` map, and return the `Box`.  The caller must eventually free
-/// it via `test_free_map`.
-///
-/// # Safety
-/// Uses raw allocation.  The returned `Box` must not be dropped normally -- pass
-/// it to `test_free_map` to release the inner arrays before dropping the box.
-#[cfg(test)]
-pub(crate) unsafe fn test_make_map(xs: u16, ys: u16) -> Box<crate::database::map_db::MapData> {
-    use crate::database::map_db::{GlobalReg, MapData, WarpList, BLOCK_SIZE};
-
-    let layout = std::alloc::Layout::new::<MapData>();
-    let raw = std::alloc::alloc_zeroed(layout) as *mut MapData;
-    assert!(!raw.is_null());
-    let mut slot = Box::from_raw(raw);
-
-    slot.xs = xs;
-    slot.ys = ys;
-    slot.bxs = ((xs as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as u16;
-    slot.bys = ((ys as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as u16;
-
-    let cells = slot.bxs as usize * slot.bys as usize;
-
-    let warp_layout = std::alloc::Layout::array::<*mut WarpList>(cells).unwrap();
-    slot.warp = std::alloc::alloc_zeroed(warp_layout) as *mut *mut WarpList;
-
-    let reg_layout = std::alloc::Layout::array::<GlobalReg>(1).unwrap();
-    slot.registry = std::alloc::alloc_zeroed(reg_layout) as *mut GlobalReg;
-
-    // Initialize block_grid for map slot 0 so test_insert_in_block works.
-    crate::game::block_grid::init_grids();
-    crate::game::block_grid::create_grid(0, xs, ys);
-
-    slot
-}
-
-/// Free the inner arrays of a test `MapData` box (produced by `test_make_map`),
-/// then leak the box so Rust does not double-free.  Only available in test builds.
-///
-/// # Safety
-/// `slot` must be a box returned by `test_make_map` that has not been freed.
-#[cfg(test)]
-pub(crate) unsafe fn test_free_map(slot: Box<crate::database::map_db::MapData>) {
-    use crate::database::map_db::{GlobalReg, WarpList};
-
-    let cells = slot.bxs as usize * slot.bys as usize;
-    std::alloc::dealloc(
-        slot.warp as *mut u8,
-        std::alloc::Layout::array::<*mut WarpList>(cells).unwrap(),
-    );
-    std::alloc::dealloc(
-        slot.registry as *mut u8,
-        std::alloc::Layout::array::<GlobalReg>(1).unwrap(),
-    );
-    let _ = Box::into_raw(slot); // prevent double-free via Box drop
-}
-
-/// Build a minimal live `BlockList` node.  Only available in test builds.
-///
-/// # Safety
-/// The returned node has next/prev set to null.
-#[cfg(test)]
-pub(crate) unsafe fn test_make_bl_node(bl_type: u8, x: u16, y: u16) -> crate::database::map_db::BlockList {
-    crate::database::map_db::BlockList {
-        next:          std::ptr::null_mut(),
-        prev:          std::ptr::null_mut(),
-        id:            0,
-        bx:            0,
-        by:            0,
-        graphic_id:    0,
-        graphic_color: 0,
-        m:             0,
-        x,
-        y,
-        bl_type,
-        subtype:       0,
-    }
-}
-
-/// Insert `node` into the block_grid for the cell containing (x, y).
-/// Only available in test builds.
-///
-/// # Safety
-/// A block_grid must have been created for map slot 0 before calling this.
-#[cfg(test)]
-pub(crate) unsafe fn test_insert_in_block(
-    _slot: &mut crate::database::map_db::MapData,
-    node: *mut crate::database::map_db::BlockList,
-    x: u16,
-    y: u16,
-) {
-    // Insert into the safe block_grid instead of the linked list.
-    // The node's bl_type is used for user_count tracking.
-    let bl = &*node;
-    if let Some(g) = crate::game::block_grid::get_grid_mut(0) {
-        g.add(bl.id, x, y, bl.bl_type);
-    }
-}

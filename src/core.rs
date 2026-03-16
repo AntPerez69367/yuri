@@ -192,13 +192,13 @@ static GLOBAL_SERVER_STATE: Mutex<Option<SharedServerState>> = Mutex::new(None);
 static SHUTDOWN_PENDING: AtomicBool = AtomicBool::new(false);
 
 /// Initialize the global server state
-pub fn rust_core_init() {
+pub fn core_init() {
     let state = crate::core::create_server_state();
     *GLOBAL_SERVER_STATE.lock().unwrap() = Some(state);
 }
 
 /// Clean up the global server state
-pub fn rust_core_cleanup() {
+pub fn core_cleanup() {
     *GLOBAL_SERVER_STATE.lock().unwrap() = None;
 }
 
@@ -206,7 +206,7 @@ pub fn rust_core_cleanup() {
 ///
 /// # Safety
 /// The callback function pointer must be valid for the lifetime of the server
-pub unsafe fn rust_set_termfunc(func: Option<unsafe fn()>) {
+pub unsafe fn set_termfunc(func: Option<unsafe fn()>) {
     if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
         let mut state = state_lock.lock().unwrap();
         if let Some(f) = func {
@@ -221,7 +221,7 @@ pub unsafe fn rust_set_termfunc(func: Option<unsafe fn()>) {
 ///
 /// # Safety
 /// Should only be called from signal handlers
-pub unsafe fn rust_handle_signal(signum: i32) {
+pub unsafe fn handle_signal(signum: i32) {
     if let Some(signal) = Signal::from_signal_num(signum) {
         if signal.should_shutdown() {
             SHUTDOWN_PENDING.store(true, Ordering::SeqCst);
@@ -230,16 +230,15 @@ pub unsafe fn rust_handle_signal(signum: i32) {
 }
 
 /// Request server shutdown
-pub fn rust_request_shutdown() {
+pub fn request_shutdown() {
     if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
         let mut state = state_lock.lock().unwrap();
         state.request_shutdown();
     }
 }
 
-/// Check if server shutdown has been requested
-/// Returns 1 if shutdown requested, 0 otherwise
-pub fn rust_should_shutdown() -> i32 {
+/// Check if server shutdown has been requested.
+pub fn should_shutdown() -> bool {
     if SHUTDOWN_PENDING.load(Ordering::SeqCst) {
         tracing::info!("[core] [signal] Processing shutdown signal");
         if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
@@ -251,12 +250,12 @@ pub fn rust_should_shutdown() -> i32 {
     }
     if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
         let state = state_lock.lock().unwrap();
-        if state.should_shutdown() { return 1; }
+        if state.should_shutdown() { return true; }
     }
-    0
+    false
 }
 
 /// Get the server tick rate in nanoseconds
-pub fn rust_get_tick_rate_ns() -> u64 {
+pub fn get_tick_rate_ns() -> u64 {
     SERVER_TICK_RATE_NS
 }

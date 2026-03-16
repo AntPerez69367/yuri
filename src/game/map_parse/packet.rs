@@ -183,6 +183,21 @@ pub unsafe fn wfifop(fd: SessionId, pos: usize) -> *mut u8 {
     std::ptr::null_mut()
 }
 
+/// Safe slice view into the write-FIFO buffer at `offset` for `len` bytes.
+/// Returns `None` if the session is gone or wfifop returns null.
+///
+/// # Safety
+/// The returned slice is only valid while no other code modifies the session.
+/// Caller must hold exclusive access (no concurrent wfifo calls on this fd).
+#[inline]
+pub unsafe fn wfifo_slice(fd: SessionId, offset: usize, len: usize) -> Option<&'static mut [u8]> {
+    let ptr = wfifop(fd, offset);
+    if ptr.is_null() {
+        return None;
+    }
+    Some(std::slice::from_raw_parts_mut(ptr, len))
+}
+
 /// Commit `size` bytes from send buffer to the wire. Mirrors `WFIFOSET`.
 #[inline]
 pub fn wfifoset(fd: SessionId, size: usize) {

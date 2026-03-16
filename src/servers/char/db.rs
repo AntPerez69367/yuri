@@ -1,7 +1,15 @@
 use sqlx::{MySqlPool, Row, Transaction, MySql};
 use anyhow::Result;
 use md5::{Md5, Digest};
-use crate::servers::char::charstatus::*;
+use crate::common::types::{Item, SkillInfo, Legend, BankData};
+use crate::common::player::inventory::{MAX_EQUIP, MAX_INVENTORY, MAX_BANK_SLOTS};
+use crate::common::player::spells::{MAX_SPELLS, MAX_MAGIC_TIMERS};
+use crate::common::player::legends::MAX_LEGENDS;
+use crate::common::player::{
+    PlayerData, PlayerIdentity, PlayerCombat, PlayerProgression,
+    PlayerSpells, PlayerInventory, PlayerAppearance, PlayerSocial,
+    PlayerRegistries, PlayerLegends,
+};
 
 /// Compute MD5 of `input` and return it as a lowercase hex string.
 /// Kept for legacy password verification only.
@@ -216,16 +224,15 @@ pub async fn set_char_password(pool: &MySqlPool, name: &str, pass: &str, newpass
     if res.is_err() { -1 } else { 0 }
 }
 
-/// Load a character from DB and return it as a raw byte blob for zlib transfer.
-/// Load character data from the database.
-pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -> Result<Vec<u8>> {
+/// Load character data from the database into a PlayerData struct.
+#[allow(clippy::type_complexity)]
+pub async fn load_player(pool: &MySqlPool, char_id: u32, login_name: &str) -> Result<PlayerData> {
 
     // Update character name to match login name.
     let _ = sqlx::query("UPDATE `Character` SET `ChaName` = ? WHERE `ChaId` = ?")
         .bind(login_name).bind(char_id).execute(pool).await;
 
     // ── Main character row ────────────────────────────────────────────────────
-    // Use manual row access because 67 columns exceeds sqlx's tuple FromRow limit (16).
     let row = sqlx::query(
         "SELECT `ChaName`, `ChaClnId`, `ChaClanTitle`, `ChaTitle`, \
          `ChaF1Name`, `ChaLevel`, `ChaPthId`, `ChaMark`, \
@@ -248,122 +255,113 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
 
     let row = match row { Some(r) => r, None => anyhow::bail!("character not found") };
 
-    // Allocate directly on heap — MmoCharStatus is 3MB, so Box::new(zeroed()) would
-    // stack-allocate it first and overflow the tokio worker thread stack.
-    let mut s: Box<MmoCharStatus> = unsafe {
-        let layout = std::alloc::Layout::new::<MmoCharStatus>();
-        let ptr = std::alloc::alloc_zeroed(layout) as *mut MmoCharStatus;
-        if ptr.is_null() {
-            std::alloc::handle_alloc_error(layout);
-        }
-        Box::from_raw(ptr)
+    let last_pos = crate::common::types::Point::new(
+        row.try_get::<u32, _>(21).unwrap_or(0) as u16,
+        row.try_get::<u32, _>(22).unwrap_or(0) as u16,
+        row.try_get::<u32, _>(23).unwrap_or(0) as u16,
+    );
+
+    let mut pd = PlayerData {
+        identity: PlayerIdentity {
+            id: char_id,
+            name: login_name.to_string(),
+            pass: String::new(),
+            f1name: row.try_get::<String, _>(4).unwrap_or_default(),
+            title: row.try_get::<String, _>(3).unwrap_or_default(),
+            ipaddress: row.try_get::<String, _>(55).unwrap_or_default(),
+            gm_level: row.try_get::<u32, _>(34).unwrap_or(0) as i8,
+            sex: row.try_get::<u32, _>(16).unwrap_or(0) as i8,
+            map_server: 0,
+            dest_pos: last_pos,
+            last_pos,
+        },
+        combat: PlayerCombat {
+            hp: row.try_get::<u32, _>(10).unwrap_or(0),
+            max_hp: row.try_get::<u32, _>(11).unwrap_or(0),
+            mp: row.try_get::<u32, _>(12).unwrap_or(0),
+            max_mp: row.try_get::<u32, _>(13).unwrap_or(0),
+            might: 0,
+            will: 0,
+            grace: 0,
+            base_might: row.try_get::<u32, _>(50).unwrap_or(0),
+            base_will: row.try_get::<u32, _>(51).unwrap_or(0),
+            base_grace: row.try_get::<u32, _>(52).unwrap_or(0),
+            base_armor: row.try_get::<i32, _>(53).unwrap_or(0),
+            state: row.try_get::<u32, _>(25).unwrap_or(0) as i8,
+            side: row.try_get::<u32, _>(24).unwrap_or(0) as i8,
+        },
+        progression: PlayerProgression {
+            level: row.try_get::<u32, _>(5).unwrap_or(0) as u8,
+            class: row.try_get::<u32, _>(6).unwrap_or(0) as u8,
+            tier: row.try_get::<u32, _>(46).unwrap_or(0) as u8,
+            mark: row.try_get::<u32, _>(7).unwrap_or(0) as u8,
+            totem: row.try_get::<u32, _>(8).unwrap_or(0) as u8,
+            country: row.try_get::<u32, _>(17).unwrap_or(0) as i8,
+            magic_number: 0,
+            exp: row.try_get::<u32, _>(14).unwrap_or(0),
+            tnl: 0,
+            next_level_xp: 0,
+            max_tnl: 0,
+            real_tnl: 0,
+            class_rank: row.try_get::<u32, _>(65).unwrap_or(0) as i32,
+            clan_rank: row.try_get::<u32, _>(66).unwrap_or(0) as i32,
+            percentage: 0.0,
+            int_percentage: 0,
+            expsold_magic: row.try_get::<u64, _>(47).unwrap_or(0),
+            expsold_health: row.try_get::<u64, _>(48).unwrap_or(0),
+            expsold_stats: row.try_get::<u64, _>(49).unwrap_or(0),
+        },
+        spells: PlayerSpells::default(),
+        inventory: PlayerInventory {
+            equip: vec![crate::common::types::Item::default(); MAX_EQUIP],
+            inventory: vec![crate::common::types::Item::default(); MAX_INVENTORY],
+            banks: vec![crate::common::types::BankData::default(); MAX_BANK_SLOTS],
+            money: row.try_get::<u32, _>(15).unwrap_or(0),
+            bank_money: row.try_get::<u32, _>(38).unwrap_or(0),
+            max_inv: row.try_get::<u32, _>(39).unwrap_or(0) as u8,
+            max_slots: row.try_get::<u32, _>(37).unwrap_or(0),
+        },
+        appearance: PlayerAppearance {
+            face: row.try_get::<u32, _>(18).unwrap_or(0) as u16,
+            hair: row.try_get::<u32, _>(26).unwrap_or(0) as u16,
+            face_color: row.try_get::<u32, _>(27).unwrap_or(0) as u16,
+            hair_color: row.try_get::<u32, _>(19).unwrap_or(0) as u16,
+            armor_color: row.try_get::<u32, _>(20).unwrap_or(0) as u16,
+            skin_color: row.try_get::<u32, _>(28).unwrap_or(0) as u16,
+            disguise: row.try_get::<u32, _>(35).unwrap_or(0) as u16,
+            disguise_color: row.try_get::<u32, _>(36).unwrap_or(0) as u16,
+            setting_flags: row.try_get::<u32, _>(33).unwrap_or(0) as u16,
+            heroes: row.try_get::<u32, _>(45).unwrap_or(0),
+            mini_map_toggle: row.try_get::<u32, _>(54).unwrap_or(0),
+            profile_vitastats: row.try_get::<u32, _>(59).unwrap_or(0) as u8,
+            profile_equiplist: row.try_get::<u32, _>(60).unwrap_or(0) as u8,
+            profile_legends: row.try_get::<u32, _>(61).unwrap_or(0) as u8,
+            profile_spells: row.try_get::<u32, _>(62).unwrap_or(0) as u8,
+            profile_inventory: row.try_get::<u32, _>(63).unwrap_or(0) as u8,
+            profile_bankitems: row.try_get::<u32, _>(64).unwrap_or(0) as u8,
+        },
+        social: PlayerSocial {
+            partner: row.try_get::<u32, _>(29).unwrap_or(0),
+            clan: row.try_get::<u32, _>(1).unwrap_or(0),
+            clan_title: row.try_get::<String, _>(2).unwrap_or_default(),
+            clan_chat: row.try_get::<u32, _>(30).unwrap_or(0) as i8,
+            pk: row.try_get::<u32, _>(40).unwrap_or(0) as u8,
+            killed_by: row.try_get::<u32, _>(41).unwrap_or(0),
+            kills_pk: row.try_get::<u32, _>(42).unwrap_or(0),
+            pk_duration: row.try_get::<u32, _>(43).unwrap_or(0),
+            karma: row.try_get::<f32, _>(9).unwrap_or(0.0),
+            alignment: row.try_get::<i8, _>(58).unwrap_or(0),
+            novice_chat: row.try_get::<u32, _>(32).unwrap_or(0) as i8,
+            subpath_chat: row.try_get::<u32, _>(31).unwrap_or(0) as i8,
+            mute: row.try_get::<u32, _>(44).unwrap_or(0) as i8,
+            tutor: row.try_get::<u8, _>(57).unwrap_or(0),
+            afk_message: row.try_get::<String, _>(56).unwrap_or_default(),
+        },
+        registries: PlayerRegistries::default(),
+        legends: PlayerLegends::default(),
     };
-    s.id = char_id;
-    copy_str_to_i8(&mut s.name,       &row.try_get::<String, _>(0).unwrap_or_default());
-    s.clan           = row.try_get::<u32, _>(1).unwrap_or(0);
-    copy_str_to_i8(&mut s.clan_title,  &row.try_get::<String, _>(2).unwrap_or_default());
-    copy_str_to_i8(&mut s.title,       &row.try_get::<String, _>(3).unwrap_or_default());
-    copy_str_to_i8(&mut s.f1name,      &row.try_get::<String, _>(4).unwrap_or_default());
-    // col 5: ChaLevel — int(10) unsigned → u32, cast to u8
-    s.level          = row.try_get::<u32, _>(5).unwrap_or(0) as u8;
-    // col 6: ChaPthId — int(10) unsigned → u32, cast to u8
-    s.class          = row.try_get::<u32, _>(6).unwrap_or(0) as u8;
-    // col 7: ChaMark — int(10) unsigned → u32, cast to u8
-    s.mark           = row.try_get::<u32, _>(7).unwrap_or(0) as u8;
-    // col 8: ChaTotem — int(10) unsigned → u32, cast to u8
-    s.totem          = row.try_get::<u32, _>(8).unwrap_or(0) as u8;
-    s.karma          = row.try_get::<f32, _>(9).unwrap_or(0.0);
-    s.hp             = row.try_get::<u32, _>(10).unwrap_or(0);
-    s.basehp         = row.try_get::<u32, _>(11).unwrap_or(0);
-    s.mp             = row.try_get::<u32, _>(12).unwrap_or(0);
-    s.basemp         = row.try_get::<u32, _>(13).unwrap_or(0);
-    s.exp            = row.try_get::<u32, _>(14).unwrap_or(0);
-    s.money          = row.try_get::<u32, _>(15).unwrap_or(0);
-    // col 16: ChaSex — int(10) unsigned → u32, cast to i8
-    s.sex            = row.try_get::<u32, _>(16).unwrap_or(0) as i8;
-    // col 17: ChaNation — int(10) unsigned → u32, cast to i8
-    s.country        = row.try_get::<u32, _>(17).unwrap_or(0) as i8;
-    // col 18: ChaFace — int(10) unsigned → u32, cast to u16
-    s.face           = row.try_get::<u32, _>(18).unwrap_or(0) as u16;
-    // col 19: ChaHairColor — int(10) unsigned → u32, cast to u16
-    s.hair_color     = row.try_get::<u32, _>(19).unwrap_or(0) as u16;
-    // col 20: ChaArmorColor — int(10) unsigned → u32, cast to u16
-    s.armor_color    = row.try_get::<u32, _>(20).unwrap_or(0) as u16;
-    // col 21: ChaMapId — int(10) unsigned → u32, cast to u16
-    s.last_pos.m     = row.try_get::<u32, _>(21).unwrap_or(0) as u16;
-    // col 22: ChaX — int(10) unsigned → u32, cast to u16
-    s.last_pos.x     = row.try_get::<u32, _>(22).unwrap_or(0) as u16;
-    // col 23: ChaY — int(10) unsigned → u32, cast to u16
-    s.last_pos.y     = row.try_get::<u32, _>(23).unwrap_or(0) as u16;
-    // col 24: ChaSide — int(10) unsigned → u32, cast to i8
-    s.side           = row.try_get::<u32, _>(24).unwrap_or(0) as i8;
-    // col 25: ChaState — int(10) unsigned → u32, cast to i8
-    s.state          = row.try_get::<u32, _>(25).unwrap_or(0) as i8;
-    // col 26: ChaHair — int(10) unsigned → u32, cast to u16
-    s.hair           = row.try_get::<u32, _>(26).unwrap_or(0) as u16;
-    // col 27: ChaFaceColor — int(10) unsigned → u32, cast to u16
-    s.face_color     = row.try_get::<u32, _>(27).unwrap_or(0) as u16;
-    // col 28: ChaSkinColor — int(10) unsigned → u32, cast to u16
-    s.skin_color     = row.try_get::<u32, _>(28).unwrap_or(0) as u16;
-    s.partner        = row.try_get::<u32, _>(29).unwrap_or(0);
-    // col 30: ChaClanChat — int(10) unsigned → u32, cast to i8
-    s.clan_chat      = row.try_get::<u32, _>(30).unwrap_or(0) as i8;
-    // col 31: ChaPathChat — int(10) unsigned → u32, cast to i8
-    s.subpath_chat   = row.try_get::<u32, _>(31).unwrap_or(0) as i8;
-    // col 32: ChaNoviceChat — int(10) unsigned → u32, cast to i8
-    s.novice_chat    = row.try_get::<u32, _>(32).unwrap_or(0) as i8;
-    // col 33: ChaSettings — int(10) unsigned → u32, cast to u16
-    s.setting_flags  = row.try_get::<u32, _>(33).unwrap_or(0) as u16;
-    // col 34: ChaGMLevel — int(10) unsigned → u32, cast to i8
-    s.gm_level       = row.try_get::<u32, _>(34).unwrap_or(0) as i8;
-    // col 35: ChaDisguise — int(10) unsigned → u32, cast to u16
-    s.disguise       = row.try_get::<u32, _>(35).unwrap_or(0) as u16;
-    // col 36: ChaDisguiseColor — int(10) unsigned → u32, cast to u16
-    s.disguise_color = row.try_get::<u32, _>(36).unwrap_or(0) as u16;
-    s.maxslots       = row.try_get::<u32, _>(37).unwrap_or(0);
-    s.bankmoney      = row.try_get::<u32, _>(38).unwrap_or(0);
-    // col 39: ChaMaximumInventory — int(10) unsigned → u32, cast to u8
-    s.maxinv         = row.try_get::<u32, _>(39).unwrap_or(0) as u8;
-    // col 40: ChaPK — int(10) unsigned → u32, cast to u8
-    s.pk             = row.try_get::<u32, _>(40).unwrap_or(0) as u8;
-    s.killedby       = row.try_get::<u32, _>(41).unwrap_or(0);
-    s.killspk        = row.try_get::<u32, _>(42).unwrap_or(0);
-    s.pkduration     = row.try_get::<u32, _>(43).unwrap_or(0);
-    // col 44: ChaMuted — int(10) unsigned → u32, cast to i8
-    s.mute           = row.try_get::<u32, _>(44).unwrap_or(0) as i8;
-    s.heroes         = row.try_get::<u32, _>(45).unwrap_or(0);
-    // col 46: ChaTier — int(10) unsigned → u32, cast to u8
-    s.tier           = row.try_get::<u32, _>(46).unwrap_or(0) as u8;
-    s.expsold_magic  = row.try_get::<u64, _>(47).unwrap_or(0);
-    s.expsold_health = row.try_get::<u64, _>(48).unwrap_or(0);
-    s.expsold_stats  = row.try_get::<u64, _>(49).unwrap_or(0);
-    s.basemight      = row.try_get::<u32, _>(50).unwrap_or(0);
-    s.basewill       = row.try_get::<u32, _>(51).unwrap_or(0);
-    s.basegrace      = row.try_get::<u32, _>(52).unwrap_or(0);
-    s.basearmor      = row.try_get::<i32, _>(53).unwrap_or(0);
-    s.mini_map_toggle = row.try_get::<u32, _>(54).unwrap_or(0);
-    copy_str_to_i8(&mut s.ipaddress,   &row.try_get::<String, _>(55).unwrap_or_default());
-    copy_str_to_i8(&mut s.afkmessage,  &row.try_get::<String, _>(56).unwrap_or_default());
-    // col 57: ChaTutor — tinyint unsigned → u8 (correct as-is)
-    s.tutor              = row.try_get::<u8, _>(57).unwrap_or(0);
-    // col 58: ChaAlignment — tinyint signed → i8 (correct as-is)
-    s.alignment          = row.try_get::<i8, _>(58).unwrap_or(0);
-    // col 59-64: profile_* — int(10) unsigned → u32, cast to u8
-    s.profile_vitastats  = row.try_get::<u32, _>(59).unwrap_or(0) as u8;
-    s.profile_equiplist  = row.try_get::<u32, _>(60).unwrap_or(0) as u8;
-    s.profile_legends    = row.try_get::<u32, _>(61).unwrap_or(0) as u8;
-    s.profile_spells     = row.try_get::<u32, _>(62).unwrap_or(0) as u8;
-    s.profile_inventory  = row.try_get::<u32, _>(63).unwrap_or(0) as u8;
-    s.profile_bankitems  = row.try_get::<u32, _>(64).unwrap_or(0) as u8;
-    // col 65: ChaPthRank — int(10) unsigned → u32, cast to i32
-    s.class_rank         = row.try_get::<u32, _>(65).unwrap_or(0) as i32;
-    // col 66: ChaClnRank — int(10) unsigned → u32, cast to i32
-    s.clan_rank          = row.try_get::<u32, _>(66).unwrap_or(0) as i32;
-    // mirror C line 616: overwrite name with login_name
-    copy_str_to_i8(&mut s.name, login_name);
 
     // ── Banks ─────────────────────────────────────────────────────────────────
-    // BnkPosition is int(10) unsigned → u32 (not u8)
     let banks: Vec<(String, u32, u32, u32, u32, u32, u32, u32, u32, u32, String)> =
         sqlx::query_as(
             "SELECT `BnkEngrave`, `BnkItmId`, `BnkAmount`, `BnkChaIdOwner`, \
@@ -375,21 +373,19 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
          custom_icon, custom_icon_color, protected, note) in banks {
         let p = pos as usize;
         if p >= MAX_BANK_SLOTS { continue; }
-        copy_str_to_i8(&mut s.banks[p].real_name, &engrave);
-        s.banks[p].item_id          = item_id;
-        s.banks[p].amount           = amount;
-        s.banks[p].owner            = owner;
-        s.banks[p].custom_look      = custom_look;
-        s.banks[p].custom_look_color = custom_look_color;
-        s.banks[p].custom_icon      = custom_icon;
-        s.banks[p].custom_icon_color = custom_icon_color;
-        s.banks[p].protected        = protected;
-        copy_str_to_i8(&mut s.banks[p].note, &note);
+        copy_str_to_i8(&mut pd.inventory.banks[p].real_name, &engrave);
+        pd.inventory.banks[p].item_id          = item_id;
+        pd.inventory.banks[p].amount           = amount;
+        pd.inventory.banks[p].owner            = owner;
+        pd.inventory.banks[p].custom_look      = custom_look;
+        pd.inventory.banks[p].custom_look_color = custom_look_color;
+        pd.inventory.banks[p].custom_icon      = custom_icon;
+        pd.inventory.banks[p].custom_icon_color = custom_icon_color;
+        pd.inventory.banks[p].protected        = protected;
+        copy_str_to_i8(&mut pd.inventory.banks[p].note, &note);
     }
 
     // ── Inventory ─────────────────────────────────────────────────────────────
-    // InvDurability is int(10) unsigned → u32 (not i32)
-    // InvPosition is int(10) unsigned → u32 (not u8)
     let items: Vec<(String, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, String)> =
         sqlx::query_as(
             "SELECT `InvEngrave`, `InvItmId`, `InvAmount`, `InvDurability`, \
@@ -402,23 +398,22 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
          custom_look, custom_look_color, custom_icon, custom_icon_color, protected, note) in items {
         let p = pos as usize;
         if p >= MAX_INVENTORY { continue; }
-        copy_str_to_i8(&mut s.inventory[p].real_name, &engrave);
-        s.inventory[p].id               = id;
-        s.inventory[p].amount           = amount as i32;
-        s.inventory[p].dura             = dura as i32;
-        s.inventory[p].owner            = owner;
-        s.inventory[p].time             = time;
-        s.inventory[p].custom           = custom;
-        s.inventory[p].custom_look      = custom_look;
-        s.inventory[p].custom_look_color = custom_look_color;
-        s.inventory[p].custom_icon      = custom_icon;
-        s.inventory[p].custom_icon_color = custom_icon_color;
-        s.inventory[p].protected        = protected;
-        copy_str_to_i8(&mut s.inventory[p].note, &note);
+        copy_str_to_i8(&mut pd.inventory.inventory[p].real_name, &engrave);
+        pd.inventory.inventory[p].id               = id;
+        pd.inventory.inventory[p].amount           = amount as i32;
+        pd.inventory.inventory[p].dura             = dura as i32;
+        pd.inventory.inventory[p].owner            = owner;
+        pd.inventory.inventory[p].time             = time;
+        pd.inventory.inventory[p].custom           = custom;
+        pd.inventory.inventory[p].custom_look      = custom_look;
+        pd.inventory.inventory[p].custom_look_color = custom_look_color;
+        pd.inventory.inventory[p].custom_icon      = custom_icon;
+        pd.inventory.inventory[p].custom_icon_color = custom_icon_color;
+        pd.inventory.inventory[p].protected        = protected;
+        copy_str_to_i8(&mut pd.inventory.inventory[p].note, &note);
     }
 
     // ── Equipment ─────────────────────────────────────────────────────────────
-    // EqpDurability is int(10) unsigned → u32, EqpSlot is int(10) unsigned → u32
     let equips: Vec<(String, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, String)> =
         sqlx::query_as(
             "SELECT `EqpEngrave`, `EqpItmId`, CAST(1 AS UNSIGNED), `EqpDurability`, \
@@ -431,33 +426,31 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
          custom_look, custom_look_color, custom_icon, custom_icon_color, protected, note) in equips {
         let p = pos as usize;
         if p >= MAX_EQUIP { continue; }
-        copy_str_to_i8(&mut s.equip[p].real_name, &engrave);
-        s.equip[p].id               = id;
-        s.equip[p].amount           = amount as i32;
-        s.equip[p].dura             = dura as i32;
-        s.equip[p].owner            = owner;
-        s.equip[p].time             = time;
-        s.equip[p].custom           = custom;
-        s.equip[p].custom_look      = custom_look;
-        s.equip[p].custom_look_color = custom_look_color;
-        s.equip[p].custom_icon      = custom_icon;
-        s.equip[p].custom_icon_color = custom_icon_color;
-        s.equip[p].protected        = protected;
-        copy_str_to_i8(&mut s.equip[p].note, &note);
+        copy_str_to_i8(&mut pd.inventory.equip[p].real_name, &engrave);
+        pd.inventory.equip[p].id               = id;
+        pd.inventory.equip[p].amount           = amount as i32;
+        pd.inventory.equip[p].dura             = dura as i32;
+        pd.inventory.equip[p].owner            = owner;
+        pd.inventory.equip[p].time             = time;
+        pd.inventory.equip[p].custom           = custom;
+        pd.inventory.equip[p].custom_look      = custom_look;
+        pd.inventory.equip[p].custom_look_color = custom_look_color;
+        pd.inventory.equip[p].custom_icon      = custom_icon;
+        pd.inventory.equip[p].custom_icon_color = custom_icon_color;
+        pd.inventory.equip[p].protected        = protected;
+        copy_str_to_i8(&mut pd.inventory.equip[p].note, &note);
     }
 
     // ── SpellBook ─────────────────────────────────────────────────────────────
-    // SbkSplId and SbkPosition are int(10) unsigned → u32
     let spells: Vec<(u32, u32)> = sqlx::query_as(
         "SELECT `SbkSplId`, `SbkPosition` FROM `SpellBook` WHERE `SbkChaId` = ? LIMIT 52"
     ).bind(char_id).fetch_all(pool).await?;
     for (spell_id, pos) in spells {
         let p = pos as usize;
-        if p < MAX_SPELLS { s.skill[p] = spell_id as u16; }
+        if p < MAX_SPELLS { pd.spells.skills[p] = spell_id as u16; }
     }
 
     // ── Aethers ───────────────────────────────────────────────────────────────
-    // AthAether, AthDuration, AthPosition are int(10) unsigned → u32; AthSplId stays u16-ish
     let aethers: Vec<(u32, u32, u32, u32)> = sqlx::query_as(
         "SELECT `AthAether`, `AthSplId`, `AthDuration`, `AthPosition` \
          FROM `Aethers` WHERE `AthChaId` = ? LIMIT 200"
@@ -465,58 +458,52 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
     for (aether, spell_id, duration, pos) in aethers {
         let p = pos as usize;
         if p >= MAX_MAGIC_TIMERS { continue; }
-        s.dura_aether[p].aether   = aether as i32;
-        s.dura_aether[p].id       = spell_id as u16;
-        s.dura_aether[p].duration = duration as i32;
+        pd.spells.dura_aether[p].aether   = aether as i32;
+        pd.spells.dura_aether[p].id       = spell_id as u16;
+        pd.spells.dura_aether[p].duration = duration as i32;
     }
 
     // ── Registry (int) ────────────────────────────────────────────────────────
-    // RegValue is int(10) unsigned → u32, cast to i32 in struct
     let regs: Vec<(String, u32)> = sqlx::query_as(
         "SELECT `RegIdentifier`, `RegValue` FROM `Registry` WHERE `RegChaId` = ? LIMIT 5000"
     ).bind(char_id).fetch_all(pool).await?;
-    s.global_reg_num = regs.len().min(MAX_GLOBALREG) as i32;
-    for (i, (key, val)) in regs.into_iter().enumerate() {
-        if i >= MAX_GLOBALREG { break; }
-        copy_str_to_i8(&mut s.global_reg[i].str, &key);
-        s.global_reg[i].val = val as i32;
+    for (key, val) in regs {
+        if val != 0 {
+            pd.registries.global_reg.insert(key, val as i32);
+        }
     }
 
     // ── Registry (string) ─────────────────────────────────────────────────────
     let regstrs: Vec<(String, String)> = sqlx::query_as(
         "SELECT `RegIdentifier`, `RegValue` FROM `RegistryString` WHERE `RegChaId` = ? LIMIT 5000"
     ).bind(char_id).fetch_all(pool).await?;
-    s.global_regstring_num = regstrs.len().min(MAX_GLOBALREG) as i32;
-    for (i, (key, val)) in regstrs.into_iter().enumerate() {
-        if i >= MAX_GLOBALREG { break; }
-        copy_str_to_i8(&mut s.global_regstring[i].str, &key);
-        copy_str_to_i8(&mut s.global_regstring[i].val, &val);
+    for (key, val) in regstrs {
+        if !val.is_empty() {
+            pd.registries.global_regstring.insert(key, val);
+        }
     }
 
     // ── NPC Registry ──────────────────────────────────────────────────────────
-    // NrgValue is int(10) unsigned → u32, cast to i32
     let npcregs: Vec<(String, u32)> = sqlx::query_as(
         "SELECT `NrgIdentifier`, `NrgValue` FROM `NPCRegistry` WHERE `NrgChaId` = ? LIMIT 100"
     ).bind(char_id).fetch_all(pool).await?;
-    for (i, (key, val)) in npcregs.into_iter().enumerate() {
-        if i >= MAX_GLOBALREG { break; }
-        copy_str_to_i8(&mut s.npcintreg[i].str, &key);
-        s.npcintreg[i].val = val as i32;
+    for (key, val) in npcregs {
+        if val != 0 {
+            pd.registries.npc_int_reg.insert(key, val as i32);
+        }
     }
 
     // ── Quest Registry ────────────────────────────────────────────────────────
-    // QrgValue is int(10) unsigned → u32, cast to i32
     let questregs: Vec<(String, u32)> = sqlx::query_as(
         "SELECT `QrgIdentifier`, `QrgValue` FROM `QuestRegistry` WHERE `QrgChaId` = ? LIMIT 250"
     ).bind(char_id).fetch_all(pool).await?;
-    for (i, (key, val)) in questregs.into_iter().enumerate() {
-        if i >= MAX_GLOBALQUESTREG { break; }
-        copy_str_to_i8(&mut s.questreg[i].str, &key);
-        s.questreg[i].val = val as i32;
+    for (key, val) in questregs {
+        if val != 0 {
+            pd.registries.quest_reg.insert(key, val as i32);
+        }
     }
 
     // ── Legends ───────────────────────────────────────────────────────────────
-    // LegPosition, LegIcon, LegColor are int(10) unsigned → u32, cast to u16 where needed
     let legends: Vec<(u32, u32, u32, String, String, u32)> = sqlx::query_as(
         "SELECT `LegPosition`, `LegIcon`, `LegColor`, `LegDescription`, \
          `LegIdentifier`, `LegTChaId` FROM `Legends` WHERE `LegChaId` = ? LIMIT 1000"
@@ -524,108 +511,144 @@ pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -
     for (pos, icon, color, text, name, tchaid) in legends {
         let p = pos as usize;
         if p >= MAX_LEGENDS { continue; }
-        s.legends[p].icon   = icon as u16;
-        s.legends[p].color  = color as u16;
-        copy_str_to_i8(&mut s.legends[p].text, &text);
-        copy_str_to_i8(&mut s.legends[p].name, &name);
-        s.legends[p].tchaid = tchaid;
+        pd.legends.legends[p].icon   = icon as u16;
+        pd.legends.legends[p].color  = color as u16;
+        copy_str_to_i8(&mut pd.legends.legends[p].text, &text);
+        copy_str_to_i8(&mut pd.legends.legends[p].name, &name);
+        pd.legends.legends[p].tchaid = tchaid;
     }
 
     // ── Kill counts ───────────────────────────────────────────────────────────
-    // KilPosition, KilMobId, KilAmount are all int(10) unsigned → u32 (already correct)
     let kills: Vec<(u32, u32, u32)> = sqlx::query_as(
         "SELECT `KilPosition`, `KilMobId`, `KilAmount` FROM `Kills` WHERE `KilChaId` = ? LIMIT 5000"
     ).bind(char_id).fetch_all(pool).await?;
-    for (pos, mob_id, amount) in kills {
-        let p = pos as usize;
-        if p >= MAX_KILLREG { continue; }
-        s.killreg[p].mob_id = mob_id;
-        s.killreg[p].amount = amount;
+    for (_pos, mob_id, amount) in kills {
+        if mob_id != 0 {
+            *pd.registries.kill_reg.entry(mob_id).or_insert(0) += amount;
+        }
     }
 
-    tracing::info!("[char] [load_char] name={} map={} x={} y={}", i8_slice_to_str(&s.name), s.last_pos.m, s.last_pos.x, s.last_pos.y);
-    Ok(char_status_to_bytes(&s).to_vec())
+    tracing::info!("[char] [load_player] name={} map={} x={} y={}", pd.identity.name, pd.identity.last_pos.m, pd.identity.last_pos.x, pd.identity.last_pos.y);
+    Ok(pd)
 }
 
-/// Save a character from a raw byte blob back to the DB.
-/// Save character data and all sub-tables to the database.
-pub async fn save_char_bytes(pool: &MySqlPool, raw: &[u8]) -> Result<()> {
+/// Save a PlayerData to the database.
+pub async fn save_player(pool: &MySqlPool, player: &PlayerData) -> Result<()> {
+    let char_id = player.identity.id;
+    if char_id == 0 { return Ok(()); }
 
-    let s = match char_status_from_bytes(raw) {
-        Some(s) => s,
-        None => anyhow::bail!("invalid char status bytes: got {} bytes, need {}", raw.len(), std::mem::size_of::<crate::servers::char::charstatus::MmoCharStatus>()),
-    };
-    if s.id == 0 { return Ok(()); }
-
-    let name      = i8_slice_to_str(&s.name);
-    let clan_title = i8_slice_to_str(&s.clan_title);
-    let title     = i8_slice_to_str(&s.title);
-    let f1name    = i8_slice_to_str(&s.f1name);
-    let afkmsg    = i8_slice_to_str(&s.afkmessage);
-
-    tracing::info!("[char] [save_char] name={} map={} x={} y={}", name, s.last_pos.m, s.last_pos.x, s.last_pos.y);
+    tracing::info!("[char] [save_player] name={} map={} x={} y={}", player.identity.name, player.identity.last_pos.m, player.identity.last_pos.x, player.identity.last_pos.y);
 
     let mut tx = pool.begin().await?;
 
     sqlx::query(
         "UPDATE `Character` SET \
-         `ChaName`=?, `ChaClnId`=?, `ChaClanTitle`=?, `ChaTitle`=?, `ChaLevel`=?, \
-         `ChaPthId`=?, `ChaMark`=?, `ChaTotem`=?, `ChaKarma`=?, \
-         `ChaCurrentVita`=?, `ChaBaseVita`=?, `ChaCurrentMana`=?, `ChaBaseMana`=?, \
-         `ChaExperience`=?, `ChaGold`=?, `ChaSex`=?, `ChaNation`=?, `ChaFace`=?, \
-         `ChaHairColor`=?, `ChaArmorColor`=?, `ChaMapId`=?, `ChaX`=?, `ChaY`=?, \
-         `ChaSide`=?, `ChaState`=?, `ChaHair`=?, `ChaFaceColor`=?, `ChaSkinColor`=?, \
-         `ChaPartner`=?, `ChaClanChat`=?, `ChaPathChat`=?, `ChaNoviceChat`=?, \
-         `ChaSettings`=?, `ChaGMLevel`=?, `ChaDisguise`=?, `ChaDisguiseColor`=?, \
-         `ChaMaximumBankSlots`=?, `ChaBankGold`=?, `ChaF1Name`=?, `ChaMaximumInventory`=?, \
-         `ChaPK`=?, `ChaKilledBy`=?, `ChaKillsPK`=?, `ChaPKDuration`=?, `ChaMuted`=?, \
-         `ChaHeroes`=?, `ChaTier`=?, `ChaExperienceSoldMagic`=?, `ChaExperienceSoldHealth`=?, \
-         `ChaExperienceSoldStats`=?, `ChaBaseMight`=?, `ChaBaseWill`=?, `ChaBaseGrace`=?, \
-         `ChaBaseArmor`=?, `ChaMiniMapToggle`=?, `ChaHunter`=0, `ChaAFKMessage`=?, \
-         `ChaTutor`=?, `ChaAlignment`=?, `ChaProfileVitaStats`=?, `ChaProfileEquipList`=?, \
-         `ChaProfileLegends`=?, `ChaProfileSpells`=?, `ChaProfileInventory`=?, \
-         `ChaProfileBankItems`=?, `ChaPthRank`=?, `ChaClnRank`=? \
+         `ChaName`=?,`ChaClnId`=?,`ChaClanTitle`=?,`ChaTitle`=?,\
+         `ChaLevel`=?,`ChaPthId`=?,`ChaMark`=?,`ChaTotem`=?,`ChaKarma`=?,\
+         `ChaCurrentVita`=?,`ChaBaseVita`=?,`ChaCurrentMana`=?,`ChaBaseMana`=?,\
+         `ChaExperience`=?,`ChaGold`=?,`ChaSex`=?,`ChaNation`=?,\
+         `ChaFace`=?,`ChaHairColor`=?,`ChaArmorColor`=?,\
+         `ChaMapId`=?,`ChaX`=?,`ChaY`=?,`ChaSide`=?,`ChaState`=?,\
+         `ChaHair`=?,`ChaFaceColor`=?,`ChaSkinColor`=?,\
+         `ChaPartner`=?,`ChaClanChat`=?,`ChaPathChat`=?,`ChaNoviceChat`=?,\
+         `ChaSettings`=?,`ChaGMLevel`=?,`ChaDisguise`=?,`ChaDisguiseColor`=?,\
+         `ChaMaximumBankSlots`=?,`ChaBankGold`=?,`ChaF1Name`=?,\
+         `ChaMaximumInventory`=?,`ChaPK`=?,`ChaKilledBy`=?,`ChaKillsPK`=?,\
+         `ChaPKDuration`=?,`ChaMuted`=?,`ChaHeroes`=?,`ChaTier`=?,\
+         `ChaExperienceSoldMagic`=?,`ChaExperienceSoldHealth`=?,`ChaExperienceSoldStats`=?,\
+         `ChaBaseMight`=?,`ChaBaseWill`=?,`ChaBaseGrace`=?,`ChaBaseArmor`=?,\
+         `ChaMiniMapToggle`=?,`ChaHunter`=0,`ChaAFKMessage`=?,\
+         `ChaTutor`=?,`ChaAlignment`=?,\
+         `ChaProfileVitaStats`=?,`ChaProfileEquipList`=?,`ChaProfileLegends`=?,\
+         `ChaProfileSpells`=?,`ChaProfileInventory`=?,`ChaProfileBankItems`=?,\
+         `ChaPthRank`=?,`ChaClnRank`=? \
          WHERE `ChaId`=?"
     )
-    .bind(&name).bind(s.clan).bind(&clan_title).bind(&title)
-    .bind(s.level).bind(s.class).bind(s.mark).bind(s.totem).bind(s.karma)
-    .bind(s.hp).bind(s.basehp).bind(s.mp).bind(s.basemp)
-    .bind(s.exp).bind(s.money).bind(s.sex).bind(s.country).bind(s.face)
-    .bind(s.hair_color).bind(s.armor_color)
-    .bind(s.last_pos.m).bind(s.last_pos.x).bind(s.last_pos.y)
-    .bind(s.side).bind(s.state).bind(s.hair).bind(s.face_color).bind(s.skin_color)
-    .bind(s.partner).bind(s.clan_chat).bind(s.subpath_chat).bind(s.novice_chat)
-    .bind(s.setting_flags).bind(s.gm_level).bind(s.disguise).bind(s.disguise_color)
-    .bind(s.maxslots).bind(s.bankmoney).bind(&f1name).bind(s.maxinv)
-    .bind(s.pk).bind(s.killedby).bind(s.killspk).bind(s.pkduration).bind(s.mute)
-    .bind(s.heroes).bind(s.tier)
-    .bind(s.expsold_magic).bind(s.expsold_health).bind(s.expsold_stats)
-    .bind(s.basemight).bind(s.basewill).bind(s.basegrace)
-    .bind(s.basearmor).bind(s.mini_map_toggle)
-    .bind(&afkmsg).bind(s.tutor).bind(s.alignment)
-    .bind(s.profile_vitastats).bind(s.profile_equiplist).bind(s.profile_legends)
-    .bind(s.profile_spells).bind(s.profile_inventory).bind(s.profile_bankitems)
-    .bind(s.class_rank as u32).bind(s.clan_rank as u32)
-    .bind(s.id)
+    .bind(&player.identity.name)
+    .bind(player.social.clan)
+    .bind(&player.social.clan_title)
+    .bind(&player.identity.title)
+    .bind(player.progression.level)
+    .bind(player.progression.class)
+    .bind(player.progression.mark)
+    .bind(player.progression.totem)
+    .bind(player.social.karma)
+    .bind(player.combat.hp)
+    .bind(player.combat.max_hp)
+    .bind(player.combat.mp)
+    .bind(player.combat.max_mp)
+    .bind(player.progression.exp)
+    .bind(player.inventory.money)
+    .bind(player.identity.sex)
+    .bind(player.progression.country)
+    .bind(player.appearance.face)
+    .bind(player.appearance.hair_color)
+    .bind(player.appearance.armor_color)
+    .bind(player.identity.last_pos.m)
+    .bind(player.identity.last_pos.x)
+    .bind(player.identity.last_pos.y)
+    .bind(player.combat.side)
+    .bind(player.combat.state)
+    .bind(player.appearance.hair)
+    .bind(player.appearance.face_color)
+    .bind(player.appearance.skin_color)
+    .bind(player.social.partner)
+    .bind(player.social.clan_chat)
+    .bind(player.social.subpath_chat)
+    .bind(player.social.novice_chat)
+    .bind(player.appearance.setting_flags)
+    .bind(player.identity.gm_level)
+    .bind(player.appearance.disguise)
+    .bind(player.appearance.disguise_color)
+    .bind(player.inventory.max_slots)
+    .bind(player.inventory.bank_money)
+    .bind(&player.identity.f1name)
+    .bind(player.inventory.max_inv)
+    .bind(player.social.pk)
+    .bind(player.social.killed_by)
+    .bind(player.social.kills_pk)
+    .bind(player.social.pk_duration)
+    .bind(player.social.mute)
+    .bind(player.appearance.heroes)
+    .bind(player.progression.tier)
+    .bind(player.progression.expsold_magic)
+    .bind(player.progression.expsold_health)
+    .bind(player.progression.expsold_stats)
+    .bind(player.combat.base_might)
+    .bind(player.combat.base_will)
+    .bind(player.combat.base_grace)
+    .bind(player.combat.base_armor)
+    .bind(player.appearance.mini_map_toggle)
+    .bind(&player.social.afk_message)
+    .bind(player.social.tutor)
+    .bind(player.social.alignment)
+    .bind(player.appearance.profile_vitastats)
+    .bind(player.appearance.profile_equiplist)
+    .bind(player.appearance.profile_legends)
+    .bind(player.appearance.profile_spells)
+    .bind(player.appearance.profile_inventory)
+    .bind(player.appearance.profile_bankitems)
+    .bind(player.progression.class_rank as u32)
+    .bind(player.progression.clan_rank as u32)
+    .bind(char_id)
     .execute(&mut *tx).await?;
 
-    // ── Sub-table saves (position-keyed upsert matching C pattern) ────────────
-    save_items_inventory(&mut tx, s.id, &s.inventory).await?;
-    save_items_equipment(&mut tx, s.id, &s.equip).await?;
-    save_spells(&mut tx, s.id, &s.skill).await?;
-    save_aethers(&mut tx, s.id, &s.dura_aether).await?;
-    save_registry(&mut tx, s.id, &s.global_reg, s.global_reg_num as usize).await?;
-    save_registry_string(&mut tx, s.id, &s.global_regstring, s.global_regstring_num as usize).await?;
-    save_npc_registry(&mut tx, s.id, &s.npcintreg).await?;
-    save_quest_registry(&mut tx, s.id, &s.questreg).await?;
-    save_kills(&mut tx, s.id, &s.killreg).await?;
-    save_legends(&mut tx, s.id, &s.legends).await?;
-    save_banks(&mut tx, s.id, &s.banks).await?;
+    save_items_inventory(&mut tx, char_id, &player.inventory.inventory).await?;
+    save_items_equipment(&mut tx, char_id, &player.inventory.equip).await?;
+    save_spells(&mut tx, char_id, &player.spells.skills).await?;
+    save_aethers(&mut tx, char_id, &player.spells.dura_aether).await?;
+    save_registry(&mut tx, char_id, &player.registries.global_reg).await?;
+    save_registry_string(&mut tx, char_id, &player.registries.global_regstring).await?;
+    save_npc_registry(&mut tx, char_id, &player.registries.npc_int_reg).await?;
+    save_quest_registry(&mut tx, char_id, &player.registries.quest_reg).await?;
+    save_kills(&mut tx, char_id, &player.registries.kill_reg).await?;
+    save_legends(&mut tx, char_id, &player.legends.legends).await?;
+    save_banks(&mut tx, char_id, &player.inventory.banks).await?;
     tx.commit().await?;
-
     Ok(())
 }
 
+/// Save a character from a raw byte blob back to the DB (thin wrapper for wire compat).
 // ── String helpers ────────────────────────────────────────────────────────────
 
 fn copy_str_to_i8<const N: usize>(dst: &mut [i8; N], src: &str) {
@@ -653,7 +676,7 @@ fn i8_slice_to_str(src: &[i8]) -> String {
 }
 
 
-async fn save_items_inventory(tx: &mut Transaction<'_, MySql>, char_id: u32, items: &[crate::servers::char::charstatus::Item]) -> Result<()> {
+async fn save_items_inventory(tx: &mut Transaction<'_, MySql>, char_id: u32, items: &[Item]) -> Result<()> {
     sqlx::query("DELETE FROM `Inventory` WHERE `InvChaId`=?")
         .bind(char_id).execute(&mut **tx).await?;
     for (i, item) in items.iter().enumerate().take(MAX_INVENTORY) {
@@ -676,7 +699,7 @@ async fn save_items_inventory(tx: &mut Transaction<'_, MySql>, char_id: u32, ite
     Ok(())
 }
 
-async fn save_items_equipment(tx: &mut Transaction<'_, MySql>, char_id: u32, items: &[crate::servers::char::charstatus::Item]) -> Result<()> {
+async fn save_items_equipment(tx: &mut Transaction<'_, MySql>, char_id: u32, items: &[Item]) -> Result<()> {
     sqlx::query("DELETE FROM `Equipment` WHERE `EqpChaId`=?")
         .bind(char_id).execute(&mut **tx).await?;
     for (i, item) in items.iter().enumerate().take(MAX_EQUIP) {
@@ -711,7 +734,7 @@ async fn save_spells(tx: &mut Transaction<'_, MySql>, char_id: u32, skills: &[u1
     Ok(())
 }
 
-async fn save_aethers(tx: &mut Transaction<'_, MySql>, char_id: u32, aethers: &[crate::servers::char::charstatus::SkillInfo]) -> Result<()> {
+async fn save_aethers(tx: &mut Transaction<'_, MySql>, char_id: u32, aethers: &[SkillInfo]) -> Result<()> {
     sqlx::query("DELETE FROM `Aethers` WHERE `AthChaId`=?")
         .bind(char_id).execute(&mut **tx).await?;
     for (i, a) in aethers.iter().enumerate().take(MAX_MAGIC_TIMERS) {
@@ -724,68 +747,73 @@ async fn save_aethers(tx: &mut Transaction<'_, MySql>, char_id: u32, aethers: &[
     Ok(())
 }
 
-async fn save_registry(tx: &mut Transaction<'_, MySql>, char_id: u32, regs: &[crate::servers::char::charstatus::GlobalReg], count: usize) -> Result<()> {
+async fn save_registry(tx: &mut Transaction<'_, MySql>, char_id: u32, regs: &std::collections::HashMap<String, i32>) -> Result<()> {
     sqlx::query("DELETE FROM `Registry` WHERE `RegChaId`=?")
         .bind(char_id).execute(&mut **tx).await?;
-    for (i, reg) in regs.iter().enumerate().take(count.min(MAX_GLOBALREG)) {
-        if reg.val == 0 { continue; }
-        let key = i8_slice_to_str(&reg.str);
+    let mut pos: u32 = 0;
+    for (key, &val) in regs {
+        if val == 0 { continue; }
         sqlx::query("INSERT INTO `Registry` (`RegChaId`,`RegIdentifier`,`RegValue`,`RegPosition`) VALUES(?,?,?,?)")
-            .bind(char_id).bind(&key).bind(reg.val).bind(i as u32).execute(&mut **tx).await?;
+            .bind(char_id).bind(key).bind(val).bind(pos).execute(&mut **tx).await?;
+        pos += 1;
     }
     Ok(())
 }
 
-async fn save_registry_string(tx: &mut Transaction<'_, MySql>, char_id: u32, regs: &[crate::servers::char::charstatus::GlobalRegString], count: usize) -> Result<()> {
+async fn save_registry_string(tx: &mut Transaction<'_, MySql>, char_id: u32, regs: &std::collections::HashMap<String, String>) -> Result<()> {
     sqlx::query("DELETE FROM `RegistryString` WHERE `RegChaId`=?")
         .bind(char_id).execute(&mut **tx).await?;
-    for (i, reg) in regs.iter().enumerate().take(count.min(MAX_GLOBALREG)) {
-        let key = i8_slice_to_str(&reg.str);
-        let val = i8_slice_to_str(&reg.val);
+    let mut pos: u32 = 0;
+    for (key, val) in regs {
         if val.is_empty() { continue; }
         sqlx::query("INSERT INTO `RegistryString` (`RegChaId`,`RegIdentifier`,`RegValue`,`RegPosition`) VALUES(?,?,?,?)")
-            .bind(char_id).bind(&key).bind(&val).bind(i as u32).execute(&mut **tx).await?;
+            .bind(char_id).bind(key).bind(val).bind(pos).execute(&mut **tx).await?;
+        pos += 1;
     }
     Ok(())
 }
 
-async fn save_npc_registry(tx: &mut Transaction<'_, MySql>, char_id: u32, regs: &[crate::servers::char::charstatus::GlobalReg]) -> Result<()> {
+async fn save_npc_registry(tx: &mut Transaction<'_, MySql>, char_id: u32, regs: &std::collections::HashMap<String, i32>) -> Result<()> {
     sqlx::query("DELETE FROM `NPCRegistry` WHERE `NrgChaId`=?")
         .bind(char_id).execute(&mut **tx).await?;
-    for (i, reg) in regs.iter().enumerate().take(MAX_GLOBALREG) {
-        if reg.val == 0 { continue; }
-        let key = i8_slice_to_str(&reg.str);
+    let mut pos: u32 = 0;
+    for (key, &val) in regs {
+        if val == 0 { continue; }
         sqlx::query("INSERT INTO `NPCRegistry` (`NrgChaId`,`NrgIdentifier`,`NrgValue`,`NrgPosition`) VALUES(?,?,?,?)")
-            .bind(char_id).bind(&key).bind(reg.val).bind(i as u32).execute(&mut **tx).await?;
+            .bind(char_id).bind(key).bind(val).bind(pos).execute(&mut **tx).await?;
+        pos += 1;
     }
     Ok(())
 }
 
-async fn save_quest_registry(tx: &mut Transaction<'_, MySql>, char_id: u32, regs: &[crate::servers::char::charstatus::GlobalReg]) -> Result<()> {
+async fn save_quest_registry(tx: &mut Transaction<'_, MySql>, char_id: u32, regs: &std::collections::HashMap<String, i32>) -> Result<()> {
     sqlx::query("DELETE FROM `QuestRegistry` WHERE `QrgChaId`=?")
         .bind(char_id).execute(&mut **tx).await?;
-    for (i, reg) in regs.iter().enumerate().take(MAX_GLOBALQUESTREG) {
-        if reg.val == 0 { continue; }
-        let key = i8_slice_to_str(&reg.str);
+    let mut pos: u32 = 0;
+    for (key, &val) in regs {
+        if val == 0 { continue; }
         sqlx::query("INSERT INTO `QuestRegistry` (`QrgChaId`,`QrgIdentifier`,`QrgValue`,`QrgPosition`) VALUES(?,?,?,?)")
-            .bind(char_id).bind(&key).bind(reg.val).bind(i as u32).execute(&mut **tx).await?;
+            .bind(char_id).bind(key).bind(val).bind(pos).execute(&mut **tx).await?;
+        pos += 1;
     }
     Ok(())
 }
 
-async fn save_kills(tx: &mut Transaction<'_, MySql>, char_id: u32, kills: &[crate::servers::char::charstatus::KillReg]) -> Result<()> {
+async fn save_kills(tx: &mut Transaction<'_, MySql>, char_id: u32, kills: &std::collections::HashMap<u32, u32>) -> Result<()> {
     sqlx::query("DELETE FROM `Kills` WHERE `KilChaId`=?")
         .bind(char_id).execute(&mut **tx).await?;
-    for (i, k) in kills.iter().enumerate().take(MAX_KILLREG) {
-        if k.mob_id == 0 { continue; }
+    let mut pos: u32 = 0;
+    for (&mob_id, &amount) in kills {
+        if amount == 0 { continue; }
         sqlx::query(
             "INSERT INTO `Kills` (`KilChaId`,`KilMobId`,`KilAmount`,`KilPosition`) VALUES(?,?,?,?)"
-        ).bind(char_id).bind(k.mob_id).bind(k.amount).bind(i as u32).execute(&mut **tx).await?;
+        ).bind(char_id).bind(mob_id).bind(amount).bind(pos).execute(&mut **tx).await?;
+        pos += 1;
     }
     Ok(())
 }
 
-async fn save_legends(tx: &mut Transaction<'_, MySql>, char_id: u32, legends: &[crate::servers::char::charstatus::Legend]) -> Result<()> {
+async fn save_legends(tx: &mut Transaction<'_, MySql>, char_id: u32, legends: &[Legend]) -> Result<()> {
     sqlx::query("DELETE FROM `Legends` WHERE `LegChaId`=?")
         .bind(char_id).execute(&mut **tx).await?;
     for (i, leg) in legends.iter().enumerate().take(MAX_LEGENDS) {
@@ -800,7 +828,7 @@ async fn save_legends(tx: &mut Transaction<'_, MySql>, char_id: u32, legends: &[
     Ok(())
 }
 
-async fn save_banks(tx: &mut Transaction<'_, MySql>, char_id: u32, banks: &[crate::servers::char::charstatus::BankData]) -> Result<()> {
+async fn save_banks(tx: &mut Transaction<'_, MySql>, char_id: u32, banks: &[BankData]) -> Result<()> {
     sqlx::query("DELETE FROM `Banks` WHERE `BnkChaId`=?")
         .bind(char_id).execute(&mut **tx).await?;
     for (i, bank) in banks.iter().enumerate().take(MAX_BANK_SLOTS) {

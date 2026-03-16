@@ -48,7 +48,7 @@ use crate::game::map_parse::items::{
 };
 use crate::game::map_parse::trading::{clif_handitem, clif_handgold, clif_parse_exchange};
 use crate::game::map_parse::groups::{clif_groupstatus, clif_addgroup, clif_parseparcel, clif_huntertoggle, clif_sendhunternote};
-use crate::game::map_parse::events::{clif_sendRewardInfo, clif_getReward, clif_parseranking as rust_clif_parseranking};
+use crate::game::map_parse::events::{clif_sendRewardInfo, clif_getReward, clif_parseranking};
 use crate::game::map_parse::player_state::{clif_mystaytus, clif_refresh};
 use crate::game::map_parse::dialogs::{clif_parsenpcdialog, clif_handle_clickgetinfo, clif_closeit};
 
@@ -71,13 +71,13 @@ use crate::game::map_parse::dialogs::clif_sendtowns;
 use crate::game::client::visual::clif_sendprofile;
 use crate::game::map_parse::player_state::clif_sendminimap;
 use crate::network::crypt::{send_meta, send_metalist};
-use crate::database::item_db::rust_itemdb_thrownconfirm as itemdb_thrownconfirm;
-use crate::game::pc::rust_pc_atkspeed;
+use crate::database::item_db;
+use crate::game::pc::pc_atkspeed;
 
 // pc_warp: actual fn takes i32, old extern had u16 — wrap with cast.
 #[inline]
 unsafe fn pc_warp(sd: *mut MapSessionData, map_id: u16, x: u16, y: u16) {
-    let _ = crate::game::pc::rust_pc_warp(sd, map_id as i32, x as i32, y as i32);
+    let _ = crate::game::pc::pc_warp(sd, map_id as i32, x as i32, y as i32);
 }
 // clif_debug: actual fn takes i32 for len, old extern had u16 — wrap with cast.
 #[inline]
@@ -101,7 +101,7 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
     if session_get_eof(fd) != 0 {
         if !sd.is_null() {
             libc::printf(b"[map] [session_eof] name=%s\n\0".as_ptr() as *const i8,
-                (*sd).status.name.as_ptr());
+                (*sd).player.identity.name.as_ptr());
             clif_handle_disconnect(sd).await;
             clif_closeit(sd);
         }
@@ -144,14 +144,14 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
         if session_exists(SessionId::from_raw(i)) {
             let tsd = session_get_data(SessionId::from_raw(i));
             if !tsd.is_null() {
-                if (*sd).status.id == (*tsd).status.id {
+                if (*sd).player.identity.id == (*tsd).player.identity.id {
                     logincount += 1;
                 }
                 if logincount >= 2 {
                     libc::printf(
                         b"%s attempted dual login on IP:%s\n\0".as_ptr() as *const i8,
-                        (*sd).status.name.as_ptr(),
-                        (*sd).status.ipaddress.as_ptr(),
+                        (*sd).player.identity.name.as_ptr(),
+                        (*sd).player.identity.ipaddress.as_ptr(),
                     );
                     session_set_eof((*sd).fd, 1);
                     session_set_eof((*tsd).fd, 1);
@@ -203,11 +203,11 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
         }
         0x0E => {
             clif_cancelafk(sd);
-            if (*sd).status.gm_level != 0 {
+            if (*sd).player.identity.gm_level != 0 {
                 clif_parsesay(sd);
             } else {
                 (*sd).chat_timer += 1;
-                if (*sd).chat_timer < 2 && (*sd).status.mute == 0 {
+                if (*sd).chat_timer < 2 && (*sd).player.social.mute == 0 {
                     clif_parsesay(sd);
                 }
             }
@@ -217,7 +217,7 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
             (*sd).time += 1;
             if (*sd).paralyzed == 0 && (*sd).sleep == 1.0f32 {
                 if (*sd).time < 4 {
-                    if (*raw_map_ptr().add((*sd).bl.m as usize)).spell != 0 || (*sd).status.gm_level != 0 {
+                    if (*raw_map_ptr().add((*sd).bl.m as usize)).spell != 0 || (*sd).player.identity.gm_level != 0 {
                         clif_parsemagic(&mut *sd);
                     } else {
                         clif_sendminitext(sd, b"That doesn't work here.\0".as_ptr() as *const i8);
@@ -242,7 +242,7 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
                 timer_insert(
                     delay,
                     delay,
-                    Some(rust_pc_atkspeed as unsafe fn(i32, i32) -> i32),
+                    Some(pc_atkspeed as unsafe fn(i32, i32) -> i32),
                     (*sd).bl.id as i32,
                     0,
                 );
@@ -254,11 +254,11 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
             let pos = rfifob((*sd).fd, 6) as usize;
             let confirm = rfifob((*sd).fd, 5);
             // pos is 1-based; inventory is 0-based. Guard against underflow and OOB.
-            if pos == 0 || pos - 1 >= (*sd).status.inventory.len() {
+            if pos == 0 || pos - 1 >= (*sd).player.inventory.inventory.len() {
                 rfifoskip(fd, len);
                 return 0;
             }
-            if itemdb_thrownconfirm((*sd).status.inventory[pos - 1].id) == 1 {
+            if item_db::search((&(*sd).player.inventory.inventory)[pos - 1].id).thrownconfirm == 1 {
                 if confirm == 1 {
                     clif_parsethrow(sd);
                 } else {
@@ -460,7 +460,7 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
             match rfifob(fd, 5) {
                 5 => { clif_sendRewardInfo(sd, fd).await; }
                 6 => { clif_getReward(sd, fd).await; }
-                _ => { rust_clif_parseranking(sd, fd).await; }
+                _ => { clif_parseranking(sd, fd).await; }
             }
         }
         0x82 => {

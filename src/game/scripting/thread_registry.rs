@@ -7,28 +7,53 @@
 //! with the response value.
 
 use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 use mlua::{Lua, RegistryKey, Thread, ThreadStatus};
 
-/// Suspended coroutine threads, keyed by user pointer (as usize).
+/// Wrapper to allow `HashMap<usize, RegistryKey>` in `OnceLock<Mutex<...>>`.
 ///
 /// SAFETY: Only accessed from the single game thread (tokio LocalSet).
-static mut THREADS: Option<HashMap<usize, RegistryKey>> = None;
+/// No concurrent access ever occurs.
+struct ThreadMap(HashMap<usize, RegistryKey>);
+unsafe impl Send for ThreadMap {}
+unsafe impl Sync for ThreadMap {}
+
+impl std::fmt::Debug for ThreadMap {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ThreadMap").field("len", &self.0.len()).finish()
+    }
+}
+
+static THREADS: OnceLock<Mutex<ThreadMap>> = OnceLock::new();
+
+fn threads() -> std::sync::MutexGuard<'static, ThreadMap> {
+    THREADS.get_or_init(|| Mutex::new(ThreadMap(HashMap::new())))
+        .lock().unwrap_or_else(|e| e.into_inner())
+}
 
 pub fn init() {
-    unsafe { THREADS = Some(HashMap::new()); }
+    // Ensure the OnceLock is initialized.
+    drop(threads());
 }
 
 /// Store a suspended Lua thread for `user`.
 ///
 /// Any previously stored thread for this user is silently dropped
 /// (equivalent to cancelling an in-progress NPC interaction).
+///
+/// If the registry insertion fails (e.g. Lua memory exhaustion), the error
+/// is logged and the thread is silently dropped rather than panicking the
+/// server.
 pub fn store(lua: &Lua, user_key: usize, thread: &Thread) {
-    let key = lua.create_registry_value(thread)
-        .expect("failed to store thread in registry");
-    unsafe {
-        THREADS.as_mut().unwrap().insert(user_key, key);
-    }
+    let key = match lua.create_registry_value(thread) {
+        Ok(k) => k,
+        Err(e) => {
+            tracing::error!("[scripting] thread_registry::store: failed to store thread: {e}");
+            return;
+        }
+    };
+    threads().0.insert(user_key, key);
 }
 
 /// Resume a suspended thread with the given arguments.
@@ -37,9 +62,7 @@ pub fn store(lua: &Lua, user_key: usize, thread: &Thread) {
 /// whether it yielded again or completed).  Returns `false` if no thread
 /// was stored for this user.
 pub fn resume<A: mlua::IntoLuaMulti>(lua: &Lua, user_key: usize, args: A) -> bool {
-    let reg_key = unsafe {
-        THREADS.as_mut().unwrap().remove(&user_key)
-    };
+    let reg_key = threads().0.remove(&user_key);
     let reg_key = match reg_key {
         Some(k) => k,
         None => return false,
@@ -69,7 +92,5 @@ pub fn resume<A: mlua::IntoLuaMulti>(lua: &Lua, user_key: usize, args: A) -> boo
 
 /// Cancel (drop) any stored thread for `user`.
 pub fn cancel(user_key: usize) {
-    unsafe {
-        THREADS.as_mut().unwrap().remove(&user_key);
-    }
+    threads().0.remove(&user_key);
 }

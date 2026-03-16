@@ -463,17 +463,17 @@ use std::slice;
 use crate::session::{SessionId, RFIFO_SIZE, WFIFO_SIZE};
 
 /// Whether the opcode uses dynamic encryption (client-side check).
-pub fn rust_crypt_is_key_client(opcode: i32) -> bool {
+pub fn crypt_is_key_client(opcode: i32) -> bool {
     is_key_client(opcode as u8)
 }
 
 /// Whether the opcode uses dynamic encryption (server-side check).
-pub fn rust_crypt_is_key_server(opcode: i32) -> bool {
+pub fn crypt_is_key_server(opcode: i32) -> bool {
     is_key_server(opcode as u8)
 }
 
 /// Generates an MD5 hex digest of `name` into `buffer` (must be ≥33 bytes).
-pub unsafe fn rust_crypt_generate_hashvalues(
+pub unsafe fn crypt_generate_hashvalues(
     name: *const i8,
     buffer: *mut i8,
     buflen: i32,
@@ -487,7 +487,7 @@ pub unsafe fn rust_crypt_generate_hashvalues(
 }
 
 /// Builds the 1025-byte encryption lookup table from `name`.
-pub unsafe fn rust_crypt_populate_table(
+pub unsafe fn crypt_populate_table(
     name: *const i8,
     table: *mut i8,
     tablelen: i32,
@@ -501,7 +501,7 @@ pub unsafe fn rust_crypt_populate_table(
 }
 
 /// Appends 3 index bytes to `packet` and updates its length field.
-pub unsafe fn rust_crypt_set_packet_indexes(packet: *mut u8) -> i32 {
+pub unsafe fn crypt_set_packet_indexes(packet: *mut u8) -> i32 {
     if packet.is_null() { return 0; }
     let psize = ((*packet.add(1) as usize) << 8) | (*packet.add(2) as usize);
     if psize == 0 || psize + 6 > WFIFO_SIZE { return 0; }
@@ -511,7 +511,7 @@ pub unsafe fn rust_crypt_set_packet_indexes(packet: *mut u8) -> i32 {
 }
 
 /// Derives a 9-byte session key into `keyout[0..10]` (NUL at [9]).
-pub unsafe fn rust_crypt_generate_key2(
+pub unsafe fn crypt_generate_key2(
     packet: *mut u8,
     table: *const i8,
     keyout: *mut i8,
@@ -532,7 +532,7 @@ pub unsafe fn rust_crypt_generate_key2(
 }
 
 /// XOR-encrypts/decrypts `buff` in-place using a 9-byte `key`.
-pub unsafe fn rust_crypt_dynamic(buff: *mut u8, key: *const i8) {
+pub unsafe fn crypt_dynamic(buff: *mut u8, key: *const i8) {
     if buff.is_null() || key.is_null() { return; }
     let total = ((*buff.add(1) as usize) << 8) | (*buff.add(2) as usize);
     if total < 5 || total > RFIFO_SIZE { return; }
@@ -542,6 +542,6 @@ pub unsafe fn rust_crypt_dynamic(buff: *mut u8, key: *const i8) {
 }
 
 /// XOR-encrypts/decrypts `buff` using the static xor_key.
-pub unsafe fn rust_crypt_static(buff: *mut u8, xor_key: *const i8) {
-    rust_crypt_dynamic(buff, xor_key);
+pub unsafe fn crypt_static(buff: *mut u8, xor_key: *const i8) {
+    crypt_dynamic(buff, xor_key);
 }

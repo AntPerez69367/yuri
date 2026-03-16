@@ -7,7 +7,7 @@
 use anyhow::{Context, Result};
 use sqlx::mysql::MySqlPoolOptions;
 use sqlx::Row;
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
@@ -58,12 +58,10 @@ fn output_meta(filename: &str, num: usize, list: &[u32]) -> Result<()> {
         let id = list[x];
 
         // name (u8-length-prefixed)
-        let name_ptr = item_db::search(id);
-        let name_bytes = if !name_ptr.is_null() {
-            let cstr = unsafe { CStr::from_ptr((*name_ptr).name.as_ptr()) };
+        let db = item_db::search(id);
+        let name_bytes = {
+            let cstr = unsafe { CStr::from_ptr(db.name.as_ptr()) };
             cstr.to_bytes().to_vec()
-        } else {
-            b"??".to_vec()
         };
         write_u8len_field(&mut w, &name_bytes)?;
 
@@ -72,28 +70,28 @@ fn output_meta(filename: &str, num: usize, list: &[u32]) -> Result<()> {
         w.write_all(&twenty.to_ne_bytes())?;
 
         // All integer fields
-        let mightreq  = if !name_ptr.is_null() { unsafe { (*name_ptr).mightreq  } } else { 0 };
-        let price     = if !name_ptr.is_null() { unsafe { (*name_ptr).price     } } else { 0 };
-        let dura      = if !name_ptr.is_null() { unsafe { (*name_ptr).dura      } } else { 0 };
-        let ac        = if !name_ptr.is_null() { unsafe { (*name_ptr).ac        } } else { 0 };
-        let hit       = if !name_ptr.is_null() { unsafe { (*name_ptr).hit       } } else { 0 };
-        let dam       = if !name_ptr.is_null() { unsafe { (*name_ptr).dam       } } else { 0 };
-        let vita      = if !name_ptr.is_null() { unsafe { (*name_ptr).vita      } } else { 0 };
-        let mana      = if !name_ptr.is_null() { unsafe { (*name_ptr).mana      } } else { 0 };
-        let might     = if !name_ptr.is_null() { unsafe { (*name_ptr).might     } } else { 0 };
-        let grace     = if !name_ptr.is_null() { unsafe { (*name_ptr).grace     } } else { 0 };
-        let will      = if !name_ptr.is_null() { unsafe { (*name_ptr).will      } } else { 0 };
-        let wisdom    = if !name_ptr.is_null() { unsafe { (*name_ptr).wisdom    } } else { 0 };
-        let con       = if !name_ptr.is_null() { unsafe { (*name_ptr).con       } } else { 0 };
-        let class_id  = if !name_ptr.is_null() { unsafe { (*name_ptr).class as i32 } } else { 0 };
-        let rank      = if !name_ptr.is_null() { unsafe { (*name_ptr).rank      } } else { 0 };
-        let level     = if !name_ptr.is_null() { unsafe { (*name_ptr).level as i32 } } else { 0 };
-        let healing   = if !name_ptr.is_null() { unsafe { (*name_ptr).healing   } } else { 0 };
-        let protection = if !name_ptr.is_null() { unsafe { (*name_ptr).protection } } else { 0 };
-        let min_sdam  = if !name_ptr.is_null() { unsafe { (*name_ptr).min_sdam as i32 } } else { 0 };
-        let max_sdam  = if !name_ptr.is_null() { unsafe { (*name_ptr).max_sdam as i32 } } else { 0 };
-        let min_ldam  = if !name_ptr.is_null() { unsafe { (*name_ptr).min_ldam as i32 } } else { 0 };
-        let max_ldam  = if !name_ptr.is_null() { unsafe { (*name_ptr).max_ldam as i32 } } else { 0 };
+        let mightreq  = db.mightreq;
+        let price     = db.price;
+        let dura      = db.dura;
+        let ac        = db.ac;
+        let hit       = db.hit;
+        let dam       = db.dam;
+        let vita      = db.vita;
+        let mana      = db.mana;
+        let might     = db.might;
+        let grace     = db.grace;
+        let will      = db.will;
+        let wisdom    = db.wisdom;
+        let con       = db.con;
+        let class_id  = db.class as i32;
+        let rank      = db.rank;
+        let level     = db.level as i32;
+        let healing   = db.healing;
+        let protection = db.protection;
+        let min_sdam  = db.min_sdam as i32;
+        let max_sdam  = db.max_sdam as i32;
+        let min_ldam  = db.min_ldam as i32;
+        let max_ldam  = db.max_ldam as i32;
 
         write_int_field(&mut w, mightreq)?;
         write_int_field(&mut w, price)?;
@@ -154,18 +152,13 @@ async fn main() -> Result<()> {
         .context("[metan] [config_error] conf/server.yaml")?;
 
     // Connect to database
-    let db_url = format!(
-        "mysql://{}:{}@{}:{}/{}",
-        config.sql_id, config.sql_pw, config.sql_ip, config.sql_port, config.sql_db
-    );
+    let db_url = std::env::var("DATABASE_URL")
+        .context("DATABASE_URL environment variable not set")?;
     let pool = MySqlPoolOptions::new()
         .max_connections(5)
         .connect(&db_url)
         .await
-        .with_context(|| format!(
-            "Cannot connect to MySQL (host={}:{} db={} user={})",
-            config.sql_ip, config.sql_port, config.sql_db, config.sql_id
-        ))?;
+        .with_context(|| format!("Cannot connect to MySQL: {}", db_url))?;
 
     // Register pool with the Rust DB module layer.
     // Use set_pool() (async-safe) instead of connect() which would panic inside tokio.
@@ -200,9 +193,7 @@ async fn main() -> Result<()> {
     let data_dir = config.data_dir.clone();
     tokio::task::spawn_blocking(move || {
         item_db::init();
-        let data_dir_c = CString::new(data_dir.as_str())
-            .expect("data_dir contains nul byte");
-        unsafe { class_db::init(data_dir_c.as_ptr()); }
+        class_db::init(&data_dir);
     })
     .await
     .context("DB init thread panicked")?;

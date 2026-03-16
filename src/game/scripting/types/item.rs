@@ -1,50 +1,8 @@
-use std::ffi::CStr;
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
 use crate::database::item_db::ItemData;
 use crate::database::recipe_db::RecipeData;
-
-// ---------------------------------------------------------------------------
-// repr(C) structs mirroring C game structs
-// ---------------------------------------------------------------------------
-
-/// Live item instance. 880 bytes.
-#[repr(C)]
-pub struct BoundItem {
-    pub id: u32,
-    pub owner: u32,
-    pub custom: u32,
-    pub time: u32,
-    pub dura: i32,
-    pub amount: i32,
-    pub pos: u8,
-    pub _pad: [u8; 3],
-    pub custom_look: u32,
-    pub custom_icon: u32,
-    pub custom_look_color: u32,
-    pub custom_icon_color: u32,
-    pub protected: u32,
-    pub traps_table: [u32; 100],
-    pub buytext: [u8; 64],
-    pub note: [i8; 300],
-    pub repair: i8,
-    pub real_name: [i8; 64],
-}
-
-#[repr(C)]
-pub struct BankData {
-    pub item_id: u32,
-    pub amount: u32,
-    pub owner: u32,
-    pub time: u32,
-    pub custom_icon: u32,
-    pub custom_look: u32,
-    pub real_name: [i8; 64],
-    pub custom_look_color: u32,
-    pub custom_icon_color: u32,
-    pub protected: u32,
-    pub note: [i8; 300],
-}
+pub use crate::common::types::{BankData, Item as BoundItem};
 
 #[repr(C)]
 pub struct Parcel {
@@ -199,28 +157,19 @@ pub unsafe fn item_data_getattr(
         "protection"   => int!(d.protection),
         "reqMight"     => int!(d.mightreq),
         "rank" => {
-            let path = crate::database::class_db::rust_classdb_path(d.class as i32);
-            let ptr = crate::database::class_db::rust_classdb_name(path, d.rank);
-            let s = classdb_name_to_string(ptr);
+            let path = crate::database::class_db::path(d.class as i32);
+            let s = crate::database::class_db::name(path, d.rank);
             Ok(mlua::Value::String(lua.create_string(s)?))
         }
         "baseClass" => {
-            int!(crate::database::class_db::rust_classdb_path(d.class as i32))
+            int!(crate::database::class_db::path(d.class as i32))
         }
         "className" => {
-            let ptr = crate::database::class_db::rust_classdb_name(d.class as i32, d.rank);
-            let s = classdb_name_to_string(ptr);
+            let s = crate::database::class_db::name(d.class as i32, d.rank);
             Ok(mlua::Value::String(lua.create_string(s)?))
         }
         _ => Ok(mlua::Value::Nil),
     }
-}
-
-fn classdb_name_to_string(ptr: *mut i8) -> String {
-    if ptr.is_null() { return String::new(); }
-    let s = unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() };
-    unsafe { crate::database::class_db::rust_classdb_free_name(ptr); }
-    s
 }
 
 // ---------------------------------------------------------------------------
@@ -262,8 +211,8 @@ impl UserData for BItemObject {
                 "customIconColor" => int!(bi.custom_icon_color),
                 "note"            => cstr!(&bi.note),
                 _ => {
-                    let db = crate::database::item_db::rust_itemdb_search(bi.id);
-                    unsafe { item_data_getattr(lua, db, &key) }
+                    let db = crate::database::item_db::search(bi.id);
+                    unsafe { item_data_getattr(lua, &*db as *const ItemData, &key) }
                 }
             }
         });
@@ -327,8 +276,8 @@ impl UserData for BankItemObject {
                 "customIconColor" => int!(bd.custom_icon_color),
                 "note"            => cstr!(&bd.note),
                 _ => {
-                    let db = crate::database::item_db::rust_itemdb_search(bd.item_id);
-                    unsafe { item_data_getattr(lua, db, &key) }
+                    let db = crate::database::item_db::search(bd.item_id);
+                    unsafe { item_data_getattr(lua, &*db as *const ItemData, &key) }
                 }
             }
         });
@@ -388,8 +337,8 @@ impl UserData for ParcelObject {
                 "pos"       => int!(p.pos),
                 "npcFlag"   => int!(p.npcflag),
                 _ => {
-                    let db = crate::database::item_db::rust_itemdb_search(p.data.id);
-                    unsafe { item_data_getattr(lua, db, &key) }
+                    let db = crate::database::item_db::search(p.data.id);
+                    unsafe { item_data_getattr(lua, &*db as *const ItemData, &key) }
                 }
             }
         });

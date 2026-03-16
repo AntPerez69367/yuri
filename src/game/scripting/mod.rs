@@ -1,8 +1,7 @@
 //! Lua scripting engine.
-#![allow(non_snake_case, dead_code, unused_variables, non_upper_case_globals, static_mut_refs)]
+#![allow(non_snake_case, dead_code, unused_variables, non_upper_case_globals)]
 
 pub mod async_coro;
-pub mod ffi;
 pub mod globals;
 pub mod object_collect;
 pub mod pc_accessors;
@@ -15,6 +14,7 @@ use mlua::Lua;
 use std::ffi::{CStr, CString};
 
 use crate::database::map_db::BlockList;
+use crate::game::pc::{BL_PC, BL_MOB, BL_NPC, BL_ITEM};
 use types::floor::FloorListObject;
 use types::item::*;
 use types::mob::MobObject;
@@ -25,51 +25,67 @@ use types::registry::*;
 // ---------------------------------------------------------------------------
 // Global Lua state — single instance, lives for the process lifetime.
 // ---------------------------------------------------------------------------
-// SAFETY: Option<mlua::Lua> is !Send + !Sync. Initialised once by rust_sl_init on the game thread.
-// All Lua calls happen on the same thread via the tokio LocalSet executor. No concurrent access.
-static mut SL_STATE: Option<Lua> = None;
+
+/// Wrapper around `Lua` to allow storage in `OnceLock`.
+///
+/// SAFETY: The Lua state is initialised once on the game thread and only
+/// accessed from the same thread via the tokio `LocalSet` executor.
+/// No concurrent access ever occurs.
+struct LuaWrapper(Lua);
+unsafe impl Send for LuaWrapper {}
+unsafe impl Sync for LuaWrapper {}
+
+impl std::fmt::Debug for LuaWrapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LuaWrapper").finish_non_exhaustive()
+    }
+}
+
+/// The global Lua state, set once by `sl_init`.
+static SL_STATE: std::sync::OnceLock<LuaWrapper> = std::sync::OnceLock::new();
+
+/// Raw `lua_State` pointer, captured once during `sl_init`.
+static SL_GSTATE: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
 
 /// Returns a reference to the global Lua state.
+///
 /// # Safety
 /// Must only be called after `sl_init()`.  All scripting runs on the LocalSet
 /// thread (timer_do + session_io_task), so no external locking is needed.
 pub unsafe fn sl_state() -> &'static Lua {
-    SL_STATE.as_ref().expect("sl_init() not called")
+    &SL_STATE.get().expect("sl_init() not called").0
 }
 
-/// Raw lua_State pointer — exported so C code using `sl_gstate` still compiles.
-/// Set after init. Leave null if mlua does not expose a stable raw accessor.
-// SAFETY: Raw pointer alias into SL_STATE's internal lua_State. Same safety invariant as SL_STATE:
-// initialised once on the game thread, only accessed from the tokio LocalSet executor.
-pub static mut sl_gstate: *mut std::ffi::c_void = std::ptr::null_mut();
+/// Returns the raw `lua_State*` pointer captured at init time.
+pub fn sl_gstate_ptr() -> *mut std::ffi::c_void {
+    SL_GSTATE.get().copied().unwrap_or(0) as *mut std::ffi::c_void
+}
 
 // ---------------------------------------------------------------------------
 // sl_init
 // ---------------------------------------------------------------------------
 pub fn sl_init() {
+    // LuaJIT on 64-bit requires luaL_newstate() — Lua::new() uses it.
+    // Lua::new_with(ALL_SAFE, ...) uses a custom allocator that LuaJIT rejects.
+    let lua = Lua::new();
+
+    register_types(&lua).expect("failed to register scripting types");
+    globals::register(&lua).expect("failed to register scripting globals");
+
+    // Capture the raw lua_State* via exec_raw (pointer is stable for process lifetime).
+    // SAFETY: exec_raw requires unsafe. The closure captures a stable pointer that lives for
+    // the process lifetime. No UB — we just store the address as a usize.
     unsafe {
-        // LuaJIT on 64-bit requires luaL_newstate() — Lua::new() uses it.
-        // Lua::new_with(ALL_SAFE, ...) uses a custom allocator that LuaJIT rejects.
-        let lua = Lua::new();
-
-        register_types(&lua).expect("failed to register scripting types");
-        globals::register(&lua).expect("failed to register scripting globals");
-
-        SL_STATE = Some(lua);
-        thread_registry::init();
-
-        // Capture the raw lua_State* via exec_raw and store in sl_gstate so C
-        // helpers 
-        // through the mlua lock (safe: pointer is stable for process lifetime).
-                // it without going through the mlua lock.  Panic on failure — sl_gstate
-        // must be non-null before any C code can call back into Lua.
-        SL_STATE.as_ref().unwrap().exec_raw::<()>((), |L| {
-            sl_gstate = L as *mut std::ffi::c_void;
+        lua.exec_raw::<()>((), |l| {
+            let _ = SL_GSTATE.set(l as usize);
         }).expect("exec_raw failed: sl_gstate could not be initialised");
-
-        // Reload scripts (lua_dir comes from config).
-        sl_reload();
     }
+
+    let _ = SL_STATE.set(LuaWrapper(lua));
+    thread_registry::init();
+
+    // Reload scripts (lua_dir comes from config).
+    unsafe { sl_reload(); }
 }
 
 /// Convert a Lua value (integer id or light userdata pointer) to a C pointer.
@@ -109,22 +125,22 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     g.set("NPC", lua.create_function(|lua, v: mlua::Value| -> mlua::Result<mlua::Value> {
         let ptr = match v {
             mlua::Value::Integer(i) if i >= 0 && i <= u32::MAX as i64 => {
-                unsafe { ffi::map_id2bl(i as u32) }
+                crate::game::map_server::map_id2bl_ref(i as u32)
             }
             mlua::Value::Number(f) if f.is_finite() && f >= 0.0 && f <= u32::MAX as f64 => {
-                unsafe { ffi::map_id2bl(f as u32) }
+                crate::game::map_server::map_id2bl_ref(f as u32)
             }
             mlua::Value::String(ref s) => {
                 let cs = CString::new(s.as_bytes().to_vec()).map_err(mlua::Error::external)?;
-                unsafe { ffi::map_name2npc(cs.as_ptr()) as *mut std::ffi::c_void }
+                unsafe { crate::game::map_server::map_name2npc(cs.as_ptr()) as *mut BlockList }
             }
             _ => std::ptr::null_mut(),
         };
         if ptr.is_null() { return Ok(mlua::Value::Nil); }
-        if unsafe { (*(ptr as *const BlockList)).bl_type as i32 } != ffi::BL_NPC {
+        if unsafe { (*ptr).bl_type as i32 } != BL_NPC {
             return Ok(mlua::Value::Nil);
         }
-        Ok(mlua::Value::UserData(lua.create_userdata(NpcObject { ptr })?))
+        Ok(mlua::Value::UserData(lua.create_userdata(NpcObject { ptr: ptr as *mut std::ffi::c_void })?))
     })?)?;
 
     // Player — callable namespace table for PC scripts.
@@ -136,17 +152,17 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
         let bl_id = match v {
             mlua::Value::Integer(id) => {
                 if id < 0 || id > u32::MAX as i64 { return Ok(mlua::Value::Nil); }
-                crate::game::map_server::map_id2sd_pc(id as u32).map(|sd| sd.bl.id)
+                crate::game::map_server::map_id2sd_pc(id as u32).map(|arc| arc.read().bl.id)
             }
             mlua::Value::Number(f) => {
                 if !f.is_finite() || f < 0.0 || f > u32::MAX as f64 { return Ok(mlua::Value::Nil); }
-                crate::game::map_server::map_id2sd_pc(f as u32).map(|sd| sd.bl.id)
+                crate::game::map_server::map_id2sd_pc(f as u32).map(|arc| arc.read().bl.id)
             }
             mlua::Value::String(ref s) => {
                 let cs = CString::new(s.as_bytes().to_vec()).map_err(mlua::Error::external)?;
-                let ptr = unsafe { ffi::map_name2sd(cs.as_ptr()) };
+                let ptr = unsafe { crate::game::map_server::map_name2sd(cs.as_ptr()) };
                 if ptr.is_null() { None }
-                else { Some(unsafe { (*(ptr as *const crate::game::pc::MapSessionData)).bl.id }) }
+                else { Some(unsafe { (*ptr).bl.id }) }
             }
             _ => None,
         };
@@ -187,23 +203,23 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     g.set("QUESTREG", ctor!(lua, QuestRegObject))?;
     // ITEM/RECIPE/FL need custom ctors that perform DB/id-db lookups.
     g.set("ITEM", lua.create_function(|lua, v: mlua::Value| -> mlua::Result<mlua::Value> {
-        let ptr: *mut std::ffi::c_void = match v {
+        let item: Option<std::sync::Arc<crate::database::item_db::ItemData>> = match v {
             mlua::Value::Integer(id) => {
                 if id < 0 || id > u32::MAX as i64 { return Ok(mlua::Value::Nil); }
-                crate::database::item_db::rust_itemdb_search(id as u32) as *mut std::ffi::c_void
+                Some(crate::database::item_db::search(id as u32))
             }
             mlua::Value::Number(f) => {
                 if !f.is_finite() || f < 0.0 || f > u32::MAX as f64 { return Ok(mlua::Value::Nil); }
-                crate::database::item_db::rust_itemdb_search(f as u32) as *mut std::ffi::c_void
+                Some(crate::database::item_db::search(f as u32))
             }
             mlua::Value::String(ref s) => {
                 let text = s.to_str()?;
-                let cs = CString::new(text.as_bytes()).map_err(mlua::Error::external)?;
-                unsafe { crate::database::item_db::rust_itemdb_searchname(cs.as_ptr()) as *mut std::ffi::c_void }
+                crate::database::item_db::searchname(&text)
             }
-            _ => std::ptr::null_mut(),
+            _ => None,
         };
-        if ptr.is_null() { return Ok(mlua::Value::Nil); }
+        let Some(item) = item else { return Ok(mlua::Value::Nil); };
+        let ptr = std::sync::Arc::into_raw(item) as *mut std::ffi::c_void;
         Ok(mlua::Value::UserData(lua.create_userdata(ItemObject { ptr })?))
     })?)?;
     g.set("BITEM",    ctor!(lua, BItemObject))?;
@@ -213,16 +229,18 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
         let ptr: *mut std::ffi::c_void = match v {
             mlua::Value::Integer(id) => {
                 if id < 0 || id > u32::MAX as i64 { return Ok(mlua::Value::Nil); }
-                crate::database::recipe_db::rust_recipedb_search(id as u32) as *mut std::ffi::c_void
+                std::sync::Arc::into_raw(crate::database::recipe_db::search(id as u32)) as *mut std::ffi::c_void
             }
             mlua::Value::Number(f) => {
                 if !f.is_finite() || f < 0.0 || f > u32::MAX as f64 { return Ok(mlua::Value::Nil); }
-                crate::database::recipe_db::rust_recipedb_search(f as u32) as *mut std::ffi::c_void
+                std::sync::Arc::into_raw(crate::database::recipe_db::search(f as u32)) as *mut std::ffi::c_void
             }
             mlua::Value::String(ref s) => {
                 let text = s.to_str()?;
-                let cs = CString::new(text.as_bytes()).map_err(mlua::Error::external)?;
-                unsafe { crate::database::recipe_db::rust_recipedb_searchname(cs.as_ptr()) as *mut std::ffi::c_void }
+                match crate::database::recipe_db::searchname(&*text) {
+                    Some(arc) => std::sync::Arc::into_raw(arc) as *mut std::ffi::c_void,
+                    None => std::ptr::null_mut(),
+                }
             }
             _ => std::ptr::null_mut(),
         };
@@ -230,7 +248,7 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
         Ok(mlua::Value::UserData(lua.create_userdata(RecipeObject { ptr })?))
     })?)?;
     let fl_ctor = lua.create_function(|lua, id: u32| -> mlua::Result<mlua::Value> {
-        let ptr = unsafe { ffi::map_id2fl(id) };
+        let ptr = unsafe { crate::game::map_server::map_id2fl(id) };
         if ptr.is_null() { return Ok(mlua::Value::Nil); }
         Ok(mlua::Value::UserData(lua.create_userdata(FloorListObject::new(ptr))?))
     })?;
@@ -316,10 +334,10 @@ pub(crate) unsafe fn bl_to_lua(lua: &Lua, bl: *mut std::ffi::c_void) -> mlua::Re
     let bl_ref = &*(bl as *const BlockList);
     let bl_type = bl_ref.bl_type as i32;
     match bl_type {
-        ffi::BL_PC   => lua.pack(PcObject  { id: bl_ref.id }),
-        ffi::BL_MOB  => lua.pack(MobObject { id: bl_ref.id }),
-        ffi::BL_NPC  => lua.pack(NpcObject { ptr: bl }),
-        ffi::BL_ITEM => lua.pack(FloorListObject::new(bl)),
+        BL_PC   => lua.pack(PcObject  { id: bl_ref.id }),
+        BL_MOB  => lua.pack(MobObject { id: bl_ref.id }),
+        BL_NPC  => lua.pack(NpcObject { ptr: bl }),
+        BL_ITEM => lua.pack(FloorListObject::new(bl)),
         other => {
             tracing::warn!("[scripting] bl_to_lua: unhandled bl_type={other:#04x}, returning nil");
             Ok(mlua::Value::Nil)
@@ -332,13 +350,13 @@ pub(crate) unsafe fn bl_to_lua(lua: &Lua, bl: *mut std::ffi::c_void) -> mlua::Re
 pub fn entity_to_lua(lua: &mlua::Lua, id: u32) -> mlua::Result<mlua::Value> {
     use crate::game::map_server::GameEntity;
     match crate::game::map_server::map_id2entity(id) {
-        Some(GameEntity::Player(sd)) => lua.pack(PcObject  { id: sd.bl.id }),
-        Some(GameEntity::Mob(mob))   => lua.pack(MobObject { id: mob.bl.id }),
-        Some(GameEntity::Npc(npc)) => lua.pack(
-            NpcObject { ptr: npc as *mut _ as *mut std::ffi::c_void }
+        Some(GameEntity::Player(arc)) => lua.pack(PcObject  { id: arc.read().bl.id }),
+        Some(GameEntity::Mob(arc))   => lua.pack(MobObject { id: arc.read().bl.id }),
+        Some(GameEntity::Npc(arc)) => lua.pack(
+            NpcObject { ptr: &*arc.write() as *const _ as *mut std::ffi::c_void }
         ),
-        Some(GameEntity::Item(item)) => lua.pack(
-            FloorListObject::new(item as *mut _ as *mut std::ffi::c_void)
+        Some(GameEntity::Item(arc)) => lua.pack(
+            FloorListObject::new(&*arc.write() as *const _ as *mut std::ffi::c_void)
         ),
         None => Ok(mlua::Value::Nil),
     }
@@ -442,10 +460,10 @@ pub unsafe fn doscript_coro(
         } else {
             let bl_ref = &*(bl as *const BlockList);
             // Wrap the first player arg through _wrap_player for yielding method support.
-            if i == 0 && bl_ref.bl_type as i32 == ffi::BL_PC {
+            if i == 0 && bl_ref.bl_type as i32 == BL_PC {
                 // Derive the user key (MapSessionData pointer) for thread registry.
-                if let Some(sd) = crate::game::map_server::map_id2sd_pc(bl_ref.id) {
-                    user_key = Some(sd as *mut crate::game::pc::MapSessionData as usize);
+                if let Some(arc) = crate::game::map_server::map_id2sd_pc(bl_ref.id) {
+                    user_key = Some(&*arc.read() as *const crate::game::pc::MapSessionData as usize);
                 }
                 let pc_val = bl_to_lua(lua, bl as *mut std::ffi::c_void).unwrap_or(mlua::Value::Nil);
                 if let Some(ref wf) = wrap_fn {
@@ -558,104 +576,55 @@ pub unsafe fn sl_updatepeople_impl(_bl: *mut std::ffi::c_void, _ap: *mut std::ff
 }
 
 
-pub unsafe fn rust_sl_init() {
-    ffi_catch!((), sl_init())
-}
-
-pub unsafe fn rust_sl_fixmem() {
-    ffi_catch!((), sl_fixmem())
-}
-
-pub unsafe fn rust_sl_reload() -> i32 {
-    ffi_catch!(-1, sl_reload())
-}
-
-pub unsafe fn rust_sl_luasize(_user: *mut crate::game::pc::MapSessionData) -> i32 {
-    ffi_catch!(0, sl_luasize())
-}
-
-pub unsafe fn rust_sl_doscript_blargs_vec(
-    root:   *const i8,
-    method: *const i8,
-    nargs:  i32,
-    args:   *const *mut std::ffi::c_void,
-) -> i32 {
-    ffi_catch!(0, sl_doscript_blargs_vec(root, method, nargs, args))
-}
-
-pub unsafe fn rust_sl_doscript_strings_vec(
-    root:   *const i8,
-    method: *const i8,
-    nargs:  i32,
-    args:   *const *const i8,
-) -> i32 {
-    ffi_catch!(0, sl_doscript_strings_vec(root, method, nargs, args))
-}
-
-pub unsafe fn rust_sl_doscript_stackargs(
-    root:   *const i8,
-    method: *const i8,
-    nargs:  i32,
-) -> i32 {
-    ffi_catch!(0, sl_doscript_stackargs(root, method, nargs))
-}
-
-pub unsafe fn rust_sl_updatepeople(
-    bl: *mut std::ffi::c_void,
-    ap: *mut std::ffi::c_void,
-) -> i32 {
-    ffi_catch!(0, sl_updatepeople_impl(bl, ap))
-}
-
 /// Direct symbol used as a function pointer callback in map_foreachinarea.
 pub unsafe fn sl_updatepeople(
     bl: *mut std::ffi::c_void,
     ap: *mut std::ffi::c_void,
 ) -> i32 {
-    ffi_catch!(0, sl_updatepeople_impl(bl, ap))
+    sl_updatepeople_impl(bl, ap)
 }
 
-pub unsafe fn rust_sl_resumemenu(selection: u32, sd: *mut crate::game::pc::MapSessionData) {
-    ffi_catch!((), async_coro::resume_menu(selection, sd as *mut std::ffi::c_void))
+pub unsafe fn sl_resumemenu(selection: u32, sd: *mut crate::game::pc::MapSessionData) {
+    async_coro::resume_menu(selection, sd as *mut std::ffi::c_void)
 }
 
-pub unsafe fn rust_sl_resumemenuseq(selection: u32, choice: i32, sd: *mut crate::game::pc::MapSessionData) {
-    ffi_catch!((), async_coro::resume_menuseq(selection, choice, sd as *mut std::ffi::c_void))
+pub unsafe fn sl_resumemenuseq(selection: u32, choice: i32, sd: *mut crate::game::pc::MapSessionData) {
+    async_coro::resume_menuseq(selection, choice, sd as *mut std::ffi::c_void)
 }
 
-pub unsafe fn rust_sl_resumeinputseq(
+pub unsafe fn sl_resumeinputseq(
     choice: u32,
     input:  *mut i8,
     sd:     *mut crate::game::pc::MapSessionData,
 ) {
-    ffi_catch!((), async_coro::resume_inputseq(choice, input, sd as *mut std::ffi::c_void))
+    async_coro::resume_inputseq(choice, input, sd as *mut std::ffi::c_void)
 }
 
-pub unsafe fn rust_sl_resumedialog(choice: u32, sd: *mut crate::game::pc::MapSessionData) {
-    ffi_catch!((), async_coro::resume_dialog(choice, sd as *mut std::ffi::c_void))
+pub unsafe fn sl_resumedialog(choice: u32, sd: *mut crate::game::pc::MapSessionData) {
+    async_coro::resume_dialog(choice, sd as *mut std::ffi::c_void)
 }
 
-pub unsafe fn rust_sl_resumebuy(items: *mut i8, sd: *mut crate::game::pc::MapSessionData) {
-    ffi_catch!((), async_coro::resume_buy(items, sd as *mut std::ffi::c_void))
+pub unsafe fn sl_resumebuy(items: *mut i8, sd: *mut crate::game::pc::MapSessionData) {
+    async_coro::resume_buy(items, sd as *mut std::ffi::c_void)
 }
 
-pub unsafe fn rust_sl_resumeinput(
+pub unsafe fn sl_resumeinput(
     tag:   *mut i8,
     input: *mut i8,
     sd:    *mut crate::game::pc::MapSessionData,
 ) {
-    ffi_catch!((), async_coro::resume_input(tag, input, sd as *mut std::ffi::c_void))
+    async_coro::resume_input(tag, input, sd as *mut std::ffi::c_void)
 }
 
-pub unsafe fn rust_sl_resumesell(choice: u32, sd: *mut crate::game::pc::MapSessionData) {
-    ffi_catch!((), async_coro::resume_sell(choice, sd as *mut std::ffi::c_void))
+pub unsafe fn sl_resumesell(choice: u32, sd: *mut crate::game::pc::MapSessionData) {
+    async_coro::resume_sell(choice, sd as *mut std::ffi::c_void)
 }
 
-pub unsafe fn rust_sl_exec(user: *mut crate::game::pc::MapSessionData, code: *mut i8) {
-    ffi_catch!((), sl_exec_str(user as *mut std::ffi::c_void, code))
+pub unsafe fn sl_exec(_user: *mut crate::game::pc::MapSessionData, code: *mut i8) {
+    sl_exec_str(_user as *mut std::ffi::c_void, code)
 }
 
-pub unsafe fn rust_sl_async_freeco(user: *mut crate::game::pc::MapSessionData) {
+pub unsafe fn sl_async_freeco(user: *mut crate::game::pc::MapSessionData) {
     thread_registry::cancel(user as usize);
     async_coro::clear_menu_opts(user as *mut std::ffi::c_void);
 }

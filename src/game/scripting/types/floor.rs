@@ -217,15 +217,15 @@ impl UserData for FloorListObject {
                         move |_, _: mlua::MultiValue| {
                             let raw = shared.swap(std::ptr::null_mut(), Ordering::Relaxed);
                             if !raw.is_null() {
-                                unsafe { crate::game::scripting::ffi::sl_fl_delete(raw); }
+                                unsafe { crate::game::scripting::map_globals::sl_fl_delete(raw); }
                             }
                             Ok(())
                         }
                     )?));
                 }
                 _ => {
-                    let db = crate::database::item_db::rust_itemdb_search(fl_ref.data.id);
-                    unsafe { item_data_getattr(lua, db, &key) }
+                    let db = crate::database::item_db::search(fl_ref.data.id);
+                    unsafe { item_data_getattr(lua, &*db as *const crate::database::item_db::ItemData, &key) }
                 }
             }
         });

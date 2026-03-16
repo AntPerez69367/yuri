@@ -13,7 +13,7 @@ use crate::game::pc::{
     EQ_ARMOR, EQ_COAT, EQ_WEAP, EQ_SHIELD, EQ_HELM,
     EQ_FACEACC, EQ_CROWN, EQ_FACEACCTWO, EQ_MANTLE, EQ_NECKLACE, EQ_BOOTS,
 };
-use crate::servers::char::charstatus::Item;
+use crate::common::types::Item;
 use crate::session::{SessionId, session_exists};
 
 use super::packet::{
@@ -26,36 +26,33 @@ use super::packet::{
 
 
 
-use crate::game::map_server::{map_id2bl as map_id2bl_ms};
+use crate::game::map_server::map_id2bl_ref;
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::client::visual::clif_clickonplayer;
 use crate::game::scripting::{
-    rust_sl_resumedialog, rust_sl_resumemenuseq, rust_sl_resumeinputseq,
-    rust_sl_resumebuy, rust_sl_resumesell, rust_sl_resumeinput, rust_sl_async_freeco,
+    sl_resumedialog, sl_resumemenuseq, sl_resumeinputseq,
+    sl_resumebuy, sl_resumesell, sl_resumeinput, sl_async_freeco,
 };
-use crate::database::item_db::{
-    rust_itemdb_name, rust_itemdb_buytext, rust_itemdb_icon, rust_itemdb_iconcolor,
-    rust_itemdb_class, rust_itemdb_rank, rust_itemdb_level,
-};
-use crate::database::class_db::rust_classdb_name;
+use crate::database::item_db;
+use crate::database::class_db::name as classdb_name;
 
 // map_id2sd_local: typed lookup returning raw pointer for use in unsafe context.
 #[inline]
 fn map_id2sd_local(id: u32) -> *mut MapSessionData {
     crate::game::map_server::map_id2sd_pc(id)
-        .map(|r| r as *mut MapSessionData)
+        .map(|arc| &mut *arc.write() as *mut MapSessionData)
         .unwrap_or(std::ptr::null_mut())
 }
 // map_id2npc_local: typed lookup returning raw pointer for use in unsafe context.
 #[inline]
 fn map_id2npc_local(id: u32) -> *mut crate::game::npc::NpcData {
     crate::game::map_server::map_id2npc_ref(id)
-        .map(|r| r as *mut crate::game::npc::NpcData)
+        .map(|arc| &mut *arc.write() as *mut crate::game::npc::NpcData)
         .unwrap_or(std::ptr::null_mut())
 }
 #[inline]
-unsafe fn map_id2bl(id: u32) -> *mut BlockList {
-    map_id2bl_ms(id) as *mut BlockList
+fn map_id2bl(id: u32) -> *mut BlockList {
+    map_id2bl_ref(id)
 }
 
 /// Dispatch a Lua event with a single block_list argument.
@@ -309,18 +306,22 @@ pub unsafe fn clif_closeit(sd: *mut MapSessionData) -> i32 {
     wfifohead(fd, 255);
     wfifob(fd, 0, 0xAA);
     wfifob(fd, 3, 0x03);
-    let gc = crate::config_globals::global_config();
-    wfifol(fd, 4, swap32(gc.login_ip as u32));
-    wfifow(fd, 8, swap16(gc.login_port as u16));
+    let cfg = crate::config::config();
+    let login_ip: u32 = cfg.login_ip.parse::<std::net::Ipv4Addr>()
+        .map(|a| u32::from_le_bytes(a.octets()))
+        .unwrap_or(0);
+    wfifol(fd, 4, swap32(login_ip));
+    wfifow(fd, 8, swap16(cfg.login_port as u16));
     wfifob(fd, 10, 0x16);
     wfifow(fd, 11, swap16(9));
-    // copy xor_key (9 chars + null) into WFIFOP(sd->fd, 13)
-    libc::strcpy(
-        wfifop(fd, 13) as *mut i8,
-        gc.xor_key.as_ptr(),
-    );
+    // copy xor_key (up to 9 chars + null) into WFIFOP(sd->fd, 13)
+    let xor_bytes = cfg.xor_key.as_bytes();
+    let dst = wfifop(fd, 13) as *mut u8;
+    let xor_len = xor_bytes.len().min(9);
+    std::ptr::copy_nonoverlapping(xor_bytes.as_ptr(), dst, xor_len);
+    *dst.add(xor_len) = 0;
     let mut len = 11usize;
-    let name_ptr = (*sd).status.name.as_ptr();
+    let name_ptr = (*sd).player.identity.name.as_ptr();
     let name_len = cstrlen(name_ptr as *const i8);
     wfifob(fd, len + 11, name_len as u8);
     libc::strcpy(
@@ -346,8 +347,8 @@ pub unsafe fn clif_sendtowns(sd: *mut MapSessionData) -> i32 {
         return 0;
     }
 
-    let gc = crate::config_globals::global_config();
-    let n = gc.town_n as usize;
+    let cfg = crate::config::config();
+    let n = cfg.town.len().min(255);
 
     wfifohead(fd, 0x59);
     wfifob(fd, 0, 0xAA);
@@ -359,14 +360,13 @@ pub unsafe fn clif_sendtowns(sd: *mut MapSessionData) -> i32 {
 
     let mut len = 0usize;
     for x in 0..n {
-        let name_ptr = gc.towns[x].name.as_ptr();
-        let name_len = cstrlen(name_ptr as *const i8);
+        let town_bytes = cfg.town[x].as_bytes();
+        let name_len = town_bytes.len();
         wfifob(fd, len + 10, x as u8);
         wfifob(fd, len + 11, name_len as u8);
-        libc::strcpy(
-            wfifop(fd, len + 12) as *mut i8,
-            name_ptr as *const i8,
-        );
+        let dst = wfifop(fd, len + 12) as *mut u8;
+        std::ptr::copy_nonoverlapping(town_bytes.as_ptr(), dst, name_len);
+        *dst.add(name_len) = 0;
         len += name_len + 2;
     }
 
@@ -408,23 +408,23 @@ pub unsafe fn clif_parsenpcdialog(sd: *mut MapSessionData) -> i32 {
     match rfifob(fd, 5) {
         0x01 => {
             // Dialog
-            rust_sl_resumedialog(npc_choice, sd);
+            sl_resumedialog(npc_choice, sd);
         }
         0x02 => {
             // Special menu
             let npc_menu = rfifob(fd, 15) as i32;
-            rust_sl_resumemenuseq(npc_choice, npc_menu, sd);
+            sl_resumemenuseq(npc_choice, npc_menu, sd);
         }
         0x04 => {
             // inputSeq returned input
             if rfifob(fd, 13) != 0x02 {
-                rust_sl_async_freeco(sd);
+                sl_async_freeco(sd);
                 return 1;
             }
             let input_len = rfifob(fd, 15) as usize;
             let mut input = [0u8; 100];
             copy_rfifo_bytes(&mut input, rfifop(fd, 16), input_len);
-            rust_sl_resumeinputseq(
+            sl_resumeinputseq(
                 npc_choice,
                 input.as_mut_ptr() as *mut i8,
                 sd,
@@ -778,8 +778,8 @@ pub unsafe fn clif_scriptmenuseq(
             let sd_ref = &*sd;
             let g = &sd_ref.gfx;
             wfifob(fd, 11, 1);
-            wfifow(fd, 12, swap16(sd_ref.status.sex as u16));
-            wfifob(fd, 14, sd_ref.status.state as u8);
+            wfifow(fd, 12, swap16(sd_ref.player.identity.sex as u16));
+            wfifob(fd, 14, sd_ref.player.combat.state as u8);
             wfifob(fd, 15, 0);
             wfifow(fd, 16, swap16(g.armor));
             wfifob(fd, 18, 0);
@@ -968,11 +968,11 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
         let raw_id = swap32(rfifol(fd, 6));
         if raw_id == 0xFFFFFFFE {
             // subpath chat toggle
-            if (*sd).status.subpath_chat == 0 {
-                (*sd).status.subpath_chat = 1;
+            if (*sd).player.social.subpath_chat == 0 {
+                (*sd).player.social.subpath_chat = 1;
                 clif_sendminitext(sd, b"Subpath Chat: ON\0".as_ptr() as *const i8);
             } else {
-                (*sd).status.subpath_chat = 0;
+                (*sd).player.social.subpath_chat = 0;
                 clif_sendminitext(sd, b"Subpath Chat: OFF\0".as_ptr() as *const i8);
             }
             return 0;
@@ -996,7 +996,7 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
                 && (sd_ref.bl.x as i32 - tsd_ref.bl.x as i32).abs() <= 21
                 && (sd_ref.bl.y as i32 - tsd_ref.bl.y as i32).abs() <= 21
             {
-                if sd_ref.status.gm_level != 0
+                if sd_ref.player.identity.gm_level != 0
                     || (tsd_ref.optFlags & 64 == 0      // !optFlag_noclick
                         && tsd_ref.optFlags & 32 == 0)  // !optFlag_stealth
                 {
@@ -1018,9 +1018,9 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
 
         if same_map_or_f1 {
             (*sd).last_click = (*bl).id;
-            rust_sl_async_freeco(sd);
+            sl_async_freeco(sd);
 
-            if (*sd).status.karma <= -3.0f32 {
+            if (*sd).player.social.karma <= -3.0f32 {
                 let nd_name = (*nd).name.as_ptr();
                 let is_f1npc = libc::strcmp(nd_name, b"f1npc\0".as_ptr() as *const i8) == 0;
                 let is_totem = libc::strcmp(nd_name, b"totem_npc\0".as_ptr() as *const i8) == 0;
@@ -1047,7 +1047,7 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
             && (sd_ref.bl.y as i32 - (*bl).y as i32).abs() <= radius
         {
             (*sd).last_click = (*bl).id;
-            rust_sl_async_freeco(sd);
+            sl_async_freeco(sd);
             sl_doscript_coro_2(b"onLook\0".as_ptr() as *const i8, std::ptr::null(), &sd_ref.bl as *const _ as *mut BlockList, bl);
             if !(*mob).data.is_null() {
                 sl_doscript_coro_2((*(*mob).data).yname.as_ptr() as *const i8, b"click\0".as_ptr() as *const i8, &sd_ref.bl as *const _ as *mut BlockList, bl);
@@ -1115,12 +1115,13 @@ pub unsafe fn clif_buydialog(
             let it = &*item.add(x);
             let mut name_buf = [0u8; 64];
 
+            let item = item_db::search(it.id);
             if it.custom_icon > 0 {
                 wfifow(fd, len + 22, swap16((it.custom_icon + 49152) as u16));
                 wfifob(fd, len + 24, it.custom_icon_color as u8);
             } else {
-                wfifow(fd, len + 22, swap16(rust_itemdb_icon(it.id) as u16));
-                wfifob(fd, len + 24, rust_itemdb_iconcolor(it.id) as u8);
+                wfifow(fd, len + 22, swap16(item.icon as u16));
+                wfifob(fd, len + 24, item.icon_color as u8);
             }
             len += 3;
             wfifol(fd, len + 22, swap32(*price.add(x) as u32));
@@ -1139,7 +1140,7 @@ pub unsafe fn clif_buydialog(
                     name_buf.as_mut_ptr() as *mut i8,
                     64,
                     b"%s\0".as_ptr() as *const i8,
-                    rust_itemdb_name(it.id),
+                    item.name.as_ptr(),
                 );
             }
             if it.owner != 0 {
@@ -1161,26 +1162,21 @@ pub unsafe fn clif_buydialog(
 
             // Build buy-text / class description
             let mut buff_buf = [0u8; 64];
-            let buytext_ptr = rust_itemdb_buytext(it.id);
-            if !buytext_ptr.is_null() && *buytext_ptr != 0 {
-                libc::strcpy(buff_buf.as_mut_ptr() as *mut i8, buytext_ptr);
+            if item.buytext[0] != 0 {
+                libc::strcpy(buff_buf.as_mut_ptr() as *mut i8, item.buytext.as_ptr());
             } else if it.buytext[0] != 0 {
                 libc::strcpy(
                     buff_buf.as_mut_ptr() as *mut i8,
                     it.buytext.as_ptr() as *const i8,
                 );
             } else {
-                let path = rust_classdb_name(
-                    rust_itemdb_class(it.id),
-                    rust_itemdb_rank(it.id),
+                let cn = classdb_name(
+                    item.class as i32,
+                    item.rank,
                 );
-                libc::snprintf(
-                    buff_buf.as_mut_ptr() as *mut i8,
-                    64,
-                    b"%s level %u\0".as_ptr() as *const i8,
-                    path,
-                    rust_itemdb_level(it.id) as u32,
-                );
+                let formatted = format!("{} level {}\0", cn, item.level as u32);
+                let copy = formatted.len().min(64);
+                std::ptr::copy_nonoverlapping(formatted.as_ptr(), buff_buf.as_mut_ptr(), copy);
             }
 
             let buff_len = libc::strlen(buff_buf.as_ptr() as *const i8);
@@ -1223,12 +1219,13 @@ pub unsafe fn clif_buydialog(
             let it = &*item.add(x);
             let mut name_buf = [0u8; 64];
 
+            let item = item_db::search(it.id);
             if it.custom_icon > 0 {
                 wfifow(fd, len + 62, swap16(it.custom_icon as u16));
                 wfifob(fd, len + 64, it.custom_icon_color as u8);
             } else {
-                wfifow(fd, len + 62, swap16(rust_itemdb_icon(it.id) as u16));
-                wfifob(fd, len + 64, rust_itemdb_iconcolor(it.id) as u8);
+                wfifow(fd, len + 62, swap16(item.icon as u16));
+                wfifob(fd, len + 64, item.icon_color as u8);
             }
             len += 3;
             wfifol(fd, len + 62, swap32(*price.add(x) as u32));
@@ -1242,7 +1239,7 @@ pub unsafe fn clif_buydialog(
             } else {
                 libc::strcpy(
                     name_buf.as_mut_ptr() as *mut i8,
-                    rust_itemdb_name(it.id),
+                    item.name.as_ptr(),
                 );
             }
             if it.owner != 0 {
@@ -1263,26 +1260,21 @@ pub unsafe fn clif_buydialog(
             len += name_len + 1;
 
             let mut buff_buf = [0u8; 64];
-            let buytext_ptr = rust_itemdb_buytext(it.id);
-            if !buytext_ptr.is_null() && *buytext_ptr != 0 {
-                libc::strcpy(buff_buf.as_mut_ptr() as *mut i8, buytext_ptr);
+            if item.buytext[0] != 0 {
+                libc::strcpy(buff_buf.as_mut_ptr() as *mut i8, item.buytext.as_ptr());
             } else if it.buytext[0] != 0 {
                 libc::strcpy(
                     buff_buf.as_mut_ptr() as *mut i8,
                     it.buytext.as_ptr() as *const i8,
                 );
             } else {
-                let path = rust_classdb_name(
-                    rust_itemdb_class(it.id),
-                    rust_itemdb_rank(it.id),
+                let cn = classdb_name(
+                    item.class as i32,
+                    item.rank,
                 );
-                libc::snprintf(
-                    buff_buf.as_mut_ptr() as *mut i8,
-                    64,
-                    b"%s level %u\0".as_ptr() as *const i8,
-                    path,
-                    rust_itemdb_level(it.id) as u32,
-                );
+                let formatted = format!("{} level {}\0", cn, item.level as u32);
+                let copy = formatted.len().min(64);
+                std::ptr::copy_nonoverlapping(formatted.as_ptr(), buff_buf.as_mut_ptr(), copy);
             }
 
             let buff_len = libc::strlen(buff_buf.as_ptr() as *const i8);
@@ -1315,7 +1307,7 @@ pub unsafe fn clif_parsebuy(sd: *mut MapSessionData) -> i32 {
         item_name_len,
     );
     if itemname[0] != 0 {
-        rust_sl_resumebuy(itemname.as_mut_ptr() as *mut i8, sd);
+        sl_resumebuy(itemname.as_mut_ptr() as *mut i8, sd);
     }
     0
 }
@@ -1412,7 +1404,7 @@ pub unsafe fn clif_selldialog(
 /// Parse a sell response packet.  Mirrors `clif_parsesell` in
 pub unsafe fn clif_parsesell(sd: *mut MapSessionData) -> i32 {
     let fd = (*sd).fd;
-    rust_sl_resumesell(rfifob(fd, 12) as u32, sd);
+    sl_resumesell(rfifob(fd, 12) as u32, sd);
     0
 }
 
@@ -1562,7 +1554,7 @@ pub unsafe fn clif_parseinput(sd: *mut MapSessionData) -> i32 {
         inp_len,
     );
 
-    rust_sl_resumeinput(
+    sl_resumeinput(
         output.as_mut_ptr() as *mut i8,
         output2.as_mut_ptr() as *mut i8,
         sd,
