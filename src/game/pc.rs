@@ -630,13 +630,13 @@ pub unsafe fn pc_afktimer(id: i32, _none: i32) -> i32 {
 
     (*sd).afktime += 1;
 
-    if (*sd).afk == 1 && (*sd).status.state == 0 {
+    if (*sd).afk == 1 && (*sd).player.combat.state == 0 {
         (*sd).totalafktime += 10;
         clif_sendaction(&mut (*sd).bl, 0x10, 0x4E, 0);
         return 0;
     }
 
-    if (*sd).afk == 1 && (*sd).status.state == 3 {
+    if (*sd).afk == 1 && (*sd).player.combat.state == 3 {
         (*sd).totalafktime += 10;
         let sd_bl = &mut (*sd).bl as *mut BlockList;
         if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
@@ -651,16 +651,16 @@ pub unsafe fn pc_afktimer(id: i32, _none: i32) -> i32 {
         return 0;
     }
 
-    if (*sd).afk == 1 && (*sd).status.state == PC_DIE as i8 {
+    if (*sd).afk == 1 && (*sd).player.combat.state == PC_DIE as i8 {
         (*sd).totalafktime += 10;
         return 0;
     }
 
     if (*sd).afktime >= 30 {
-        if (*sd).status.state == 0 {
+        if (*sd).player.combat.state == 0 {
             (*sd).totalafktime += 300;
             clif_sendaction(&mut (*sd).bl, 0x10, 0x4E, 0);
-        } else if (*sd).status.state == 3 {
+        } else if (*sd).player.combat.state == 3 {
             (*sd).totalafktime += 300;
             let sd_bl = &mut (*sd).bl as *mut BlockList;
             if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
@@ -690,7 +690,7 @@ pub unsafe fn pc_starttimer(sd: *mut MapSessionData) -> i32 {
     (*sd).savetimer = timer_insert(60000, 60000,
         Some(pc_savetimer as unsafe fn(i32, i32) -> i32),
         (*sd).bl.id as i32, 0);
-    if (*sd).status.gm_level < 50 {
+    if (*sd).player.identity.gm_level < 50 {
         (*sd).afktimer = timer_insert(10000, 10000,
             Some(pc_afktimer as unsafe fn(i32, i32) -> i32),
             (*sd).bl.id as i32, 0);
@@ -744,30 +744,30 @@ pub unsafe fn bl_duratimer(id: i32, _none: i32) -> i32 {
 
     // while_passive: each learned spell fires once per second
     for x in 0..52usize {
-        if (*sd).status.skill[x] > 0 {
-            sl_doscript_simple_pc(magic_db::search((*sd).status.skill[x] as i32).yname.as_ptr(), c"while_passive".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        if (&(*sd).player.spells.skills)[x] > 0 {
+            sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname.as_ptr(), c"while_passive".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
     // while_equipped: each worn item fires once per second
     for x in 0..14usize {
-        if (*sd).status.equip[x].id > 0 {
-            sl_doscript_simple_pc(item_db::search((*sd).status.equip[x].id).yname.as_ptr(), c"while_equipped".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        if (&(*sd).player.inventory.equip)[x].id > 0 {
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.equip)[x].id).yname.as_ptr(), c"while_equipped".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
     // duration / aether tick for each active magic timer slot
     for x in 0..MAX_MAGIC_TIMERS {
-        let mid = (*sd).status.dura_aether[x].id as i32;
-        if (*sd).status.dura_aether[x].id > 0 {
-            let tbl: *mut BlockList = if (*sd).status.dura_aether[x].caster_id > 0 {
-                map_id2bl_pc((*sd).status.dura_aether[x].caster_id)
+        let mid = (&(*sd).player.spells.dura_aether)[x].id as i32;
+        if (&(*sd).player.spells.dura_aether)[x].id > 0 {
+            let tbl: *mut BlockList = if (&(*sd).player.spells.dura_aether)[x].caster_id > 0 {
+                map_id2bl_pc((&(*sd).player.spells.dura_aether)[x].caster_id)
             } else {
                 std::ptr::null_mut()
             };
 
-            if (*sd).status.dura_aether[x].duration > 0 {
-                (*sd).status.dura_aether[x].duration -= 1000;
+            if (&(*sd).player.spells.dura_aether)[x].duration > 0 {
+                (&mut (*sd).player.spells.dura_aether)[x].duration -= 1000;
 
                 if !tbl.is_null() {
                     // C initialises `health` as uninitialised long — translate as 0.
@@ -784,17 +784,17 @@ pub unsafe fn bl_duratimer(id: i32, _none: i32) -> i32 {
                     sl_doscript_simple_pc(magic_db::search(mid).yname.as_ptr(), c"while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
 
-                if (*sd).status.dura_aether[x].duration <= 0 {
-                    (*sd).status.dura_aether[x].duration = 0;
+                if (&(*sd).player.spells.dura_aether)[x].duration <= 0 {
+                    (&mut (*sd).player.spells.dura_aether)[x].duration = 0;
                     clif_send_duration(
                         &mut *sd,
-                        (*sd).status.dura_aether[x].id as i32,
+                        (&(*sd).player.spells.dura_aether)[x].id as i32,
                         0i32,
-                        map_id2sd_pc((*sd).status.dura_aether[x].caster_id),
+                        map_id2sd_pc((&(*sd).player.spells.dura_aether)[x].caster_id),
                     );
-                    (*sd).status.dura_aether[x].caster_id = 0;
+                    (&mut (*sd).player.spells.dura_aether)[x].caster_id = 0;
                     {
-                        let anim = (*sd).status.dura_aether[x].animation as i32;
+                        let anim = (&(*sd).player.spells.dura_aether)[x].animation as i32;
                         let sd_bl = &mut (*sd).bl as *mut BlockList;
                         if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
                             let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
@@ -806,10 +806,10 @@ pub unsafe fn bl_duratimer(id: i32, _none: i32) -> i32 {
                             }
                         }
                     }
-                    (*sd).status.dura_aether[x].animation = 0;
+                    (&mut (*sd).player.spells.dura_aether)[x].animation = 0;
 
-                    if (*sd).status.dura_aether[x].aether == 0 {
-                        (*sd).status.dura_aether[x].id = 0;
+                    if (&(*sd).player.spells.dura_aether)[x].aether == 0 {
+                        (&mut (*sd).player.spells.dura_aether)[x].id = 0;
                     }
 
                     if !tbl.is_null() {
@@ -820,17 +820,17 @@ pub unsafe fn bl_duratimer(id: i32, _none: i32) -> i32 {
                 }
             }
 
-            if (*sd).status.dura_aether[x].aether > 0 {
-                (*sd).status.dura_aether[x].aether -= 1000;
+            if (&(*sd).player.spells.dura_aether)[x].aether > 0 {
+                (&mut (*sd).player.spells.dura_aether)[x].aether -= 1000;
 
-                if (*sd).status.dura_aether[x].aether <= 0 {
-                    clif_send_aether(&mut *sd, (*sd).status.dura_aether[x].id as i32, 0);
+                if (&(*sd).player.spells.dura_aether)[x].aether <= 0 {
+                    clif_send_aether(&mut *sd, (&mut (*sd).player.spells.dura_aether)[x].id as i32, 0);
 
-                    if (*sd).status.dura_aether[x].duration == 0 {
-                        (*sd).status.dura_aether[x].id = 0;
+                    if (&(*sd).player.spells.dura_aether)[x].duration == 0 {
+                        (&mut (*sd).player.spells.dura_aether)[x].id = 0;
                     }
 
-                    (*sd).status.dura_aether[x].aether = 0;
+                    (&mut (*sd).player.spells.dura_aether)[x].aether = 0;
                 }
             }
         }
@@ -847,26 +847,26 @@ pub unsafe fn bl_secondduratimer(id: i32, _none: i32) -> i32 {
     if sd.is_null() { return 0; }
 
     for x in 0..52usize {
-        if (*sd).status.skill[x] > 0 {
-            sl_doscript_simple_pc(magic_db::search((*sd).status.skill[x] as i32).yname.as_ptr(), c"while_passive_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        if (&(*sd).player.spells.skills)[x] > 0 {
+            sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname.as_ptr(), c"while_passive_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
     for x in 0..14usize {
-        if (*sd).status.equip[x].id > 0 {
-            sl_doscript_simple_pc(item_db::search((*sd).status.equip[x].id).yname.as_ptr(), c"while_equipped_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        if (&(*sd).player.inventory.equip)[x].id > 0 {
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.equip)[x].id).yname.as_ptr(), c"while_equipped_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
     for x in 0..MAX_MAGIC_TIMERS {
-        if (*sd).status.dura_aether[x].id > 0 {
-            let tbl: *mut BlockList = if (*sd).status.dura_aether[x].caster_id > 0 {
-                map_id2bl_pc((*sd).status.dura_aether[x].caster_id)
+        if (&(*sd).player.spells.dura_aether)[x].id > 0 {
+            let tbl: *mut BlockList = if (&(*sd).player.spells.dura_aether)[x].caster_id > 0 {
+                map_id2bl_pc((&(*sd).player.spells.dura_aether)[x].caster_id)
             } else {
                 std::ptr::null_mut()
             };
 
-            if (*sd).status.dura_aether[x].duration > 0 {
+            if (&(*sd).player.spells.dura_aether)[x].duration > 0 {
                 if !tbl.is_null() {
                     let health: i64 = if (*tbl).bl_type as i32 == BL_MOB {
                         let tmob = tbl as *mut crate::game::mob::MobSpawnData;
@@ -875,10 +875,10 @@ pub unsafe fn bl_secondduratimer(id: i32, _none: i32) -> i32 {
                         0
                     };
                     if health > 0 || (*tbl).bl_type as i32 == BL_PC {
-                        sl_doscript_2_pc(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"while_cast_250".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
+                        sl_doscript_2_pc(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"while_cast_250".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
                     }
                 } else {
-                    sl_doscript_simple_pc(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"while_cast_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"while_cast_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
         }
@@ -895,26 +895,26 @@ pub unsafe fn bl_thirdduratimer(id: i32, _none: i32) -> i32 {
     if sd.is_null() { return 0; }
 
     for x in 0..52usize {
-        if (*sd).status.skill[x] > 0 {
-            sl_doscript_simple_pc(magic_db::search((*sd).status.skill[x] as i32).yname.as_ptr(), c"while_passive_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        if (&(*sd).player.spells.skills)[x] > 0 {
+            sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname.as_ptr(), c"while_passive_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
     for x in 0..14usize {
-        if (*sd).status.equip[x].id > 0 {
-            sl_doscript_simple_pc(item_db::search((*sd).status.equip[x].id).yname.as_ptr(), c"while_equipped_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        if (&(*sd).player.inventory.equip)[x].id > 0 {
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.equip)[x].id).yname.as_ptr(), c"while_equipped_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
     for x in 0..MAX_MAGIC_TIMERS {
-        if (*sd).status.dura_aether[x].id > 0 {
-            let tbl: *mut BlockList = if (*sd).status.dura_aether[x].caster_id > 0 {
-                map_id2bl_pc((*sd).status.dura_aether[x].caster_id)
+        if (&(*sd).player.spells.dura_aether)[x].id > 0 {
+            let tbl: *mut BlockList = if (&(*sd).player.spells.dura_aether)[x].caster_id > 0 {
+                map_id2bl_pc((&(*sd).player.spells.dura_aether)[x].caster_id)
             } else {
                 std::ptr::null_mut()
             };
 
-            if (*sd).status.dura_aether[x].duration > 0 {
+            if (&(*sd).player.spells.dura_aether)[x].duration > 0 {
                 if !tbl.is_null() {
                     let health: i64 = if (*tbl).bl_type as i32 == BL_MOB {
                         let tmob = tbl as *mut crate::game::mob::MobSpawnData;
@@ -923,10 +923,10 @@ pub unsafe fn bl_thirdduratimer(id: i32, _none: i32) -> i32 {
                         0
                     };
                     if health > 0 || (*tbl).bl_type as i32 == BL_PC {
-                        sl_doscript_2_pc(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"while_cast_500".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
+                        sl_doscript_2_pc(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"while_cast_500".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
                     }
                 } else {
-                    sl_doscript_simple_pc(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"while_cast_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"while_cast_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
         }
@@ -943,26 +943,26 @@ pub unsafe fn bl_fourthduratimer(id: i32, _none: i32) -> i32 {
     if sd.is_null() { return 0; }
 
     for x in 0..52usize {
-        if (*sd).status.skill[x] > 0 {
-            sl_doscript_simple_pc(magic_db::search((*sd).status.skill[x] as i32).yname.as_ptr(), c"while_passive_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        if (&(*sd).player.spells.skills)[x] > 0 {
+            sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname.as_ptr(), c"while_passive_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
     for x in 0..14usize {
-        if (*sd).status.equip[x].id > 0 {
-            sl_doscript_simple_pc(item_db::search((*sd).status.equip[x].id).yname.as_ptr(), c"while_equipped_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        if (&(*sd).player.inventory.equip)[x].id > 0 {
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.equip)[x].id).yname.as_ptr(), c"while_equipped_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
     for x in 0..MAX_MAGIC_TIMERS {
-        if (*sd).status.dura_aether[x].id > 0 {
-            let tbl: *mut BlockList = if (*sd).status.dura_aether[x].caster_id > 0 {
-                map_id2bl_pc((*sd).status.dura_aether[x].caster_id)
+        if (&(*sd).player.spells.dura_aether)[x].id > 0 {
+            let tbl: *mut BlockList = if (&(*sd).player.spells.dura_aether)[x].caster_id > 0 {
+                map_id2bl_pc((&(*sd).player.spells.dura_aether)[x].caster_id)
             } else {
                 std::ptr::null_mut()
             };
 
-            if (*sd).status.dura_aether[x].duration > 0 {
+            if (&(*sd).player.spells.dura_aether)[x].duration > 0 {
                 if !tbl.is_null() {
                     let health: i64 = if (*tbl).bl_type as i32 == BL_MOB {
                         let tmob = tbl as *mut crate::game::mob::MobSpawnData;
@@ -971,10 +971,10 @@ pub unsafe fn bl_fourthduratimer(id: i32, _none: i32) -> i32 {
                         0
                     };
                     if health > 0 || (*tbl).bl_type as i32 == BL_PC {
-                        sl_doscript_2_pc(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"while_cast_1500".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
+                        sl_doscript_2_pc(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"while_cast_1500".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
                     }
                 } else {
-                    sl_doscript_simple_pc(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"while_cast_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"while_cast_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
         }
@@ -991,26 +991,26 @@ pub unsafe fn bl_fifthduratimer(id: i32, _none: i32) -> i32 {
     if sd.is_null() { return 0; }
 
     for x in 0..52usize {
-        if (*sd).status.skill[x] > 0 {
-            sl_doscript_simple_pc(magic_db::search((*sd).status.skill[x] as i32).yname.as_ptr(), c"while_passive_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        if (&(*sd).player.spells.skills)[x] > 0 {
+            sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname.as_ptr(), c"while_passive_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
     for x in 0..14usize {
-        if (*sd).status.equip[x].id > 0 {
-            sl_doscript_simple_pc(item_db::search((*sd).status.equip[x].id).yname.as_ptr(), c"while_equipped_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        if (&(*sd).player.inventory.equip)[x].id > 0 {
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.equip)[x].id).yname.as_ptr(), c"while_equipped_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
     }
 
     for x in 0..MAX_MAGIC_TIMERS {
-        if (*sd).status.dura_aether[x].id > 0 {
-            let tbl: *mut BlockList = if (*sd).status.dura_aether[x].caster_id > 0 {
-                map_id2bl_pc((*sd).status.dura_aether[x].caster_id)
+        if (&(*sd).player.spells.dura_aether)[x].id > 0 {
+            let tbl: *mut BlockList = if (&(*sd).player.spells.dura_aether)[x].caster_id > 0 {
+                map_id2bl_pc((&(*sd).player.spells.dura_aether)[x].caster_id)
             } else {
                 std::ptr::null_mut()
             };
 
-            if (*sd).status.dura_aether[x].duration > 0 {
+            if (&(*sd).player.spells.dura_aether)[x].duration > 0 {
                 if !tbl.is_null() {
                     let health: i64 = if (*tbl).bl_type as i32 == BL_MOB {
                         let tmob = tbl as *mut crate::game::mob::MobSpawnData;
@@ -1019,10 +1019,10 @@ pub unsafe fn bl_fifthduratimer(id: i32, _none: i32) -> i32 {
                         0
                     };
                     if health > 0 || (*tbl).bl_type as i32 == BL_PC {
-                        sl_doscript_2_pc(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"while_cast_3000".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
+                        sl_doscript_2_pc(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"while_cast_3000".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
                     }
                 } else {
-                    sl_doscript_simple_pc(magic_db::search((*sd).status.dura_aether[x].id as i32).yname.as_ptr(), c"while_cast_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"while_cast_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
         }
@@ -1039,19 +1039,19 @@ pub unsafe fn bl_aethertimer(id: i32, _none: i32) -> i32 {
     if sd.is_null() { return 0; }
 
     for x in 0..MAX_MAGIC_TIMERS {
-        if (*sd).status.dura_aether[x].id > 0 {
-            if (*sd).status.dura_aether[x].aether > 0 {
-                (*sd).status.dura_aether[x].aether -= 1000;
+        if (&(*sd).player.spells.dura_aether)[x].id > 0 {
+            if (&(*sd).player.spells.dura_aether)[x].aether > 0 {
+                (&mut (*sd).player.spells.dura_aether)[x].aether -= 1000;
             }
 
-            if (*sd).status.dura_aether[x].aether <= 0 {
-                clif_send_aether(&mut *sd, (*sd).status.dura_aether[x].id as i32, 0);
+            if (&(*sd).player.spells.dura_aether)[x].aether <= 0 {
+                clif_send_aether(&mut *sd, (&mut (*sd).player.spells.dura_aether)[x].id as i32, 0);
 
-                if (*sd).status.dura_aether[x].duration == 0 {
-                    (*sd).status.dura_aether[x].id = 0;
+                if (&(*sd).player.spells.dura_aether)[x].duration == 0 {
+                    (&mut (*sd).player.spells.dura_aether)[x].id = 0;
                 }
 
-                (*sd).status.dura_aether[x].aether = 0;
+                (&mut (*sd).player.spells.dura_aether)[x].aether = 0;
                 return 0;
             }
         }
@@ -1086,11 +1086,11 @@ pub unsafe fn pc_timer(id: i32, _none: i32) -> i32 {
         }
     }
 
-    if (*sd).status.pk == 1 && (*sd).status.pkduration > 0 {
-        (*sd).status.pkduration -= 1000;
+    if (*sd).player.social.pk == 1 && (*sd).player.social.pk_duration > 0 {
+        (*sd).player.social.pk_duration -= 1000;
 
-        if (*sd).status.pkduration == 0 {
-            (*sd).status.pk = 0;
+        if (*sd).player.social.pk_duration == 0 {
+            (*sd).player.social.pk = 0;
             clif_sendchararea(sd);
         }
     }
@@ -1145,7 +1145,7 @@ pub unsafe fn pc_scripttimer(id: i32, _none: i32) -> i32 {
         }
     }
 
-    if (*sd).status.hp == 0 && (*sd).deathflag != 0 {
+    if (*sd).player.combat.hp == 0 && (*sd).deathflag != 0 {
         pc_diescript(sd);
         return 0;
     }
@@ -1159,7 +1159,7 @@ pub unsafe fn pc_scripttimer(id: i32, _none: i32) -> i32 {
 
     sl_doscript_simple_pc(c"pc_timer".as_ptr(), c"tick".as_ptr(), &mut (*sd).bl as *mut BlockList);
 
-    if (*sd).status.setting_flags & FLAG_ADVICE as u16 != 0 {
+    if (*sd).player.appearance.setting_flags & FLAG_ADVICE as u16 != 0 {
         sl_doscript_simple_pc(c"pc_timer".as_ptr(), c"advice".as_ptr(), &mut (*sd).bl as *mut BlockList);
     }
 
@@ -1274,9 +1274,8 @@ pub unsafe fn pc_requestmp(sd: *mut MapSessionData) -> i32 {
 
     (*sd).flags = 0;
 
-    let char_name = std::ffi::CStr::from_ptr((*sd).status.name.as_ptr())
-        .to_str().unwrap_or("").to_owned();
-    let char_id = (*sd).status.id;
+    let char_name = (*sd).player.identity.name.clone();
+    let char_id = (*sd).player.identity.id;
 
     // EXEMPT from async conversion: this function is called from sync contexts
     // (timer callback pc_timer, Lua sl_pc_sendstatus, and the login sequence
@@ -1299,12 +1298,12 @@ pub unsafe fn pc_requestmp(sd: *mut MapSessionData) -> i32 {
 /// level they qualify for.
 ///
 pub unsafe fn pc_checklevel(sd: *mut MapSessionData) -> i32 {
-    let path_raw = (*sd).status.class as i32;
+    let path_raw = (*sd).player.progression.class as i32;
     let path = if path_raw > 5 { classdb_path(path_raw) } else { path_raw };
 
-    for x in (*sd).status.level as i32..99 {
+    for x in (*sd).player.progression.level as i32..99 {
         let lvlxp = classdb_level(path, x);
-        if (*sd).status.exp >= lvlxp {
+        if (*sd).player.progression.exp >= lvlxp {
             sl_doscript_simple_pc(c"onLevel".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
     }
@@ -1334,7 +1333,7 @@ pub unsafe fn pc_givexp(
             if stack >= 32768 { break; }
             if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
                 let tsd = tsd_arc.read();
-                if tsd.bl.x == sx && tsd.bl.y == sy && tsd.status.gm_level == 0 {
+                if tsd.bl.x == sx && tsd.bl.y == sy && tsd.player.identity.gm_level == 0 {
                     stack += 1;
                 }
             }
@@ -1368,30 +1367,30 @@ pub unsafe fn pc_givexp(
 
     // cast to i64 makes this unreachable; preserved as dead code matching C original where exp is unsigned int
     if (exp as i64) < 0 {
-        if ((*sd).status.exp as i64) < (exp as i64).abs() {
-            (*sd).status.exp = 0;
+        if ((*sd).player.progression.exp as i64) < (exp as i64).abs() {
+            (*sd).player.progression.exp = 0;
         } else {
-            (*sd).status.exp = (*sd).status.exp.wrapping_add(exp);
+            (*sd).player.progression.exp = (*sd).player.progression.exp.wrapping_add(exp);
         }
         return 0;
     }
 
     let totalxp: i64 = (exp as i64).wrapping_mul(xprate as i64);
-    let difxp: u32 = 4294967295u32.wrapping_sub((*sd).status.exp);
+    let difxp: u32 = 4294967295u32.wrapping_sub((*sd).player.progression.exp);
 
     let (tempxp, defaultxp): (u32, u32) = if (difxp as i64) > totalxp {
         (
-            (*sd).status.exp.wrapping_add(totalxp as u32),
+            (*sd).player.progression.exp.wrapping_add(totalxp as u32),
             totalxp as u32,
         )
     } else {
         (
-            (*sd).status.exp.wrapping_add(difxp),
+            (*sd).player.progression.exp.wrapping_add(difxp),
             difxp,
         )
     };
 
-    (*sd).status.exp = tempxp;
+    (*sd).player.progression.exp = tempxp;
 
     libc::snprintf(
         xpstring.as_mut_ptr(),
@@ -1435,16 +1434,16 @@ pub unsafe fn pc_calcstat(sd: *mut MapSessionData) -> i32 {
     if (*sd).enchanted == 0.0f32 { (*sd).enchanted = 1.0f32; }
 
     // C: `if (sd->status.basehp <= 0)` — unsigned int, so equivalent to == 0.
-    if (*sd).status.basehp == 0 { (*sd).status.basehp = 5; }
-    if (*sd).status.basemp == 0 { (*sd).status.basemp = 5; }
+    if (*sd).player.combat.max_hp == 0 { (*sd).player.combat.max_hp = 5; }
+    if (*sd).player.combat.max_mp == 0 { (*sd).player.combat.max_mp = 5; }
 
     // Copy base stats
-    (*sd).armor   = (*sd).status.basearmor  as i32;
-    (*sd).max_hp  = (*sd).status.basehp;
-    (*sd).max_mp  = (*sd).status.basemp;
-    (*sd).might   = (*sd).status.basemight  as i32;
-    (*sd).grace   = (*sd).status.basegrace  as i32;
-    (*sd).will    = (*sd).status.basewill   as i32;
+    (*sd).armor   = (*sd).player.combat.base_armor  as i32;
+    (*sd).max_hp  = (*sd).player.combat.max_hp;
+    (*sd).max_mp  = (*sd).player.combat.max_mp;
+    (*sd).might   = (*sd).player.combat.base_might  as i32;
+    (*sd).grace   = (*sd).player.combat.base_grace  as i32;
+    (*sd).will    = (*sd).player.combat.base_will   as i32;
 
     (*sd).maxSdam = 0;
     (*sd).minSdam = 0;
@@ -1454,12 +1453,12 @@ pub unsafe fn pc_calcstat(sd: *mut MapSessionData) -> i32 {
     (*sd).attack_speed = 20;
     (*sd).protection   = 0;
     (*sd).healing      = 0;
-    (*sd).status.tnl   = 0;
-    (*sd).status.realtnl = 0;
+    (*sd).player.progression.tnl   = 0;
+    (*sd).player.progression.real_tnl = 0;
 
     // Accumulate stats from equipped items
     for x in 0..14usize {
-        let id = (*sd).status.equip[x].id;
+        let id = (&(*sd).player.inventory.equip)[x].id;
         if id > 0 {
             let db = item_db::search(id);
             (*sd).max_hp  = (*sd).max_hp.wrapping_add(db.vita  as u32);
@@ -1480,8 +1479,8 @@ pub unsafe fn pc_calcstat(sd: *mut MapSessionData) -> i32 {
     }
 
     // Mount state
-    if (*sd).status.state == PC_MOUNTED as i8 {
-        if (*sd).status.gm_level == 0 {
+    if (*sd).player.combat.state == PC_MOUNTED as i8 {
+        if (*sd).player.identity.gm_level == 0 {
             if (*sd).speed < 40 { (*sd).speed = 40; }
         }
         sl_doscript_simple_pc(c"remount".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
@@ -1490,10 +1489,10 @@ pub unsafe fn pc_calcstat(sd: *mut MapSessionData) -> i32 {
     }
 
     // Fire recast and passive scripts (only when alive)
-    if (*sd).status.state != PC_DIE as i8 {
+    if (*sd).player.combat.state != PC_DIE as i8 {
         // Recast active magic aether slots
         for x in 0..MAX_MAGIC_TIMERS {
-            let p = &(*sd).status.dura_aether[x];
+            let p = &(&(*sd).player.spells.dura_aether)[x];
             if p.id > 0 && p.duration > 0 {
                 let tsd = map_id2sd_pc(p.caster_id);
                 if !tsd.is_null() {
@@ -1507,53 +1506,53 @@ pub unsafe fn pc_calcstat(sd: *mut MapSessionData) -> i32 {
 
         // Passive skills
         for x in 0..52usize {
-            if (*sd).status.skill[x] > 0 {
-                sl_doscript_simple_pc(magic_db::search((*sd).status.skill[x] as i32).yname.as_ptr(), c"passive".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            if (&(*sd).player.spells.skills)[x] > 0 {
+                sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname.as_ptr(), c"passive".as_ptr(), &mut (*sd).bl as *mut BlockList);
             }
         }
 
         // Re-equip scripts
         for x in 0..14usize {
-            if (*sd).status.equip[x].id > 0 {
-                sl_doscript_simple_pc(item_db::search((*sd).status.equip[x].id).yname.as_ptr(), c"re_equip".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            if (&(*sd).player.inventory.equip)[x].id > 0 {
+                sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.equip)[x].id).yname.as_ptr(), c"re_equip".as_ptr(), &mut (*sd).bl as *mut BlockList);
             }
         }
     }
 
     // Compute TNL percentage for group status window (added 8-5-16)
-    if (*sd).status.tnl == 0 {
-        let path_raw = (*sd).status.class as i32;
+    if (*sd).player.progression.tnl == 0 {
+        let path_raw = (*sd).player.progression.class as i32;
         let path = if path_raw > 5 { classdb_path(path_raw) } else { path_raw };
-        let level = (*sd).status.level as i32;
+        let level = (*sd).player.progression.level as i32;
 
         if level < 99 {
             let helper = classdb_level(path, level).wrapping_sub(classdb_level(path, level - 1)) as i64;
-            let tnl    = classdb_level(path, level) as i64 - (*sd).status.exp as i64;
+            let tnl    = classdb_level(path, level) as i64 - (*sd).player.progression.exp as i64;
             let mut percentage = (((helper - tnl) as f32) / (helper as f32)) * 100.0f32;
             // C bug preserved: tnl assigned before death-penalty correction; C never re-assigns it
-            (*sd).status.tnl = percentage as i32 as u32;
+            (*sd).player.progression.tnl = percentage as i32 as u32;
             if tnl > helper {
                 // XP went below previous level threshold (e.g. after a death penalty);
                 // recomputes percentage for internal use only — status.tnl is NOT updated here (matches C)
-                percentage = ((*sd).status.exp as f32 / helper as f32) * 100.0f32 + 0.5f32;
+                percentage = ((*sd).player.progression.exp as f32 / helper as f32) * 100.0f32 + 0.5f32;
             }
             let _ = percentage; // suppress unused-variable warning; death-penalty path uses it in C for nothing further
         } else {
-            (*sd).status.tnl = (((*sd).status.exp as f64 / 4294967295.0f64) * 100.0f64) as i32 as u32;
+            (*sd).player.progression.tnl = (((*sd).player.progression.exp as f64 / 4294967295.0f64) * 100.0f64) as i32 as u32;
         }
     }
 
     // Compute real TNL for F1 menu (added 8-6-16)
-    if (*sd).status.realtnl == 0 {
-        let path_raw = (*sd).status.class as i32;
+    if (*sd).player.progression.real_tnl == 0 {
+        let path_raw = (*sd).player.progression.class as i32;
         let path = if path_raw > 5 { classdb_path(path_raw) } else { path_raw };
-        let level = (*sd).status.level as i32;
+        let level = (*sd).player.progression.level as i32;
 
         if level < 99 {
-            let tnl = classdb_level(path, level) as i64 - (*sd).status.exp as i64;
-            (*sd).status.realtnl = tnl as i32 as u32;
+            let tnl = classdb_level(path, level) as i64 - (*sd).player.progression.exp as i64;
+            (*sd).player.progression.real_tnl = tnl as i32 as u32;
         } else {
-            (*sd).status.realtnl = 0;
+            (*sd).player.progression.real_tnl = 0;
         }
     }
 
@@ -1579,8 +1578,8 @@ pub unsafe fn pc_calcstat(sd: *mut MapSessionData) -> i32 {
     if max_magic  > 0 { (*sd).max_mp = max_magic  as u32; }
 
     // Clamp current HP/MP
-    if (*sd).status.hp > (*sd).max_hp { (*sd).status.hp = (*sd).max_hp; }
-    if (*sd).status.mp > (*sd).max_mp { (*sd).status.mp = (*sd).max_mp; }
+    if (*sd).player.combat.hp > (*sd).max_hp { (*sd).player.combat.hp = (*sd).max_hp; }
+    if (*sd).player.combat.mp > (*sd).max_mp { (*sd).player.combat.mp = (*sd).max_mp; }
 
     clif_sendstatus(sd, SFLAG_FULLSTATS | SFLAG_HPMP | SFLAG_XPMONEY);
 
@@ -1708,120 +1707,73 @@ pub unsafe fn pc_setregstr(sd: *mut MapSessionData, reg: i32, str_: *mut i8) -> 
     0
 }
 
-// ── Global string registry (persisted in MmoCharStatus) ──────────────────────
+// ── Global string registry (persisted in PlayerRegistries) ───────────────────
 
 /// `char *pc_readglobalregstring(USER *sd, const char *reg)` — reads a global string variable.
 ///
-/// Scans `sd->status.global_regstring[0..MAX_GLOBALPLAYERREG]` for a case-insensitive match.
-/// Returns pointer to `val` if found, or pointer to static empty string.
+/// Looks up `reg` in the player's global string registry HashMap.
+/// Returns pointer to the stored value if found, or pointer to static empty string.
 pub unsafe fn pc_readglobalregstring(
     sd: *mut MapSessionData, reg: *const i8,
 ) -> *mut i8 {
     if sd.is_null() || reg.is_null() { return c"".as_ptr() as *mut i8; }
     let sd = &mut *sd;
-    for i in 0..MAX_GLOBALPLAYERREG {
-        if libc::strcasecmp(sd.status.global_regstring[i].str.as_ptr(), reg) == 0 {
-            return sd.status.global_regstring[i].val.as_mut_ptr();
-        }
+    let key_str = std::ffi::CStr::from_ptr(reg).to_str().unwrap_or("");
+    match sd.player.registries.get_reg_str(key_str) {
+        Some(v) => v.as_ptr() as *mut i8,
+        None => c"".as_ptr() as *mut i8,
     }
-    c"".as_ptr() as *mut i8
 }
 
 /// `int pc_setglobalregstring(USER *sd, const char *reg, const char *val)` — sets a global string variable.
 ///
-/// Finds an existing slot by case-insensitive key match, or claims the first empty slot.
-/// Setting to `""` clears the key string (marks slot unused).
+/// Inserts or updates the key in the player's global string registry HashMap.
+/// Setting to `""` removes the key.
 pub unsafe fn pc_setglobalregstring(
     sd: *mut MapSessionData, reg: *const i8, val: *const i8,
 ) -> i32 {
     if sd.is_null() || reg.is_null() { return 0; }
     let sd = &mut *sd;
-    // Find existing slot
-    let mut exist: i32 = -1;
-    for i in 0..MAX_GLOBALPLAYERREG {
-        if libc::strcasecmp(sd.status.global_regstring[i].str.as_ptr(), reg) == 0 {
-            exist = i as i32;
-            break;
-        }
+    let key_str = std::ffi::CStr::from_ptr(reg).to_str().unwrap_or("");
+    let val_str = if val.is_null() { "" } else { std::ffi::CStr::from_ptr(val).to_str().unwrap_or("") };
+    if val_str.is_empty() {
+        sd.player.registries.global_regstring.remove(key_str);
+    } else {
+        sd.player.registries.set_reg_str(key_str, val_str);
     }
-    if exist != -1 {
-        let idx = exist as usize;
-        if libc::strcasecmp(val, c"".as_ptr()) == 0 {
-            // Clear key (marks slot empty)
-            libc::strcpy(sd.status.global_regstring[idx].str.as_mut_ptr() as *mut i8, c"".as_ptr());
-        }
-        libc::strcpy(sd.status.global_regstring[idx].val.as_mut_ptr() as *mut i8,
-                     val as *const i8);
-        return 0;
-    }
-    // Find empty slot
-    for i in 0..MAX_GLOBALPLAYERREG {
-        if libc::strcasecmp(sd.status.global_regstring[i].str.as_ptr(), c"".as_ptr()) == 0 {
-            libc::strcpy(sd.status.global_regstring[i].str.as_mut_ptr() as *mut i8,
-                         reg as *const i8);
-            libc::strcpy(sd.status.global_regstring[i].val.as_mut_ptr() as *mut i8,
-                         val as *const i8);
-            return 0;
-        }
-    }
-    libc::printf(c"pc_setglobalreg : couldn't set %s\n".as_ptr(), reg);
-    1
+    0
 }
 
-// ── Global integer registry (persisted in MmoCharStatus) ─────────────────────
+// ── Global integer registry (persisted in PlayerRegistries) ──────────────────
 
 /// `int pc_readglobalreg(USER *sd, const char *reg)` — reads a global integer variable.
 ///
-/// Scans `sd->status.global_reg[0..MAX_GLOBALPLAYERREG]` for a case-insensitive match.
+/// Looks up `reg` in the player's global integer registry HashMap.
 pub unsafe fn pc_readglobalreg(
     sd: *mut MapSessionData, reg: *const i8,
 ) -> i32 {
     if sd.is_null() || reg.is_null() { return 0; }
     let sd = &*sd;
-    for i in 0..MAX_GLOBALPLAYERREG {
-        if libc::strcasecmp(sd.status.global_reg[i].str.as_ptr(), reg) == 0 {
-            return sd.status.global_reg[i].val;
-        }
-    }
-    0
+    let key_str = std::ffi::CStr::from_ptr(reg).to_str().unwrap_or("");
+    sd.player.registries.get_reg(key_str).unwrap_or(0)
 }
 
 /// `int pc_setglobalreg(USER *sd, const char *reg, unsigned long val)` — sets a global integer variable.
 ///
-/// Finds an existing slot by case-insensitive key match (scanning all MAX_GLOBALREG slots),
-/// or claims the first empty slot. Setting val to 0 also clears the key string.
+/// Inserts or updates the key in the player's global integer registry HashMap.
+/// Setting val to 0 removes the key.
 pub unsafe fn pc_setglobalreg(
     sd: *mut MapSessionData, reg: *const i8, val: u64,
 ) -> i32 {
     if sd.is_null() || reg.is_null() { return 0; }
     let sd = &mut *sd;
-    // Find existing slot (scan full array)
-    let mut exist: i32 = -1;
-    for i in 0..MAX_GLOBALREG {
-        if libc::strcasecmp(sd.status.global_reg[i].str.as_ptr(), reg) == 0 {
-            exist = i as i32;
-            break;
-        }
+    let key_str = std::ffi::CStr::from_ptr(reg).to_str().unwrap_or("");
+    if val == 0 {
+        sd.player.registries.global_reg.remove(key_str);
+    } else {
+        sd.player.registries.set_reg(key_str, val as i32);
     }
-    if exist != -1 {
-        let idx = exist as usize;
-        if val == 0 {
-            libc::strcpy(sd.status.global_reg[idx].str.as_mut_ptr() as *mut i8, c"".as_ptr());
-        }
-        sd.status.global_reg[idx].val = val as i32;
-        return 0;
-    }
-    // Find empty slot (scan full MAX_GLOBALREG array, matching C behavior)
-    for i in 0..MAX_GLOBALREG {
-        if libc::strcasecmp(sd.status.global_reg[i].str.as_ptr(), c"".as_ptr()) == 0 {
-            libc::strcpy(sd.status.global_reg[i].str.as_mut_ptr() as *mut i8,
-                         reg as *const i8);
-            sd.status.global_reg[i].val = val as i32;
-            return 0;
-        }
-    }
-    libc::printf(c"pc_setglobalreg : couldn't set %s\n".as_ptr(), reg);
-    1
+    0
 }
 
 // ── Parameter read/write (HP/MP/max) ─────────────────────────────────────────
@@ -1832,8 +1784,8 @@ pub unsafe fn pc_readparam(sd: *mut MapSessionData, type_: i32) -> i32 {
     if sd.is_null() { return 0; }
     let sd = &*sd;
     match type_ {
-        SP_HP  => sd.status.hp as i32,
-        SP_MP  => sd.status.mp as i32,
+        SP_HP  => sd.player.combat.hp as i32,
+        SP_MP  => sd.player.combat.mp as i32,
         SP_MHP => sd.max_hp as i32,
         SP_MMP => sd.max_mp as i32,
         _      => 0,
@@ -1845,8 +1797,8 @@ pub unsafe fn pc_readparam(sd: *mut MapSessionData, type_: i32) -> i32 {
 pub unsafe fn pc_setparam(sd: *mut MapSessionData, type_: i32, val: i32) -> i32 {
     if sd.is_null() { return 0; }
     match type_ {
-        SP_HP  => (*sd).status.hp  = val as u32,
-        SP_MP  => (*sd).status.mp  = val as u32,
+        SP_HP  => (*sd).player.combat.hp  = val as u32,
+        SP_MP  => (*sd).player.combat.mp  = val as u32,
         SP_MHP => (*sd).max_hp     = val as u32,
         SP_MMP => (*sd).max_mp     = val as u32,
         _      => {}
@@ -1855,164 +1807,98 @@ pub unsafe fn pc_setparam(sd: *mut MapSessionData, type_: i32, val: i32) -> i32 
     0
 }
 
-// ── Account registry (persisted in MmoCharStatus.acctreg) ────────────────────
+// ── Account registry (persisted in PlayerRegistries) ─────────────────────────
 
 /// `int pc_readacctreg(USER *sd, const char *reg)` — reads an account-scoped integer variable.
 ///
-/// Scans `sd->status.acctreg[0..MAX_GLOBALREG]` for a case-insensitive match.
-/// Returns the integer value or 0. (Function declared in pc.h but never defined in pc.c;
-/// implemented here for completeness.)
+/// Looks up `reg` in the player's account registry HashMap.
 pub unsafe fn pc_readacctreg(
     sd: *mut MapSessionData, reg: *const i8,
 ) -> i32 {
     if sd.is_null() || reg.is_null() { return 0; }
     let sd = &*sd;
-    for i in 0..MAX_GLOBALREG {
-        if libc::strcasecmp(sd.status.acctreg[i].str.as_ptr(), reg) == 0 {
-            return sd.status.acctreg[i].val;
-        }
-    }
-    0
+    let key_str = std::ffi::CStr::from_ptr(reg).to_str().unwrap_or("");
+    sd.player.registries.get_acct_reg(key_str).unwrap_or(0)
 }
 
 /// `int pc_setacctreg(USER *sd, const char *reg, int val)` — sets an account-scoped integer variable.
 ///
-/// Finds an existing slot by case-insensitive key match, or claims the first empty slot.
-/// Setting val to 0 clears the key string (marks slot unused).
-/// (Function declared in pc.h but never defined in pc.c; implemented here.)
+/// Inserts or updates the key in the player's account registry HashMap.
+/// Setting val to 0 removes the key.
 pub unsafe fn pc_setacctreg(
     sd: *mut MapSessionData, reg: *const i8, val: i32,
 ) -> i32 {
     if sd.is_null() || reg.is_null() { return 0; }
     let sd = &mut *sd;
-    let mut exist: i32 = -1;
-    for i in 0..MAX_GLOBALREG {
-        if libc::strcasecmp(sd.status.acctreg[i].str.as_ptr(), reg) == 0 {
-            exist = i as i32;
-            break;
-        }
-    }
-    if exist != -1 {
-        let idx = exist as usize;
-        if val == 0 {
-            libc::strcpy(sd.status.acctreg[idx].str.as_mut_ptr() as *mut i8, c"".as_ptr());
-        }
-        sd.status.acctreg[idx].val = val;
-        return 0;
-    }
-    for i in 0..MAX_GLOBALREG {
-        if libc::strcasecmp(sd.status.acctreg[i].str.as_ptr(), c"".as_ptr()) == 0 {
-            libc::strcpy(sd.status.acctreg[i].str.as_mut_ptr() as *mut i8,
-                         reg as *const i8);
-            sd.status.acctreg[i].val = val;
-            return 0;
-        }
+    let key_str = std::ffi::CStr::from_ptr(reg).to_str().unwrap_or("");
+    if val == 0 {
+        sd.player.registries.acct_reg.remove(key_str);
+    } else {
+        sd.player.registries.set_acct_reg(key_str, val);
     }
     0
 }
 
-// ── NPC integer registry (persisted in MmoCharStatus.npcintreg) ──────────────
+// ── NPC integer registry (persisted in PlayerRegistries) ─────────────────────
 
 /// `int pc_readnpcintreg(USER *sd, const char *reg)` — reads an NPC-scoped integer variable.
 ///
-/// Scans `sd->status.npcintreg[0..MAX_GLOBALNPCREG]` for a case-insensitive match.
+/// Looks up `reg` in the player's NPC integer registry HashMap.
 pub unsafe fn pc_readnpcintreg(
     sd: *mut MapSessionData, reg: *const i8,
 ) -> i32 {
     if sd.is_null() || reg.is_null() { return 0; }
     let sd = &*sd;
-    for i in 0..MAX_GLOBALNPCREG {
-        if libc::strcasecmp(sd.status.npcintreg[i].str.as_ptr(), reg) == 0 {
-            return sd.status.npcintreg[i].val;
-        }
-    }
-    0
+    let key_str = std::ffi::CStr::from_ptr(reg).to_str().unwrap_or("");
+    sd.player.registries.get_npc_reg(key_str).unwrap_or(0)
 }
 
 /// `int pc_setnpcintreg(USER *sd, const char *reg, int val)` — sets an NPC-scoped integer variable.
 ///
-/// Finds an existing slot by case-insensitive key match, or claims the first empty slot.
-/// Setting val to 0 clears the key string (marks slot unused).
+/// Inserts or updates the key in the player's NPC integer registry HashMap.
+/// Setting val to 0 removes the key.
 pub unsafe fn pc_setnpcintreg(
     sd: *mut MapSessionData, reg: *const i8, val: i32,
 ) -> i32 {
     if sd.is_null() || reg.is_null() { return 0; }
     let sd = &mut *sd;
-    let mut exist: i32 = -1;
-    for i in 0..MAX_GLOBALNPCREG {
-        if libc::strcasecmp(sd.status.npcintreg[i].str.as_ptr(), reg) == 0 {
-            exist = i as i32;
-            break;
-        }
-    }
-    if exist != -1 {
-        let idx = exist as usize;
-        if val == 0 {
-            libc::strcpy(sd.status.npcintreg[idx].str.as_mut_ptr() as *mut i8, c"".as_ptr());
-        }
-        sd.status.npcintreg[idx].val = val;
-        return 0;
-    }
-    for i in 0..MAX_GLOBALNPCREG {
-        if libc::strcasecmp(sd.status.npcintreg[i].str.as_ptr(), c"".as_ptr()) == 0 {
-            libc::strcpy(sd.status.npcintreg[i].str.as_mut_ptr() as *mut i8,
-                         reg as *const i8);
-            sd.status.npcintreg[i].val = val;
-            return 0;
-        }
+    let key_str = std::ffi::CStr::from_ptr(reg).to_str().unwrap_or("");
+    if val == 0 {
+        sd.player.registries.npc_int_reg.remove(key_str);
+    } else {
+        sd.player.registries.set_npc_reg(key_str, val);
     }
     0
 }
 
-// ── Quest registry (persisted in MmoCharStatus.questreg) ─────────────────────
+// ── Quest registry (persisted in PlayerRegistries) ───────────────────────────
 
 /// `int pc_readquestreg(USER *sd, const char *reg)` — reads a quest integer variable.
 ///
-/// Scans `sd->status.questreg[0..MAX_GLOBALQUESTREG]` for a case-insensitive match.
+/// Looks up `reg` in the player's quest registry HashMap.
 pub unsafe fn pc_readquestreg(
     sd: *mut MapSessionData, reg: *const i8,
 ) -> i32 {
     if sd.is_null() || reg.is_null() { return 0; }
     let sd = &*sd;
-    for i in 0..MAX_GLOBALQUESTREG {
-        if libc::strcasecmp(sd.status.questreg[i].str.as_ptr(), reg) == 0 {
-            return sd.status.questreg[i].val;
-        }
-    }
-    0
+    let key_str = std::ffi::CStr::from_ptr(reg).to_str().unwrap_or("");
+    sd.player.registries.get_quest_reg(key_str).unwrap_or(0)
 }
 
 /// `int pc_setquestreg(USER *sd, const char *reg, int val)` — sets a quest integer variable.
 ///
-/// Finds an existing slot by case-insensitive key match, or claims the first empty slot.
-/// Setting val to 0 clears the key string (marks slot unused).
+/// Inserts or updates the key in the player's quest registry HashMap.
+/// Setting val to 0 removes the key.
 pub unsafe fn pc_setquestreg(
     sd: *mut MapSessionData, reg: *const i8, val: i32,
 ) -> i32 {
     if sd.is_null() || reg.is_null() { return 0; }
     let sd = &mut *sd;
-    let mut exist: i32 = -1;
-    for i in 0..MAX_GLOBALQUESTREG {
-        if libc::strcasecmp(sd.status.questreg[i].str.as_ptr(), reg) == 0 {
-            exist = i as i32;
-            break;
-        }
-    }
-    if exist != -1 {
-        let idx = exist as usize;
-        if val == 0 {
-            libc::strcpy(sd.status.questreg[idx].str.as_mut_ptr() as *mut i8, c"".as_ptr());
-        }
-        sd.status.questreg[idx].val = val;
-        return 0;
-    }
-    for i in 0..MAX_GLOBALQUESTREG {
-        if libc::strcasecmp(sd.status.questreg[i].str.as_ptr(), c"".as_ptr()) == 0 {
-            libc::strcpy(sd.status.questreg[i].str.as_mut_ptr() as *mut i8,
-                         reg as *const i8);
-            sd.status.questreg[i].val = val;
-            return 0;
-        }
+    let key_str = std::ffi::CStr::from_ptr(reg).to_str().unwrap_or("");
+    if val == 0 {
+        sd.player.registries.quest_reg.remove(key_str);
+    } else {
+        sd.player.registries.set_quest_reg(key_str, val);
     }
     0
 }
@@ -2041,7 +1927,7 @@ pub unsafe fn pc_isinvenspace(
 ) -> i32 {
     if sd.is_null() { return 0; }
     let sd = &mut *sd;
-    let maxinv = sd.status.maxinv as usize;
+    let maxinv = sd.player.inventory.max_inv as usize;
     let id_u  = id as u32;
     let own_u = owner as u32;
 
@@ -2049,7 +1935,7 @@ pub unsafe fn pc_isinvenspace(
         // Count how many of this item the player already owns (inventory + equip).
         let mut maxamount: i32 = 0;
         for i in 0..maxinv {
-            let inv = &sd.status.inventory[i];
+            let inv = &sd.player.inventory.inventory[i];
             if inv.id == id_u && item_db::search(id_u).max_amount > 0
                 && inv.owner == own_u
                 && libc::strcasecmp(inv.real_name.as_ptr(), engrave) == 0
@@ -2062,14 +1948,14 @@ pub unsafe fn pc_isinvenspace(
             }
         }
         for i in 0..14usize {
-            let eq = &sd.status.equip[i];
+            let eq = &sd.player.inventory.equip[i];
             if eq.id == id_u && item_db::search(id_u).max_amount > 0
-                && sd.status.inventory[i].owner == own_u
-                && libc::strcasecmp(sd.status.inventory[i].real_name.as_ptr(), engrave) == 0
-                && sd.status.inventory[i].custom_look       == custom_look
-                && sd.status.inventory[i].custom_look_color == custom_look_color
-                && sd.status.inventory[i].custom_icon       == custom_icon
-                && sd.status.inventory[i].custom_icon_color == custom_icon_color
+                && sd.player.inventory.inventory[i].owner == own_u
+                && libc::strcasecmp(sd.player.inventory.inventory[i].real_name.as_ptr(), engrave) == 0
+                && sd.player.inventory.inventory[i].custom_look       == custom_look
+                && sd.player.inventory.inventory[i].custom_look_color == custom_look_color
+                && sd.player.inventory.inventory[i].custom_icon       == custom_icon
+                && sd.player.inventory.inventory[i].custom_icon_color == custom_icon_color
             {
                 maxamount += 1;
             }
@@ -2077,7 +1963,7 @@ pub unsafe fn pc_isinvenspace(
 
         // Find a slot that already has the item but isn't full.
         for i in 0..maxinv {
-            let inv = &sd.status.inventory[i];
+            let inv = &sd.player.inventory.inventory[i];
             if inv.id == id_u
                 && inv.amount < item_db::search(id_u).stack_amount
                 && maxamount < item_db::search(id_u).max_amount
@@ -2094,18 +1980,18 @@ pub unsafe fn pc_isinvenspace(
 
         // Find an empty slot under the global cap.
         for i in 0..maxinv {
-            if sd.status.inventory[i].id == 0
+            if sd.player.inventory.inventory[i].id == 0
                 && maxamount < item_db::search(id_u).max_amount
             {
                 return i as i32;
             }
         }
 
-        return sd.status.maxinv as i32;
+        return sd.player.inventory.max_inv as i32;
     } else {
         // No per-player max — just stack or find empty.
         for i in 0..maxinv {
-            let inv = &sd.status.inventory[i];
+            let inv = &sd.player.inventory.inventory[i];
             if inv.id == id_u
                 && inv.amount < item_db::search(id_u).stack_amount
                 && inv.owner == own_u
@@ -2119,11 +2005,11 @@ pub unsafe fn pc_isinvenspace(
             }
         }
         for i in 0..maxinv {
-            if sd.status.inventory[i].id == 0 {
+            if sd.player.inventory.inventory[i].id == 0 {
                 return i as i32;
             }
         }
-        return sd.status.maxinv as i32;
+        return sd.player.inventory.max_inv as i32;
     }
 }
 
@@ -2148,45 +2034,45 @@ pub unsafe fn pc_isinvenitemspace(
 
     if item_db::search(id_u).max_amount > 0 {
         let mut maxamount: i32 = 0;
-        let maxinv = sd.status.maxinv as usize;
+        let maxinv = sd.player.inventory.max_inv as usize;
         for i in 0..maxinv {
-            if sd.status.inventory[i].id == id_u && item_db::search(id_u).max_amount > 0 {
-                maxamount += sd.status.inventory[i].amount;
+            if sd.player.inventory.inventory[i].id == id_u && item_db::search(id_u).max_amount > 0 {
+                maxamount += sd.player.inventory.inventory[i].amount;
             }
         }
         for i in 0..14usize {
-            if sd.status.equip[i].id == id_u && item_db::search(id_u).max_amount > 0 {
+            if sd.player.inventory.equip[i].id == id_u && item_db::search(id_u).max_amount > 0 {
                 // C checks takeoffid: skip the slot being unequipped
                 if sd.takeoffid == -1
-                    || sd.status.equip[sd.takeoffid as usize].id != id_u
+                    || sd.player.inventory.equip[sd.takeoffid as usize].id != id_u
                 {
                     maxamount += 1;
                 }
             }
         }
 
-        if sd.status.inventory[num].id == 0
+        if sd.player.inventory.inventory[num].id == 0
             && item_db::search(id_u).max_amount - maxamount >= item_db::search(id_u).stack_amount
         {
             return item_db::search(id_u).stack_amount;
-        } else if sd.status.inventory[num].id != id_u
-            || sd.status.inventory[num].owner != own_u
-            || libc::strcasecmp(sd.status.inventory[num].real_name.as_ptr(), engrave) != 0
+        } else if sd.player.inventory.inventory[num].id != id_u
+            || sd.player.inventory.inventory[num].owner != own_u
+            || libc::strcasecmp(sd.player.inventory.inventory[num].real_name.as_ptr(), engrave) != 0
         {
             return 0;
         } else {
             return item_db::search(id_u).max_amount - maxamount;
         }
     } else {
-        if sd.status.inventory[num].id == 0 {
+        if sd.player.inventory.inventory[num].id == 0 {
             return item_db::search(id_u).stack_amount;
-        } else if sd.status.inventory[num].id != id_u
-            || sd.status.inventory[num].owner != own_u
-            || libc::strcasecmp(sd.status.inventory[num].real_name.as_ptr(), engrave) != 0
+        } else if sd.player.inventory.inventory[num].id != id_u
+            || sd.player.inventory.inventory[num].owner != own_u
+            || libc::strcasecmp(sd.player.inventory.inventory[num].real_name.as_ptr(), engrave) != 0
         {
             return 0;
         } else {
-            return item_db::search(id_u).stack_amount - sd.status.inventory[num].amount;
+            return item_db::search(id_u).stack_amount - sd.player.inventory.inventory[num].amount;
         }
     }
 }
@@ -2315,7 +2201,7 @@ pub unsafe fn pc_addtocurrent_inner(
         std::mem::size_of::<u32>() * MAX_GROUP_MEMBERS,
     );
 
-    let inv = &(*sd).status.inventory[id];
+    let inv = &(&(*sd).player.inventory.inventory)[id];
     if (*fl).data.id   == inv.id
         && (*fl).data.owner == inv.owner
         && libc::strcasecmp((*fl).data.real_name.as_ptr(), inv.real_name.as_ptr()) == 0
@@ -2354,7 +2240,7 @@ pub unsafe fn pc_additem(
     if (*fl).id == 0 && (*fl).amount != 0 { return 0; }
 
     let id_u = (*fl).id;
-    let maxinv = (*sd).status.maxinv as i32;
+    let maxinv = (*sd).player.inventory.max_inv as i32;
 
     let mut num = pc_isinvenspace(
         sd, id_u as i32, (*fl).owner as i32,
@@ -2387,7 +2273,7 @@ pub unsafe fn pc_additem(
 
         if (*fl).amount > i {
             // Partial fill: put as much as fits.
-            let inv = &mut (*sd).status.inventory[num as usize];
+            let inv = &mut (&mut (*sd).player.inventory.inventory)[num as usize];
             inv.id         = id_u;
             inv.dura       = (*fl).dura;
             inv.protected  = (*fl).protected;
@@ -2404,7 +2290,7 @@ pub unsafe fn pc_additem(
             (*fl).amount  -= i;
         } else {
             // Full fill: place the remaining amount.
-            let inv = &mut (*sd).status.inventory[num as usize];
+            let inv = &mut (&mut (*sd).player.inventory.inventory)[num as usize];
             inv.id         = id_u;
             inv.dura       = (*fl).dura;
             inv.protected  = (*fl).protected;
@@ -2462,7 +2348,7 @@ pub unsafe fn pc_additemnolog(
     if (*fl).id == 0 && (*fl).amount != 0 { return 0; }
 
     let id_u   = (*fl).id;
-    let maxinv = (*sd).status.maxinv as i32;
+    let maxinv = (*sd).player.inventory.max_inv as i32;
 
     let mut num = pc_isinvenspace(
         sd, id_u as i32, (*fl).owner as i32,
@@ -2494,7 +2380,7 @@ pub unsafe fn pc_additemnolog(
         );
 
         if (*fl).amount > i {
-            let inv = &mut (*sd).status.inventory[num as usize];
+            let inv = &mut (&mut (*sd).player.inventory.inventory)[num as usize];
             inv.id         = id_u;
             inv.dura       = (*fl).dura;
             inv.protected  = (*fl).protected;
@@ -2509,7 +2395,7 @@ pub unsafe fn pc_additemnolog(
             inv.amount    += i;
             (*fl).amount  -= i;
         } else {
-            let inv = &mut (*sd).status.inventory[num as usize];
+            let inv = &mut (&mut (*sd).player.inventory.inventory)[num as usize];
             inv.id         = id_u;
             inv.dura       = (*fl).dura;
             inv.protected  = (*fl).protected;
@@ -2567,9 +2453,9 @@ pub unsafe fn pc_delitem(
     type_:  i32,
 ) -> i32 {
     if sd.is_null() { return 0; }
-    let maxinv = (*sd).status.maxinv as i32;
+    let maxinv = (*sd).player.inventory.max_inv as i32;
     if id < 0 || id >= maxinv { return 0; }
-    let inv = &mut (*sd).status.inventory[id as usize];
+    let inv = &mut (&mut (*sd).player.inventory.inventory)[id as usize];
     if inv.id == 0 { return 0; }
     if amount <= 0 { return 0; }
 
@@ -2586,7 +2472,7 @@ pub unsafe fn pc_delitem(
         libc::memset(inv as *mut Item as *mut libc::c_void, 0, std::mem::size_of::<Item>());
         clif_senddelitem(sd, id, type_);
     } else {
-        let item_id = (*sd).status.inventory[id as usize].id;
+        let item_id = (&(*sd).player.inventory.inventory)[id as usize].id;
         let mut buf = [0i8; 255];
         libc::snprintf(
             buf.as_mut_ptr(), 255,
@@ -2612,10 +2498,10 @@ pub unsafe fn pc_dropitemmap(
     if sd.is_null() { return 0; }
     let id_u = id as usize;
 
-    if id > (*sd).status.maxinv as i32 { return 0; }
-    if (*sd).status.inventory[id_u].id == 0 { return 0; }
+    if id > (*sd).player.inventory.max_inv as i32 { return 0; }
+    if (&(*sd).player.inventory.inventory)[id_u].id == 0 { return 0; }
 
-    if (*sd).status.inventory[id_u].amount <= 0 {
+    if (&(*sd).player.inventory.inventory)[id_u].amount <= 0 {
         clif_senddelitem(sd, id, 1);
         return 0;
     }
@@ -2629,7 +2515,7 @@ pub unsafe fn pc_dropitemmap(
     (*fl).bl.y = (*sd).bl.y;
     libc::memcpy(
         &mut (*fl).data as *mut _ as *mut libc::c_void,
-        &(*sd).status.inventory[id_u] as *const Item as *const libc::c_void,
+        &(&(*sd).player.inventory.inventory)[id_u] as *const Item as *const libc::c_void,
         std::mem::size_of::<Item>(),
     );
     // looters is already zeroed by mem::zeroed()
@@ -2647,12 +2533,12 @@ pub unsafe fn pc_dropitemmap(
         }
     }
 
-    (*sd).status.inventory[id_u].amount -= 1;
+    (&mut (*sd).player.inventory.inventory)[id_u].amount -= 1;
 
-    if type_ != 0 || (*sd).status.inventory[id_u].amount == 0 {
+    if type_ != 0 || (&(*sd).player.inventory.inventory)[id_u].amount == 0 {
         // Full drop: clear the slot.
         libc::memset(
-            &mut (*sd).status.inventory[id_u] as *mut Item as *mut libc::c_void,
+            &mut (&mut (*sd).player.inventory.inventory)[id_u] as *mut Item as *mut libc::c_void,
             0,
             std::mem::size_of::<Item>(),
         );
@@ -2693,7 +2579,7 @@ pub unsafe fn pc_changeitem(
     id2: i32,
 ) -> i32 {
     if sd.is_null() { return 0; }
-    let maxinv = (*sd).status.maxinv as i32;
+    let maxinv = (*sd).player.inventory.max_inv as i32;
     if id1 >= maxinv { return 0; }
     if id2 >= maxinv { return 0; }
 
@@ -2701,18 +2587,18 @@ pub unsafe fn pc_changeitem(
     let i2 = id2 as usize;
 
     // Swap using a byte-level copy to preserve the full Item layout.
-    let tmp: Item = (*sd).status.inventory[i2];
-    (*sd).status.inventory[i2] = (*sd).status.inventory[i1];
-    (*sd).status.inventory[i1] = tmp;
+    let tmp: Item = (&(*sd).player.inventory.inventory)[i2];
+    (&mut (*sd).player.inventory.inventory)[i2] = (&mut (*sd).player.inventory.inventory)[i1];
+    (&mut (*sd).player.inventory.inventory)[i1] = tmp;
 
-    if (*sd).status.inventory[i1].id != 0 {
-        if (*sd).status.inventory[i2].id == 0 {
+    if (&(*sd).player.inventory.inventory)[i1].id != 0 {
+        if (&(*sd).player.inventory.inventory)[i2].id == 0 {
             clif_senddelitem(sd, id2, 0);
         }
         clif_sendadditem(sd, id1);
     }
-    if (*sd).status.inventory[i2].id != 0 {
-        if (*sd).status.inventory[i1].id == 0 {
+    if (&(*sd).player.inventory.inventory)[i2].id != 0 {
+        if (&(*sd).player.inventory.inventory)[i1].id == 0 {
             clif_senddelitem(sd, id1, 0);
         }
         clif_sendadditem(sd, id2);
@@ -2731,25 +2617,25 @@ pub unsafe fn pc_useitem(
     id: i32,
 ) -> i32 {
     if sd.is_null() { return 0; }
-    let maxinv = (*sd).status.maxinv as i32;
+    let maxinv = (*sd).player.inventory.max_inv as i32;
     if id < 0 || id >= maxinv { return 0; }
     let id_u = id as usize;
 
-    if (*sd).status.inventory[id_u].id == 0 { return 0; }
+    if (&(*sd).player.inventory.inventory)[id_u].id == 0 { return 0; }
 
     // Ownership check.
-    if (*sd).status.inventory[id_u].owner != 0
-        && (*sd).status.inventory[id_u].owner != (*sd).status.id
+    if (&(*sd).player.inventory.inventory)[id_u].owner != 0
+        && (&(*sd).player.inventory.inventory)[id_u].owner != (*sd).player.identity.id
     {
         clif_sendminitext(sd, c"You cannot use this, it does not belong to you!".as_ptr());
         return 0;
     }
 
     // Equipment type: check whether the current equip slot can be replaced.
-    let equip_type = item_db::search((*sd).status.inventory[id_u].id).typ as i32 - 3;
-    if equip_type >= 0 && (equip_type as usize) < (*sd).status.equip.len() {
-        if (*sd).status.equip[equip_type as usize].id > 0 && (*sd).status.gm_level == 0 {
-            if item_db::search((*sd).status.equip[equip_type as usize].id).unequip as i32 == 1 {
+    let equip_type = item_db::search((&(*sd).player.inventory.inventory)[id_u].id).typ as i32 - 3;
+    if equip_type >= 0 && (equip_type as usize) < (*sd).player.inventory.equip.len() {
+        if (&(*sd).player.inventory.equip)[equip_type as usize].id > 0 && (*sd).player.identity.gm_level == 0 {
+            if item_db::search((&(*sd).player.inventory.equip)[equip_type as usize].id).unequip as i32 == 1 {
                 clif_sendminitext(sd, c"You are unable to unequip that.".as_ptr());
                 return 0;
             }
@@ -2757,71 +2643,71 @@ pub unsafe fn pc_useitem(
     }
 
     // Class / path restriction check.
-    if item_db::search((*sd).status.inventory[id_u].id).class as i32 != 0 {
-        if classdb_path((*sd).status.class as i32) == 5 {
+    if item_db::search((&(*sd).player.inventory.inventory)[id_u].id).class as i32 != 0 {
+        if classdb_path((*sd).player.progression.class as i32) == 5 {
             // GM — no restriction
-        } else if (item_db::search((*sd).status.inventory[id_u].id).class as i32) < 6 {
-            if classdb_path((*sd).status.class as i32)
-                != item_db::search((*sd).status.inventory[id_u].id).class as i32
+        } else if (item_db::search((&(*sd).player.inventory.inventory)[id_u].id).class as i32) < 6 {
+            if classdb_path((*sd).player.progression.class as i32)
+                != item_db::search((&(*sd).player.inventory.inventory)[id_u].id).class as i32
             {
                 clif_sendminitext(sd, map_msg()[MAP_ERRITMPATH].message.as_ptr());
                 return 0;
             }
         } else {
-            if (*sd).status.class as i32 != item_db::search((*sd).status.inventory[id_u].id).class as i32 {
+            if (*sd).player.progression.class as i32 != item_db::search((&(*sd).player.inventory.inventory)[id_u].id).class as i32 {
                 clif_sendminitext(sd, map_msg()[MAP_ERRITMPATH].message.as_ptr());
                 return 0;
             }
         }
-        if ((*sd).status.mark as i32) < item_db::search((*sd).status.inventory[id_u].id).rank {
+        if ((*sd).player.progression.mark as i32) < item_db::search((&(*sd).player.inventory.inventory)[id_u].id).rank {
             clif_sendminitext(sd, map_msg()[MAP_ERRITMMARK].message.as_ptr());
             return 0;
         }
     }
 
     // Ghost / mounted state restrictions.
-    if (*sd).status.state == PC_DIE as i8 {
+    if (*sd).player.combat.state == PC_DIE as i8 {
         clif_sendminitext(sd, map_msg()[MAP_ERRGHOST].message.as_ptr());
         return 0;
     }
-    if (*sd).status.state == PC_MOUNTED as i8 {
+    if (*sd).player.combat.state == PC_MOUNTED as i8 {
         clif_sendminitext(sd, map_msg()[MAP_ERRMOUNT].message.as_ptr());
         return 0;
     }
 
     // Set a timed expiry if the item has one.
-    if item_db::search((*sd).status.inventory[id_u].id).time as i32 != 0
-        && (*sd).status.inventory[id_u].time == 0
+    if item_db::search((&(*sd).player.inventory.inventory)[id_u].id).time as i32 != 0
+        && (&(*sd).player.inventory.inventory)[id_u].time == 0
     {
-        (*sd).status.inventory[id_u].time =
+        (&mut (*sd).player.inventory.inventory)[id_u].time =
             (libc::time(std::ptr::null_mut()) as u32)
-                .wrapping_add(item_db::search((*sd).status.inventory[id_u].id).time as i32 as u32);
+                .wrapping_add(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).time as i32 as u32);
     }
 
     let map_ptr = crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
 
     macro_rules! can_use {
         () => {
-            !map_ptr.is_null() && (*map_ptr).can_use != 0 || (*sd).status.gm_level != 0
+            !map_ptr.is_null() && (*map_ptr).can_use != 0 || (*sd).player.identity.gm_level != 0
         };
     }
     macro_rules! can_eat {
         () => {
-            !map_ptr.is_null() && (*map_ptr).can_eat != 0 || (*sd).status.gm_level != 0
+            !map_ptr.is_null() && (*map_ptr).can_eat != 0 || (*sd).player.identity.gm_level != 0
         };
     }
     macro_rules! can_smoke {
         () => {
-            !map_ptr.is_null() && (*map_ptr).can_smoke != 0 || (*sd).status.gm_level != 0
+            !map_ptr.is_null() && (*map_ptr).can_smoke != 0 || (*sd).player.identity.gm_level != 0
         };
     }
     macro_rules! can_equip {
         () => {
-            !map_ptr.is_null() && (*map_ptr).can_equip != 0 || (*sd).status.gm_level != 0
+            !map_ptr.is_null() && (*map_ptr).can_equip != 0 || (*sd).player.identity.gm_level != 0
         };
     }
 
-    let item_type = item_db::search((*sd).status.inventory[id_u].id).typ as i32;
+    let item_type = item_db::search((&(*sd).player.inventory.inventory)[id_u].id).typ as i32;
 
     match item_type {
         t if t == ITM_EAT => {
@@ -2831,7 +2717,7 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
             pc_delitem(sd, id, 1, 2);
         }
@@ -2842,7 +2728,7 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
             pc_delitem(sd, id, 1, 6);
         }
@@ -2853,7 +2739,7 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
             // No auto-delete for USESPC — script decides.
         }
@@ -2864,7 +2750,7 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_MAP => {
@@ -2874,7 +2760,7 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"maps".as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_QUIVER => {
@@ -2892,7 +2778,7 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"onMountItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_FACE => {
@@ -2902,7 +2788,7 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"useFace".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_SET => {
@@ -2912,7 +2798,7 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"useSetItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_SKIN => {
@@ -2922,7 +2808,7 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"useSkinItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_HAIR_DYE => {
@@ -2932,7 +2818,7 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"useHairDye".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_FACEACCTWO => {
@@ -2942,7 +2828,7 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"useBeardItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         t if t == ITM_SMOKE => {
@@ -2952,10 +2838,10 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
-            (*sd).status.inventory[id_u].dura -= 1;
-            if (*sd).status.inventory[id_u].dura == 0 {
+            (&mut (*sd).player.inventory.inventory)[id_u].dura -= 1;
+            if (&(*sd).player.inventory.inventory)[id_u].dura == 0 {
                 pc_delitem(sd, id, 1, 3);
             } else {
                 clif_sendadditem(sd, id);
@@ -2978,7 +2864,7 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
             sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
         }
         _ => {}
@@ -3027,16 +2913,16 @@ pub unsafe fn pc_isequip(
 ) -> i32 {
     if sd.is_null() { return 0; }
     if type_ < 0 || type_ >= 15 { return 0; }
-    (*sd).status.equip[type_ as usize].id as i32
+    (&(*sd).player.inventory.equip)[type_ as usize].id as i32
 }
 
 /// `int pc_loaditem(USER* sd)` — send all non-empty inventory slots to the
 /// client via `clif_sendadditem`.
 pub unsafe fn pc_loaditem(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
-    let maxinv = (*sd).status.maxinv as usize;
+    let maxinv = (*sd).player.inventory.max_inv as usize;
     for i in 0..maxinv {
-        if (*sd).status.inventory[i].id != 0 {
+        if (&(*sd).player.inventory.inventory)[i].id != 0 {
             clif_sendadditem(sd, i as i32);
         }
     }
@@ -3050,7 +2936,7 @@ pub unsafe fn pc_loaditem(sd: *mut MapSessionData) -> i32 {
 pub unsafe fn pc_loadequip(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     for i in 0..14 {
-        if (*sd).status.equip[i].id > 0 {
+        if (&(*sd).player.inventory.equip)[i].id > 0 {
             clif_sendequip(sd, i as i32);
         }
     }
@@ -3074,15 +2960,15 @@ pub unsafe fn pc_canequipitem(
     id: i32,
 ) -> i32 {
     if sd.is_null() { return 0; }
-    let maxinv = (*sd).status.maxinv as i32;
+    let maxinv = (*sd).player.inventory.max_inv as i32;
     if id < 0 || id >= maxinv { return 0; }
 
-    let itemid = (*sd).status.inventory[id as usize].id;
+    let itemid = (&(*sd).player.inventory.inventory)[id as usize].id;
 
     // Two-handed weapon conflicts:
     // If a weapon with look 10000..29999 is equipped, a shield cannot be added.
     if pc_isequip(sd, EQ_WEAP) != 0 {
-        let weap_look = item_db::search((*sd).status.equip[EQ_WEAP as usize].id).look;
+        let weap_look = item_db::search((&(*sd).player.inventory.equip)[EQ_WEAP as usize].id).look;
         if item_db::search(itemid).typ as i32 == ITM_SHIELD
             && weap_look >= 10000
             && weap_look <= 29999
@@ -3102,14 +2988,14 @@ pub unsafe fn pc_canequipitem(
         }
     }
 
-    if ((*sd).status.level as i32) < item_db::search(itemid).level as i32 {
+    if ((*sd).player.progression.level as i32) < item_db::search(itemid).level as i32 {
         return MAP_ERRITMLEVEL as i32;
     }
     if (*sd).might < item_db::search(itemid).mightreq {
         return MAP_ERRITMMIGHT as i32;
     }
     let item_sex = item_db::search(itemid).sex as i32;
-    if ((*sd).status.sex as i32) != item_sex && item_sex != 2 {
+    if ((*sd).player.identity.sex as i32) != item_sex && item_sex != 2 {
         return MAP_ERRITMSEX as i32;
     }
 
@@ -3149,29 +3035,29 @@ pub unsafe fn pc_equipitem(
     id: i32,
 ) -> i32 {
     if sd.is_null() { return 0; }
-    let maxinv = (*sd).status.maxinv as i32;
+    let maxinv = (*sd).player.inventory.max_inv as i32;
     if id < 0 || id >= maxinv { return 0; }
     let id_u = id as usize;
 
-    if (*sd).status.inventory[id_u].id == 0 { return 0; }
+    if (&(*sd).player.inventory.inventory)[id_u].id == 0 { return 0; }
 
     // State restrictions (non-GMs only).
-    if (*sd).status.state != 0 && (*sd).status.gm_level == 0 {
-        if (*sd).status.state == 1 {
+    if (*sd).player.combat.state != 0 && (*sd).player.identity.gm_level == 0 {
+        if (*sd).player.combat.state == 1 {
             clif_sendminitext(sd, c"Spirit's can't do that.".as_ptr());
         }
-        if (*sd).status.state == 3 {
+        if (*sd).player.combat.state == 3 {
             clif_sendminitext(sd, c"You can't do that while riding a mount.".as_ptr());
         }
-        if (*sd).status.state == 4 {
+        if (*sd).player.combat.state == 4 {
             clif_sendminitext(sd, c"You can't do that while transformed.".as_ptr());
         }
         return 0;
     }
 
     // Ownership check.
-    if (*sd).status.inventory[id_u].owner != 0
-        && (*sd).status.inventory[id_u].owner != (*sd).bl.id
+    if (&(*sd).player.inventory.inventory)[id_u].owner != 0
+        && (&(*sd).player.inventory.inventory)[id_u].owner != (*sd).bl.id
     {
         clif_sendminitext(sd, c"This does not belong to you.".as_ptr());
         return 0;
@@ -3186,25 +3072,25 @@ pub unsafe fn pc_equipitem(
 
     // Determine equip slot from item type.  Equip types start at ITM_WEAP=3,
     // so slot = type - 3.  Valid range: 0..=14.
-    let slot = item_db::search((*sd).status.inventory[id_u].id).typ as i32 - 3;
+    let slot = item_db::search((&(*sd).player.inventory.inventory)[id_u].id).typ as i32 - 3;
     if slot < 0 || slot > 14 {
         // Not an equip item.
         return 0;
     }
 
     // Stat check.
-    if pc_canequipstats(sd, (*sd).status.inventory[id_u].id) == 0 {
+    if pc_canequipstats(sd, (&(*sd).player.inventory.inventory)[id_u].id) == 0 {
         clif_sendminitext(sd, c"Your stats are too low to equip that.".as_ptr());
         return 0;
     }
 
     // Store the item id and inventory slot so pc_equipscript can finish the job.
-    (*sd).equipid = (*sd).status.inventory[id_u].id;
+    (*sd).equipid = (&(*sd).player.inventory.inventory)[id_u].id;
     (*sd).invslot = id as u8;
 
     // Fire the Lua equip hooks.
     sl_doscript_simple_pc(c"onEquip".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
-    sl_doscript_simple_pc(item_db::search((*sd).status.inventory[id_u].id).yname.as_ptr(), c"onEquip".as_ptr(), &mut (*sd).bl as *mut BlockList);
+    sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"onEquip".as_ptr(), &mut (*sd).bl as *mut BlockList);
 
     0
 }
@@ -3223,48 +3109,48 @@ pub unsafe fn pc_equipscript(sd: *mut MapSessionData) -> i32 {
 
     // Left/right ring slot arbitration: prefer the empty slot.
     if ret == EQ_LEFT {
-        ret = if (*sd).status.equip[EQ_LEFT as usize].id != 0
-                 && (*sd).status.equip[EQ_RIGHT as usize].id == 0
+        ret = if (&(*sd).player.inventory.equip)[EQ_LEFT as usize].id != 0
+                 && (&(*sd).player.inventory.equip)[EQ_RIGHT as usize].id == 0
               { EQ_RIGHT } else { EQ_LEFT };
     }
 
     if ret == EQ_RIGHT {
-        ret = if (*sd).status.equip[EQ_RIGHT as usize].id != 0
-                 && (*sd).status.equip[EQ_LEFT as usize].id == 0
+        ret = if (&(*sd).player.inventory.equip)[EQ_RIGHT as usize].id != 0
+                 && (&(*sd).player.inventory.equip)[EQ_LEFT as usize].id == 0
               { EQ_LEFT } else { EQ_RIGHT };
     }
 
     // Sub-ring slot arbitration.
     if ret == EQ_SUBLEFT {
-        ret = if (*sd).status.equip[EQ_SUBLEFT as usize].id != 0
-                 && (*sd).status.equip[EQ_SUBRIGHT as usize].id == 0
+        ret = if (&(*sd).player.inventory.equip)[EQ_SUBLEFT as usize].id != 0
+                 && (&(*sd).player.inventory.equip)[EQ_SUBRIGHT as usize].id == 0
               { EQ_SUBLEFT } else { EQ_SUBRIGHT };
     }
 
     if ret == EQ_SUBRIGHT {
-        ret = if (*sd).status.equip[EQ_SUBRIGHT as usize].id != 0
-                 && (*sd).status.equip[EQ_SUBLEFT as usize].id == 0
+        ret = if (&(*sd).player.inventory.equip)[EQ_SUBRIGHT as usize].id != 0
+                 && (&(*sd).player.inventory.equip)[EQ_SUBLEFT as usize].id == 0
               { EQ_SUBLEFT } else { EQ_SUBRIGHT };
     }
 
     // State restrictions (non-GMs only).
-    if (*sd).status.state != 0 && (*sd).status.gm_level == 0 {
-        if (*sd).status.state == 1 {
+    if (*sd).player.combat.state != 0 && (*sd).player.identity.gm_level == 0 {
+        if (*sd).player.combat.state == 1 {
             clif_sendminitext(sd, c"Spirits can't do that.".as_ptr());
         }
-        if (*sd).status.state == 2 {
+        if (*sd).player.combat.state == 2 {
             clif_sendminitext(sd, c"You can't do that while transformed.".as_ptr());
         }
-        if (*sd).status.state == 3 {
+        if (*sd).player.combat.state == 3 {
             clif_sendminitext(sd, c"You can't do that while riding a mount.".as_ptr());
         }
-        if (*sd).status.state == 4 {
+        if (*sd).player.combat.state == 4 {
             clif_sendminitext(sd, c"You can't do that while transformed.".as_ptr());
         }
         return 0;
     }
 
-    if (*sd).status.equip[ret as usize].id != 0 {
+    if (&(*sd).player.inventory.equip)[ret as usize].id != 0 {
         // A different item is already in this slot — trigger its unequip hook
         // instead of equipping immediately.
         (*sd).target   = (*sd).bl.id as i32;
@@ -3279,8 +3165,8 @@ pub unsafe fn pc_equipscript(sd: *mut MapSessionData) -> i32 {
     // Slot is free: copy inventory item → equip slot, remove from inventory.
     let invslot = (*sd).invslot as usize;
     libc::memcpy(
-        &mut (*sd).status.equip[ret as usize] as *mut _ as *mut libc::c_void,
-        &(*sd).status.inventory[invslot] as *const _ as *const libc::c_void,
+        &mut (&mut (*sd).player.inventory.equip)[ret as usize] as *mut _ as *mut libc::c_void,
+        &(&(*sd).player.inventory.inventory)[invslot] as *const _ as *const libc::c_void,
         std::mem::size_of::<crate::servers::char::charstatus::Item>(),
     );
 
@@ -3297,7 +3183,7 @@ pub unsafe fn pc_equipscript(sd: *mut MapSessionData) -> i32 {
     }
 
     clif_sendequip(sd, ret);
-    (*sd).status.equip[ret as usize].amount = 1;
+    (&mut (*sd).player.inventory.equip)[ret as usize].amount = 1;
 
     pc_calcstat(sd);
     clif_sendupdatestatus_onequip(sd);
@@ -3318,7 +3204,7 @@ pub unsafe fn pc_unequip(
     if sd.is_null() { return 1; }
     if type_ < 0 || type_ >= 15 { return 1; }
 
-    if (*sd).status.equip[type_ as usize].id == 0 { return 1; }
+    if (&(*sd).player.inventory.equip)[type_ as usize].id == 0 { return 1; }
 
     (*sd).takeoffid = type_ as i8;
     sl_doscript_simple_pc(c"onUnequip".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
@@ -3338,7 +3224,7 @@ pub unsafe fn pc_unequipscript(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
     let type_  = (*sd).takeoffid as usize;
-    let takeoff = (*sd).status.equip[type_].id;
+    let takeoff = (&(*sd).player.inventory.equip)[type_].id;
 
     if (*sd).equipid > 0 {
         // Swap: move old equip item to inventory, place new inventory item in slot.
@@ -3346,25 +3232,25 @@ pub unsafe fn pc_unequipscript(sd: *mut MapSessionData) -> i32 {
         let invslot = (*sd).invslot as usize;
         libc::memcpy(
             &mut it as *mut _ as *mut libc::c_void,
-            &(*sd).status.equip[type_] as *const _ as *const libc::c_void,
+            &(&(*sd).player.inventory.equip)[type_] as *const _ as *const libc::c_void,
             std::mem::size_of::<crate::servers::char::charstatus::Item>(),
         );
         libc::memcpy(
-            &mut (*sd).status.equip[type_] as *mut _ as *mut libc::c_void,
-            &(*sd).status.inventory[invslot] as *const _ as *const libc::c_void,
+            &mut (&mut (*sd).player.inventory.equip)[type_] as *mut _ as *mut libc::c_void,
+            &(&(*sd).player.inventory.inventory)[invslot] as *const _ as *const libc::c_void,
             std::mem::size_of::<crate::servers::char::charstatus::Item>(),
         );
 
         pc_delitem(sd, invslot as i32, 1, 6);
         pc_additem(sd, &mut it as *mut _);
         clif_sendequip(sd, type_ as i32);
-        (*sd).status.equip[type_].amount = 1;
+        (&mut (*sd).player.inventory.equip)[type_].amount = 1;
     } else {
         // Simple unequip: clear slot and return item to inventory.
         let mut it = std::mem::zeroed::<crate::servers::char::charstatus::Item>();
         libc::memcpy(
             &mut it as *mut _ as *mut libc::c_void,
-            &(*sd).status.equip[type_] as *const _ as *const libc::c_void,
+            &(&(*sd).player.inventory.equip)[type_] as *const _ as *const libc::c_void,
             std::mem::size_of::<crate::servers::char::charstatus::Item>(),
         );
 
@@ -3375,7 +3261,7 @@ pub unsafe fn pc_unequipscript(sd: *mut MapSessionData) -> i32 {
         if pc_additem(sd, &mut it as *mut _) != 0 { return 1; }
 
         libc::memset(
-            &mut (*sd).status.equip[type_] as *mut _ as *mut libc::c_void,
+            &mut (&mut (*sd).player.inventory.equip)[type_] as *mut _ as *mut libc::c_void,
             0,
             std::mem::size_of::<crate::servers::char::charstatus::Item>(),
         );
@@ -3424,7 +3310,7 @@ pub unsafe fn pc_getitemscript(
 
     if (*fl).data.id == 0 {
         // It's gold — credit the amount and remove from map.
-        (*sd).status.money += (*fl).data.amount as u32;
+        (*sd).player.inventory.money += (*fl).data.amount as u32;
         clif_sendstatus(sd, SFLAG_XPMONEY);
         clif_lookgone_pc(&(*fl).bl as *const BlockList);
         map_delitem((*fl).bl.id);
@@ -3433,7 +3319,7 @@ pub unsafe fn pc_getitemscript(
     }
 
     // Non-droppable items are blocked for regular players.
-    if item_db::search((*fl).data.id).droppable != 0 && (*sd).status.gm_level == 0 {
+    if item_db::search((*fl).data.id).droppable != 0 && (*sd).player.identity.gm_level == 0 {
         clif_sendminitext(sd, c"That item cannot be picked up.".as_ptr());
         return 0;
     }
@@ -3555,9 +3441,9 @@ pub async unsafe fn pc_warp(
         if x < 0 || x > 255 { x = 1; }
         if y < 0 || y > 255 { y = 1; }
 
-        (*sd).status.dest_pos.m = m as u16;
-        (*sd).status.dest_pos.x = x as u16;
-        (*sd).status.dest_pos.y = y as u16;
+        (*sd).player.identity.dest_pos.m = m as u16;
+        (*sd).player.identity.dest_pos.x = x as u16;
+        (*sd).player.identity.dest_pos.y = y as u16;
 
         clif_transfer(sd, destsrv, m, x, y);
         return 0;
@@ -3590,12 +3476,12 @@ pub async unsafe fn pc_warp(
 
     // Fire passive_before_warp for each known spell.
     for i in 0..MAX_SPELLS {
-        sl_doscript_simple_pc(magic_db::search((*sd).status.skill[i] as i32).yname.as_ptr(), c"passive_before_warp".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.skills)[i] as i32).yname.as_ptr(), c"passive_before_warp".as_ptr(), &mut (*sd).bl as *mut BlockList);
     }
 
     // Fire before_warp_while_cast for each active aether timer.
     for i in 0..MAX_MAGIC_TIMERS {
-        sl_doscript_simple_pc(magic_db::search((*sd).status.dura_aether[i].id as i32).yname.as_ptr(), c"before_warp_while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.dura_aether)[i].id as i32).yname.as_ptr(), c"before_warp_while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
     }
 
     // Perform the actual move.
@@ -3612,12 +3498,12 @@ pub async unsafe fn pc_warp(
 
     // Fire passive_on_warp for each known spell.
     for i in 0..MAX_SPELLS {
-        sl_doscript_simple_pc(magic_db::search((*sd).status.skill[i] as i32).yname.as_ptr(), c"passive_on_warp".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.skills)[i] as i32).yname.as_ptr(), c"passive_on_warp".as_ptr(), &mut (*sd).bl as *mut BlockList);
     }
 
     // Fire on_warp_while_cast for each active aether timer.
     for i in 0..MAX_MAGIC_TIMERS {
-        sl_doscript_simple_pc(magic_db::search((*sd).status.dura_aether[i].id as i32).yname.as_ptr(), c"on_warp_while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.dura_aether)[i].id as i32).yname.as_ptr(), c"on_warp_while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
     }
 
     0
@@ -3628,7 +3514,7 @@ pub async unsafe fn pc_warp(
 pub unsafe fn pc_loadmagic(sd: *mut MapSessionData) -> i32 {
     use crate::servers::char::charstatus::MAX_SPELLS;
     for i in 0..MAX_SPELLS {
-        if (*sd).status.skill[i] > 0 {
+        if (&(*sd).player.spells.skills)[i] > 0 {
             clif_sendmagic(&mut *sd, i as i32);
         }
     }
@@ -3646,7 +3532,7 @@ pub unsafe fn pc_magic_startup(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
     for x in 0..MAX_MAGIC_TIMERS {
-        let p = &(*sd).status.dura_aether[x];
+        let p = &(&(*sd).player.spells.dura_aether)[x];
 
         if p.id > 0 {
             if p.duration > 0 {
@@ -3658,8 +3544,8 @@ pub unsafe fn pc_magic_startup(sd: *mut MapSessionData) -> i32 {
                     (*sd).attacker = p.caster_id;
                     sl_doscript_2_pc(magic_db::search(p.id as i32).yname.as_ptr(), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList);
                 } else {
-                    (*sd).target   = (*sd).status.id as i32;
-                    (*sd).attacker = (*sd).status.id;
+                    (*sd).target   = (*sd).player.identity.id as i32;
+                    (*sd).attacker = (*sd).player.identity.id;
                     sl_doscript_simple_pc(magic_db::search(p.id as i32).yname.as_ptr(), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList);
                 }
             }
@@ -3678,7 +3564,7 @@ pub unsafe fn pc_magic_startup(sd: *mut MapSessionData) -> i32 {
 pub unsafe fn pc_reload_aether(sd: *mut MapSessionData) -> i32 {
     use crate::servers::char::charstatus::MAX_MAGIC_TIMERS;
     for x in 0..MAX_MAGIC_TIMERS {
-        let p = &(*sd).status.dura_aether[x];
+        let p = &(&(*sd).player.spells.dura_aether)[x];
         if p.id > 0 && p.aether > 0 {
             clif_send_aether(&mut *sd, p.id as i32, p.aether / 1000);
         }
@@ -3719,29 +3605,29 @@ pub unsafe fn pc_diescript(sd: *mut MapSessionData) -> i32 {
 
     // Set the killer (use attacker's bl.id if we have it).
     if !attacker_bl.is_null() {
-        (*sd).status.killedby = (*attacker_bl).id;
+        (*sd).player.social.killed_by = (*attacker_bl).id;
     }
-    (*sd).status.state = 1; // PC_DIE
-    (*sd).status.hp    = 0;
+    (*sd).player.combat.state = 1; // PC_DIE
+    (*sd).player.combat.hp    = 0;
 
     // Clear active aether timers that are not dispel-immune.
     for i in 0..MAX_MAGIC_TIMERS {
-        let id = (*sd).status.dura_aether[i].id;
+        let id = (&(*sd).player.spells.dura_aether)[i].id;
         if id == 0 { continue; }
 
         if magic_db::search(id as i32).dispell as i32 > 0 { continue; }
 
-        (*sd).status.dura_aether[i].duration = 0;
+        (&mut (*sd).player.spells.dura_aether)[i].duration = 0;
         clif_send_duration(
             &mut *sd,
-            (*sd).status.dura_aether[i].id as i32,
+            (&(*sd).player.spells.dura_aether)[i].id as i32,
             0,
-            map_id2sd_pc((*sd).status.dura_aether[i].caster_id),
+            map_id2sd_pc((&(*sd).player.spells.dura_aether)[i].caster_id),
         );
-        (*sd).status.dura_aether[i].caster_id = 0;
+        (&mut (*sd).player.spells.dura_aether)[i].caster_id = 0;
 
         {
-            let anim = (*sd).status.dura_aether[i].animation as i32;
+            let anim = (&(*sd).player.spells.dura_aether)[i].animation as i32;
             let sd_bl = &mut (*sd).bl as *mut BlockList;
             if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
                 let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
@@ -3753,15 +3639,15 @@ pub unsafe fn pc_diescript(sd: *mut MapSessionData) -> i32 {
                 }
             }
         }
-        (*sd).status.dura_aether[i].animation = 0;
+        (&mut (*sd).player.spells.dura_aether)[i].animation = 0;
 
-        if (*sd).status.dura_aether[i].aether == 0 {
-            (*sd).status.dura_aether[i].id = 0;
+        if (&(*sd).player.spells.dura_aether)[i].aether == 0 {
+            (&mut (*sd).player.spells.dura_aether)[i].id = 0;
         }
 
         // Fire uncast hook.
-        let caster_bl = if (*sd).status.dura_aether[i].caster_id != (*sd).bl.id {
-            map_id2bl_pc((*sd).status.dura_aether[i].caster_id)
+        let caster_bl = if (&(*sd).player.spells.dura_aether)[i].caster_id != (*sd).bl.id {
+            map_id2bl_pc((&(*sd).player.spells.dura_aether)[i].caster_id)
         } else {
             std::ptr::null_mut()
         };
@@ -3839,8 +3725,8 @@ pub unsafe fn pc_warp_sync(sd: *mut MapSessionData, m: i32, x: i32, y: i32) -> i
 /// warps the player to their current position (which re-spawns them for other
 /// clients on the same map).
 pub unsafe fn pc_res(sd: *mut MapSessionData) -> i32 {
-    (*sd).status.state = PC_ALIVE as i8;
-    (*sd).status.hp    = 100;
+    (*sd).player.combat.state = PC_ALIVE as i8;
+    (*sd).player.combat.hp    = 100;
     clif_sendstatus(sd, SFLAG_HPMP);
     pc_warp_sync(sd, (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32);
     0
@@ -3854,23 +3740,7 @@ pub unsafe fn pc_res(sd: *mut MapSessionData) -> i32 {
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
 pub unsafe fn addtokillreg(sd: *mut MapSessionData, mob: i32) -> i32 {
-    use crate::servers::char::charstatus::MAX_KILLREG;
     if sd.is_null() { return 0; }
-    let mob_u = mob as u32;
-    // First pass: increment existing entry.
-    for x in 0..MAX_KILLREG {
-        if (*sd).status.killreg[x].mob_id == mob_u {
-            (*sd).status.killreg[x].amount = (*sd).status.killreg[x].amount.wrapping_add(1);
-            return 0;
-        }
-    }
-    // Second pass: claim first empty slot.
-    for x in 0..MAX_KILLREG {
-        if (*sd).status.killreg[x].mob_id == 0 {
-            (*sd).status.killreg[x].mob_id = mob_u;
-            (*sd).status.killreg[x].amount = 1;
-            return 0;
-        }
-    }
+    (*sd).player.registries.add_kill(mob as u32);
     0
 }
