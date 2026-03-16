@@ -215,14 +215,14 @@ pub unsafe fn map_setmapip(id: i32, ip: u32, port: u16) -> i32 {
 // similarly won't contend in practice, but structurally enforces correct
 // access patterns and is ready for future multi-threading.
 
-static PLAYER_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<crate::game::pc::MapSessionData>>>>> = OnceLock::new();
+static PLAYER_MAP: OnceLock<Mutex<crate::common::entity_manager::EntityManager<crate::game::pc::MapSessionData>>> = OnceLock::new();
 static MOB_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<crate::game::mob::MobSpawnData>>>>> = OnceLock::new();
 static NPC_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<crate::game::npc::NpcData>>>>> = OnceLock::new();
 static ITEM_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<crate::game::scripting::types::floor::FloorItemData>>>>> = OnceLock::new();
 
 #[inline]
-fn player_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<RwLock<crate::game::pc::MapSessionData>>>> {
-    PLAYER_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
+fn player_map() -> std::sync::MutexGuard<'static, crate::common::entity_manager::EntityManager<crate::game::pc::MapSessionData>> {
+    PLAYER_MAP.get_or_init(|| Mutex::new(crate::common::entity_manager::EntityManager::new())).lock().unwrap_or_else(|e| e.into_inner())
 }
 #[inline]
 fn mob_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<RwLock<crate::game::mob::MobSpawnData>>>> {
@@ -243,7 +243,7 @@ fn item_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<RwLock<crate::g
 /// pointers if a player is removed mid-iteration (Arc keeps data alive).
 pub fn for_each_player<F: FnMut(&mut crate::game::pc::MapSessionData)>(mut f: F) {
     let arcs: Vec<Arc<RwLock<crate::game::pc::MapSessionData>>> = {
-        player_map().values().cloned().collect()
+        player_map().iter().map(|(_, arc)| Arc::clone(arc)).collect()
     };
     for arc in arcs {
         // data_ptr() returns raw pointer without acquiring any lock.
@@ -317,7 +317,8 @@ unsafe fn box_into_arc_rwlock<T>(b: Box<T>) -> Arc<RwLock<T>> {
 
 /// Insert a player — takes ownership of the Box, wrapping it in Arc<RwLock>.
 pub fn map_addiddb_player(id: u32, sd: Box<crate::game::pc::MapSessionData>) {
-    player_map().insert(id, unsafe { box_into_arc_rwlock(sd) });
+    let arc = unsafe { box_into_arc_rwlock(sd) };
+    player_map().insert_arc(id, arc);
 }
 
 /// Insert a mob — takes ownership of the Box, wrapping it in Arc<RwLock>.
@@ -350,7 +351,7 @@ pub fn map_deliddb(id: u32) {
     use crate::game::mob::{MOB_START_NUM, FLOORITEM_START_NUM, NPC_START_NUM};
     if id == 0 { return; }
     if id < MOB_START_NUM {
-        player_map().remove(&id);
+        player_map().remove(id);
     } else if id >= NPC_START_NUM {
         npc_map().remove(&id);
     } else if id >= FLOORITEM_START_NUM {
@@ -371,8 +372,7 @@ pub fn map_deliddb(id: u32) {
 #[must_use]
 #[inline]
 pub fn map_id2sd_pc(id: u32) -> Option<Arc<RwLock<crate::game::pc::MapSessionData>>> {
-    let map = player_map();
-    map.get(&id).cloned()
+    player_map().get_by_id(id)
 }
 
 /// Typed lookup — returns `Arc<RwLock<MobSpawnData>>` if id is a mob.

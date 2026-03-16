@@ -102,6 +102,28 @@ impl<T> EntityManager<T> {
         self.len() == 0
     }
 
+    /// Insert a pre-wrapped Arc<RwLock<T>>. Used for large structs that
+    /// must be heap-allocated before wrapping (e.g., via `box_into_arc_rwlock`).
+    /// Returns an EntityId handle. Bumps generation if the slot was previously used.
+    pub fn insert_arc(&mut self, id: u32, arc: Arc<RwLock<T>>) -> EntityId {
+        let generation = self.slots
+            .get(&id)
+            .map(|s| next_generation(s.generation))
+            .unwrap_or(1);
+
+        self.slots.insert(id, Slot {
+            entity: Some(arc),
+            generation,
+        });
+
+        EntityId { id, generation }
+    }
+
+    /// Remove all entities. All existing EntityId handles become stale.
+    pub fn clear(&mut self) {
+        self.slots.clear();
+    }
+
     pub fn entity_id_for(&self, id: u32) -> Option<EntityId> {
         self.slots.get(&id).and_then(|slot| {
             slot.entity.as_ref().map(|_| EntityId { id, generation: slot.generation })
@@ -215,6 +237,41 @@ mod tests {
         assert!(!em.is_alive(old_id));
         let arc = em.get(new_id).unwrap();
         assert_eq!(*arc.read(), "bob");
+    }
+
+    #[test]
+    fn insert_arc_works() {
+        let mut em = EntityManager::<String>::new();
+        let arc = Arc::new(RwLock::new("pre-wrapped".to_string()));
+        let id = em.insert_arc(1, arc.clone());
+        assert!(em.is_alive(id));
+        let got = em.get(id).unwrap();
+        assert_eq!(*got.read(), "pre-wrapped");
+        // The returned Arc is the SAME allocation (not a copy)
+        assert!(Arc::ptr_eq(&arc, &got));
+    }
+
+    #[test]
+    fn insert_arc_bumps_generation() {
+        let mut em = EntityManager::<String>::new();
+        let old_id = em.insert(1, "first".to_string());
+        em.remove(1);
+        let arc = Arc::new(RwLock::new("second".to_string()));
+        let new_id = em.insert_arc(1, arc);
+        assert!(!em.is_alive(old_id));
+        assert!(em.is_alive(new_id));
+        assert_ne!(old_id, new_id);
+    }
+
+    #[test]
+    fn clear_removes_all() {
+        let mut em = EntityManager::<String>::new();
+        let id1 = em.insert(1, "a".to_string());
+        let id2 = em.insert(2, "b".to_string());
+        em.clear();
+        assert!(!em.is_alive(id1));
+        assert!(!em.is_alive(id2));
+        assert!(em.is_empty());
     }
 
     #[test]
