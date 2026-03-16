@@ -5,7 +5,7 @@ use crate::game::pc::{MapSessionData, EQ_FACEACCTWO, SFLAG_HPMP, SFLAG_FULLSTATS
 use crate::session::SessionId;
 use crate::database::map_db::BlockList;
 use crate::game::mob::{MobSpawnData, MAX_THREATCOUNT};
-use crate::servers::char::charstatus::{MAX_INVENTORY, MAX_SPELLS, MAX_KILLREG, MAX_EQUIP, MAX_MAGIC_TIMERS, MAX_LEGENDS, MAX_BANK_SLOTS};
+use crate::servers::char::charstatus::{MAX_INVENTORY, MAX_SPELLS, MAX_EQUIP, MAX_MAGIC_TIMERS, MAX_LEGENDS, MAX_BANK_SLOTS};
 
 // ─── Read: block_list embedded fields ────────────────────────────────────────
 
@@ -15,89 +15,89 @@ pub fn sl_pc_bl_x(sd: &mut MapSessionData) -> i32    { sd.bl.x as i32 }
 pub fn sl_pc_bl_y(sd: &mut MapSessionData) -> i32    { sd.bl.y as i32 }
 pub fn sl_pc_bl_type(sd: &mut MapSessionData) -> i32 { sd.bl.bl_type as i32 }
 
-// ─── Read: status fields ──────────────────────────────────────────────────────
+// ─── Read: player fields ─────────────────────────────────────────────────────
 
-pub fn sl_pc_status_id(sd: &mut MapSessionData) -> i32          { sd.status.id as i32 }
-pub fn sl_pc_status_hp(sd: &mut MapSessionData) -> i32          { sd.status.hp as i32 }
-pub fn sl_pc_status_mp(sd: &mut MapSessionData) -> i32          { sd.status.mp as i32 }
-pub fn sl_pc_status_level(sd: &mut MapSessionData) -> i32       { sd.status.level as i32 }
-pub fn sl_pc_status_exp(sd: &mut MapSessionData) -> i32         { sd.status.exp as i32 }
-pub fn sl_pc_status_expsoldmagic(sd: &mut MapSessionData) -> i32{ sd.status.expsold_magic as i32 } // truncates to low 32 bits; matches C
+pub fn sl_pc_status_id(sd: &mut MapSessionData) -> i32          { sd.player.identity.id as i32 }
+pub fn sl_pc_status_hp(sd: &mut MapSessionData) -> i32          { sd.player.combat.hp as i32 }
+pub fn sl_pc_status_mp(sd: &mut MapSessionData) -> i32          { sd.player.combat.mp as i32 }
+pub fn sl_pc_status_level(sd: &mut MapSessionData) -> i32       { sd.player.progression.level as i32 }
+pub fn sl_pc_status_exp(sd: &mut MapSessionData) -> i32         { sd.player.progression.exp as i32 }
+pub fn sl_pc_status_expsoldmagic(sd: &mut MapSessionData) -> i32{ sd.player.progression.expsold_magic as i32 } // truncates to low 32 bits; matches C
 // Field name mapping (C → Rust where they differ):
 //   settingFlags → setting_flags   classRank → class_rank   clanRank → clan_rank
 //   miniMapToggle → mini_map_toggle   expsoldhealth/stats → expsold_health/stats
 // Many numeric fields are u8/u16/u32/u64/i8/i32/f32 in Rust; all cast to i32.
-// sl_pc_status_killspvp reads from sd->killspvp (direct USER field), not status.
+// sl_pc_status_killspvp reads from sd->killspvp (direct USER field), not player.
 
-pub fn sl_pc_status_expsoldhealth(sd: &mut MapSessionData) -> i32 { sd.status.expsold_health as i32 } // truncates to low 32 bits; matches C
-pub fn sl_pc_status_expsoldstats(sd: &mut MapSessionData) -> i32  { sd.status.expsold_stats as i32 } // truncates to low 32 bits; matches C
-pub fn sl_pc_status_class(sd: &mut MapSessionData) -> i32     { sd.status.class as i32 }
-pub fn sl_pc_status_totem(sd: &mut MapSessionData) -> i32     { sd.status.totem as i32 }
-pub fn sl_pc_status_tier(sd: &mut MapSessionData) -> i32      { sd.status.tier as i32 }
-pub fn sl_pc_status_mark(sd: &mut MapSessionData) -> i32      { sd.status.mark as i32 }
-pub fn sl_pc_status_country(sd: &mut MapSessionData) -> i32   { sd.status.country as i32 }
-pub fn sl_pc_status_clan(sd: &mut MapSessionData) -> i32      { sd.status.clan as i32 }
-pub fn sl_pc_status_gm_level(sd: &mut MapSessionData) -> i32  { sd.status.gm_level as i32 }
-pub fn sl_pc_status_sex(sd: &mut MapSessionData) -> i32       { sd.status.sex as i32 }
-pub fn sl_pc_status_side(sd: &mut MapSessionData) -> i32      { sd.status.side as i32 }
-pub fn sl_pc_status_state(sd: &mut MapSessionData) -> i32     { sd.status.state as i32 }
-pub fn sl_pc_status_face(sd: &mut MapSessionData) -> i32      { sd.status.face as i32 }
-pub fn sl_pc_status_hair(sd: &mut MapSessionData) -> i32      { sd.status.hair as i32 }
-pub fn sl_pc_status_hair_color(sd: &mut MapSessionData) -> i32  { sd.status.hair_color as i32 }
-pub fn sl_pc_status_face_color(sd: &mut MapSessionData) -> i32  { sd.status.face_color as i32 }
-pub fn sl_pc_status_armor_color(sd: &mut MapSessionData) -> i32 { sd.status.armor_color as i32 }
-pub fn sl_pc_status_skin_color(sd: &mut MapSessionData) -> i32  { sd.status.skin_color as i32 }
-pub fn sl_pc_status_basehp(sd: &mut MapSessionData) -> i32    { sd.status.basehp as i32 }
-pub fn sl_pc_status_basemp(sd: &mut MapSessionData) -> i32    { sd.status.basemp as i32 }
-pub fn sl_pc_status_money(sd: &mut MapSessionData) -> i32     { sd.status.money as i32 }
-pub fn sl_pc_status_bankmoney(sd: &mut MapSessionData) -> i32 { sd.status.bankmoney as i32 }
-pub fn sl_pc_status_maxslots(sd: &mut MapSessionData) -> i32  { sd.status.maxslots as i32 }
-pub fn sl_pc_status_maxinv(sd: &mut MapSessionData) -> i32    { sd.status.maxinv as i32 }
-pub fn sl_pc_status_partner(sd: &mut MapSessionData) -> i32   { sd.status.partner as i32 }
-pub fn sl_pc_status_pk(sd: &mut MapSessionData) -> i32        { sd.status.pk as i32 }
-pub fn sl_pc_status_killedby(sd: &mut MapSessionData) -> i32  { sd.status.killedby as i32 }
-pub fn sl_pc_status_killspk(sd: &mut MapSessionData) -> i32   { sd.status.killspk as i32 }
-pub fn sl_pc_status_pkduration(sd: &mut MapSessionData) -> i32{ sd.status.pkduration as i32 }
-pub fn sl_pc_status_basegrace(sd: &mut MapSessionData) -> i32 { sd.status.basegrace as i32 }
-pub fn sl_pc_status_basemight(sd: &mut MapSessionData) -> i32 { sd.status.basemight as i32 }
-pub fn sl_pc_status_basewill(sd: &mut MapSessionData) -> i32  { sd.status.basewill as i32 }
-pub fn sl_pc_status_basearmor(sd: &mut MapSessionData) -> i32 { sd.status.basearmor as i32 }
-pub fn sl_pc_status_tutor(sd: &mut MapSessionData) -> i32     { sd.status.tutor as i32 }
-pub fn sl_pc_status_karma(sd: &mut MapSessionData) -> i32     { sd.status.karma as i32 } // truncates float to int; matches C
-pub fn sl_pc_status_alignment(sd: &mut MapSessionData) -> i32 { sd.status.alignment as i32 }
-pub fn sl_pc_status_classRank(sd: &mut MapSessionData) -> i32 { sd.status.class_rank as i32 }
-pub fn sl_pc_status_clanRank(sd: &mut MapSessionData) -> i32  { sd.status.clan_rank as i32 }
-pub fn sl_pc_status_novice_chat(sd: &mut MapSessionData) -> i32 { sd.status.novice_chat as i32 }
-pub fn sl_pc_status_subpath_chat(sd: &mut MapSessionData) -> i32{ sd.status.subpath_chat as i32 }
-pub fn sl_pc_status_clan_chat(sd: &mut MapSessionData) -> i32  { sd.status.clan_chat as i32 }
-pub fn sl_pc_status_miniMapToggle(sd: &mut MapSessionData) -> i32{ sd.status.mini_map_toggle as i32 }
-pub fn sl_pc_status_heroes(sd: &mut MapSessionData) -> i32    { sd.status.heroes as i32 }
-pub fn sl_pc_status_mute(sd: &mut MapSessionData) -> i32      { sd.status.mute as i32 }
-pub fn sl_pc_status_settingFlags(sd: &mut MapSessionData) -> i32{ sd.status.setting_flags as i32 }
-// sl_pc_status_killspvp reads from the direct USER field `killspvp`, not status.killspvp
+pub fn sl_pc_status_expsoldhealth(sd: &mut MapSessionData) -> i32 { sd.player.progression.expsold_health as i32 } // truncates to low 32 bits; matches C
+pub fn sl_pc_status_expsoldstats(sd: &mut MapSessionData) -> i32  { sd.player.progression.expsold_stats as i32 } // truncates to low 32 bits; matches C
+pub fn sl_pc_status_class(sd: &mut MapSessionData) -> i32     { sd.player.progression.class as i32 }
+pub fn sl_pc_status_totem(sd: &mut MapSessionData) -> i32     { sd.player.progression.totem as i32 }
+pub fn sl_pc_status_tier(sd: &mut MapSessionData) -> i32      { sd.player.progression.tier as i32 }
+pub fn sl_pc_status_mark(sd: &mut MapSessionData) -> i32      { sd.player.progression.mark as i32 }
+pub fn sl_pc_status_country(sd: &mut MapSessionData) -> i32   { sd.player.progression.country as i32 }
+pub fn sl_pc_status_clan(sd: &mut MapSessionData) -> i32      { sd.player.social.clan as i32 }
+pub fn sl_pc_status_gm_level(sd: &mut MapSessionData) -> i32  { sd.player.identity.gm_level as i32 }
+pub fn sl_pc_status_sex(sd: &mut MapSessionData) -> i32       { sd.player.identity.sex as i32 }
+pub fn sl_pc_status_side(sd: &mut MapSessionData) -> i32      { sd.player.combat.side as i32 }
+pub fn sl_pc_status_state(sd: &mut MapSessionData) -> i32     { sd.player.combat.state as i32 }
+pub fn sl_pc_status_face(sd: &mut MapSessionData) -> i32      { sd.player.appearance.face as i32 }
+pub fn sl_pc_status_hair(sd: &mut MapSessionData) -> i32      { sd.player.appearance.hair as i32 }
+pub fn sl_pc_status_hair_color(sd: &mut MapSessionData) -> i32  { sd.player.appearance.hair_color as i32 }
+pub fn sl_pc_status_face_color(sd: &mut MapSessionData) -> i32  { sd.player.appearance.face_color as i32 }
+pub fn sl_pc_status_armor_color(sd: &mut MapSessionData) -> i32 { sd.player.appearance.armor_color as i32 }
+pub fn sl_pc_status_skin_color(sd: &mut MapSessionData) -> i32  { sd.player.appearance.skin_color as i32 }
+pub fn sl_pc_status_basehp(sd: &mut MapSessionData) -> i32    { sd.player.combat.max_hp as i32 }
+pub fn sl_pc_status_basemp(sd: &mut MapSessionData) -> i32    { sd.player.combat.max_mp as i32 }
+pub fn sl_pc_status_money(sd: &mut MapSessionData) -> i32     { sd.player.inventory.money as i32 }
+pub fn sl_pc_status_bankmoney(sd: &mut MapSessionData) -> i32 { sd.player.inventory.bank_money as i32 }
+pub fn sl_pc_status_maxslots(sd: &mut MapSessionData) -> i32  { sd.player.inventory.max_slots as i32 }
+pub fn sl_pc_status_maxinv(sd: &mut MapSessionData) -> i32    { sd.player.inventory.max_inv as i32 }
+pub fn sl_pc_status_partner(sd: &mut MapSessionData) -> i32   { sd.player.social.partner as i32 }
+pub fn sl_pc_status_pk(sd: &mut MapSessionData) -> i32        { sd.player.social.pk as i32 }
+pub fn sl_pc_status_killedby(sd: &mut MapSessionData) -> i32  { sd.player.social.killed_by as i32 }
+pub fn sl_pc_status_killspk(sd: &mut MapSessionData) -> i32   { sd.player.social.kills_pk as i32 }
+pub fn sl_pc_status_pkduration(sd: &mut MapSessionData) -> i32{ sd.player.social.pk_duration as i32 }
+pub fn sl_pc_status_basegrace(sd: &mut MapSessionData) -> i32 { sd.player.combat.base_grace as i32 }
+pub fn sl_pc_status_basemight(sd: &mut MapSessionData) -> i32 { sd.player.combat.base_might as i32 }
+pub fn sl_pc_status_basewill(sd: &mut MapSessionData) -> i32  { sd.player.combat.base_will as i32 }
+pub fn sl_pc_status_basearmor(sd: &mut MapSessionData) -> i32 { sd.player.combat.base_armor as i32 }
+pub fn sl_pc_status_tutor(sd: &mut MapSessionData) -> i32     { sd.player.social.tutor as i32 }
+pub fn sl_pc_status_karma(sd: &mut MapSessionData) -> i32     { sd.player.social.karma as i32 } // truncates float to int; matches C
+pub fn sl_pc_status_alignment(sd: &mut MapSessionData) -> i32 { sd.player.social.alignment as i32 }
+pub fn sl_pc_status_classRank(sd: &mut MapSessionData) -> i32 { sd.player.progression.class_rank as i32 }
+pub fn sl_pc_status_clanRank(sd: &mut MapSessionData) -> i32  { sd.player.progression.clan_rank as i32 }
+pub fn sl_pc_status_novice_chat(sd: &mut MapSessionData) -> i32 { sd.player.social.novice_chat as i32 }
+pub fn sl_pc_status_subpath_chat(sd: &mut MapSessionData) -> i32{ sd.player.social.subpath_chat as i32 }
+pub fn sl_pc_status_clan_chat(sd: &mut MapSessionData) -> i32  { sd.player.social.clan_chat as i32 }
+pub fn sl_pc_status_miniMapToggle(sd: &mut MapSessionData) -> i32{ sd.player.appearance.mini_map_toggle as i32 }
+pub fn sl_pc_status_heroes(sd: &mut MapSessionData) -> i32    { sd.player.appearance.heroes as i32 }
+pub fn sl_pc_status_mute(sd: &mut MapSessionData) -> i32      { sd.player.social.mute as i32 }
+pub fn sl_pc_status_settingFlags(sd: &mut MapSessionData) -> i32{ sd.player.appearance.setting_flags as i32 }
+// sl_pc_status_killspvp reads from the direct USER field `killspvp`, not player.
 pub fn sl_pc_status_killspvp(sd: &mut MapSessionData) -> i32  { sd.killspvp as i32 }
-pub fn sl_pc_status_profile_vitastats(sd: &mut MapSessionData) -> i32  { sd.status.profile_vitastats as i32 }
-pub fn sl_pc_status_profile_equiplist(sd: &mut MapSessionData) -> i32  { sd.status.profile_equiplist as i32 }
-pub fn sl_pc_status_profile_legends(sd: &mut MapSessionData) -> i32    { sd.status.profile_legends as i32 }
-pub fn sl_pc_status_profile_spells(sd: &mut MapSessionData) -> i32     { sd.status.profile_spells as i32 }
-pub fn sl_pc_status_profile_inventory(sd: &mut MapSessionData) -> i32  { sd.status.profile_inventory as i32 }
-pub fn sl_pc_status_profile_bankitems(sd: &mut MapSessionData) -> i32  { sd.status.profile_bankitems as i32 }
+pub fn sl_pc_status_profile_vitastats(sd: &mut MapSessionData) -> i32  { sd.player.appearance.profile_vitastats as i32 }
+pub fn sl_pc_status_profile_equiplist(sd: &mut MapSessionData) -> i32  { sd.player.appearance.profile_equiplist as i32 }
+pub fn sl_pc_status_profile_legends(sd: &mut MapSessionData) -> i32    { sd.player.appearance.profile_legends as i32 }
+pub fn sl_pc_status_profile_spells(sd: &mut MapSessionData) -> i32     { sd.player.appearance.profile_spells as i32 }
+pub fn sl_pc_status_profile_inventory(sd: &mut MapSessionData) -> i32  { sd.player.appearance.profile_inventory as i32 }
+pub fn sl_pc_status_profile_bankitems(sd: &mut MapSessionData) -> i32  { sd.player.appearance.profile_bankitems as i32 }
 
-// String getters — status fields are fixed-size [i8; N] arrays; return pointer to first element.
-pub fn sl_pc_status_name(sd: &mut MapSessionData) -> *const i8 {
-    sd.status.name.as_ptr()
+// String getters — player fields are now Rust Strings; return &str.
+pub fn sl_pc_status_name(sd: &MapSessionData) -> &str {
+    &sd.player.identity.name
 }
-pub fn sl_pc_status_title(sd: &mut MapSessionData) -> *const i8 {
-    sd.status.title.as_ptr()
+pub fn sl_pc_status_title(sd: &MapSessionData) -> &str {
+    &sd.player.identity.title
 }
-pub fn sl_pc_status_clan_title(sd: &mut MapSessionData) -> *const i8 {
-    sd.status.clan_title.as_ptr()
+pub fn sl_pc_status_clan_title(sd: &MapSessionData) -> &str {
+    &sd.player.social.clan_title
 }
-pub fn sl_pc_status_afkmessage(sd: &mut MapSessionData) -> *const i8 {
-    sd.status.afkmessage.as_ptr()
+pub fn sl_pc_status_afkmessage(sd: &MapSessionData) -> &str {
+    &sd.player.social.afk_message
 }
-pub fn sl_pc_status_f1name(sd: &mut MapSessionData) -> *const i8 {
-    sd.status.f1name.as_ptr()
+pub fn sl_pc_status_f1name(sd: &MapSessionData) -> &str {
+    &sd.player.identity.f1name
 }
 
 // ─── Read: direct USER fields ────────────────────────────────────────────────
@@ -178,12 +178,12 @@ pub fn sl_pc_invslot(sd: &mut MapSessionData) -> i32      { sd.invslot as i32 }
 pub fn sl_pc_pickuptype(sd: &mut MapSessionData) -> i32   { sd.pickuptype as i32 }
 pub fn sl_pc_spottraps(sd: &mut MapSessionData) -> i32    { sd.spottraps as i32 }
 pub fn sl_pc_fury(sd: &mut MapSessionData) -> i32         { sd.fury as i32 } // truncates float to int; matches C
-// status.equip[EQ_FACEACCTWO] — Item.id and Item.custom are both u32
+// player.inventory.equip[EQ_FACEACCTWO] — Item.id and Item.custom are both u32
 pub fn sl_pc_faceacctwo_id(sd: &mut MapSessionData) -> i32 {
-    sd.status.equip[EQ_FACEACCTWO as usize].id as i32
+    sd.player.inventory.equip[EQ_FACEACCTWO as usize].id as i32
 }
 pub fn sl_pc_faceacctwo_custom(sd: &mut MapSessionData) -> i32 {
-    sd.status.equip[EQ_FACEACCTWO as usize].custom as i32
+    sd.player.inventory.equip[EQ_FACEACCTWO as usize].custom as i32
 }
 pub fn sl_pc_protection(sd: &mut MapSessionData) -> i32   { sd.protection as i32 }
 pub fn sl_pc_clone(sd: &mut MapSessionData) -> i32        { sd.clone as i32 }
@@ -347,42 +347,42 @@ fn map_id2mob_acc(id: u32) -> *mut MobSpawnData {
 /// Returns 1 if the account is registered, 0 otherwise.
 /// Delegates to `clif_isregistered` (still in C / map_parse.c).
 pub unsafe fn sl_pc_actid(sd: &mut MapSessionData) -> i32 {
-    clif_isregistered(sd.status.id as u32)
+    clif_isregistered(sd.player.identity.id as u32)
 }
 
 /// Returns a heap-allocated email string (or NULL).
 /// The pointer is leaked — Lua copies the string immediately, matching C behaviour.
 pub unsafe fn sl_pc_email(sd: &mut MapSessionData) -> *const i8 {
-    clif_getaccountemail(sd.status.id as u32)
+    clif_getaccountemail(sd.player.identity.id as u32)
 }
 
 /// Returns the interned clan name for this character's clan id.
 pub fn sl_pc_clanname(sd: &mut MapSessionData) -> *const i8 {
-    clan_db::name(sd.status.clan as i32)
+    clan_db::name(sd.player.social.clan as i32)
 }
 
 /// Returns the path (base class id) for this character's class.
 pub fn sl_pc_baseclass(sd: &mut MapSessionData) -> i32 {
-    class_db::path(sd.status.class as i32)
+    class_db::path(sd.player.progression.class as i32)
 }
 
 /// Returns the display name of the base class (path, rank 0).
 /// The returned pointer is a leaked CString — Lua copies it immediately.
 pub fn sl_pc_baseClassName(sd: &mut MapSessionData) -> *const i8 {
-    let path = class_db::path(sd.status.class as i32);
+    let path = class_db::path(sd.player.progression.class as i32);
     string_to_cptr(classdb_name_ffi(path, 0))
 }
 
 /// Returns the display name of the character's class at rank 0.
 /// The returned pointer is a leaked CString — Lua copies it immediately.
 pub fn sl_pc_className(sd: &mut MapSessionData) -> *const i8 {
-    string_to_cptr(classdb_name_ffi(sd.status.class as i32, 0))
+    string_to_cptr(classdb_name_ffi(sd.player.progression.class as i32, 0))
 }
 
 /// Returns the display name of the character's class at their current mark (rank).
 /// The returned pointer is a leaked CString — Lua copies it immediately.
 pub fn sl_pc_classNameMark(sd: &mut MapSessionData) -> *const i8 {
-    string_to_cptr(classdb_name_ffi(sd.status.class as i32, sd.status.mark as i32))
+    string_to_cptr(classdb_name_ffi(sd.player.progression.class as i32, sd.player.progression.mark as i32))
 }
 
 // ─── Write: direct field setters ─────────────────────────────────────────────
@@ -409,58 +409,58 @@ pub fn sl_pc_classNameMark(sd: &mut MapSessionData) -> *const i8 {
 //   protection/miss → i16
 //   optFlags/uFlags → u64 (XOR ops)
 
-// status.* setters
-pub fn sl_pc_set_hp(sd: &mut MapSessionData, v: i32)         { sd.status.hp = v as u32; }
-pub fn sl_pc_set_mp(sd: &mut MapSessionData, v: i32)         { sd.status.mp = v as u32; }
-pub fn sl_pc_set_exp(sd: &mut MapSessionData, v: i32)        { sd.status.exp = v as u32; }
-pub fn sl_pc_set_level(sd: &mut MapSessionData, v: i32)      { sd.status.level = v as u8; }
-pub fn sl_pc_set_class(sd: &mut MapSessionData, v: i32)      { sd.status.class = v as u8; }
-pub fn sl_pc_set_totem(sd: &mut MapSessionData, v: i32)      { sd.status.totem = v as u8; }
-pub fn sl_pc_set_tier(sd: &mut MapSessionData, v: i32)       { sd.status.tier = v as u8; }
-pub fn sl_pc_set_mark(sd: &mut MapSessionData, v: i32)       { sd.status.mark = v as u8; }
-pub fn sl_pc_set_country(sd: &mut MapSessionData, v: i32)    { sd.status.country = v as i8; }
-pub fn sl_pc_set_clan(sd: &mut MapSessionData, v: i32)       { sd.status.clan = v as u32; }
-pub fn sl_pc_set_gm_level(sd: &mut MapSessionData, v: i32)   { sd.status.gm_level = v as i8; }
-pub fn sl_pc_set_side(sd: &mut MapSessionData, v: i32)       { sd.status.side = v as i8; }
-pub fn sl_pc_set_state(sd: &mut MapSessionData, v: i32)      { sd.status.state = v as i8; }
-pub fn sl_pc_set_hair(sd: &mut MapSessionData, v: i32)       { sd.status.hair = v as u16; }
-pub fn sl_pc_set_hair_color(sd: &mut MapSessionData, v: i32) { sd.status.hair_color = v as u16; }
-pub fn sl_pc_set_face_color(sd: &mut MapSessionData, v: i32) { sd.status.face_color = v as u16; }
-pub fn sl_pc_set_armor_color(sd: &mut MapSessionData, v: i32){ sd.status.armor_color = v as u16; }
-pub fn sl_pc_set_skin_color(sd: &mut MapSessionData, v: i32) { sd.status.skin_color = v as u16; }
-pub fn sl_pc_set_face(sd: &mut MapSessionData, v: i32)       { sd.status.face = v as u16; }
-pub fn sl_pc_set_money(sd: &mut MapSessionData, v: i32)      { sd.status.money = v as u32; }
-pub fn sl_pc_set_bankmoney(sd: &mut MapSessionData, v: i32)  { sd.status.bankmoney = v as u32; }
-pub fn sl_pc_set_maxslots(sd: &mut MapSessionData, v: i32)   { sd.status.maxslots = v as u32; }
-pub fn sl_pc_set_maxinv(sd: &mut MapSessionData, v: i32)     { sd.status.maxinv = v as u8; }
-pub fn sl_pc_set_partner(sd: &mut MapSessionData, v: i32)    { sd.status.partner = v as u32; }
-pub fn sl_pc_set_pk(sd: &mut MapSessionData, v: i32)         { sd.status.pk = v as u8; }
-pub fn sl_pc_set_basehp(sd: &mut MapSessionData, v: i32)     { sd.status.basehp = v as u32; }
-pub fn sl_pc_set_basemp(sd: &mut MapSessionData, v: i32)     { sd.status.basemp = v as u32; }
-pub fn sl_pc_set_karma(sd: &mut MapSessionData, v: i32)      { sd.status.karma = v as f32; }
-pub fn sl_pc_set_alignment(sd: &mut MapSessionData, v: i32)  { sd.status.alignment = v as i8; }
-pub fn sl_pc_set_basegrace(sd: &mut MapSessionData, v: i32)  { sd.status.basegrace = v as u32; }
-pub fn sl_pc_set_basemight(sd: &mut MapSessionData, v: i32)  { sd.status.basemight = v as u32; }
-pub fn sl_pc_set_basewill(sd: &mut MapSessionData, v: i32)   { sd.status.basewill = v as u32; }
-pub fn sl_pc_set_basearmor(sd: &mut MapSessionData, v: i32)  { sd.status.basearmor = v; }
-pub fn sl_pc_set_novice_chat(sd: &mut MapSessionData, v: i32){ sd.status.novice_chat = v as i8; }
-pub fn sl_pc_set_subpath_chat(sd: &mut MapSessionData, v: i32){ sd.status.subpath_chat = v as i8; }
-pub fn sl_pc_set_clan_chat(sd: &mut MapSessionData, v: i32)  { sd.status.clan_chat = v as i8; }
-pub fn sl_pc_set_tutor(sd: &mut MapSessionData, v: i32)      { sd.status.tutor = v as u8; }
-pub fn sl_pc_set_profile_vitastats(sd: &mut MapSessionData, v: i32) { sd.status.profile_vitastats = v as u8; }
-pub fn sl_pc_set_profile_equiplist(sd: &mut MapSessionData, v: i32) { sd.status.profile_equiplist = v as u8; }
-pub fn sl_pc_set_profile_legends(sd: &mut MapSessionData, v: i32)   { sd.status.profile_legends = v as u8; }
-pub fn sl_pc_set_profile_spells(sd: &mut MapSessionData, v: i32)    { sd.status.profile_spells = v as u8; }
-pub fn sl_pc_set_profile_inventory(sd: &mut MapSessionData, v: i32) { sd.status.profile_inventory = v as u8; }
-pub fn sl_pc_set_profile_bankitems(sd: &mut MapSessionData, v: i32) { sd.status.profile_bankitems = v as u8; }
-pub fn sl_pc_set_mute(sd: &mut MapSessionData, v: i32)       { sd.status.mute = v as i8; }
+// player.* setters
+pub fn sl_pc_set_hp(sd: &mut MapSessionData, v: i32)         { sd.player.combat.hp = v as u32; }
+pub fn sl_pc_set_mp(sd: &mut MapSessionData, v: i32)         { sd.player.combat.mp = v as u32; }
+pub fn sl_pc_set_exp(sd: &mut MapSessionData, v: i32)        { sd.player.progression.exp = v as u32; }
+pub fn sl_pc_set_level(sd: &mut MapSessionData, v: i32)      { sd.player.progression.level = v as u8; }
+pub fn sl_pc_set_class(sd: &mut MapSessionData, v: i32)      { sd.player.progression.class = v as u8; }
+pub fn sl_pc_set_totem(sd: &mut MapSessionData, v: i32)      { sd.player.progression.totem = v as u8; }
+pub fn sl_pc_set_tier(sd: &mut MapSessionData, v: i32)       { sd.player.progression.tier = v as u8; }
+pub fn sl_pc_set_mark(sd: &mut MapSessionData, v: i32)       { sd.player.progression.mark = v as u8; }
+pub fn sl_pc_set_country(sd: &mut MapSessionData, v: i32)    { sd.player.progression.country = v as i8; }
+pub fn sl_pc_set_clan(sd: &mut MapSessionData, v: i32)       { sd.player.social.clan = v as u32; }
+pub fn sl_pc_set_gm_level(sd: &mut MapSessionData, v: i32)   { sd.player.identity.gm_level = v as i8; }
+pub fn sl_pc_set_side(sd: &mut MapSessionData, v: i32)       { sd.player.combat.side = v as i8; }
+pub fn sl_pc_set_state(sd: &mut MapSessionData, v: i32)      { sd.player.combat.state = v as i8; }
+pub fn sl_pc_set_hair(sd: &mut MapSessionData, v: i32)       { sd.player.appearance.hair = v as u16; }
+pub fn sl_pc_set_hair_color(sd: &mut MapSessionData, v: i32) { sd.player.appearance.hair_color = v as u16; }
+pub fn sl_pc_set_face_color(sd: &mut MapSessionData, v: i32) { sd.player.appearance.face_color = v as u16; }
+pub fn sl_pc_set_armor_color(sd: &mut MapSessionData, v: i32){ sd.player.appearance.armor_color = v as u16; }
+pub fn sl_pc_set_skin_color(sd: &mut MapSessionData, v: i32) { sd.player.appearance.skin_color = v as u16; }
+pub fn sl_pc_set_face(sd: &mut MapSessionData, v: i32)       { sd.player.appearance.face = v as u16; }
+pub fn sl_pc_set_money(sd: &mut MapSessionData, v: i32)      { sd.player.inventory.money = v as u32; }
+pub fn sl_pc_set_bankmoney(sd: &mut MapSessionData, v: i32)  { sd.player.inventory.bank_money = v as u32; }
+pub fn sl_pc_set_maxslots(sd: &mut MapSessionData, v: i32)   { sd.player.inventory.max_slots = v as u32; }
+pub fn sl_pc_set_maxinv(sd: &mut MapSessionData, v: i32)     { sd.player.inventory.max_inv = v as u8; }
+pub fn sl_pc_set_partner(sd: &mut MapSessionData, v: i32)    { sd.player.social.partner = v as u32; }
+pub fn sl_pc_set_pk(sd: &mut MapSessionData, v: i32)         { sd.player.social.pk = v as u8; }
+pub fn sl_pc_set_basehp(sd: &mut MapSessionData, v: i32)     { sd.player.combat.max_hp = v as u32; }
+pub fn sl_pc_set_basemp(sd: &mut MapSessionData, v: i32)     { sd.player.combat.max_mp = v as u32; }
+pub fn sl_pc_set_karma(sd: &mut MapSessionData, v: i32)      { sd.player.social.karma = v as f32; }
+pub fn sl_pc_set_alignment(sd: &mut MapSessionData, v: i32)  { sd.player.social.alignment = v as i8; }
+pub fn sl_pc_set_basegrace(sd: &mut MapSessionData, v: i32)  { sd.player.combat.base_grace = v as u32; }
+pub fn sl_pc_set_basemight(sd: &mut MapSessionData, v: i32)  { sd.player.combat.base_might = v as u32; }
+pub fn sl_pc_set_basewill(sd: &mut MapSessionData, v: i32)   { sd.player.combat.base_will = v as u32; }
+pub fn sl_pc_set_basearmor(sd: &mut MapSessionData, v: i32)  { sd.player.combat.base_armor = v; }
+pub fn sl_pc_set_novice_chat(sd: &mut MapSessionData, v: i32){ sd.player.social.novice_chat = v as i8; }
+pub fn sl_pc_set_subpath_chat(sd: &mut MapSessionData, v: i32){ sd.player.social.subpath_chat = v as i8; }
+pub fn sl_pc_set_clan_chat(sd: &mut MapSessionData, v: i32)  { sd.player.social.clan_chat = v as i8; }
+pub fn sl_pc_set_tutor(sd: &mut MapSessionData, v: i32)      { sd.player.social.tutor = v as u8; }
+pub fn sl_pc_set_profile_vitastats(sd: &mut MapSessionData, v: i32) { sd.player.appearance.profile_vitastats = v as u8; }
+pub fn sl_pc_set_profile_equiplist(sd: &mut MapSessionData, v: i32) { sd.player.appearance.profile_equiplist = v as u8; }
+pub fn sl_pc_set_profile_legends(sd: &mut MapSessionData, v: i32)   { sd.player.appearance.profile_legends = v as u8; }
+pub fn sl_pc_set_profile_spells(sd: &mut MapSessionData, v: i32)    { sd.player.appearance.profile_spells = v as u8; }
+pub fn sl_pc_set_profile_inventory(sd: &mut MapSessionData, v: i32) { sd.player.appearance.profile_inventory = v as u8; }
+pub fn sl_pc_set_profile_bankitems(sd: &mut MapSessionData, v: i32) { sd.player.appearance.profile_bankitems = v as u8; }
+pub fn sl_pc_set_mute(sd: &mut MapSessionData, v: i32)       { sd.player.social.mute = v as i8; }
 // C casts to (unsigned int) but Rust field is u16; low 16 bits are preserved identically.
-pub fn sl_pc_set_settingFlags(sd: &mut MapSessionData, v: i32) { sd.status.setting_flags = v as u16; }
-pub fn sl_pc_set_heroshow(sd: &mut MapSessionData, v: i32)   { sd.status.heroes = v as u32; }
-pub fn sl_pc_set_sex(sd: &mut MapSessionData, v: i32)        { sd.status.sex = v as i8; }
-pub fn sl_pc_set_classRank(sd: &mut MapSessionData, v: i32)  { sd.status.class_rank = v; }
-pub fn sl_pc_set_clanRank(sd: &mut MapSessionData, v: i32)   { sd.status.clan_rank = v; }
-pub fn sl_pc_setminimaptoggle(sd: &mut MapSessionData, v: i32) { sd.status.mini_map_toggle = v as u32; }
+pub fn sl_pc_set_settingFlags(sd: &mut MapSessionData, v: i32) { sd.player.appearance.setting_flags = v as u16; }
+pub fn sl_pc_set_heroshow(sd: &mut MapSessionData, v: i32)   { sd.player.appearance.heroes = v as u32; }
+pub fn sl_pc_set_sex(sd: &mut MapSessionData, v: i32)        { sd.player.identity.sex = v as i8; }
+pub fn sl_pc_set_classRank(sd: &mut MapSessionData, v: i32)  { sd.player.progression.class_rank = v; }
+pub fn sl_pc_set_clanRank(sd: &mut MapSessionData, v: i32)   { sd.player.progression.clan_rank = v; }
+pub fn sl_pc_setminimaptoggle(sd: &mut MapSessionData, v: i32) { sd.player.appearance.mini_map_toggle = v as u32; }
 
 // direct USER field setters
 pub fn sl_pc_set_max_hp(sd: &mut MapSessionData, v: i32)     { sd.max_hp = v as u32; }
@@ -582,16 +582,32 @@ pub unsafe fn sl_pc_set_gfx_name(sd: &mut MapSessionData, v: *const i8) {
     bounded_copy(sd.gfx.name.as_mut_ptr(), v, sd.gfx.name.len());
 }
 pub unsafe fn sl_pc_set_name(sd: &mut MapSessionData, v: *const i8) {
-    bounded_copy(sd.status.name.as_mut_ptr(), v, sd.status.name.len());
+    if !v.is_null() {
+        sd.player.identity.name = std::ffi::CStr::from_ptr(v).to_string_lossy().into_owned();
+    } else {
+        sd.player.identity.name.clear();
+    }
 }
 pub unsafe fn sl_pc_set_title(sd: &mut MapSessionData, v: *const i8) {
-    bounded_copy(sd.status.title.as_mut_ptr(), v, sd.status.title.len());
+    if !v.is_null() {
+        sd.player.identity.title = std::ffi::CStr::from_ptr(v).to_string_lossy().into_owned();
+    } else {
+        sd.player.identity.title.clear();
+    }
 }
 pub unsafe fn sl_pc_set_clan_title(sd: &mut MapSessionData, v: *const i8) {
-    bounded_copy(sd.status.clan_title.as_mut_ptr(), v, sd.status.clan_title.len());
+    if !v.is_null() {
+        sd.player.social.clan_title = std::ffi::CStr::from_ptr(v).to_string_lossy().into_owned();
+    } else {
+        sd.player.social.clan_title.clear();
+    }
 }
 pub unsafe fn sl_pc_set_afkmessage(sd: &mut MapSessionData, v: *const i8) {
-    bounded_copy(sd.status.afkmessage.as_mut_ptr(), v, sd.status.afkmessage.len());
+    if !v.is_null() {
+        sd.player.social.afk_message = std::ffi::CStr::from_ptr(v).to_string_lossy().into_owned();
+    } else {
+        sd.player.social.afk_message.clear();
+    }
 }
 pub unsafe fn sl_pc_set_speech(sd: &mut MapSessionData, v: *const i8) {
     bounded_copy(sd.speech.as_mut_ptr(), v, sd.speech.len());
@@ -618,7 +634,7 @@ pub fn sl_pc_loaded(sd: &mut MapSessionData) -> i32 {
     sd.loaded as i32
 }
 pub fn sl_pc_inventory_id(sd: &mut MapSessionData, pos: i32) -> u32 {
-    sd.status.inventory[pos as usize].id as u32
+    sd.player.inventory.inventory[pos as usize].id as u32
 }
 
 // ─── Regen overflow accumulators and group membership ────────────────────────
@@ -662,7 +678,7 @@ pub unsafe fn sl_pc_getgroup(sd: &mut MapSessionData, out: *mut u32, max: i32) -
         }
         return n as i32;
     }
-    if max > 0 { *out = user.status.id; }
+    if max > 0 { *out = user.player.identity.id; }
     1
 }
 
@@ -820,13 +836,13 @@ pub fn sl_pc_deductduraequip(sd: &mut MapSessionData) {
 
 pub fn sl_pc_deductdurainv(sd: &mut MapSessionData, slot: i32, v: i32) {
     if slot >= 0 && (slot as usize) < MAX_INVENTORY {
-        sd.status.inventory[slot as usize].dura -= v;
+        sd.player.inventory.inventory[slot as usize].dura -= v;
     }
 }
 
 pub fn sl_pc_hasequipped(sd: &mut MapSessionData, item_id: u32) -> i32 {
     for i in 0..MAX_EQUIP {
-        if sd.status.equip[i].id == item_id { return 1; }
+        if sd.player.inventory.equip[i].id == item_id { return 1; }
     }
     0
 }
@@ -838,8 +854,8 @@ pub unsafe fn sl_pc_removeitemslot(sd: &mut MapSessionData, slot: i32, amount: i
 pub fn sl_pc_hasitem(sd: &mut MapSessionData, item_id: u32, amount: i32) -> i32 {
     let mut found = 0i32;
     for i in 0..MAX_INVENTORY {
-        if sd.status.inventory[i].id == item_id {
-            found += sd.status.inventory[i].amount as i32;
+        if sd.player.inventory.inventory[i].id == item_id {
+            found += sd.player.inventory.inventory[i].amount as i32;
         }
     }
     if found >= amount { found } else { 0 }
@@ -916,42 +932,28 @@ pub unsafe fn sl_pc_swingtarget(sd: &mut MapSessionData, id: i32) {
 
 // ── Kill registry ─────────────────────────────────────────────────────────────
 
-pub unsafe fn sl_pc_killcount(sd: &mut MapSessionData, mob_id: i32) -> i32 {
-    for x in 0..MAX_KILLREG {
-        if sd.status.killreg[x].mob_id == mob_id as u32 {
-            return sd.status.killreg[x].amount as i32;
-        }
-    }
-    0
+pub fn sl_pc_killcount(sd: &mut MapSessionData, mob_id: i32) -> i32 {
+    sd.player.registries.get_kill_count(mob_id as u32) as i32
 }
 
-pub unsafe fn sl_pc_setkillcount(sd: &mut MapSessionData, mob_id: i32, amount: i32) {
-    for x in 0..MAX_KILLREG {
-        if sd.status.killreg[x].mob_id == mob_id as u32 {
-            sd.status.killreg[x].amount = amount as u32;
-            return;
-        }
-    }
-    for x in 0..MAX_KILLREG {
-        if sd.status.killreg[x].mob_id == 0 {
-            sd.status.killreg[x].mob_id = mob_id as u32;
-            sd.status.killreg[x].amount = amount as u32;
-            return;
-        }
+pub fn sl_pc_setkillcount(sd: &mut MapSessionData, mob_id: i32, amount: i32) {
+    if amount > 0 {
+        sd.player.registries.kill_reg.insert(mob_id as u32, amount as u32);
+    } else {
+        sd.player.registries.kill_reg.remove(&(mob_id as u32));
     }
 }
 
-pub unsafe fn sl_pc_flushkills(sd: &mut MapSessionData, mob_id: i32) {
-    for x in 0..MAX_KILLREG {
-        if mob_id == 0 || sd.status.killreg[x].mob_id == mob_id as u32 {
-            sd.status.killreg[x].mob_id = 0;
-            sd.status.killreg[x].amount = 0;
-        }
+pub fn sl_pc_flushkills(sd: &mut MapSessionData, mob_id: i32) {
+    if mob_id == 0 {
+        sd.player.registries.kill_reg.clear();
+    } else {
+        sd.player.registries.kill_reg.remove(&(mob_id as u32));
     }
 }
 
-pub unsafe fn sl_pc_flushallkills(sd: &mut MapSessionData) {
-    sl_pc_flushkills(sd, 0);
+pub fn sl_pc_flushallkills(sd: &mut MapSessionData) {
+    sd.player.registries.kill_reg.clear();
 }
 
 // ── Threat ────────────────────────────────────────────────────────────────────
@@ -985,15 +987,15 @@ pub unsafe fn sl_pc_addthreatgeneral(_sd: &mut MapSessionData, _amount: u32) { /
 pub unsafe fn sl_pc_hasspell(sd: &mut MapSessionData, name: *const i8) -> i32 {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_SPELLS {
-        if sd.status.skill[i] == id as u16 { return 1; }
+        if sd.player.spells.skills[i] == id as u16 { return 1; }
     }
     0
 }
 
 pub unsafe fn sl_pc_addspell(sd: &mut MapSessionData, spell_id: i32) {
     for i in 0..MAX_SPELLS {
-        if sd.status.skill[i] == 0 {
-            sd.status.skill[i] = spell_id as u16;
+        if sd.player.spells.skills[i] == 0 {
+            sd.player.spells.skills[i] = spell_id as u16;
             pc_loadmagic(sd);
             return;
         }
@@ -1002,7 +1004,7 @@ pub unsafe fn sl_pc_addspell(sd: &mut MapSessionData, spell_id: i32) {
 
 pub fn sl_pc_removespell(sd: &mut MapSessionData, spell_id: i32) {
     for i in 0..MAX_SPELLS {
-        if sd.status.skill[i] == spell_id as u16 { sd.status.skill[i] = 0; }
+        if sd.player.spells.skills[i] == spell_id as u16 { sd.player.spells.skills[i] = 0; }
     }
 }
 
@@ -1011,7 +1013,7 @@ pub fn sl_pc_removespell(sd: &mut MapSessionData, spell_id: i32) {
 pub unsafe fn sl_pc_hasduration(sd: &mut MapSessionData, name: *const i8) -> i32 {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
-        if sd.status.dura_aether[i].id == id as u16 && sd.status.dura_aether[i].duration > 0 { return 1; }
+        if sd.player.spells.dura_aether[i].id == id as u16 && sd.player.spells.dura_aether[i].duration > 0 { return 1; }
     }
     0
 }
@@ -1019,9 +1021,9 @@ pub unsafe fn sl_pc_hasduration(sd: &mut MapSessionData, name: *const i8) -> i32
 pub unsafe fn sl_pc_hasdurationid(sd: &mut MapSessionData, name: *const i8, caster_id: i32) -> i32 {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
-        if sd.status.dura_aether[i].id == id as u16
-            && sd.status.dura_aether[i].caster_id == caster_id as u32
-            && sd.status.dura_aether[i].duration > 0 { return 1; }
+        if sd.player.spells.dura_aether[i].id == id as u16
+            && sd.player.spells.dura_aether[i].caster_id == caster_id as u32
+            && sd.player.spells.dura_aether[i].duration > 0 { return 1; }
     }
     0
 }
@@ -1029,7 +1031,7 @@ pub unsafe fn sl_pc_hasdurationid(sd: &mut MapSessionData, name: *const i8, cast
 pub unsafe fn sl_pc_getduration(sd: &mut MapSessionData, name: *const i8) -> i32 {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
-        if sd.status.dura_aether[i].id == id as u16 { return sd.status.dura_aether[i].duration; }
+        if sd.player.spells.dura_aether[i].id == id as u16 { return sd.player.spells.dura_aether[i].duration; }
     }
     0
 }
@@ -1037,9 +1039,9 @@ pub unsafe fn sl_pc_getduration(sd: &mut MapSessionData, name: *const i8) -> i32
 pub unsafe fn sl_pc_getdurationid(sd: &mut MapSessionData, name: *const i8, caster_id: i32) -> i32 {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
-        if sd.status.dura_aether[i].id == id as u16
-            && sd.status.dura_aether[i].caster_id == caster_id as u32 {
-            return sd.status.dura_aether[i].duration;
+        if sd.player.spells.dura_aether[i].id == id as u16
+            && sd.player.spells.dura_aether[i].caster_id == caster_id as u32 {
+            return sd.player.spells.dura_aether[i].duration;
         }
     }
     0
@@ -1049,7 +1051,7 @@ pub unsafe fn sl_pc_durationamount(sd: &mut MapSessionData, name: *const i8) -> 
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     let mut count = 0;
     for i in 0..MAX_MAGIC_TIMERS {
-        if sd.status.dura_aether[i].id == id as u16 && sd.status.dura_aether[i].duration > 0 { count += 1; }
+        if sd.player.spells.dura_aether[i].id == id as u16 && sd.player.spells.dura_aether[i].duration > 0 { count += 1; }
     }
     count
 }
@@ -1059,35 +1061,35 @@ pub unsafe fn sl_pc_setduration(sd: &mut MapSessionData, name: *const i8, mut ti
     if time_ms > 0 && time_ms < 1000 { time_ms = 1000; }
     let mut alreadycast = false;
     for x in 0..MAX_MAGIC_TIMERS {
-        if sd.status.dura_aether[x].id == id as u16
-            && sd.status.dura_aether[x].caster_id == caster_id as u32
-            && sd.status.dura_aether[x].duration > 0 { alreadycast = true; break; }
+        if sd.player.spells.dura_aether[x].id == id as u16
+            && sd.player.spells.dura_aether[x].caster_id == caster_id as u32
+            && sd.player.spells.dura_aether[x].duration > 0 { alreadycast = true; break; }
     }
     for x in 0..MAX_MAGIC_TIMERS {
-        let da_id = sd.status.dura_aether[x].id;
-        let da_caster = sd.status.dura_aether[x].caster_id;
-        let da_aether = sd.status.dura_aether[x].aether;
-        let da_duration = sd.status.dura_aether[x].duration;
+        let da_id = sd.player.spells.dura_aether[x].id;
+        let da_caster = sd.player.spells.dura_aether[x].caster_id;
+        let da_aether = sd.player.spells.dura_aether[x].aether;
+        let da_duration = sd.player.spells.dura_aether[x].duration;
         if da_id == id as u16 && time_ms <= 0 && da_caster == caster_id as u32 && alreadycast {
             let tsd = map_id2sd_acc(da_caster);
             clif_send_duration(&mut *sd, id, time_ms, tsd);
-            sd.status.dura_aether[x].duration = 0; sd.status.dura_aether[x].caster_id = 0;
-            if da_aether == 0 { sd.status.dura_aether[x].id = 0; }
+            sd.player.spells.dura_aether[x].duration = 0; sd.player.spells.dura_aether[x].caster_id = 0;
+            if da_aether == 0 { sd.player.spells.dura_aether[x].id = 0; }
             return;
         } else if da_id == id as u16 && da_caster == caster_id as u32
             && da_aether > 0 && da_duration <= 0 {
-            sd.status.dura_aether[x].duration = time_ms;
+            sd.player.spells.dura_aether[x].duration = time_ms;
             clif_send_duration(&mut *sd, id, time_ms / 1000, map_id2sd_acc(da_caster));
             return;
         } else if da_id == id as u16 && da_caster == caster_id as u32
             && (da_duration > time_ms || recast != 0) && alreadycast {
-            sd.status.dura_aether[x].duration = time_ms;
+            sd.player.spells.dura_aether[x].duration = time_ms;
             clif_send_duration(&mut *sd, id, time_ms / 1000, map_id2sd_acc(da_caster));
             return;
         } else if da_id == 0 && da_duration == 0 && time_ms != 0 && !alreadycast {
-            sd.status.dura_aether[x].id = id as u16;
-            sd.status.dura_aether[x].duration = time_ms;
-            sd.status.dura_aether[x].caster_id = caster_id as u32;
+            sd.player.spells.dura_aether[x].id = id as u16;
+            sd.player.spells.dura_aether[x].duration = time_ms;
+            sd.player.spells.dura_aether[x].caster_id = caster_id as u32;
             clif_send_duration(&mut *sd, id, time_ms / 1000, map_id2sd_acc(caster_id as u32));
             return;
         }
@@ -1096,14 +1098,14 @@ pub unsafe fn sl_pc_setduration(sd: &mut MapSessionData, name: *const i8, mut ti
 
 pub unsafe fn sl_pc_flushduration(sd: &mut MapSessionData, _dispel_level: i32, min_id: i32, max_id: i32) {
     for x in 0..MAX_MAGIC_TIMERS {
-        let id = sd.status.dura_aether[x].id as i32;
-        if id == 0 || sd.status.dura_aether[x].duration <= 0 { continue; }
+        let id = sd.player.spells.dura_aether[x].id as i32;
+        if id == 0 || sd.player.spells.dura_aether[x].duration <= 0 { continue; }
         if min_id > 0 && id < min_id { continue; }
         if max_id > 0 && id > max_id { continue; }
-        let tsd = map_id2sd_acc(sd.status.dura_aether[x].caster_id);
+        let tsd = map_id2sd_acc(sd.player.spells.dura_aether[x].caster_id);
         clif_send_duration(&mut *sd, id, 0, tsd);
-        sd.status.dura_aether[x].duration = 0; sd.status.dura_aether[x].caster_id = 0;
-        if sd.status.dura_aether[x].aether == 0 { sd.status.dura_aether[x].id = 0; }
+        sd.player.spells.dura_aether[x].duration = 0; sd.player.spells.dura_aether[x].caster_id = 0;
+        if sd.player.spells.dura_aether[x].aether == 0 { sd.player.spells.dura_aether[x].id = 0; }
     }
 }
 
@@ -1113,7 +1115,7 @@ pub unsafe fn sl_pc_flushdurationnouncast(sd: &mut MapSessionData, dispel_level:
 
 pub unsafe fn sl_pc_refreshdurations(sd: &mut MapSessionData) {
     for x in 0..MAX_MAGIC_TIMERS {
-        let da = sd.status.dura_aether[x];
+        let da = sd.player.spells.dura_aether[x];
         if da.id > 0 && da.duration > 0 {
             let tsd = map_id2sd_acc(da.caster_id);
             clif_send_duration(&mut *sd, da.id as i32, da.duration / 1000, tsd);
@@ -1128,21 +1130,21 @@ pub unsafe fn sl_pc_setaether(sd: &mut MapSessionData, name: *const i8, mut time
     if time_ms > 0 && time_ms < 1000 { time_ms = 1000; }
     let mut alreadycast = false;
     for x in 0..MAX_MAGIC_TIMERS {
-        if sd.status.dura_aether[x].id == id as u16 { alreadycast = true; break; }
+        if sd.player.spells.dura_aether[x].id == id as u16 { alreadycast = true; break; }
     }
     for x in 0..MAX_MAGIC_TIMERS {
-        let da_id = sd.status.dura_aether[x].id;
-        let da_aether = sd.status.dura_aether[x].aether;
-        let da_duration = sd.status.dura_aether[x].duration;
+        let da_id = sd.player.spells.dura_aether[x].id;
+        let da_aether = sd.player.spells.dura_aether[x].aether;
+        let da_duration = sd.player.spells.dura_aether[x].duration;
         if da_id == id as u16 && time_ms <= 0 {
             clif_send_aether(&mut *sd, id, time_ms);
-            if da_duration == 0 { sd.status.dura_aether[x].id = 0; }
-            sd.status.dura_aether[x].aether = 0; return;
+            if da_duration == 0 { sd.player.spells.dura_aether[x].id = 0; }
+            sd.player.spells.dura_aether[x].aether = 0; return;
         } else if da_id == id as u16 && (da_aether > time_ms || da_duration > 0) {
-            sd.status.dura_aether[x].aether = time_ms;
+            sd.player.spells.dura_aether[x].aether = time_ms;
             clif_send_aether(&mut *sd, id, time_ms / 1000); return;
         } else if da_id == 0 && da_aether == 0 && time_ms != 0 && !alreadycast {
-            sd.status.dura_aether[x].id = id as u16; sd.status.dura_aether[x].aether = time_ms;
+            sd.player.spells.dura_aether[x].id = id as u16; sd.player.spells.dura_aether[x].aether = time_ms;
             clif_send_aether(&mut *sd, id, time_ms / 1000); return;
         }
     }
@@ -1151,7 +1153,7 @@ pub unsafe fn sl_pc_setaether(sd: &mut MapSessionData, name: *const i8, mut time
 pub unsafe fn sl_pc_hasaether(sd: &mut MapSessionData, name: *const i8) -> i32 {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
-        if sd.status.dura_aether[i].id == id as u16 && sd.status.dura_aether[i].aether > 0 { return 1; }
+        if sd.player.spells.dura_aether[i].id == id as u16 && sd.player.spells.dura_aether[i].aether > 0 { return 1; }
     }
     0
 }
@@ -1159,19 +1161,19 @@ pub unsafe fn sl_pc_hasaether(sd: &mut MapSessionData, name: *const i8) -> i32 {
 pub unsafe fn sl_pc_getaether(sd: &mut MapSessionData, name: *const i8) -> i32 {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
-        if sd.status.dura_aether[i].id == id as u16 { return sd.status.dura_aether[i].aether; }
+        if sd.player.spells.dura_aether[i].id == id as u16 { return sd.player.spells.dura_aether[i].aether; }
     }
     0
 }
 
 pub unsafe fn sl_pc_flushaether(sd: &mut MapSessionData) {
     for i in 0..MAX_MAGIC_TIMERS {
-        if sd.status.dura_aether[i].aether > 0 {
-            let aether_id = sd.status.dura_aether[i].id as i32;
-            let aether_dur = sd.status.dura_aether[i].duration;
+        if sd.player.spells.dura_aether[i].aether > 0 {
+            let aether_id = sd.player.spells.dura_aether[i].id as i32;
+            let aether_dur = sd.player.spells.dura_aether[i].duration;
             clif_send_aether(&mut *sd, aether_id, 0);
-            sd.status.dura_aether[i].aether = 0;
-            if aether_dur == 0 { sd.status.dura_aether[i].id = 0; }
+            sd.player.spells.dura_aether[i].aether = 0;
+            if aether_dur == 0 { sd.player.spells.dura_aether[i].id = 0; }
         }
     }
 }
@@ -1181,7 +1183,7 @@ pub unsafe fn sl_pc_flushaether(sd: &mut MapSessionData) {
 pub fn sl_pc_addclan(_sd: &mut MapSessionData, _name: *const i8) { /* stub */ }
 
 pub fn sl_pc_updatepath(sd: &mut MapSessionData, path: i32, mark: i32) {
-    let id = sd.status.id;
+    let id = sd.player.identity.id;
     let _ = crate::database::blocking_run_async(async move {
         sqlx::query("UPDATE `Character` SET `ChaPthId`=?,`ChaMark`=? WHERE `ChaId`=?")
             .bind(path).bind(mark).bind(id)
@@ -1190,7 +1192,7 @@ pub fn sl_pc_updatepath(sd: &mut MapSessionData, path: i32, mark: i32) {
 }
 
 pub fn sl_pc_updatecountry(sd: &mut MapSessionData, country: i32) {
-    let id = sd.status.id;
+    let id = sd.player.identity.id;
     let _ = crate::database::blocking_run_async(async move {
         sqlx::query("UPDATE `Character` SET `ChaNation`=? WHERE `ChaId`=?")
             .bind(country).bind(id)
@@ -1217,8 +1219,8 @@ pub unsafe fn sl_pc_removetime(sd: &mut MapSessionData, v: i32) {
 }
 
 pub fn sl_pc_setheroshow(sd: &mut MapSessionData, flag: i32) {
-    sd.status.heroes = flag as u32;
-    let id = sd.status.id;
+    sd.player.appearance.heroes = flag as u32;
+    let id = sd.player.identity.id;
     let _ = crate::database::blocking_run_async(async move {
         sqlx::query("UPDATE `Character` SET `ChaHeroShow`=? WHERE `ChaId`=?")
             .bind(flag).bind(id)
@@ -1234,10 +1236,10 @@ pub unsafe fn sl_pc_addlegend(
 ) {
     use crate::servers::char::charstatus::MAX_LEGENDS;
     for x in 0..MAX_LEGENDS {
-        let empty_now  = sd.status.legends[x].name[0] == 0;
-        let empty_next = x + 1 >= MAX_LEGENDS || sd.status.legends[x + 1].name[0] == 0;
+        let empty_now  = sd.player.legends.legends[x].name[0] == 0;
+        let empty_next = x + 1 >= MAX_LEGENDS || sd.player.legends.legends[x + 1].name[0] == 0;
         if empty_now && empty_next {
-            let leg = &mut sd.status.legends[x];
+            let leg = &mut sd.player.legends.legends[x];
             bounded_copy(leg.text.as_mut_ptr(), text, leg.text.len());
             bounded_copy(leg.name.as_mut_ptr(), name, leg.name.len());
             leg.icon   = icon as u16;
@@ -1252,7 +1254,7 @@ pub unsafe fn sl_pc_haslegend(sd: &mut MapSessionData, name: *const i8) -> i32 {
     use crate::servers::char::charstatus::MAX_LEGENDS;
     let cmp = if name.is_null() { b"" as &[u8] } else { std::ffi::CStr::from_ptr(name).to_bytes() };
     for i in 0..MAX_LEGENDS {
-        let leg_name = sd.status.legends[i].name;
+        let leg_name = sd.player.legends.legends[i].name;
         if leg_name[0] != 0 {
             let leg_bytes = std::ffi::CStr::from_ptr(leg_name.as_ptr()).to_bytes();
             if leg_bytes.eq_ignore_ascii_case(cmp) { return 1; }
@@ -1262,7 +1264,7 @@ pub unsafe fn sl_pc_haslegend(sd: &mut MapSessionData, name: *const i8) -> i32 {
 }
 
 pub unsafe fn sl_pc_removelegendbyname(sd: &mut MapSessionData, name: *const i8) {
-    let legs = &mut sd.status.legends;
+    let legs = &mut sd.player.legends.legends;
     let cmp = if name.is_null() { b"".as_ref() } else { std::ffi::CStr::from_ptr(name).to_bytes() };
     // zero all matching entries
     for x in 0..MAX_LEGENDS {
@@ -1292,7 +1294,7 @@ pub unsafe fn sl_pc_removelegendbyname(sd: &mut MapSessionData, name: *const i8)
 }
 
 pub fn sl_pc_removelegendbycolor(sd: &mut MapSessionData, color: i32) {
-    let legs = &mut sd.status.legends;
+    let legs = &mut sd.player.legends.legends;
     let color = color as u16;
     // copy non-matching entries forward, skipping matched ones
     let mut count = 0usize;
@@ -1349,7 +1351,7 @@ pub unsafe fn sl_user_coref_container(sd: &mut MapSessionData) -> u32 {
 
 /// addMagic / addMana — add `amount` to sd->status.mp and send HP/MP status.
 pub unsafe fn sl_pc_addmagic(sd: &mut MapSessionData, amount: i32) {
-    sd.status.mp = (sd.status.mp as i32).wrapping_add(amount) as u32;
+    sd.player.combat.mp = (sd.player.combat.mp as i32).wrapping_add(amount) as u32;
     clif_sendstatus(sd, SFLAG_HPMP);
 }
 
@@ -1360,16 +1362,16 @@ pub unsafe fn sl_pc_addmanaextend(sd: &mut MapSessionData, amount: i32) {
 
 /// addGold — add gold to sd->status.money and send XP/money status.
 pub unsafe fn sl_pc_addgold(sd: &mut MapSessionData, amount: i32) {
-    sd.status.money = (sd.status.money as i32).wrapping_add(amount) as u32;
+    sd.player.inventory.money = (sd.player.inventory.money as i32).wrapping_add(amount) as u32;
     clif_sendstatus(sd, SFLAG_XPMONEY);
 }
 
 /// removeGold — subtract gold (floor at 0) and send XP/money status.
 pub unsafe fn sl_pc_removegold(sd: &mut MapSessionData, amount: i32) {
-    if sd.status.money < amount as u32 {
-        sd.status.money = 0;
+    if sd.player.inventory.money < amount as u32 {
+        sd.player.inventory.money = 0;
     } else {
-        sd.status.money -= amount as u32;
+        sd.player.inventory.money -= amount as u32;
     }
     clif_sendstatus(sd, SFLAG_XPMONEY);
 }
@@ -1392,7 +1394,7 @@ pub unsafe fn sl_pc_addhealth_extend(sd: &mut MapSessionData, amount: i32) {
 /// removeHealth (extend variant) — damage by amount, skipped if dead.
 pub unsafe fn sl_pc_removehealth_extend(sd: &mut MapSessionData, damage: i32) {
     use crate::game::pc::PC_DIE;
-    if sd.status.state != PC_DIE as i8 {
+    if sd.player.combat.state != PC_DIE as i8 {
         clif_send_pc_healthscript(&mut *sd, damage, 0);
         clif_sendstatus(sd, SFLAG_HPMP);
     }
@@ -1403,10 +1405,10 @@ pub fn sl_pc_getequippeddura(sd: &mut MapSessionData, id: u32, slot: i32) -> i32
     use crate::servers::char::charstatus::MAX_EQUIP;
     if slot >= 0 && (slot as usize) < MAX_EQUIP {
         let s = slot as usize;
-        if sd.status.equip[s].id == id { return sd.status.equip[s].dura; }
+        if sd.player.inventory.equip[s].id == id { return sd.player.inventory.equip[s].dura; }
     } else {
         for x in 0..MAX_EQUIP {
-            if sd.status.equip[x].id == id { return sd.status.equip[x].dura; }
+            if sd.player.inventory.equip[x].id == id { return sd.player.inventory.equip[x].dura; }
         }
     }
     -1
@@ -1435,22 +1437,22 @@ pub unsafe fn sl_map_spell(m: i32) -> i32 {
 
 pub fn sl_pc_checkbankitems(sd: &mut MapSessionData, slot: i32) -> i32 {
     if slot < 0 || slot as usize >= MAX_BANK_SLOTS { return 0; }
-    sd.status.banks[slot as usize].item_id as i32
+    sd.player.inventory.banks[slot as usize].item_id as i32
 }
 
 pub fn sl_pc_checkbankamounts(sd: &mut MapSessionData, slot: i32) -> i32 {
     if slot < 0 || slot as usize >= MAX_BANK_SLOTS { return 0; }
-    sd.status.banks[slot as usize].amount as i32
+    sd.player.inventory.banks[slot as usize].amount as i32
 }
 
 pub fn sl_pc_checkbankowners(sd: &mut MapSessionData, slot: i32) -> i32 {
     if slot < 0 || slot as usize >= MAX_BANK_SLOTS { return 0; }
-    sd.status.banks[slot as usize].owner as i32
+    sd.player.inventory.banks[slot as usize].owner as i32
 }
 
 pub fn sl_pc_checkbankengraves(sd: &mut MapSessionData, slot: i32) -> *const i8 {
     if slot < 0 || slot as usize >= MAX_BANK_SLOTS { return c"".as_ptr(); }
-    sd.status.banks[slot as usize].real_name.as_ptr() as *const i8
+    sd.player.inventory.banks[slot as usize].real_name.as_ptr() as *const i8
 }
 
 // ─── Bank deposit / withdraw ──────────────────────────────────────────────────
@@ -1465,7 +1467,7 @@ pub unsafe fn sl_pc_bankdeposit(
     // Find existing matching slot, else find empty slot.
     let mut deposit: Option<usize> = None;
     for x in 0..MAX_BANK_SLOTS {
-        let b = &sd.status.banks[x];
+        let b = &sd.player.inventory.banks[x];
         if b.item_id == item && b.owner == owner {
             let rn = b.real_name.as_ptr() as *const u8;
             let rn_len = libc::strlen(rn as *const i8) + 1;
@@ -1479,11 +1481,11 @@ pub unsafe fn sl_pc_bankdeposit(
         }
     }
     if let Some(x) = deposit {
-        sd.status.banks[x].amount = sd.status.banks[x].amount.wrapping_add(amount);
+        sd.player.inventory.banks[x].amount = sd.player.inventory.banks[x].amount.wrapping_add(amount);
     } else {
         for x in 0..MAX_BANK_SLOTS {
-            if sd.status.banks[x].item_id == 0 {
-                let b = &mut sd.status.banks[x];
+            if sd.player.inventory.banks[x].item_id == 0 {
+                let b = &mut sd.player.inventory.banks[x];
                 b.item_id = item;
                 b.amount = amount;
                 b.owner = owner;
@@ -1505,7 +1507,7 @@ pub unsafe fn sl_pc_bankwithdraw(
     };
     let mut deposit: Option<usize> = None;
     for x in 0..MAX_BANK_SLOTS {
-        let b = &sd.status.banks[x];
+        let b = &sd.player.inventory.banks[x];
         if b.item_id == item && b.owner == owner {
             let rn = b.real_name.as_ptr() as *const u8;
             let rn_len = libc::strlen(rn as *const i8) + 1;
@@ -1519,10 +1521,10 @@ pub unsafe fn sl_pc_bankwithdraw(
         }
     }
     let Some(x) = deposit else { return; };
-    if sd.status.banks[x].amount <= amount {
-        sd.status.banks[x] = std::mem::zeroed();
+    if sd.player.inventory.banks[x].amount <= amount {
+        sd.player.inventory.banks[x] = std::mem::zeroed();
     } else {
-        sd.status.banks[x].amount -= amount;
+        sd.player.inventory.banks[x].amount -= amount;
     }
 }
 
@@ -1535,7 +1537,7 @@ pub unsafe fn sl_pc_bankcheckamount(
     };
     let mut total: u32 = 0;
     for x in 0..MAX_BANK_SLOTS {
-        let b = &sd.status.banks[x];
+        let b = &sd.player.inventory.banks[x];
         if b.item_id == item && b.owner == owner {
             let rn = b.real_name.as_ptr() as *const u8;
             let rn_len = libc::strlen(rn as *const i8) + 1;
@@ -1574,13 +1576,8 @@ pub unsafe fn sl_pc_getparcellist(
 
 // ─── Kill registry ────────────────────────────────────────────────────────────
 
-pub unsafe fn sl_pc_killrank(sd: &mut MapSessionData, mob_id: i32) -> i32 {
-    for x in 0..MAX_KILLREG {
-        if sd.status.killreg[x].mob_id as i32 == mob_id {
-            return sd.status.killreg[x].amount as i32;
-        }
-    }
-    0
+pub fn sl_pc_killrank(sd: &mut MapSessionData, mob_id: i32) -> i32 {
+    sd.player.registries.get_kill_count(mob_id as u32) as i32
 }
 
 // ─── Misc PC helpers ──────────────────────────────────────────────────────────
@@ -1608,14 +1605,14 @@ pub unsafe fn sl_pc_broadcast_sd(
 
 pub unsafe fn sl_pc_getinventoryitem(sd: &mut MapSessionData, slot: i32) -> *mut std::ffi::c_void {
     if slot < 0 || slot as usize >= MAX_INVENTORY { return std::ptr::null_mut(); }
-    if sd.status.inventory[slot as usize].id == 0 { return std::ptr::null_mut(); }
-    &mut sd.status.inventory[slot as usize] as *mut _ as *mut std::ffi::c_void
+    if sd.player.inventory.inventory[slot as usize].id == 0 { return std::ptr::null_mut(); }
+    &mut sd.player.inventory.inventory[slot as usize] as *mut _ as *mut std::ffi::c_void
 }
 
 pub unsafe fn sl_pc_getequippeditem_sd(sd: &mut MapSessionData, slot: i32) -> *mut std::ffi::c_void {
     if slot < 0 || slot as usize >= MAX_EQUIP { return std::ptr::null_mut(); }
-    if sd.status.equip[slot as usize].id == 0 { return std::ptr::null_mut(); }
-    &mut sd.status.equip[slot as usize] as *mut _ as *mut std::ffi::c_void
+    if sd.player.inventory.equip[slot as usize].id == 0 { return std::ptr::null_mut(); }
+    &mut sd.player.inventory.equip[slot as usize] as *mut _ as *mut std::ffi::c_void
 }
 
 // ─── Inventory mutation: add / remove items ───────────────────────────────────
@@ -1645,10 +1642,10 @@ pub unsafe fn sl_pc_removeitem(
     engrave: *const i8,
 ) {
     let engrave = if engrave.is_null() { c"".as_ptr() } else { engrave };
-    let maxinv = sd.status.maxinv as usize;
+    let maxinv = sd.player.inventory.max_inv as usize;
     for x in 0..maxinv {
         if amount == 0 { break; }
-        let inv = &sd.status.inventory[x];
+        let inv = &sd.player.inventory.inventory[x];
         if inv.id != id { continue; }
         if owner != 0 && inv.owner != owner { continue; }
         if libc::strcasecmp(inv.real_name.as_ptr(), engrave) != 0 { continue; }
@@ -1666,10 +1663,10 @@ pub unsafe fn sl_pc_removeitemdura(
     type_: i32,
 ) {
     let max_dura = crate::database::item_db::search(id).dura;
-    let maxinv = sd.status.maxinv as usize;
+    let maxinv = sd.player.inventory.max_inv as usize;
     for x in 0..maxinv {
         if amount == 0 { break; }
-        let inv = &sd.status.inventory[x];
+        let inv = &sd.player.inventory.inventory[x];
         if inv.id != id { continue; }
         if inv.dura != max_dura { continue; }
         let avail = inv.amount as u32;
@@ -1684,10 +1681,10 @@ pub unsafe fn sl_pc_hasitemdura(
     sd: &mut MapSessionData, id: u32, mut amount: u32,
 ) -> i32 {
     let max_dura = crate::database::item_db::search(id).dura;
-    let maxinv = sd.status.maxinv as usize;
+    let maxinv = sd.player.inventory.max_inv as usize;
     for x in 0..maxinv {
         if amount == 0 { break; }
-        let inv = &sd.status.inventory[x];
+        let inv = &sd.player.inventory.inventory[x];
         if inv.id != id { continue; }
         if inv.dura != max_dura { continue; }
         let avail = inv.amount as u32;
@@ -1707,8 +1704,8 @@ pub unsafe fn sl_pc_getspells(
     let mut count = 0i32;
     for x in 0..MAX_SPELLS {
         if count >= max { break; }
-        if sd.status.skill[x] != 0 {
-            *out_ids.add(count as usize) = sd.status.skill[x] as i32;
+        if sd.player.spells.skills[x] != 0 {
+            *out_ids.add(count as usize) = sd.player.spells.skills[x] as i32;
             count += 1;
         }
     }
@@ -1722,8 +1719,8 @@ pub unsafe fn sl_pc_getspellnames(
     let mut count = 0i32;
     for x in 0..MAX_SPELLS {
         if count >= max { break; }
-        if sd.status.skill[x] != 0 {
-            *out_names.add(count as usize) = magic_db::search(sd.status.skill[x] as i32).name.as_ptr();
+        if sd.player.spells.skills[x] != 0 {
+            *out_names.add(count as usize) = magic_db::search(sd.player.spells.skills[x] as i32).name.as_ptr();
             count += 1;
         }
     }
@@ -1737,7 +1734,7 @@ pub unsafe fn sl_pc_getalldurations(
     let mut count = 0i32;
     for i in 0..MAX_MAGIC_TIMERS {
         if count >= max { break; }
-        let da = &sd.status.dura_aether[i];
+        let da = &sd.player.spells.dura_aether[i];
         if da.id > 0 && da.duration > 0 {
             *out_names.add(count as usize) = magic_db::search(da.id as i32).yname.as_ptr();
             count += 1;
@@ -1753,8 +1750,8 @@ pub unsafe fn sl_pc_getlegend(
 ) -> *const i8 {
     if name.is_null() { return std::ptr::null(); }
     for x in 0..MAX_LEGENDS {
-        if libc::strcasecmp(sd.status.legends[x].name.as_ptr(), name) == 0 {
-            return sd.status.legends[x].text.as_ptr() as *const i8;
+        if libc::strcasecmp(sd.player.legends.legends[x].name.as_ptr(), name) == 0 {
+            return sd.player.legends.legends[x].text.as_ptr() as *const i8;
         }
     }
     std::ptr::null()
@@ -1766,7 +1763,7 @@ pub unsafe fn sl_pc_activespells(sd: &mut MapSessionData, name: *const i8) -> i3
     if name.is_null() { return 0; }
     let id = magic_db::id_by_name(cptr_to_str(name));
     for x in 0..MAX_MAGIC_TIMERS {
-        let da = &sd.status.dura_aether[x];
+        let da = &sd.player.spells.dura_aether[x];
         if da.id as i32 == id && da.duration > 0 { return 1; }
     }
     0
@@ -1781,14 +1778,14 @@ pub unsafe fn sl_pc_givexp(sd: &mut MapSessionData, amount: u32) {
 // ─── Clan bank reads ──────────────────────────────────────────────────────────
 
 pub unsafe fn sl_pc_getclanitems(sd: &mut MapSessionData, slot: i32) -> i32 {
-    let clan = crate::database::clan_db::search(sd.status.clan as i32);
+    let clan = crate::database::clan_db::search(sd.player.social.clan as i32);
     if clan.clanbanks.is_null() { return 0; }
     if slot < 0 || slot >= 255 { return 0; }
     (*clan.clanbanks.add(slot as usize)).item_id as i32
 }
 
 pub unsafe fn sl_pc_getclanamounts(sd: &mut MapSessionData, slot: i32) -> i32 {
-    let clan = crate::database::clan_db::search(sd.status.clan as i32);
+    let clan = crate::database::clan_db::search(sd.player.social.clan as i32);
     if clan.clanbanks.is_null() { return 0; }
     if slot < 0 || slot >= 255 { return 0; }
     (*clan.clanbanks.add(slot as usize)).amount as i32
@@ -1797,7 +1794,7 @@ pub unsafe fn sl_pc_getclanamounts(sd: &mut MapSessionData, slot: i32) -> i32 {
 pub unsafe fn sl_pc_checkclankitemamounts(
     sd: &mut MapSessionData, item: i32, _amount: i32,
 ) -> i32 {
-    let clan = crate::database::clan_db::search(sd.status.clan as i32);
+    let clan = crate::database::clan_db::search(sd.player.social.clan as i32);
     if clan.clanbanks.is_null() { return 0; }
     let mut total: u32 = 0;
     for x in 0..255usize {
@@ -1814,9 +1811,9 @@ pub unsafe fn sl_pc_getcreationitems(
 ) -> i32 {
     if out.is_null() { return 0; }
     let curitem = rfifob(sd.fd, len as usize) as i32 - 1;
-    let maxinv = sd.status.maxinv as i32;
-    if curitem >= 0 && curitem < maxinv && sd.status.inventory[curitem as usize].id != 0 {
-        *out = sd.status.inventory[curitem as usize].id;
+    let maxinv = sd.player.inventory.max_inv as i32;
+    if curitem >= 0 && curitem < maxinv && sd.player.inventory.inventory[curitem as usize].id != 0 {
+        *out = sd.player.inventory.inventory[curitem as usize].id;
         return 1;
     }
     0
@@ -1950,12 +1947,12 @@ pub unsafe fn sl_pc_buyextend_send(
 
 unsafe fn sell_send_inner(sd: &mut MapSessionData, msg: *const i8, items: *const i32, n: i32) {
     let nu = n as usize;
-    let maxinv = sd.status.maxinv as usize;
+    let maxinv = sd.player.inventory.max_inv as usize;
     let mut slots: Vec<i32> = Vec::with_capacity(nu * 4);
     for j in 0..nu {
         let item_id = *items.add(j) as u32;
         for x in 0..maxinv {
-            if sd.status.inventory[x].id == item_id { slots.push(x as i32); }
+            if sd.player.inventory.inventory[x].id == item_id { slots.push(x as i32); }
         }
     }
     clif_selldialog_pc(sd, sd.last_click, msg, slots.as_ptr() as *const i32, slots.len() as i32);
@@ -2007,7 +2004,7 @@ pub unsafe fn sl_pc_removeparcel(
     pos: i32, _owner: u32,
     _engrave: *const i8, _npcflag: i32,
 ) {
-    let char_id = sd.status.id;
+    let char_id = sd.player.identity.id;
     let _ = crate::database::blocking_run_async(async move {
         sqlx::query(
             "DELETE FROM `Parcels` WHERE `ParChaIdDestination`=? AND `ParPosition`=?"
@@ -2045,7 +2042,7 @@ pub unsafe fn sl_pc_setpk(sd: &mut MapSessionData, id: i32) {
 ///
 pub unsafe fn sl_pc_removehealth_nodmgnum(sd: &mut MapSessionData, damage: i32, type_: i32) {
     use crate::game::pc::PC_DIE;
-    if (sd.status.state as i32) != PC_DIE {
+    if (sd.player.combat.state as i32) != PC_DIE {
         clif_send_pc_health(&mut *sd, damage, type_);
     }
 }
@@ -2055,12 +2052,12 @@ pub unsafe fn sl_pc_removehealth_nodmgnum(sd: &mut MapSessionData, damage: i32, 
 pub unsafe fn sl_pc_expireitem(sd: &mut MapSessionData) {
     let t = libc::time(std::ptr::null_mut()) as u32;
 
-    for x in 0..sd.status.maxinv as usize {
-        let id = sd.status.inventory[x].id;
+    for x in 0..sd.player.inventory.max_inv as usize {
+        let id = sd.player.inventory.inventory[x].id;
         if id == 0 { continue; }
         let db_item = item_db::search(id);
         let item_t = db_item.time;
-        let slot_t = sd.status.inventory[x].time;
+        let slot_t = sd.player.inventory.inventory[x].time;
         if (slot_t > 0 && slot_t < t) || (item_t > 0 && item_t < t) {
             let name = crate::game::scripting::types::item::fixed_str(&db_item.name);
             let msg = format!("Your {} has expired! Please visit the cash shop to purchase another.", name);
@@ -2073,16 +2070,16 @@ pub unsafe fn sl_pc_expireitem(sd: &mut MapSessionData) {
 
     // Find first empty inventory slot (receives the item moved by pc_unequip)
     let mut eqdel = -1i32;
-    for x in 0..sd.status.maxinv as usize {
-        if sd.status.inventory[x].id == 0 { eqdel = x as i32; break; }
+    for x in 0..sd.player.inventory.max_inv as usize {
+        if sd.player.inventory.inventory[x].id == 0 { eqdel = x as i32; break; }
     }
 
     for x in 0..MAX_EQUIP {
-        let id = sd.status.equip[x].id;
+        let id = sd.player.inventory.equip[x].id;
         if id == 0 { continue; }
         let db_item = item_db::search(id);
         let item_t = db_item.time;
-        let slot_t = sd.status.equip[x].time;
+        let slot_t = sd.player.inventory.equip[x].time;
         if (slot_t > 0 && slot_t < t) || (item_t > 0 && item_t < t) {
             let name = crate::game::scripting::types::item::fixed_str(&db_item.name);
             let msg = format!("Your {} has expired! Please visit the cash shop to purchase another.", name);

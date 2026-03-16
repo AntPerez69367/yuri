@@ -143,6 +143,12 @@ impl UserData for PcObject {
                     unsafe { cstr_to_lua(lua, $f(sd)) }
                 };
             }
+            // New — for migrated &str getters (no unsafe, no CStr parsing)
+            macro_rules! str_ref {
+                ($f:expr) => {
+                    Ok(mlua::Value::String(lua.create_string($f(sd))?))
+                };
+            }
             // Shared map properties (pvp, mapTitle, bgm, etc.) handled before the type-specific match.
             let m = sl_pc_bl_m(sd);
             if let Some(v) = unsafe { shared::map_field(lua, m, key.as_str()) } {
@@ -177,8 +183,8 @@ impl UserData for PcObject {
                 "totem" => int_!(sl_pc_status_totem),
                 "tier" => int_!(sl_pc_status_tier),
                 "mark" => int_!(sl_pc_status_mark),
-                "name" => str_!(sl_pc_status_name),
-                "title" => str_!(sl_pc_status_title),
+                "name" => str_ref!(sl_pc_status_name),
+                "title" => str_ref!(sl_pc_status_title),
                 "sex" => int_!(sl_pc_status_sex),
                 "country" => int_!(sl_pc_status_country),
                 "side" => int_!(sl_pc_status_side),
@@ -190,7 +196,7 @@ impl UserData for PcObject {
                 "ipaddress" => str_!(sl_pc_ipaddress),
                 "clan" => int_!(sl_pc_status_clan),
                 "clanName" => str_!(sl_pc_clanname),
-                "clanTitle" => str_!(sl_pc_status_clan_title),
+                "clanTitle" => str_ref!(sl_pc_status_clan_title),
                 "clanRank" => int_!(sl_pc_status_clanRank),
                 "actId" => Ok(mlua::Value::Integer(unsafe { sl_pc_actid(sd) } as i64)),
                 "gmLevel" => int_!(sl_pc_status_gm_level),
@@ -250,7 +256,7 @@ impl UserData for PcObject {
                 "afk" => bool_!(sl_pc_afk),
                 "afkTime" => int_!(sl_pc_afktime),
                 "afkTimeTotal" => int_!(sl_pc_totalafktime),
-                "afkMessage" => str_!(sl_pc_status_afkmessage),
+                "afkMessage" => str_ref!(sl_pc_status_afkmessage),
                 "backstab" => bool_!(sl_pc_backstab),
                 "flank" => bool_!(sl_pc_flank),
                 "spotTraps" => bool_!(sl_pc_spottraps),
@@ -306,7 +312,7 @@ impl UserData for PcObject {
                 "timerTick" => int_!(sl_pc_scripttick),
                 "displayTimeLeft" => int_!(sl_pc_disptimertick),
                 "fury" => int_!(sl_pc_fury),
-                "f1Name" => str_!(sl_pc_status_f1name),
+                "f1Name" => str_ref!(sl_pc_status_f1name),
                 "mail" => str_!(sl_pc_mail),
                 "cursed" => int_!(sl_pc_cursed),
                 "dialogType" => int_!(sl_pc_dialogtype),

@@ -742,9 +742,9 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         // Mutate in-memory session data synchronously before any await point.
         if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
             let sd = &mut *arc.write();
-            sd.status.clan = 0;
-            sd.status.clan_title[0] = 0;
-            sd.status.clan_rank = 0;
+            sd.player.social.clan = 0;
+            sd.player.social.clan_title.clear();
+            sd.player.progression.clan_rank = 0;
             crate::database::blocking_run_async(
                         crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *const _ as usize)
                     );
@@ -760,9 +760,9 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         // Mutate in-memory session data synchronously before any await point.
         if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
             let sd = &mut *arc.write();
-            sd.status.clan = clan as u32;
-            sd.status.clan_title[0] = 0;
-            sd.status.clan_rank = 1;
+            sd.player.social.clan = clan as u32;
+            sd.player.social.clan_title.clear();
+            sd.player.progression.clan_rank = 1;
             crate::database::blocking_run_async(
                         crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *const _ as usize)
                     );
@@ -778,7 +778,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         // Mutate in-memory session data synchronously before any await point.
         if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
             let sd = &mut *arc.write();
-            sd.status.clan_rank = rank;
+            sd.player.progression.clan_rank = rank;
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaClnRank`=? WHERE `ChaId`=?", rank, id as u32
@@ -790,11 +790,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         // Mutate in-memory session data synchronously before any await point.
         if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
             let sd = &mut *arc.write();
-            let dst = &mut sd.status.clan_title;
-            let bytes = title.as_bytes();
-            let copy_len = bytes.len().min(dst.len() - 1);
-            for (i, &b) in bytes.iter().take(copy_len).enumerate() { dst[i] = b as i8; }
-            dst[copy_len] = 0;
+            sd.player.social.clan_title = title.clone();
             crate::database::blocking_run_async(
                         crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *const _ as usize)
                     );
@@ -812,9 +808,9 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         // Online path: mutate session data synchronously before any await point.
         if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
             let sd = &mut *arc.write();
-            let new_class = crate::database::class_db::path(sd.status.class as i32) as u8;
-            sd.status.class = new_class;
-            sd.status.class_rank = 0;
+            let new_class = crate::database::class_db::path(sd.player.progression.class as i32) as u8;
+            sd.player.progression.class = new_class;
+            sd.player.progression.class_rank = 0;
             crate::database::blocking_run_async(
                         crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *const _ as usize)
                     );
@@ -840,8 +836,8 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         // Mutate in-memory session data synchronously before any await point.
         if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
             let sd = &mut *arc.write();
-            sd.status.class = cls as u8;
-            sd.status.class_rank = 0;
+            sd.player.progression.class = cls as u8;
+            sd.player.progression.class_rank = 0;
             crate::database::blocking_run_async(
                         crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *const _ as usize)
                     );
