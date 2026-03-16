@@ -502,8 +502,8 @@ pub unsafe fn sl_g_talk(bl_ptr: *mut std::ffi::c_void, talk_type: i32, msg: *con
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(arc) = map_id2sd_pc(id) {
-                let pc = &mut *arc.write();
-                clif_speak_inner(&raw mut pc.bl, msg, bl, talk_type);
+                let pc = &*arc.read();
+                clif_speak_inner(&raw const pc.bl, msg, bl, talk_type);
             }
         }
     }

@@ -116,8 +116,8 @@ pub unsafe fn clif_sendguidespecific(sd: *mut MapSessionData, guide: i32) -> i32
 
 /// foreachinarea callback: send a global broadcast to one player.
 ///
-pub unsafe fn clif_broadcast_sub_inner(bl: *mut BlockList, msg: *const i8) -> i32 {
-    let sd = bl as *mut MapSessionData;
+pub unsafe fn clif_broadcast_sub_inner(bl: *const BlockList, msg: *const i8) -> i32 {
+    let sd = bl as *const MapSessionData;
     if sd.is_null() { return 0; }
 
     if !session_alive((*sd).fd) { return 0; }
@@ -147,8 +147,8 @@ pub unsafe fn clif_broadcast_sub_inner(bl: *mut BlockList, msg: *const i8) -> i3
 
 /// foreachinarea callback: send a GM broadcast to one player.
 ///
-pub unsafe fn clif_gmbroadcast_sub_inner(bl: *mut BlockList, msg: *const i8) -> i32 {
-    let sd = bl as *mut MapSessionData;
+pub unsafe fn clif_gmbroadcast_sub_inner(bl: *const BlockList, msg: *const i8) -> i32 {
+    let sd = bl as *const MapSessionData;
     if sd.is_null() { return 0; }
 
     if !session_alive((*sd).fd) { return 0; }
@@ -174,8 +174,8 @@ pub unsafe fn clif_gmbroadcast_sub_inner(bl: *mut BlockList, msg: *const i8) -> 
 
 /// foreachinarea callback: send a broadcast only if the player is a GM.
 ///
-pub unsafe fn clif_broadcasttogm_sub_inner(bl: *mut BlockList, msg: *const i8) -> i32 {
-    let sd = bl as *mut MapSessionData;
+pub unsafe fn clif_broadcasttogm_sub_inner(bl: *const BlockList, msg: *const i8) -> i32 {
+    let sd = bl as *const MapSessionData;
     if sd.is_null() { return 0; }
 
     if (*sd).status.gm_level != 0 {
@@ -214,7 +214,7 @@ pub unsafe fn clif_broadcast(msg: *const i8, m: i32) -> i32 {
                     let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
                     for id in ids {
                         if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_broadcast_sub_inner(&raw mut pc_arc.write().bl, msg);
+                            clif_broadcast_sub_inner(&raw const pc_arc.read().bl, msg);
                         }
                     }
                 }
@@ -226,7 +226,7 @@ pub unsafe fn clif_broadcast(msg: *const i8, m: i32) -> i32 {
             let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_broadcast_sub_inner(&raw mut pc_arc.write().bl, msg);
+                    clif_broadcast_sub_inner(&raw const pc_arc.read().bl, msg);
                 }
             }
         }
@@ -247,7 +247,7 @@ pub unsafe fn clif_gmbroadcast(msg: *const i8, m: i32) -> i32 {
                     let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
                     for id in ids {
                         if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_gmbroadcast_sub_inner(&raw mut pc_arc.write().bl, msg);
+                            clif_gmbroadcast_sub_inner(&raw const pc_arc.read().bl, msg);
                         }
                     }
                 }
@@ -259,7 +259,7 @@ pub unsafe fn clif_gmbroadcast(msg: *const i8, m: i32) -> i32 {
             let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_gmbroadcast_sub_inner(&raw mut pc_arc.write().bl, msg);
+                    clif_gmbroadcast_sub_inner(&raw const pc_arc.read().bl, msg);
                 }
             }
         }
@@ -280,7 +280,7 @@ pub unsafe fn clif_broadcasttogm(msg: *const i8, m: i32) -> i32 {
                     let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
                     for id in ids {
                         if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_broadcasttogm_sub_inner(&raw mut pc_arc.write().bl, msg);
+                            clif_broadcasttogm_sub_inner(&raw const pc_arc.read().bl, msg);
                         }
                     }
                 }
@@ -292,7 +292,7 @@ pub unsafe fn clif_broadcasttogm(msg: *const i8, m: i32) -> i32 {
             let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_broadcasttogm_sub_inner(&raw mut pc_arc.write().bl, msg);
+                    clif_broadcasttogm_sub_inner(&raw const pc_arc.read().bl, msg);
                 }
             }
         }
@@ -328,8 +328,8 @@ pub unsafe fn clif_guitextsd(msg: *const i8, sd: *mut MapSessionData) -> i32 {
 
 /// foreachinarea callback: send a GUI text popup to one player.
 ///
-pub unsafe fn clif_guitext_inner(bl: *mut BlockList, msg: *const i8) -> i32 {
-    let sd = bl as *mut MapSessionData;
+pub unsafe fn clif_guitext_inner(bl: *const BlockList, msg: *const i8) -> i32 {
+    let sd = bl as *const MapSessionData;
     if sd.is_null() { return 0; }
 
     if !session_alive((*sd).fd) { return 0; }
@@ -1192,8 +1192,8 @@ pub unsafe fn clif_sendmobyell_inner(_bl: *mut BlockList, _msg: *const i8, _sd: 
 
 /// Send an NPC/object speech-bubble packet to one player.
 ///
-pub unsafe fn clif_speak_inner(bl: *mut BlockList, msg: *const i8, nd: *mut BlockList, speak_type: i32) -> i32 {
-    let sd = bl as *mut MapSessionData;
+pub unsafe fn clif_speak_inner(bl: *const BlockList, msg: *const i8, nd: *const BlockList, speak_type: i32) -> i32 {
+    let sd = bl as *const MapSessionData;
     if sd.is_null() || nd.is_null() { return 0; }
 
     let len = libc_strlen(msg);
