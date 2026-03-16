@@ -267,10 +267,12 @@ pub unsafe fn clif_sendchararea(sd: *mut MapSessionData) -> i32 {
 /// Applies visibility rules (stealth, ghost, GFX override).
 ///
 pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
+    // Read locks: this function is verified read-only (builds 0x33 appearance packet).
+    // .read() fixes the sender==id deadlock (re-entrant write) and enables concurrent readers.
     let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(sender as u32) else { return 0; };
-    let sd: *mut MapSessionData = &mut *sd_arc.write() as *mut MapSessionData;
+    let sd: *const MapSessionData = &*sd_arc.read() as *const MapSessionData;
     let Some(src_arc) = crate::game::map_server::map_id2sd_pc(id as u32) else { return 0; };
-    let src_sd: *mut MapSessionData = &mut *src_arc.write() as *mut MapSessionData;
+    let src_sd: *const MapSessionData = &*src_arc.read() as *const MapSessionData;
 
     // Stealth: hide from non-GM viewers (except from self)
     if ((*sd).optFlags & OPT_FLAG_STEALTH) != 0
@@ -319,7 +321,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     // State / invis at [16]
     let can_see_invis = (*sd).bl.id != (*src_sd).bl.id
         && ((*src_sd).status.gm_level != 0
-            || clif_isingroup(src_sd, sd) != 0
+            || clif_isingroup(src_sd as *const MapSessionData as *mut MapSessionData, sd as *const MapSessionData as *mut MapSessionData) != 0
             || ((*sd).gfx.dye == (*src_sd).gfx.dye
                 && (*sd).gfx.dye != 0
                 && (*src_sd).gfx.dye != 0));
@@ -361,7 +363,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     wfifob(src_fd, 25, (*sd).status.skin_color as u8);
 
     // Armor at [26..27], color at [28]
-    let armor_id = pc_isequip(sd, EQ_ARMOR);
+    let armor_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_ARMOR);
     if armor_id == 0 {
         wfifow(src_fd, 26, ((*sd).status.sex as u16).swap_bytes());
     } else {
@@ -382,7 +384,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         wfifob(src_fd, 28, armor_color);
     }
     // Coat overrides armor
-    let coat_id = pc_isequip(sd, EQ_COAT);
+    let coat_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_COAT);
     if coat_id != 0 {
         let coat_item = item_db::search(coat_id as u32);
         wfifow(src_fd, 26, (coat_item.look as u16).swap_bytes());
@@ -390,7 +392,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Weapon at [29..30], color at [31]
-    let weap_id = pc_isequip(sd, EQ_WEAP);
+    let weap_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_WEAP);
     if weap_id == 0 {
         wfifow(src_fd, 29, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 31, 0);
@@ -407,7 +409,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Shield at [32..33], color at [34]
-    let shield_id = pc_isequip(sd, EQ_SHIELD);
+    let shield_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_SHIELD);
     if shield_id == 0 {
         wfifow(src_fd, 32, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 34, 0);
@@ -424,7 +426,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Helm at [35] flag, [36..37] look+color
-    let helm_id    = pc_isequip(sd, EQ_HELM);
+    let helm_id    = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_HELM);
     let helm_item  = if helm_id != 0 { Some(item_db::search(helm_id as u32)) } else { None };
     let helm_look  = helm_item.as_ref().map_or(-1, |i| i.look);
     if helm_id == 0
@@ -445,7 +447,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Face accessory at [38..39], color at [40]
-    let faceacc_id = pc_isequip(sd, EQ_FACEACC);
+    let faceacc_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_FACEACC);
     if faceacc_id == 0 {
         wfifow(src_fd, 38, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 40, 0);
@@ -456,7 +458,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Crown at [41..42], color at [43]; also clears helm flag at [35]
-    let crown_id = pc_isequip(sd, EQ_CROWN);
+    let crown_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_CROWN);
     if crown_id == 0 {
         wfifow(src_fd, 41, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 43, 0);
@@ -474,7 +476,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Face accessory 2 at [44..45], color at [46]
-    let faceacc2_id = pc_isequip(sd, EQ_FACEACCTWO);
+    let faceacc2_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_FACEACCTWO);
     if faceacc2_id == 0 {
         wfifow(src_fd, 44, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 46, 0);
@@ -485,7 +487,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Mantle at [47..48], color at [49]
-    let mantle_id = pc_isequip(sd, EQ_MANTLE);
+    let mantle_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_MANTLE);
     if mantle_id == 0 {
         wfifow(src_fd, 47, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 49, 0xFF);
@@ -496,7 +498,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Necklace at [50..51], color at [52]
-    let neck_id   = pc_isequip(sd, EQ_NECKLACE);
+    let neck_id   = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_NECKLACE);
     let neck_item = if neck_id != 0 { Some(item_db::search(neck_id as u32)) } else { None };
     let neck_look = neck_item.as_ref().map_or(-1, |i| i.look);
     if neck_id == 0
@@ -511,7 +513,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Boots at [53..54], color at [55]
-    let boots_id = pc_isequip(sd, EQ_BOOTS);
+    let boots_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_BOOTS);
     if boots_id == 0 {
         wfifow(src_fd, 53, ((*sd).status.sex as u16).swap_bytes());
         wfifob(src_fd, 55, 0);
@@ -538,7 +540,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     if invis_or_stealth
         && (*sd).bl.id != (*src_sd).bl.id
         && ((*src_sd).status.gm_level != 0
-            || clif_isingroup(src_sd, sd) != 0
+            || clif_isingroup(src_sd as *const MapSessionData as *mut MapSessionData, sd as *const MapSessionData as *mut MapSessionData) != 0
             || ((*sd).gfx.dye == (*src_sd).gfx.dye
                 && (*sd).gfx.dye != 0
                 && (*src_sd).gfx.dye != 0))
@@ -560,7 +562,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         wfifob(src_fd, 56, 3);
     }
     // Same group → title color 2
-    if clif_isingroup(src_sd, sd) != 0 {
+    if clif_isingroup(src_sd as *const MapSessionData as *mut MapSessionData, sd as *const MapSessionData as *mut MapSessionData) != 0 {
         wfifob(src_fd, 56, 2);
     }
 
