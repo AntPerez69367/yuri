@@ -3,6 +3,7 @@
 #![allow(non_snake_case, dead_code, unused_variables)]
 
 
+use crate::common::player::PlayerData;
 use crate::database::map_db::BlockList;
 // MobSpawnData is used by future porting tasks (Tasks 6+); import it when needed.
 use crate::game::types::GfxViewer;
@@ -75,10 +76,9 @@ pub struct PcBodItems {
 
 // ─── MapSessionData ────────────────────────────────────────────────────────────
 
-/// Player character session data — live in-memory state for a connected player.
-///
-/// Field order matches the C definition exactly. Every field has been verified
-/// against the C source. Do NOT reorder fields — `#[repr(C)]` layout depends on it.
+/// MapSessionData — player session state. `#[repr(C)]` is retained during migration
+/// for `Box::new_zeroed` safety (all-zeros valid for numeric fields). Field order must
+/// keep `bl: BlockList` first (cast to `*mut BlockList` for grid operations).
 #[repr(C)]
 pub struct MapSessionData {
     // Intrusive block-list header (must be first — cast to *mut BlockList for grid operations).
@@ -87,6 +87,10 @@ pub struct MapSessionData {
 
     // mmo
     pub status:            MmoCharStatus,
+
+    // New domain-typed player data. Migrated callers read/write this instead of `status`.
+    // Synced from `status` at char-load and back to `status` at char-save.
+    pub player:            PlayerData,
 
     // status timers
     pub equiptimer:        u64,
@@ -339,8 +343,9 @@ unsafe impl Sync for MapSessionData {}
 #[cfg(test)]
 mod layout_tests {
     use super::*;
-    // Verified with: printf("%zu\n", sizeof(struct map_sessiondata))
-    const EXPECTED_SIZE: usize = 3335344;
+    // C baseline was 3335344. The `player: PlayerData` Rust-only field adds 824 bytes.
+    // Update this constant when PlayerData sub-structs grow or new fields are added.
+    const EXPECTED_SIZE: usize = 3336168;
     #[test]
     fn map_session_data_size() {
         assert_eq!(std::mem::size_of::<MapSessionData>(), EXPECTED_SIZE);

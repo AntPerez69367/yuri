@@ -138,6 +138,120 @@ impl PlayerData {
         s
     }
 
+    /// Write all PlayerData fields into an existing MmoCharStatus in-place.
+    /// Zero allocations — used on the save hot path.
+    pub fn sync_to_legacy(&self, dst: &mut MmoCharStatus) {
+        // ── Identity ──
+        dst.id = self.identity.id;
+        string_to_i8_array(&self.identity.name, &mut dst.name);
+        string_to_i8_array(&self.identity.pass, &mut dst.pass);
+        string_to_i8_array(&self.identity.f1name, &mut dst.f1name);
+        string_to_i8_array(&self.identity.title, &mut dst.title);
+        string_to_i8_array(&self.identity.ipaddress, &mut dst.ipaddress);
+        dst.gm_level = self.identity.gm_level;
+        dst.sex = self.identity.sex;
+        dst.map_server = self.identity.map_server;
+        dst.dest_pos = self.identity.dest_pos;
+        dst.last_pos = self.identity.last_pos;
+
+        // ── Combat ──
+        dst.hp = self.combat.hp;
+        dst.basehp = self.combat.max_hp;
+        dst.mp = self.combat.mp;
+        dst.basemp = self.combat.max_mp;
+        dst.might = self.combat.might;
+        dst.will = self.combat.will;
+        dst.grace = self.combat.grace;
+        dst.basemight = self.combat.base_might;
+        dst.basewill = self.combat.base_will;
+        dst.basegrace = self.combat.base_grace;
+        dst.basearmor = self.combat.base_armor;
+        dst.state = self.combat.state;
+        dst.side = self.combat.side;
+
+        // ── Progression ──
+        dst.level = self.progression.level;
+        dst.class = self.progression.class;
+        dst.tier = self.progression.tier;
+        dst.mark = self.progression.mark;
+        dst.totem = self.progression.totem;
+        dst.country = self.progression.country;
+        dst.magic_number = self.progression.magic_number;
+        dst.exp = self.progression.exp;
+        dst.tnl = self.progression.tnl;
+        dst.nextlevelxp = self.progression.next_level_xp;
+        dst.maxtnl = self.progression.max_tnl;
+        dst.realtnl = self.progression.real_tnl;
+        dst.class_rank = self.progression.class_rank;
+        dst.clan_rank = self.progression.clan_rank;
+        dst.percentage = self.progression.percentage;
+        dst.int_percentage = self.progression.int_percentage;
+        dst.expsold_magic = self.progression.expsold_magic;
+        dst.expsold_health = self.progression.expsold_health;
+        dst.expsold_stats = self.progression.expsold_stats;
+
+        // ── Spells ──
+        let n = self.spells.skills.len().min(dst.skill.len());
+        dst.skill[..n].copy_from_slice(&self.spells.skills[..n]);
+        let n = self.spells.dura_aether.len().min(dst.dura_aether.len());
+        dst.dura_aether[..n].copy_from_slice(&self.spells.dura_aether[..n]);
+
+        // ── Inventory ──
+        let n = self.inventory.equip.len().min(dst.equip.len());
+        dst.equip[..n].copy_from_slice(&self.inventory.equip[..n]);
+        let n = self.inventory.inventory.len().min(dst.inventory.len());
+        dst.inventory[..n].copy_from_slice(&self.inventory.inventory[..n]);
+        let n = self.inventory.banks.len().min(dst.banks.len());
+        dst.banks[..n].copy_from_slice(&self.inventory.banks[..n]);
+        dst.money = self.inventory.money;
+        dst.bankmoney = self.inventory.bank_money;
+        dst.maxinv = self.inventory.max_inv;
+        dst.maxslots = self.inventory.max_slots;
+
+        // ── Appearance ──
+        dst.face = self.appearance.face;
+        dst.hair = self.appearance.hair;
+        dst.face_color = self.appearance.face_color;
+        dst.hair_color = self.appearance.hair_color;
+        dst.armor_color = self.appearance.armor_color;
+        dst.skin_color = self.appearance.skin_color;
+        dst.disguise = self.appearance.disguise;
+        dst.disguise_color = self.appearance.disguise_color;
+        dst.setting_flags = self.appearance.setting_flags;
+        dst.heroes = self.appearance.heroes;
+        dst.mini_map_toggle = self.appearance.mini_map_toggle;
+        dst.profile_vitastats = self.appearance.profile_vitastats;
+        dst.profile_equiplist = self.appearance.profile_equiplist;
+        dst.profile_legends = self.appearance.profile_legends;
+        dst.profile_spells = self.appearance.profile_spells;
+        dst.profile_inventory = self.appearance.profile_inventory;
+        dst.profile_bankitems = self.appearance.profile_bankitems;
+
+        // ── Social ──
+        dst.partner = self.social.partner;
+        dst.clan = self.social.clan;
+        string_to_i8_array(&self.social.clan_title, &mut dst.clan_title);
+        dst.clan_chat = self.social.clan_chat;
+        dst.pk = self.social.pk;
+        dst.killedby = self.social.killed_by;
+        dst.killspk = self.social.kills_pk;
+        dst.pkduration = self.social.pk_duration;
+        dst.karma = self.social.karma;
+        dst.alignment = self.social.alignment;
+        dst.novice_chat = self.social.novice_chat;
+        dst.subpath_chat = self.social.subpath_chat;
+        dst.mute = self.social.mute;
+        dst.tutor = self.social.tutor;
+        string_to_i8_array(&self.social.afk_message, &mut dst.afkmessage);
+
+        // ── Registries ──
+        write_registries_to_mmo(&self.registries, dst);
+
+        // ── Legends ──
+        let n = self.legends.legends.len().min(dst.legends.len());
+        dst.legends[..n].copy_from_slice(&self.legends.legends[..n]);
+    }
+
     /// Convert from the legacy MmoCharStatus. Used during migration and for testing.
     pub fn from_mmo_char_status(old: &MmoCharStatus) -> Self {
         PlayerData {
@@ -539,6 +653,72 @@ mod tests {
         let mut buf = [0x7Fi8; 16]; // fill with non-zero
         string_to_i8_array("", &mut buf);
         assert_eq!(buf[0], 0); // null terminator at index 0
+    }
+
+    #[test]
+    fn sync_to_legacy_matches_to_mmo_char_status() {
+        let mut pd = PlayerData::default();
+        // Identity (including string fields)
+        pd.identity.id = 42;
+        pd.identity.name = "SyncTest".to_string();
+        pd.identity.title = "Champion".to_string();
+        pd.identity.gm_level = 3;
+        pd.identity.dest_pos = Point::new(10, 20, 30);
+        // Combat
+        pd.combat.hp = 100;
+        pd.combat.max_hp = 200;
+        pd.combat.base_armor = -5;
+        pd.combat.state = -1;
+        // Progression
+        pd.progression.level = 50;
+        pd.progression.class = 3;
+        pd.progression.tnl = 5000;
+        pd.progression.expsold_magic = 999;
+        // Spells
+        pd.spells.skills[0] = 42;
+        pd.spells.dura_aether[0].id = 7;
+        // Inventory (scalar + array)
+        pd.inventory.money = 99999;
+        pd.inventory.equip[0].id = 300;
+        pd.inventory.inventory[5].id = 400;
+        pd.inventory.banks[0].item_id = 500;
+        // Appearance
+        pd.appearance.hair = 7;
+        pd.appearance.disguise = 99;
+        // Social (including string field)
+        pd.social.clan = 10;
+        pd.social.clan_title = "Knight".to_string();
+        pd.social.afk_message = "brb".to_string();
+        pd.social.karma = 3.14;
+        // Registries
+        pd.registries.set_reg("sync_var", 77);
+        pd.registries.set_reg_str("str_key", "hello");
+        pd.registries.kill_reg.insert(1001, 5);
+        // Legends
+        pd.legends.legends[0].icon = 5;
+        pd.legends.legends[0].color = 3;
+
+        // to_mmo_char_status allocates a fresh 3MB struct
+        let via_alloc = pd.to_mmo_char_status();
+
+        // sync_to_legacy writes into an existing zeroed struct (zero-alloc hot path)
+        let mut via_sync = alloc_zeroed_charstatus();
+        pd.sync_to_legacy(&mut via_sync);
+
+        // Byte-level comparison: both MmoCharStatus instances must be identical.
+        let alloc_bytes = unsafe {
+            std::slice::from_raw_parts(
+                &*via_alloc as *const MmoCharStatus as *const u8,
+                std::mem::size_of::<MmoCharStatus>(),
+            )
+        };
+        let sync_bytes = unsafe {
+            std::slice::from_raw_parts(
+                &*via_sync as *const MmoCharStatus as *const u8,
+                std::mem::size_of::<MmoCharStatus>(),
+            )
+        };
+        assert_eq!(alloc_bytes, sync_bytes, "sync_to_legacy and to_mmo_char_status must produce identical output");
     }
 
     #[test]

@@ -8,6 +8,7 @@
 
 use std::ptr;
 
+use crate::common::player::PlayerData;
 use crate::database::{blocking_run_async, get_pool};
 use crate::database::map_db::BlockList;
 use crate::game::pc::MapSessionData;
@@ -71,13 +72,20 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
     }
 
     // SAFETY: Box::new_zeroed allocates MapSessionData (~3MB) on the heap without
-    // a stack intermediary. assume_init is safe because all-zero is valid for MapSessionData
-    // (every field is a numeric type or array of numerics/pointers initialized to null).
+    // a stack intermediary. assume_init is safe for numeric/pointer fields.
+    // PlayerData (String/Vec/HashMap) is immediately overwritten via ptr::write below.
     let mut sd_box: Box<MapSessionData> = unsafe { Box::new_zeroed().assume_init() };
     let sd: *mut MapSessionData = sd_box.as_mut() as *mut MapSessionData;
 
+    // SAFETY: player contains String/Vec/HashMap — zeroed bytes are UB.
+    // Write a valid default before any code path can read or drop it.
+    ptr::write(ptr::addr_of_mut!((*sd).player), PlayerData::default());
+
     // Copy MmoCharStatus into sd->status.
     ptr::copy_nonoverlapping(p, ptr::addr_of_mut!((*sd).status), 1);
+
+    // Populate player from the legacy status data we just copied.
+    (*sd).player = PlayerData::from_mmo_char_status(&(*sd).status);
 
     // Attach to session.
     (*sd).fd = sid;
@@ -88,37 +96,46 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
     }
 
     // Build the per-session encryption hash table from the character name.
-    // C: populate_table(sd->status.name, sd->EncHash, sizeof(sd->EncHash))
-    crypt_populate_table(
-        (*sd).status.name.as_ptr() as *const i8,
-        (*sd).EncHash.as_mut_ptr(),
-        0x401, // sizeof(sd->EncHash)
-    );
+    // player.identity.name is a String; copy into a null-terminated stack buffer.
+    {
+        let mut name_buf = [0u8; 16];
+        let name = (*sd).player.identity.name.as_bytes();
+        let n = name.len().min(15);
+        name_buf[..n].copy_from_slice(&name[..n]);
+        crypt_populate_table(
+            name_buf.as_ptr() as *const i8,
+            (*sd).EncHash.as_mut_ptr(),
+            0x401, // sizeof(sd->EncHash)
+        );
+    }
 
     // Set up the block-list header.
-    (*sd).bl.id   = (*sd).status.id;
+    (*sd).bl.id   = (*sd).player.identity.id;
     (*sd).bl.prev = ptr::null_mut();
     (*sd).bl.next = ptr::null_mut();
 
     // Visual / display defaults.
-    (*sd).disguise       = (*sd).status.disguise;
-    (*sd).disguise_color = (*sd).status.disguise_color;
+    (*sd).disguise       = (*sd).player.appearance.disguise;
+    (*sd).disguise_color = (*sd).player.appearance.disguise_color;
     (*sd).viewx = 8;
     (*sd).viewy = 7;
 
-    // Copy IP address (null-terminated C string, max 255 bytes).
-    let src_ptr = (*sd).status.ipaddress.as_ptr();
-    let src_bytes = std::slice::from_raw_parts(src_ptr as *const u8, 255);
-    let null_pos = src_bytes.iter().position(|&b| b == 0).unwrap_or(254);
-    ptr::copy_nonoverlapping(
-        src_ptr,
-        (*sd).ipaddress.as_mut_ptr(),
-        null_pos + 1, // copy including null terminator
-    );
+    // Copy IP address from the String in player.identity into the legacy C array.
+    {
+        let ip_bytes = (*sd).player.identity.ipaddress.as_bytes();
+        let n = ip_bytes.len().min(254);
+        ptr::copy_nonoverlapping(
+            ip_bytes.as_ptr() as *const i8,
+            (*sd).ipaddress.as_mut_ptr(),
+            n,
+        );
+        // Ensure null termination.
+        (*sd).ipaddress[n] = 0;
+    }
 
     // Query the Character table for the stored map position.
     // ChaMapId is `int(10) unsigned` → u32; ChaX/ChaY likewise.
-    let char_id = (*sd).status.id;
+    let char_id = (*sd).player.identity.id;
     let pos_opt: Option<(u32, u32, u32)> = blocking_run_async(async move {
         let pool = get_pool();
         sqlx::query_as::<_, (u32, u32, u32)>(
@@ -132,29 +149,29 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
 
     // Apply the loaded position into last_pos.
     if let Some((map_id, cx, cy)) = pos_opt {
-        (*sd).status.last_pos.m = map_id as u16;
-        (*sd).status.last_pos.x = cx as u16;
-        (*sd).status.last_pos.y = cy as u16;
+        (*sd).player.identity.last_pos.m = map_id as u16;
+        (*sd).player.identity.last_pos.x = cx as u16;
+        (*sd).player.identity.last_pos.y = cy as u16;
     }
 
     // GM players walk through blocked tiles.
-    if (*sd).status.gm_level != 0 {
+    if (*sd).player.identity.gm_level != 0 {
         (*sd).optFlags |= OPT_WALKTHROUGH;
     }
 
     // Fall back to map 0 / spawn point if the target map is not loaded.
-    if !crate::game::block::map_is_loaded((*sd).status.last_pos.m as i32) {
-        (*sd).status.last_pos.m = 0;
-        (*sd).status.last_pos.x = 8;
-        (*sd).status.last_pos.y = 7;
+    if !crate::game::block::map_is_loaded((*sd).player.identity.last_pos.m as i32) {
+        (*sd).player.identity.last_pos.m = 0;
+        (*sd).player.identity.last_pos.x = 8;
+        (*sd).player.identity.last_pos.y = 7;
     }
 
     // Place the player on the map (adds to block grid).
     pc_setpos(
         sd,
-        (*sd).status.last_pos.m as i32,
-        (*sd).status.last_pos.x as i32,
-        (*sd).status.last_pos.y as i32,
+        (*sd).player.identity.last_pos.m as i32,
+        (*sd).player.identity.last_pos.x as i32,
+        (*sd).player.identity.last_pos.y as i32,
     );
 
     // Load magic timers and start session timers.
@@ -236,11 +253,10 @@ pub unsafe fn intif_mmo_tosd(fd: i32, p: *const MmoCharStatus) -> i32 {
     // We capture that here and fire the hook AFTER blocking_run_async returns so
     // Lua's DB calls (which also use blocking_run_async) don't deadlock on DB_RUNTIME.
     let fire_login_hook = crate::database::blocking_run_async(
-        crate::database::assert_send(crate::game::map_server::mmo_setonline((*sd).status.id, 1))
+        crate::database::assert_send(crate::game::map_server::mmo_setonline((*sd).player.identity.id, 1))
     );
     if fire_login_hook {
-        let name_str = std::ffi::CStr::from_ptr((*sd).status.name.as_ptr() as *const i8)
-            .to_string_lossy();
+        let name_str = (*sd).player.identity.name.as_str();
         let raw_ip = crate::session::session_get_client_ip(fd);
         let addr = format!("{}.{}.{}.{}", raw_ip & 0xff, (raw_ip >> 8) & 0xff,
             (raw_ip >> 16) & 0xff, (raw_ip >> 24) & 0xff);
@@ -364,11 +380,17 @@ pub mod intif_save_impl {
 
     pub unsafe fn sl_intif_save(sd: *mut MapSessionData) -> i32 {
         if sd.is_null() { return -1; }
-        (*sd).status.last_pos.m = (*sd).bl.m;
-        (*sd).status.last_pos.x = (*sd).bl.x;
-        (*sd).status.last_pos.y = (*sd).bl.y;
-        (*sd).status.disguise       = (*sd).disguise;
-        (*sd).status.disguise_color = (*sd).disguise_color;
+
+        // Sync runtime shadow fields into player before serialization.
+        (*sd).player.identity.last_pos.m = (*sd).bl.m;
+        (*sd).player.identity.last_pos.x = (*sd).bl.x;
+        (*sd).player.identity.last_pos.y = (*sd).bl.y;
+        (*sd).player.appearance.disguise       = (*sd).disguise;
+        (*sd).player.appearance.disguise_color = (*sd).disguise_color;
+
+        // Sync player → status for wire serialization (zlib raw bytes).
+        (*sd).player.sync_to_legacy(&mut (*sd).status);
+
         match compress_status(sd, 0x3004) {
             Some(pkt) => { intif_save(pkt.as_ptr(), pkt.len() as u32); 0 }
             None      => -1,
@@ -377,22 +399,28 @@ pub mod intif_save_impl {
 
     pub unsafe fn sl_intif_savequit(sd: *mut MapSessionData) -> i32 {
         if sd.is_null() { return -1; }
-        if !map_is_loaded((*sd).status.dest_pos.m as i32) {
-            if (*sd).status.dest_pos.m == 0 {
-                (*sd).status.dest_pos.m = (*sd).bl.m;
-                (*sd).status.dest_pos.x = (*sd).bl.x;
-                (*sd).status.dest_pos.y = (*sd).bl.y;
+
+        // Dest-pos fallback: if the target map isn't loaded, warp to current position.
+        if !map_is_loaded((*sd).player.identity.dest_pos.m as i32) {
+            if (*sd).player.identity.dest_pos.m == 0 {
+                (*sd).player.identity.dest_pos.m = (*sd).bl.m;
+                (*sd).player.identity.dest_pos.x = (*sd).bl.x;
+                (*sd).player.identity.dest_pos.y = (*sd).bl.y;
             }
-            (*sd).status.last_pos.m = (*sd).status.dest_pos.m;
-            (*sd).status.last_pos.x = (*sd).status.dest_pos.x;
-            (*sd).status.last_pos.y = (*sd).status.dest_pos.y;
+            (*sd).player.identity.last_pos = (*sd).player.identity.dest_pos;
         } else {
-            (*sd).status.last_pos.m = (*sd).bl.m;
-            (*sd).status.last_pos.x = (*sd).bl.x;
-            (*sd).status.last_pos.y = (*sd).bl.y;
+            (*sd).player.identity.last_pos.m = (*sd).bl.m;
+            (*sd).player.identity.last_pos.x = (*sd).bl.x;
+            (*sd).player.identity.last_pos.y = (*sd).bl.y;
         }
-        (*sd).status.disguise       = (*sd).disguise;
-        (*sd).status.disguise_color = (*sd).disguise_color;
+
+        // Sync runtime shadow fields.
+        (*sd).player.appearance.disguise       = (*sd).disguise;
+        (*sd).player.appearance.disguise_color = (*sd).disguise_color;
+
+        // Sync player → status for wire serialization.
+        (*sd).player.sync_to_legacy(&mut (*sd).status);
+
         match compress_status(sd, 0x3007) {
             Some(pkt) => { intif_savequit(pkt.as_ptr(), pkt.len() as u32); 0 }
             None      => -1,
