@@ -29,6 +29,7 @@ serde_yaml = "0.9.34-deprecated"
 anyhow = "1.0.102"
 thiserror = "2.0.18"
 rayon = "1"
+dashmap = "6"
 parking_lot = { version = "0.12", features = ["deadlock_detection"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
@@ -42,21 +43,13 @@ socket2 = "0.6"
 criterion = "0.8.2"
 
 [[bin]]
-name = "login_server"
-path = "src/bin/login_server.rs"
-
-[[bin]]
-name = "char_server"
-path = "src/bin/char_server.rs"
-
-[[bin]]
-name = "map_server"
-path = "src/bin/map_server.rs"
-
-[[bin]]
 name = "decrypt_cli"
 path = "src/bin/decrypt_cli.rs"
 
 [[bin]]
 name = "metan_cli"
 path = "src/bin/metan_cli.rs"
+
+[[bin]]
+name = "world_server"
+path = "src/bin/world_server.rs"

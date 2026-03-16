@@ -2,25 +2,20 @@ use anyhow::{Context, Result};
 use sqlx::mysql::MySqlPoolOptions;
 use std::ffi::CString;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use yuri::config::ServerConfig;
 use yuri::game::block::map_initblock;
 use yuri::game::map_server::map_initiddb;
-
 use yuri::game::scripting::sl_init;
 use yuri::game::map_server::{lang_read, map_do_term, map_loadgameregistry};
 use yuri::game::client::visual::clif_timeout;
 use yuri::database::{item_db, magic_db, mob_db, class_db, board_db, clan_db, recipe_db};
 use yuri::game::mob::mobspawn_read;
-use yuri::session::{
-    get_session_manager, sync_callback, make_listen_port,
-};
+use yuri::session::{get_session_manager, sync_callback, make_listen_port};
 use yuri::core::{core_init, set_termfunc};
-use yuri::servers::map::MapState;
+use yuri::servers::login::{LoginState, parse_lang_file};
+use yuri::world::{WorldState, KickRequest};
 
-
-/// Stub replacing `db_init()` from `c_deps/db.c`.
-/// The original function only increments a statistics counter; it has no
-/// side-effects on any game state, so removing it is safe.
 pub fn db_init() {}
 
 #[tokio::main]
@@ -32,11 +27,7 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    // Initialize core state.
     core_init();
-    // fd_max is now owned by session.rs (get_fd_max()); no external callback needed.
-    // db_init() is now a no-op stub defined above
-    // timer_init() was a no-op — removed
 
     let mut conf_file = "conf/server.yaml".to_string();
     let mut lang_file = "conf/lang.yaml".to_string();
@@ -46,7 +37,7 @@ async fn main() -> Result<()> {
     while i < args.len() {
         match args[i].as_str() {
             "--help" | "--h" | "--?" | "/?" => {
-                println!("Usage: map_server [--conf FILE] [--lang FILE]");
+                println!("Usage: world_server [--conf FILE] [--lang FILE]");
                 return Ok(());
             }
             "--conf" if i + 1 < args.len() => { i += 1; conf_file = args[i].clone(); }
@@ -56,7 +47,6 @@ async fn main() -> Result<()> {
         i += 1;
     }
 
-    // Load config (Rust side)
     let config: ServerConfig = {
         let content = std::fs::read_to_string(&conf_file)
             .with_context(|| format!("Cannot read config: {}", conf_file))?;
@@ -64,35 +54,36 @@ async fn main() -> Result<()> {
             .with_context(|| format!("Cannot parse config: {}", conf_file))?
     };
 
-    // Load config into the global CONFIG static and initialise rate atomics.
+    // Load config into global CONFIG static (for game code that reads it).
     if yuri::config::config_read(&conf_file) != 0 {
         anyhow::bail!("config_read failed for {}", conf_file);
     }
 
-    // Load lang strings
+    // Load lang strings for map server
     {
         let clang = CString::new(lang_file.as_str()).unwrap();
         unsafe { lang_read(clang.as_ptr()); }
     }
 
-    tracing::info!("[map] Map Server Started.");
+    // Load login messages
+    let lang_content = std::fs::read_to_string(&lang_file).unwrap_or_default();
+    let messages = parse_lang_file(&lang_content)?;
 
-    // Rust async DB pool
+    tracing::info!("[world] World Server Starting...");
+
+    // Shared DB pool — increased max_connections for combined workload.
     let pool = {
         let db_url = std::env::var("DATABASE_URL")
             .context("DATABASE_URL environment variable not set")?;
         MySqlPoolOptions::new()
-            .max_connections(5)
+            .max_connections(15)
             .connect(&db_url)
             .await
             .with_context(|| format!("Cannot connect to MySQL: {}", db_url))?
     };
 
-    // Register the pool with the Rust DB module layer (map_db, mob_db, etc.).
-    // We use set_pool() here instead of db_connect() to avoid
-    // block_on-inside-runtime panic (we're already inside #[tokio::main]).
     yuri::database::set_pool(pool.clone())
-        .context("Failed to register DB pool with Rust DB modules")?;
+        .context("Failed to register DB pool")?;
 
     // Reset online flags
     sqlx::query("UPDATE `Character` SET `ChaOnline` = 0 WHERE `ChaOnline` = 1")
@@ -100,9 +91,22 @@ async fn main() -> Result<()> {
         .await
         .ok();
 
-    // Run all blocking init (map_db::map_init, *_db::init, game init) on a
-    // dedicated thread. spawn_blocking is required because these functions call
-    // blocking_run() internally, which panics if called from within the tokio runtime.
+    // Create kick channel (login listener → LocalSet)
+    let (kick_tx, kick_rx) = mpsc::channel::<KickRequest>(64);
+
+    // Build WorldState
+    let world = Arc::new(WorldState {
+        db: pool.clone(),
+        config: config.clone(),
+        messages,
+        online: dashmap::DashSet::new(),
+        auth_db: dashmap::DashMap::new(),
+        kick_tx,
+    });
+
+    yuri::world::set_world(Arc::clone(&world));
+
+    // ── Map server blocking init ──────────────────────────────────────
     {
         let maps_dir = config.maps_dir.clone();
         let data_dir = config.data_dir.clone();
@@ -114,19 +118,9 @@ async fn main() -> Result<()> {
                 anyhow::bail!("map_init failed");
             }
 
-            // Game-logic init — order matches do_init exactly.
             unsafe {
                 map_initblock();
                 map_initiddb();
-                // Drive npc_init_async and warp_init_async via block_in_place (main
-                // runtime reactor) instead of their blocking_run_async wrappers.
-                // Those wrappers use DB_RUNTIME (a separate current_thread runtime),
-                // which registers connection sockets with its own reactor.  Any
-                // connection returned to the pool from DB_RUNTIME is then
-                // reactor-mismatched when reused by blocking_run / block_in_place
-                // (main runtime) in the subsequent *_init calls, causing a 30-second
-                // pool acquire timeout.  block_in_place is safe here because this
-                // closure runs inside spawn_blocking, not a LocalSet task.
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async {
                         yuri::game::npc::npc_init_async().await;
@@ -136,8 +130,6 @@ async fn main() -> Result<()> {
                 item_db::init();
                 recipe_db::init();
                 mob_db::init();
-                // mobspawn_read is now async; drive it to completion from
-                // within spawn_blocking using block_in_place (safe: not in LocalSet).
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(mobspawn_read())
                 });
@@ -147,8 +139,6 @@ async fn main() -> Result<()> {
                 board_db::init();
                 yuri::game::map_server::object_flag_init();
                 sl_init();
-                // map_loadgameregistry is now async; drive it to completion from
-                // within spawn_blocking using block_in_place (safe: not in LocalSet).
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(map_loadgameregistry())
                 });
@@ -162,8 +152,7 @@ async fn main() -> Result<()> {
                 }
                 make_listen_port(map_port as i32);
 
-                // Timers from the old do_init — restored here after do_init was removed.
-                let startup = std::ffi::CString::new("startup").unwrap();
+                let startup = CString::new("startup").unwrap();
                 yuri::game::scripting::doscript_blargs(startup.as_ptr(), std::ptr::null(), &[]);
 
                 set_termfunc(Some(map_do_term));
@@ -173,68 +162,80 @@ async fn main() -> Result<()> {
           .context("Init thread panicked")??;
     }
 
-    let state = Arc::new(MapState::new(pool, config));
-
-    // Register state with FFI bridge so game logic can send packets to char_server.
-    yuri::game::map_char::set_map_state(Arc::clone(&state));
-
-    // Spawn auth DB expiry timer (replaces auth_timer — every 30s).
-    // Does not touch Lua, safe on any thread.
+    // ── Login listener (general tokio runtime) ────────────────────────
     {
-        let s = Arc::clone(&state);
+        let w = Arc::clone(&world);
+        let bind = format!("{}:{}", config.login_ip, config.login_port);
         tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(30));
-            loop {
-                ticker.tick().await;
-                yuri::servers::map::packet::expire_auth(&s).await;
+            let mut login_state = LoginState::new(
+                w.db.clone(),
+                w.config.clone(),
+                w.messages.clone(),
+            );
+            login_state.world = Some(Arc::clone(&w));
+            let login_state = Arc::new(login_state);
+            tracing::info!("[login] [ready] addr={}", bind);
+            if let Err(e) = LoginState::run(login_state, &bind).await {
+                tracing::error!("[login] listener error: {}", e);
             }
         });
     }
 
-    tracing::info!("[map] [ready] Listening on {}:{}", state.config.map_ip, state.config.map_port);
+    // ── Auth expiry timer (every 30s) ─────────────────────────────────
+    {
+        let w = Arc::clone(&world);
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(tokio::time::Duration::from_secs(30));
+            loop {
+                ticker.tick().await;
+                let now = std::time::Instant::now();
+                w.auth_db.retain(|_, entry| entry.expires > now);
+            }
+        });
+    }
 
-    // Spawn background deadlock detector (parking_lot feature).
-    // Checks every 5 seconds; logs involved threads + backtraces on detection.
+    tracing::info!("[world] [ready] Login={}:{} Map={}:{}",
+        config.login_ip, config.login_port,
+        config.map_ip, config.map_port);
+
+    // ── Deadlock detector ─────────────────────────────────────────────
     std::thread::spawn(|| {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(5));
             let deadlocks = parking_lot::deadlock::check_deadlock();
-            if deadlocks.is_empty() {
-                continue;
-            }
-            tracing::error!("[map] [deadlock] {} deadlock(s) detected!", deadlocks.len());
+            if deadlocks.is_empty() { continue; }
+            tracing::error!("[world] [deadlock] {} deadlock(s) detected!", deadlocks.len());
             for (i, threads) in deadlocks.iter().enumerate() {
-                tracing::error!("[map] [deadlock] Deadlock #{}", i + 1);
+                tracing::error!("[world] [deadlock] Deadlock #{}", i + 1);
                 for t in threads {
-                    tracing::error!(
-                        "[map] [deadlock]   Thread {:?}:\n{:?}",
-                        t.thread_id(),
-                        t.backtrace()
-                    );
+                    tracing::error!("[world] [deadlock]   Thread {:?}:\n{:?}", t.thread_id(), t.backtrace());
                 }
             }
         }
     });
 
-    // Run the C session event loop. LocalSet is required for spawn_local (accept_loop,
-    // session_io_task). This drives client accept + I/O until shutdown is signalled.
-    //
-    // connect_to_char is spawned on the LocalSet (not tokio::spawn) because its
-    // intif_mmo_tosd → Lua login-event path touches the Lua state, which is
-    // single-threaded and must run on the same thread as the C event loop.
+    // ── LocalSet: kick drain + map session loop ───────────────────────
     let local = tokio::task::LocalSet::new();
+
+    // Kick request drain task
     {
-        let s = Arc::clone(&state);
+        let mut kick_rx = kick_rx;
         local.spawn_local(async move {
-            yuri::servers::map::char::connect_to_char(s).await;
+            while let Some(req) = kick_rx.recv().await {
+                // Find the session for this char_id and kick it
+                if let Some(arc) = yuri::game::map_server::map_id2sd_pc(req.char_id) {
+                    let fd = arc.read().fd;
+                    yuri::session::session_set_eof(fd, 12);
+                    tracing::info!("[world] [kick] char_id={} fd={:?} kicked (duplicate login)", req.char_id, fd);
+                }
+            }
         });
     }
-    local.run_until(yuri::session::run_async_server(state.config.map_port)).await
+
+    local.run_until(yuri::session::run_async_server(world.config.map_port)).await
         .map_err(|e| anyhow::anyhow!("session loop error: {}", e))?;
 
-    tracing::info!("[map] Shutting down...");
-    // Deregister the term callback before calling map_do_term() explicitly so
-    // a signal arriving after the session loop cannot fire it a second time.
+    tracing::info!("[world] Shutting down...");
     unsafe { set_termfunc(None); }
     unsafe { map_do_term(); }
     Ok(())

@@ -70,11 +70,6 @@ pub fn build_version_patch(nex_version: u16, patch_url: &str) -> Vec<u8> {
     buf
 }
 
-/// Builds the interserver accept/reject packet (3 bytes, LE cmd=0x1000).
-pub fn build_intif_auth_response(accepted: bool) -> Vec<u8> {
-    vec![0x00, 0x10, if accepted { 0x00 } else { 0x01 }]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,12 +86,6 @@ mod tests {
         let pkt = build_version_patch(100, "http://example.com");
         assert_eq!(pkt.len(), 47);
         assert_eq!(pkt[4], 0x02); // type field
-    }
-
-    #[test]
-    fn test_build_intif_auth_response() {
-        assert_eq!(build_intif_auth_response(true),  vec![0x00, 0x10, 0x00]);
-        assert_eq!(build_intif_auth_response(false), vec![0x00, 0x10, 0x01]);
     }
 
     #[test]

@@ -23,6 +23,8 @@ pub mod database;
 pub mod servers;
 /// Session management (replaces session.c)
 pub mod session;
+/// Shared world state for single-binary mode
+pub mod world;
 
 // ============================================
 // Game Logic Modules (Phase 3)

@@ -63,19 +63,12 @@ pub fn parse_lang_file(content: &str) -> Result<LoginMessages> {
     Ok(msgs)
 }
 
-/// Char server response routed back to a waiting client task.
-pub struct CharResponse {
-    pub session_id: u16,
-    pub data: Vec<u8>,
-}
-
 pub struct LoginState {
     pub db: Option<MySqlPool>,
     pub config: ServerConfig,
     pub messages: LoginMessages,
     pub lockout: Mutex<HashMap<u32, u32>>,  // ip → fail count
-    pub pending: Mutex<HashMap<u16, tokio::sync::mpsc::Sender<CharResponse>>>,
-    pub char_tx: Mutex<Option<tokio::sync::mpsc::Sender<Vec<u8>>>>,
+    pub world: Option<Arc<crate::world::WorldState>>,
 }
 
 impl LoginState {
@@ -85,8 +78,7 @@ impl LoginState {
             config,
             messages,
             lockout: Mutex::new(HashMap::new()),
-            pending: Mutex::new(HashMap::new()),
-            char_tx: Mutex::new(None),
+            world: None,
         }
     }
 
@@ -110,8 +102,7 @@ start_point:
             config,
             messages: LoginMessages::default(),
             lockout: Mutex::new(HashMap::new()),
-            pending: Mutex::new(HashMap::new()),
-            char_tx: Mutex::new(None),
+            world: None,
         }
     }
 
@@ -159,15 +150,10 @@ start_point:
             return;
         }
 
-        let cmd = first[3];
-        if cmd == 0xFF {
-            interserver::promote_to_charserver(state, stream, first).await;
-        } else {
-            // Use the OS socket fd as session_id, matching the C login server where
-            // session_id == the client's file descriptor (typically 4, 5, 6, ...).
-            let session_id = stream.as_raw_fd() as u16;
-            client::handle_client(state, stream, peer, session_id, first).await;
-        }
+        // Use the OS socket fd as session_id, matching the C login server where
+        // session_id == the client's file descriptor (typically 4, 5, 6, ...).
+        let session_id = stream.as_raw_fd() as u16;
+        client::handle_client(state, stream, peer, session_id, first).await;
     }
 
     pub async fn run(state: Arc<Self>, bind_addr: &str) -> anyhow::Result<()> {

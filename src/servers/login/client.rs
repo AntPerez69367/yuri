@@ -2,9 +2,8 @@ use std::sync::Arc;
 use std::net::SocketAddr;
 use tokio::net::TcpStream;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::mpsc;
 
-use super::{LoginState, CharResponse, LGN_ERRDB, LGN_ERRPASS, LGN_ERRUSER};
+use super::{LoginState, LGN_ERRPASS, LGN_ERRUSER};
 use super::packet::{read_client_packet, build_message, build_version_ok, build_version_patch};
 use crate::network::crypt::tk_crypt_static;
 
@@ -148,14 +147,15 @@ async fn dispatch_register(
     sd.name = name.clone();
     sd.pass = pass;
 
-    let mut msg = vec![0u8; 20];
-    msg[0] = 0x01; msg[1] = 0x10;
-    msg[2] = (session_id & 0xFF) as u8;
-    msg[3] = (session_id >> 8) as u8;
-    let nb = name.as_bytes();
-    msg[4..4 + nb.len().min(16)].copy_from_slice(&nb[..nb.len().min(16)]);
+    let pool = &state.world.as_ref().unwrap().db;
+    let used = crate::servers::char::db::is_name_used(pool, &name).await.unwrap_or(true);
+    if used {
+        let _ = stream.write_all(&build_message(0x03, &state.messages.0[super::LGN_USEREXIST], xk)).await;
+    } else {
+        let _ = stream.write_all(&build_message(0x00, "\x00", xk)).await;
+    }
 
-    forward_to_char(state, stream, msg, session_id, xk, &state.messages.0[LGN_ERRDB]).await;
+    let _ = session_id; // preserved for future logging
 }
 
 async fn dispatch_login(
@@ -212,19 +212,115 @@ async fn dispatch_login(
     sd.name = name.clone();
     sd.pass = pass.clone();
 
-    let mut msg = vec![0u8; 40];
-    msg[0] = 0x03; msg[1] = 0x10;
-    msg[2] = (session_id & 0xFF) as u8;
-    msg[3] = (session_id >> 8) as u8;
-    let nb = name.as_bytes();
-    msg[4..4 + nb.len().min(16)].copy_from_slice(&nb[..nb.len().min(16)]);
-    let pb = pass.as_bytes();
-    msg[20..20 + pb.len().min(16)].copy_from_slice(&pb[..pb.len().min(16)]);
-    if let std::net::IpAddr::V4(v4) = peer.ip() {
-        msg[36..40].copy_from_slice(&v4.octets());
+    dispatch_login_direct(stream, state, session_id, peer, &name, &pass).await;
+}
+
+async fn dispatch_login_direct(
+    stream: &mut TcpStream,
+    state: &LoginState,
+    session_id: u16,
+    peer: &SocketAddr,
+    name: &str,
+    pass: &str,
+) {
+    let world = state.world.as_ref().unwrap();
+    let xk = state.config.xor_key.as_bytes();
+    let pool = &world.db;
+
+    // Password verification (from char/login.rs:handle_login)
+    let stored_hash = match crate::servers::char::db::get_char_password(pool, name).await {
+        Ok(Some(h)) => h,
+        Ok(None) => {
+            let _ = stream.write_all(&build_message(0x03, &state.messages.0[super::LGN_WRONGUSER], xk)).await;
+            return;
+        }
+        Err(e) => {
+            tracing::error!("[login] [direct] db error: {}", e);
+            let _ = stream.write_all(&build_message(0x03, &state.messages.0[super::LGN_ERRDB], xk)).await;
+            return;
+        }
+    };
+
+    let (mast_ok, mast_hash) = match crate::servers::char::db::get_master_password(pool).await {
+        Ok(Some((mhash, exp))) => (crate::servers::char::db::ismastpass(pass, &mhash, exp).await, Some(mhash)),
+        _ => (false, None),
+    };
+
+    if !crate::servers::char::db::ispass(name, pass, &stored_hash).await && !mast_ok {
+        let _ = stream.write_all(&build_message(0x03, &state.messages.0[super::LGN_WRONGPASS], xk)).await;
+        return;
     }
 
-    forward_to_char(state, stream, msg, session_id, xk, &state.messages.0[LGN_ERRDB]).await;
+    // Bcrypt rehash (background, from char/login.rs:221-267)
+    if !mast_ok && crate::servers::char::db::is_legacy_hash(&stored_hash) {
+        let pool2 = pool.clone();
+        let pass2 = pass.to_owned();
+        let name2 = name.to_owned();
+        tokio::spawn(async move {
+            if let Ok(new_hash) = crate::servers::char::db::hash_password(&pass2).await {
+                let _ = sqlx::query("UPDATE `Character` SET `ChaPassword` = ? WHERE `ChaName` = ?")
+                    .bind(&new_hash).bind(&name2).execute(&pool2).await;
+            }
+        });
+    }
+    if mast_ok {
+        if let Some(mhash) = mast_hash {
+            if crate::servers::char::db::is_legacy_hash(&mhash) {
+                let pool2 = pool.clone();
+                let pass2 = pass.to_owned();
+                tokio::spawn(async move {
+                    if let Ok(new_hash) = crate::servers::char::db::hash_password(&pass2).await {
+                        let _ = sqlx::query("UPDATE `AdminPassword` SET `AdmPassword` = ? WHERE `AdmId` = 1")
+                            .bind(&new_hash).execute(&pool2).await;
+                    }
+                });
+            }
+        }
+    }
+
+    // Char lookup (from char/login.rs:269-273)
+    let char_info = match crate::servers::char::db::char_login_lookup(pool, name).await {
+        Ok(Some(c)) => c,
+        Ok(None) => {
+            let _ = stream.write_all(&build_message(0x03, &state.messages.0[super::LGN_WRONGUSER], xk)).await;
+            return;
+        }
+        Err(e) => {
+            tracing::error!("[login] [direct] lookup error: {}", e);
+            let _ = stream.write_all(&build_message(0x03, &state.messages.0[super::LGN_ERRDB], xk)).await;
+            return;
+        }
+    };
+
+    // Ban check (from char/login.rs:277-281)
+    if char_info.banned || crate::servers::char::db::is_account_banned(pool, char_info.char_id).await {
+        let _ = stream.write_all(&build_message(0x03, &state.messages.0[super::LGN_BANNED], xk)).await;
+        return;
+    }
+
+    // Duplicate login check (from char/login.rs:297-313)
+    if world.online.contains(&char_info.char_id) {
+        let _ = stream.write_all(&build_message(0x03, &state.messages.0[super::LGN_DBLLOGIN], xk)).await;
+        // Send kick request to LocalSet
+        let _ = world.kick_tx.send(crate::world::KickRequest { char_id: char_info.char_id }).await;
+        return;
+    }
+
+    // Insert auth token (replaces 0x3802 authadd)
+    let normalized_name = name.to_lowercase();
+    world.auth_db.insert(normalized_name, crate::world::AuthEntry {
+        account_id: 0, // not used in current flow
+        char_id: char_info.char_id,
+        char_name: name.to_string(),
+        client_ip: match peer.ip() {
+            std::net::IpAddr::V4(v4) => u32::from(v4),
+            _ => 0,
+        },
+        expires: std::time::Instant::now() + std::time::Duration::from_secs(30),
+    });
+
+    // Send auth success redirect to client (from interserver.rs:send_auth_success)
+    super::interserver::send_auth_success_direct(stream, &state.config, name, session_id).await;
 }
 
 async fn dispatch_create_char(
@@ -249,18 +345,23 @@ async fn dispatch_create_char(
         .subsec_nanos() % 2) as u8;
 
     let xk = state.config.xor_key.as_bytes();
-    let mut msg = vec![0u8; 43];
-    msg[0] = 0x02; msg[1] = 0x10;
-    msg[2] = (session_id & 0xFF) as u8;
-    msg[3] = (session_id >> 8) as u8;
-    let nb = sd.name.as_bytes();
-    msg[4..4 + nb.len().min(16)].copy_from_slice(&nb[..nb.len().min(16)]);
-    let pb = sd.pass.as_bytes();
-    msg[20..20 + pb.len().min(16)].copy_from_slice(&pb[..pb.len().min(16)]);
-    msg[36] = sd.face; msg[37] = sd.sex; msg[38] = sd.country;
-    msg[39] = sd.totem; msg[40] = sd.hair; msg[41] = sd.hair_color; msg[42] = sd.face_color;
 
-    forward_to_char(state, stream, msg, session_id, xk, &state.messages.0[LGN_ERRDB]).await;
+    let pool = &state.world.as_ref().unwrap().db;
+    let cfg = &state.config;
+    let res = crate::servers::char::db::create_char(
+        pool, &sd.name, &sd.pass,
+        sd.totem, sd.sex % 2, sd.country,
+        sd.face as u16, sd.hair as u16,
+        sd.face_color as u16, sd.hair_color as u16,
+        cfg.start_point.m as u32, cfg.start_point.x as u32, cfg.start_point.y as u32,
+    ).await;
+    if res == 0 {
+        let _ = stream.write_all(&build_message(0x00, &state.messages.0[super::LGN_NEWCHAR], xk)).await;
+    } else {
+        let _ = stream.write_all(&build_message(0x03, &state.messages.0[super::LGN_USEREXIST], xk)).await;
+    }
+
+    let _ = session_id; // preserved for future logging
 }
 
 async fn dispatch_change_pass(
@@ -291,86 +392,20 @@ async fn dispatch_change_pass(
 
     sd.name = name.to_string();
 
-    let mut msg = vec![0u8; 52];
-    msg[0] = 0x04; msg[1] = 0x10;
-    msg[2] = (session_id & 0xFF) as u8;
-    msg[3] = (session_id >> 8) as u8;
-    msg[4..4 + name_len.min(16)].copy_from_slice(&pkt[6..6 + name_len.min(16)]);
-    msg[20..20 + old_pass_len.min(16)].copy_from_slice(&pkt[old_off + 1..old_off + 1 + old_pass_len.min(16)]);
-    msg[36..36 + new_pass_len.min(16)].copy_from_slice(&pkt[new_off + 1..new_off + 1 + new_pass_len.min(16)]);
-
-    forward_to_char(state, stream, msg, session_id, xk, &state.messages.0[LGN_ERRDB]).await;
-}
-
-async fn forward_to_char(
-    state: &LoginState,
-    stream: &mut TcpStream,
-    msg: Vec<u8>,
-    session_id: u16,
-    xk: &[u8],
-    err_db_msg: &str,
-) {
-    // The char server relays a single response per request. For login (0x2003),
-    // the response arrives after the map server acks via mapif_parse_login and
-    // contains the map server IP:port for the client redirect.
-    let (tx, mut rx) = mpsc::channel::<CharResponse>(4);
-    {
-        let mut pending = state.pending.lock().await;
-        pending.insert(session_id, tx);
+    let pool = &state.world.as_ref().unwrap().db;
+    let old_pass = std::str::from_utf8(&pkt[old_off + 1..old_off + 1 + old_pass_len])
+        .unwrap_or("").trim_end_matches('\0');
+    let new_pass = std::str::from_utf8(&pkt[new_off + 1..new_off + 1 + new_pass_len])
+        .unwrap_or("").trim_end_matches('\0');
+    let res = crate::servers::char::db::set_char_password(pool, name, old_pass, new_pass).await;
+    match res {
+         0 => { let _ = stream.write_all(&build_message(0x00, &state.messages.0[super::LGN_CHGPASS], xk)).await; }
+        -2 => { let _ = stream.write_all(&build_message(0x03, &state.messages.0[super::LGN_WRONGUSER], xk)).await; }
+        -3 => { let _ = stream.write_all(&build_message(0x03, &state.messages.0[super::LGN_WRONGPASS], xk)).await; }
+         _ => { let _ = stream.write_all(&build_message(0x03, &state.messages.0[super::LGN_ERRDB], xk)).await; }
     }
 
-    let remove_pending = || async {
-        let mut pending = state.pending.lock().await;
-        pending.remove(&session_id);
-    };
-
-    tracing::debug!("[login] [forward_to_char] session={} msg_len={} cmd={:02X}{:02X} hex={:02X?}",
-        session_id, msg.len(), msg[0], msg[1], &msg[..msg.len().min(20)]);
-
-    let sent = {
-        let tx_guard = state.char_tx.lock().await;
-        let _has_char = tx_guard.is_some();
-        if let Some(tx) = &*tx_guard {
-            tx.send(msg).await.is_ok()
-        } else {
-            false
-        }
-    };
-
-    if !sent {
-        tracing::warn!("[login] [forward_to_char] session={} FAILED to send to char server", session_id);
-        let _ = stream.write_all(&build_message(0x03, err_db_msg, xk)).await;
-        remove_pending().await;
-        return;
-    }
-    tracing::debug!("[login] [forward_to_char] session={} sent OK, waiting for response...", session_id);
-
-    // Wait for the response (up to 10s).
-    let resp = match tokio::time::timeout(std::time::Duration::from_secs(10), rx.recv()).await {
-        Ok(Some(r)) => {
-            tracing::debug!("[login] [forward_to_char] session={} got response cmd={:04X} len={}",
-                session_id,
-                if r.data.len() >= 2 { u16::from_le_bytes([r.data[0], r.data[1]]) } else { 0 },
-                r.data.len());
-            r
-        }
-        Ok(None) => {
-            tracing::warn!("[login] [forward_to_char] session={} channel closed (no response)", session_id);
-            let _ = stream.write_all(&build_message(0x03, err_db_msg, xk)).await;
-            remove_pending().await;
-            return;
-        }
-        Err(_) => {
-            tracing::warn!("[login] [forward_to_char] session={} TIMEOUT waiting for char response", session_id);
-            let _ = stream.write_all(&build_message(0x03, err_db_msg, xk)).await;
-            remove_pending().await;
-            return;
-        }
-    };
-
-    super::interserver::dispatch_char_response(stream, state, &resp).await;
-
-    remove_pending().await;
+    let _ = session_id; // preserved for future logging
 }
 
 #[cfg(test)]
