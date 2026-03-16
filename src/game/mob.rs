@@ -260,10 +260,10 @@ unsafe fn broadcast_animation_to_pcs(mob: &MobSpawnData, anim: i32) {
     if let Some(grid) = block_grid::get_grid(m) {
         let slot = &*ffi_get_map_ptr(mob.bl.m);
         let ids = block_grid::ids_in_area(grid, mob.bl.x as i32, mob.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
-        let t = &mob.bl as *const BlockList as *mut BlockList;
+        let t = &mob.bl as *const BlockList;
         for id in ids {
             if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_sendanimation_inner(&mut sd_arc.write().bl, anim, t, -1);
+                clif_sendanimation_inner(&sd_arc.read().bl, anim, t, -1);
             }
         }
     }

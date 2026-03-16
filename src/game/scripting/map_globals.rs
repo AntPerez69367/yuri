@@ -383,8 +383,8 @@ pub unsafe fn sl_g_sendanimation(bl_ptr: *mut std::ffi::c_void, anim: i32, times
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(arc) = map_id2sd_pc(id) {
-                let pc = &mut *arc.write();
-                clif_sendanimation_inner(&mut pc.bl, anim, bl, times);
+                let pc = &*arc.read();
+                clif_sendanimation_inner(&pc.bl, anim, bl, times);
             }
         }
     }
@@ -409,8 +409,8 @@ pub unsafe fn sl_g_sendanimxy(
         let ids = block_grid::ids_in_area(grid, bx, by, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(arc) = map_id2sd_pc(id) {
-                let pc = &mut *arc.write();
-                clif_sendanimation_xy_inner(&mut pc.bl, anim, times, x, y);
+                let pc = &*arc.read();
+                clif_sendanimation_xy_inner(&pc.bl, anim, times, x, y);
             }
         }
     }
@@ -433,7 +433,7 @@ pub unsafe fn sl_g_repeatanimation(bl_ptr: *mut std::ffi::c_void, anim: i32, dur
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(pc_arc) = map_id2sd_pc(id) {
-                clif_sendanimation_inner(&mut pc_arc.write().bl, anim, bl, wire_dur);
+                clif_sendanimation_inner(&pc_arc.read().bl, anim, bl, wire_dur);
             }
         }
     }
@@ -457,8 +457,8 @@ pub unsafe fn sl_g_selfanimation(
         let cell_ids = grid.ids_at_tile(tx as u16, ty as u16);
         for id in cell_ids {
             if let Some(arc) = map_id2sd_pc(id) {
-                let pc = &mut *arc.write();
-                clif_sendanimation_inner(&mut pc.bl, anim, bl, times);
+                let pc = &*arc.read();
+                clif_sendanimation_inner(&pc.bl, anim, bl, times);
             }
         }
     }
@@ -482,8 +482,8 @@ pub unsafe fn sl_g_selfanimationxy(
         let cell_ids = grid.ids_at_tile(sx as u16, sy as u16);
         for id in cell_ids {
             if let Some(arc) = map_id2sd_pc(id) {
-                let pc = &mut *arc.write();
-                clif_sendanimation_xy_inner(&mut pc.bl, anim, times, x, y);
+                let pc = &*arc.read();
+                clif_sendanimation_xy_inner(&pc.bl, anim, times, x, y);
             }
         }
     }

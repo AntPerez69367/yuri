@@ -416,8 +416,8 @@ pub fn clif_send_groupbars(sd: &mut MapSessionData, tsd: &mut MapSessionData) {
 /// *mut BlockList. The BlockList is embedded as the first field of MobSpawnData /
 /// MapSessionData, so casting bl to the entity type is valid. The &mut BlockList
 /// parameter is used at the boundary; the internal cast is confined to this unsafe block.
-pub fn clif_send_mobbars_inner(bl: &mut BlockList, sd: &mut MapSessionData) -> i32 {
-    let mob = bl as *mut BlockList as *mut MobSpawnData;
+pub fn clif_send_mobbars_inner(bl: &BlockList, sd: &MapSessionData) -> i32 {
+    let mob = bl as *const BlockList as *const MobSpawnData;
 
     unsafe {
         if (*mob).current_vita == 0 && (*mob).maxvita == 0 { return 1; }
@@ -764,13 +764,13 @@ pub fn clif_send_mob_health_sub_inner(
 /// MapSessionData, so casting bl to the entity type is valid. The &mut BlockList
 /// parameter is used at the boundary; the internal cast is confined to this unsafe block.
 pub fn clif_send_mob_health_sub_nosd_inner(
-    bl: &mut BlockList,
-    mob: &mut MobSpawnData,
+    bl: &BlockList,
+    mob: &MobSpawnData,
     critical: i32,
     percentage: i32,
     damage: i32,
 ) -> i32 {
-    let sd = bl as *mut BlockList as *mut MapSessionData;
+    let sd = bl as *const BlockList as *const MapSessionData;
 
     unsafe {
         if !session_exists((*sd).fd) {
@@ -919,8 +919,8 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
                 let ids = block_grid::ids_in_area(grid, mob.bl.x as i32, mob.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
                 for id in ids {
                     if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                        let mut pc = pc_arc.write();
-                        clif_send_mob_health_sub_nosd_inner(&mut pc.bl, mob, critical, pct_int, damage);
+                        let pc = pc_arc.read();
+                        clif_send_mob_health_sub_nosd_inner(&pc.bl, mob, critical, pct_int, damage);
                     }
                 }
             }
@@ -1086,8 +1086,8 @@ pub async fn clif_mob_kill(mob: &mut MobSpawnData) -> i32 {
             let ids = block_grid::ids_in_area(grid, mob.bl.x as i32, mob.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    let mut pc = pc_arc.write();
-                    clif_send_destroy_inner(&mut pc.bl, mob_ptr);
+                    let pc = pc_arc.read();
+                    clif_send_destroy_inner(&pc.bl, mob_ptr);
                 }
             }
         }
@@ -1107,8 +1107,8 @@ pub async fn clif_mob_kill(mob: &mut MobSpawnData) -> i32 {
 /// borrow checker cannot simultaneously allow `&mut *mob` in the closure AND
 /// use `mob.bl.m/x/y` as the area arguments to `foreach_in_area` in the same
 /// expression — both would require a mutable borrow of `mob`.
-pub fn clif_send_destroy_inner(bl: &mut BlockList, mob: *mut MobSpawnData) -> i32 {
-    let sd = bl as *mut BlockList as *mut MapSessionData;
+pub fn clif_send_destroy_inner(bl: &BlockList, mob: *const MobSpawnData) -> i32 {
+    let sd = bl as *const BlockList as *const MapSessionData;
 
     unsafe {
         if !session_exists((*sd).fd) {
@@ -1398,8 +1398,8 @@ pub fn clif_sendmob_action(mob: &mut MobSpawnData, action_type: i32, time: i32, 
 /// *mut BlockList. The BlockList is embedded as the first field of MobSpawnData /
 /// MapSessionData, so casting bl to the entity type is valid. The &mut BlockList
 /// parameter is used at the boundary; the internal cast is confined to this unsafe block.
-pub fn clif_sendanimation_xy_inner(bl: &mut BlockList, anim: i32, times: i32, x: i32, y: i32) -> i32 {
-    let src = bl as *mut BlockList as *mut MapSessionData;
+pub fn clif_sendanimation_xy_inner(bl: &BlockList, anim: i32, times: i32, x: i32, y: i32) -> i32 {
+    let src = bl as *const BlockList as *const MapSessionData;
 
     unsafe {
         if !session_exists((*src).fd) {
@@ -1434,8 +1434,8 @@ pub fn clif_sendanimation_xy_inner(bl: &mut BlockList, anim: i32, times: i32, x:
 /// *mut BlockList. The BlockList is embedded as the first field of MobSpawnData /
 /// MapSessionData, so casting bl to the entity type is valid. The &mut BlockList
 /// parameter is used at the boundary; the internal cast is confined to this unsafe block.
-pub fn clif_sendanimation_inner(bl: &mut BlockList, anim: i32, t: *mut BlockList, times: i32) -> i32 {
-    let sd = bl as *mut BlockList as *mut MapSessionData;
+pub fn clif_sendanimation_inner(bl: &BlockList, anim: i32, t: *const BlockList, times: i32) -> i32 {
+    let sd = bl as *const BlockList as *const MapSessionData;
 
     if t.is_null() { return 0; }
 

@@ -639,7 +639,7 @@ pub unsafe fn pc_afktimer(id: i32, _none: i32) -> i32 {
             let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_sendanimation_inner(&mut tsd_arc.write().bl, 324, sd_bl, 0);
+                    clif_sendanimation_inner(&tsd_arc.read().bl, 324, sd_bl, 0);
                 }
             }
         }
@@ -663,7 +663,7 @@ pub unsafe fn pc_afktimer(id: i32, _none: i32) -> i32 {
                 let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
                 for id in ids {
                     if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                        clif_sendanimation_inner(&mut tsd_arc.write().bl, 324, sd_bl, 0);
+                        clif_sendanimation_inner(&tsd_arc.read().bl, 324, sd_bl, 0);
                     }
                 }
             }
@@ -796,7 +796,7 @@ pub unsafe fn bl_duratimer(id: i32, _none: i32) -> i32 {
                             let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
                             for id in ids {
                                 if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                                    clif_sendanimation_inner(&mut tsd_arc.write().bl, anim, sd_bl, -1);
+                                    clif_sendanimation_inner(&tsd_arc.read().bl, anim, sd_bl, -1);
                                 }
                             }
                         }
@@ -1133,8 +1133,8 @@ pub unsafe fn pc_scripttimer(id: i32, _none: i32) -> i32 {
             let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(id) {
-                    let mut mob = mob_arc.write();
-                    clif_send_mobbars_inner(&mut mob.bl, &mut *sd);
+                    let mob = mob_arc.read();
+                    clif_send_mobbars_inner(&mob.bl, &*sd);
                 }
             }
         }
@@ -3743,7 +3743,7 @@ pub unsafe fn pc_diescript(sd: *mut MapSessionData) -> i32 {
                 let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
                 for id in ids {
                     if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                        clif_sendanimation_inner(&mut tsd_arc.write().bl, anim, sd_bl, -1);
+                        clif_sendanimation_inner(&tsd_arc.read().bl, anim, sd_bl, -1);
                     }
                 }
             }

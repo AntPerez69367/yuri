@@ -414,8 +414,8 @@ fn command_spell(sd: &mut MapSessionData, line: &str) -> i32 {
         let ids = block_grid::ids_in_area(grid, sd.bl.x as i32, sd.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                let mut pc = arc.write();
-                clif_sendanimation_inner(&mut pc.bl, anim, sd_bl, times);
+                let pc = arc.read();
+                clif_sendanimation_inner(&pc.bl, anim, sd_bl, times);
             }
         }
     }
@@ -1080,8 +1080,8 @@ fn command_nspell(sd: &mut MapSessionData, _line: &str) -> i32 {
         let ids = block_grid::ids_in_area(grid, sd.bl.x as i32, sd.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                let mut pc = arc.write();
-                clif_sendanimation_inner(&mut pc.bl, anim, sd_bl, times);
+                let pc = arc.read();
+                clif_sendanimation_inner(&pc.bl, anim, sd_bl, times);
             }
         }
     }
@@ -1099,8 +1099,8 @@ fn command_pspell(sd: &mut MapSessionData, _line: &str) -> i32 {
         let ids = block_grid::ids_in_area(grid, sd.bl.x as i32, sd.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                let mut pc = arc.write();
-                clif_sendanimation_inner(&mut pc.bl, anim, sd_bl, times);
+                let pc = arc.read();
+                clif_sendanimation_inner(&pc.bl, anim, sd_bl, times);
             }
         }
     }
