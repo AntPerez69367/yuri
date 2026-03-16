@@ -9,10 +9,12 @@ use parking_lot::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::database::get_pool;
+use crate::database::{blocking_run_async, boards as db_boards};
 use crate::game::pc::{
-    MapSessionData,
+    MapSessionData, FLAG_MAIL,
     U_FLAG_UNPHYSICAL,
 };
+use crate::servers::map::packet::ClientPacket;
 
 use crate::database::map_db::BlockList;
 
@@ -739,43 +741,6 @@ pub async unsafe fn map_addmob(
 const BOARD_CAN_WRITE: i32 = 1;
 const BOARD_CAN_DEL:   i32 = 2;
 
-// ---------------------------------------------------------------------------
-// Board / N-Mail inter-server struct layouts
-//
-// Only used to build inter-server packets memcpy'd into the WFIFO buffer.
-// ---------------------------------------------------------------------------
-
-/// inter-server packet body for 0x3009.
-#[repr(C)]
-struct BoardShow0 {
-    fd:     i32,
-    board:  i32,
-    bcount: i32,
-    flags:  i32,
-    popup:  i8,
-    name:   [i8; 16],
-}
-
-/// inter-server packet body for 0x300A.
-#[repr(C)]
-struct BoardsReadPost0 {
-    name:   [i8; 16],
-    fd:     i32,
-    post:   i32,
-    board:  i32,
-    flags:  i32,
-}
-
-/// inter-server packet body for 0x300C.
-#[repr(C)]
-struct BoardsPost0 {
-    fd:    i32,
-    board: i32,
-    nval:  i32,
-    name:  [i8; 16],
-    topic: [i8; 53],
-    post:  [i8; 4001],
-}
 
 // ---------------------------------------------------------------------------
 // nmail_sendmessage — sends a notification message packet to the player's fd.
@@ -849,28 +814,29 @@ pub unsafe fn boards_delete(sd: *mut MapSessionData, board: i32) -> i32 {
         u16::from_be(p.read_unaligned()) as i32
     };
 
-    // Packet 0x3008 is 28 bytes:
-    //   [0..1]   = 0x3008 (opcode, LE)
-    //   [2..3]   = sd->fd
-    //   [4..5]   = gm_level
-    //   [6..7]   = board_candel
-    //   [8..9]   = board
-    //   [10..11] = post
-    //   [12..27] = name (16 bytes)
-    let mut pkt = vec![0u8; 28];
-    pkt[0..2].copy_from_slice(&0x3008u16.to_le_bytes());
-    pkt[2..4].copy_from_slice(&((*sd).fd.raw() as u16).to_le_bytes());
-    pkt[4..6].copy_from_slice(&((*sd).player.identity.gm_level as u8 as u16).to_le_bytes());
-    pkt[6..8].copy_from_slice(&((*sd).board_candel as u16).to_le_bytes());
-    pkt[8..10].copy_from_slice(&(board as u16).to_le_bytes());
-    pkt[10..12].copy_from_slice(&(post as u16).to_le_bytes());
-    {
-        let name = (*sd).player.identity.name.as_bytes();
-        let n = name.len().min(15);
-        std::ptr::copy_nonoverlapping(name.as_ptr(), pkt[12..].as_mut_ptr(), n);
-        // remaining bytes stay zero from vec![0u8; 28]
-    }
-    crate::game::map_char::send(pkt);
+    let name = (*sd).player.identity.name.clone();
+    let gm_level = (*sd).player.identity.gm_level as u16;
+    let can_delete = (*sd).board_candel as u16;
+
+    let result = blocking_run_async(async move {
+        db_boards::delete_post(
+            get_pool(),
+            board as u16,
+            post as u16,
+            &name,
+            gm_level,
+            can_delete,
+        ).await
+    });
+
+    // Format client response (matches 0x3808 handler).
+    // other=7 tells the client to refresh the board after delete.
+    let (msg, r#type) = match result {
+        0 => (c"The message has been deleted.", 1),
+        1 => (c"You can only delete your own messages.", 0),
+        _ => (c"Something went wrong. Please try again later.", 0),
+    };
+    nmail_sendmessage(sd, msg.as_ptr(), 7, r#type);
     0
 }
 
@@ -920,30 +886,62 @@ pub unsafe fn boards_showposts(
         flags |= BOARD_CAN_DEL;
     }
 
-    // Packet 0x3009: opcode(2) + BoardShow0 struct as raw bytes
-    let struct_size = std::mem::size_of::<BoardShow0>();
-    let mut pkt = vec![0u8; 2 + struct_size];
-    pkt[0..2].copy_from_slice(&0x3009u16.to_le_bytes());
-    let mut a = BoardShow0 {
-        fd:     (*sd).fd.raw(),
-        board,
-        bcount: (*sd).bcount,
-        flags,
-        popup:  (*sd).board_popup as i8,
-        name:   [0i8; 16],
+    let fd = (*sd).fd;
+    let name = (*sd).player.identity.name.clone();
+    let bcount = (*sd).bcount as u32;
+    let popup = (*sd).board_popup as u8;
+
+    // Query DB directly instead of sending 0x3009 to char server.
+    let rows = blocking_run_async(async move {
+        db_boards::list_posts(get_pool(), board as u32, bcount as u32 * 20, &name).await
+    });
+
+    tracing::debug!("[map] [boards] showposts: board={} flags={} rows={}", board, flags, rows.len());
+
+    // Compute flags1/flags2 (matches char server's 0x3009 handler).
+    let flags1: u8 = if popup != 0 && board != 0 {
+        if flags == 6 { 6 } else if flags & BOARD_CAN_WRITE == 0 { 0 } else { 2 }
+    } else {
+        if flags == 6 { 6 } else if flags & BOARD_CAN_WRITE == 0 { 1 } else { 3 }
     };
-    {
-        let name = (*sd).player.identity.name.as_bytes();
-        let n = name.len().min(15);
-        std::ptr::copy_nonoverlapping(name.as_ptr() as *const i8, a.name.as_mut_ptr(), n);
+    let flags2: u8 = if board == 0 { 4 } else { 2 };
+
+    let board_display_name = board_db::board_name(board);
+
+    let mut pkt_out = ClientPacket::board(flags2);
+    pkt_out.put_u8(flags1);
+    pkt_out.put_u16_be(board as u16);
+    pkt_out.put_str(&board_display_name);
+
+    if rows.is_empty() {
+        pkt_out.put_u8(0);
+    } else {
+        pkt_out.put_u8(rows.len() as u8);
+
+        for row in &rows {
+            pkt_out.put_u8(row.color as u8);
+            pkt_out.put_u16_be(row.post_id as u16);
+
+            // Compose user string: "{bn_name} {user}" for boards, just "{user}" for nmail.
+            let composed_user = if board != 0 && row.board_name != 0 {
+                let bn = board_db::bn_name(row.board_name as i32);
+                format!("{} {}", bn, row.user)
+            } else {
+                row.user.clone()
+            };
+            pkt_out.put_str(&composed_user);
+
+            pkt_out.put_u8(row.month as u8);
+            pkt_out.put_u8(row.day as u8);
+            pkt_out.put_str(&row.topic);
+        }
     }
-    std::ptr::copy_nonoverlapping(
-        std::ptr::addr_of!(a) as *const u8,
-        pkt[2..].as_mut_ptr(),
-        struct_size,
-    );
-    tracing::debug!("[map] [boards] showposts: sending 0x3009 board={} flags={} pkt_size={}", board, flags, pkt.len());
-    crate::game::map_char::send(pkt);
+
+    tracing::debug!("[map] [boards] showposts: sending client packet fd={} buf_len={}", fd, pkt_out.buf.len());
+    pkt_out.send(fd);
+
+    // Advance pagination counter.
+    (*sd).bcount += 1;
     0
 }
 
@@ -976,28 +974,49 @@ pub unsafe fn boards_readpost(
     if (*sd).board_canwrite != 0 { flags |= BOARD_CAN_WRITE; }
     if (*sd).board_candel   != 0 { flags |= BOARD_CAN_DEL;   }
 
-    let mut header = BoardsReadPost0 {
-        name:  [0i8; 16],
-        fd:    (*sd).fd.raw(),
-        post,
-        board,
-        flags,
+    let fd = (*sd).fd;
+    let name = (*sd).player.identity.name.clone();
+
+    // Query DB directly instead of sending 0x300A to char server.
+    let content = blocking_run_async(async move {
+        db_boards::read_post(get_pool(), board as u32, post as u32, &name).await
+    });
+
+    let Some(content) = content else {
+        return 0;
     };
-    {
-        let name = (*sd).player.identity.name.as_bytes();
-        let n = name.len().min(15);
-        std::ptr::copy_nonoverlapping(name.as_ptr() as *const i8, header.name.as_mut_ptr(), n);
+
+    // Mark mail as read and potentially clear mail flag (matches char server 0x300A handler).
+    if board == 0 {
+        let name2 = (*sd).player.identity.name.clone();
+        let post_id = content.post_id;
+        let clear_flag = blocking_run_async(async move {
+            db_boards::mark_mail_read(get_pool(), post_id, &name2).await
+        });
+        if clear_flag {
+            (*sd).flags &= !FLAG_MAIL;
+        }
     }
 
-    let struct_size = std::mem::size_of::<BoardsReadPost0>();
-    let mut pkt = vec![0u8; 2 + struct_size];
-    pkt[0..2].copy_from_slice(&0x300Au16.to_le_bytes());
-    std::ptr::copy_nonoverlapping(
-        std::ptr::addr_of!(header) as *const u8,
-        pkt[2..].as_mut_ptr(),
-        struct_size,
-    );
-    crate::game::map_char::send(pkt);
+    // Build client response (matches 0x380F handler in packet.rs).
+    // post_type and buttons are computed by the char server's 0x300A handler:
+    let post_type: u8 = if board == 0 { 5 } else { 3 };
+    let buttons: u8 = if board == 0 || (flags & BOARD_CAN_WRITE) != 0 { 3 } else { 1 };
+
+    let mut pkt_out = ClientPacket::board(post_type);
+    // Overwrite [4] — C code does NOT set [4]=3 for readpost.
+    pkt_out.buf[4] = 0;
+    pkt_out.put_u8(buttons);
+    pkt_out.put_u8(if board == 0 { 1 } else { 0 });
+    pkt_out.put_u16_be(content.post_id as u16);
+    pkt_out.put_str(&content.user);
+    pkt_out.put_u8(content.month as u8);
+    pkt_out.put_u8(content.day as u8);
+    pkt_out.put_str(&content.topic);
+    pkt_out.put_str_u16_be(&content.body);
+
+    tracing::debug!("[map] [boards] readpost: sending client packet fd={} buf_len={}", fd, pkt_out.buf.len());
+    pkt_out.send(fd);
     0
 }
 
@@ -1059,43 +1078,47 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
         return 0;
     }
 
-    let mut header = BoardsPost0 {
-        fd: (*sd).fd.raw(),
-        board,
-        nval: (*sd).boardnameval as i32,
-        name:  [0i8; 16],
-        topic: [0i8; 53],
-        post:  [0i8; 4001],
-    };
-    {
-        let name = (*sd).player.identity.name.as_bytes();
-        let n = name.len().min(15);
-        std::ptr::copy_nonoverlapping(name.as_ptr() as *const i8, header.name.as_mut_ptr(), n);
-    }
+    // Extract topic and post body from the recv buffer.
+    let mut topic_buf = [0u8; 53];
+    let mut post_buf = [0u8; 4001];
     std::ptr::copy_nonoverlapping(
-        rfifop(fd, 9) as *const i8,
-        header.topic.as_mut_ptr(),
+        rfifop(fd, 9),
+        topic_buf.as_mut_ptr(),
         topiclen,
     );
     std::ptr::copy_nonoverlapping(
-        rfifop(fd, topiclen + 11) as *const i8,
-        header.post.as_mut_ptr(),
+        rfifop(fd, topiclen + 11),
+        post_buf.as_mut_ptr(),
         postlen,
     );
 
+    let name = (*sd).player.identity.name.clone();
+    let mut nval = (*sd).boardnameval as i32;
     if (*sd).player.identity.gm_level != 0 {
-        header.nval = 1;
+        nval = 1;
     }
 
-    let struct_size = std::mem::size_of::<BoardsPost0>();
-    let mut pkt = vec![0u8; 2 + struct_size];
-    pkt[0..2].copy_from_slice(&0x300Cu16.to_le_bytes());
-    std::ptr::copy_nonoverlapping(
-        std::ptr::addr_of!(header) as *const u8,
-        pkt[2..].as_mut_ptr(),
-        struct_size,
-    );
-    crate::game::map_char::send(pkt);
+    let topic_str = std::str::from_utf8(&topic_buf[..topiclen]).unwrap_or("").to_owned();
+    let post_str = std::str::from_utf8(&post_buf[..postlen]).unwrap_or("").to_owned();
+
+    // Call DB directly instead of sending 0x300C to char server.
+    let result = blocking_run_async(async move {
+        db_boards::create_board_post(
+            get_pool(),
+            board as u32,
+            nval,
+            &name,
+            &topic_str,
+            &post_str,
+        ).await
+    });
+
+    // Format client response (matches 0x380B handler).
+    let (msg, r#type) = match result {
+        0 => (c"Your message has been posted.", 1),
+        _ => (c"Something went wrong. Please try again later.", 0),
+    };
+    nmail_sendmessage(sd, msg.as_ptr(), 6, r#type);
     0
 }
 
@@ -1256,20 +1279,16 @@ pub unsafe fn nmail_sendmailcopy(
         return 0;
     }
 
-    const PKT_LEN: usize = 4124;
-    let mut pkt = vec![0u8; PKT_LEN];
-    pkt[0..2].copy_from_slice(&0x300Fu16.to_le_bytes());
-    pkt[2..4].copy_from_slice(&((*sd).fd.raw() as u16).to_le_bytes());
-    {
-        let name = (*sd).player.identity.name.as_bytes();
-        let n = name.len().min(15);
-        std::ptr::copy_nonoverlapping(name.as_ptr(), pkt[4..].as_mut_ptr(), n);
-        // remaining bytes stay zero from vec![0u8; PKT_LEN]
-    }
-    std::ptr::copy_nonoverlapping(to_user as *const u8, pkt[20..].as_mut_ptr(), 16);
-    std::ptr::copy_nonoverlapping(topic   as *const u8, pkt[72..].as_mut_ptr(), 52);
-    std::ptr::copy_nonoverlapping(message as *const u8, pkt[124..].as_mut_ptr(), 4000);
-    crate::game::map_char::send(pkt);
+    let from = (*sd).player.identity.name.clone();
+    let to_str = std::ffi::CStr::from_ptr(to_user).to_string_lossy().into_owned();
+    let topic_str = std::ffi::CStr::from_ptr(topic).to_string_lossy().into_owned();
+    let msg_str = std::ffi::CStr::from_ptr(message).to_string_lossy().into_owned();
+
+    // Call DB directly instead of sending 0x300F to char server.
+    // No client response for copy-to-self mail.
+    blocking_run_async(async move {
+        let _ = db_boards::nmail_insert(get_pool(), &from, &to_str, &topic_str, &msg_str).await;
+    });
     0
 }
 
@@ -1461,20 +1480,23 @@ pub unsafe fn nmail_sendmail(
         return 0;
     }
 
-    const PKT_LEN: usize = 4124;
-    let mut pkt = vec![0u8; PKT_LEN];
-    pkt[0..2].copy_from_slice(&0x300Du16.to_le_bytes());
-    pkt[2..4].copy_from_slice(&((*sd).fd.raw() as u16).to_le_bytes());
-    {
-        let name = (*sd).player.identity.name.as_bytes();
-        let n = name.len().min(15);
-        std::ptr::copy_nonoverlapping(name.as_ptr(), pkt[4..].as_mut_ptr(), n);
-        // remaining bytes stay zero from vec![0u8; PKT_LEN]
-    }
-    std::ptr::copy_nonoverlapping(to_user as *const u8, pkt[20..].as_mut_ptr(), 16);
-    std::ptr::copy_nonoverlapping(topic   as *const u8, pkt[72..].as_mut_ptr(), 52);
-    std::ptr::copy_nonoverlapping(message as *const u8, pkt[124..].as_mut_ptr(), 4000);
-    crate::game::map_char::send(pkt);
+    let from = (*sd).player.identity.name.clone();
+    let to_str = std::ffi::CStr::from_ptr(to_user).to_string_lossy().into_owned();
+    let topic_str = std::ffi::CStr::from_ptr(topic).to_string_lossy().into_owned();
+    let msg_str = std::ffi::CStr::from_ptr(message).to_string_lossy().into_owned();
+
+    // Call DB directly instead of sending 0x300D to char server.
+    let result = blocking_run_async(async move {
+        db_boards::nmail_insert(get_pool(), &from, &to_str, &topic_str, &msg_str).await
+    });
+
+    // Format client response (matches 0x380C handler).
+    let (msg, r#type) = match result {
+        0 => (c"Your message has been sent.", 1),
+        2 => (c"User does not exist.", 0),
+        _ => (c"Something went wrong. Please try again later.", 0),
+    };
+    nmail_sendmessage(sd, msg.as_ptr(), 6, r#type);
     0
 }
 

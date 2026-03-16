@@ -871,12 +871,7 @@ pub unsafe fn clif_show_ghost(
 /// Sends a user-list notification to the char server for this player.
 ///
 ///
-/// Sends a 4-byte little-endian packet to `char_fd`:
-/// ```text
-/// [0x0B][0x30][fd_lo][fd_hi]
-/// ```
-/// Opcode 0x300B, then `sd->fd` as LE u16. Internal server-to-server packets
-/// use no SWAP16, so fields are little-endian.
+/// Queries the DB for online heroes and sends a user-list packet to the client.
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
@@ -892,10 +887,69 @@ pub unsafe fn clif_user_list(
         return 0;
     }
 
-    let mut pkt = Vec::with_capacity(4);
-    pkt.extend_from_slice(&0x300Bu16.to_le_bytes());
-    pkt.extend_from_slice(&(sdr.fd.raw() as u16).to_le_bytes());
-    crate::game::map_char::send(pkt);
+    let fd = sdr.fd;
+    let sd_clan = sdr.player.social.clan as i32;
+
+    // Query DB directly instead of sending 0x300B to char server.
+    let heroes = crate::database::blocking_run_async(async {
+        crate::database::boards::list_online_heroes(crate::database::get_pool()).await
+    });
+
+    let count = heroes.len();
+
+    // Build client packet (matches 0x380A handler in packet.rs).
+    // [0]=0xAA, [1..2]=len(BE), [3]=0x36, [4]=0,
+    // [5..6]=total(u16 BE), [7..8]=server(u16 BE), [9]=1,
+    // then per entry: path_nation(1)+mark_icon(1)+hunter(1)+color(1)+name(len-prefixed)
+    let mut buf = vec![0xAAu8, 0, 0, 0x36, 0];
+    buf.extend_from_slice(&(count as u16).to_be_bytes());
+    buf.extend_from_slice(&(count as u16).to_be_bytes());
+    buf.push(1);
+
+    for hero in &heroes {
+        let class = hero.class as i32;
+        let mark = hero.mark as i32;
+        let clan = hero.clan as i32;
+        let hunter = hero.hunter as i32;
+        let nation = hero.nation as i32;
+
+        let path = if class > 4 { crate::database::class_db::path(class) } else { class };
+        let icon = crate::database::class_db::icon(class);
+
+        buf.push((path + 16 * nation) as u8);
+        buf.push((16 * mark + icon) as u8);
+        buf.push(hunter as u8);
+
+        let color = if crate::database::class_db::path(class) == 5 {
+            47
+        } else if sd_clan != 0 && sd_clan == clan {
+            63
+        } else {
+            143
+        };
+        buf.push(color);
+
+        let name_bytes = hero.name.as_bytes();
+        buf.push(name_bytes.len() as u8);
+        buf.extend_from_slice(name_bytes);
+    }
+
+    // Write length at [1..2] (BE) — counts bytes from [3] onward.
+    let len = (buf.len() - 3) as u16;
+    buf[1] = (len >> 8) as u8;
+    buf[2] = (len & 0xFF) as u8;
+
+    // Send via encrypt
+    wfifohead(fd, buf.len() + 64);
+    let p = wfifop(fd, 0);
+    if p.is_null() { return 0; }
+    std::ptr::copy_nonoverlapping(buf.as_ptr(), p, buf.len());
+    let enc_len = encrypt(fd);
+    if enc_len <= 0 {
+        tracing::warn!("[map] [packet] clif_user_list encrypt failed fd={}", fd);
+        return 0;
+    }
+    wfifoset(fd, enc_len as usize);
     0
 }
 

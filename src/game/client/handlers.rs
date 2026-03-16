@@ -674,7 +674,7 @@ pub unsafe fn clif_Hacker(name: *mut i8, reason: *const i8) -> i32 {
     0
 }
 
-/// Accept a character-load request; look up ChaId by name, then call intif_load.
+/// Accept a character-load request; look up auth token, load player, install session.
 pub async unsafe fn clif_accept2(
     fd: SessionId, name: *mut i8, name_len: i32,
 ) -> i32 {
@@ -690,16 +690,44 @@ pub async unsafe fn clif_accept2(
     std::ptr::copy_nonoverlapping(name as *const u8, n.as_mut_ptr(), name_len as usize);
     let name_str = CStr::from_ptr(n.as_ptr() as *const i8)
         .to_str().unwrap_or("").to_owned();
-    let id: u32 = sqlx::query_scalar::<_, u32>(
-        "SELECT `ChaId` FROM `Character` WHERE `ChaName` = ?"
-    )
-    .bind(name_str)
-    .fetch_optional(get_pool())
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or(0);
-    crate::game::map_char::intif_load(fd.raw(), id, n.as_ptr() as *const i8);
+
+    let world = match crate::world::get_world() {
+        Some(w) => w,
+        None => {
+            tracing::error!("[map] [accept2] WorldState not available");
+            session_set_eof(fd, 11);
+            return 0;
+        }
+    };
+
+    let normalized = name_str.to_lowercase();
+    let entry = match world.auth_db.remove(&normalized) {
+        Some((_, e)) => e,
+        None => {
+            tracing::warn!("[map] [accept2] auth_db miss: name={}", name_str);
+            session_set_eof(fd, 11);
+            return 0;
+        }
+    };
+
+    let char_id = entry.char_id;
+    tracing::info!("[map] [accept2] auth_db hit: name={} char_id={}", name_str, char_id);
+
+    // Load player directly from DB — no inter-server roundtrip.
+    let player = match crate::servers::char::db::load_player(
+        &world.db, char_id, &name_str
+    ).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("[map] [accept2] load_player failed: {}", e);
+            session_set_eof(fd, 7);
+            return 0;
+        }
+    };
+
+    // Install player session (runs on LocalSet — safe for Lua)
+    crate::game::map_char::intif_install_player(fd.raw(), player);
+    world.online.insert(char_id);
     0
 }
 

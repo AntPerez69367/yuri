@@ -19,10 +19,7 @@ const UFLAG_SILENCED: u64 = 1;
 const UFLAG_IMMORTAL: u64 = 8;
 const UFLAG_UNPHYS:   u64 = 16;
 
-const MAX_MAP_PER_SERVER: i32 = 65535;
-
 use crate::config_globals::{XP_RATE, D_RATE};
-use crate::database::map_db::map_n;
 use crate::game::mob::{MOB_SPAWN_START, MOB_SPAWN_MAX, MOB_ONETIME_START, MOB_ONETIME_MAX};
 
 use crate::game::map_server::userlist;
@@ -1133,24 +1130,6 @@ fn command_reloadnpc(sd: &mut MapSessionData, _line: &str) -> i32 {
 
 fn command_reloadmaps(sd: &mut MapSessionData, _line: &str) -> i32 {
     unsafe { map_reload(); }
-    let map_n_val = map_n.load(Ordering::Relaxed) as usize;
-    let pkt_len = map_n_val * 2 + 8;
-    let mut pkt = vec![0u8; pkt_len];
-    pkt[0..2].copy_from_slice(&0x3001u16.to_le_bytes());
-    pkt[2..6].copy_from_slice(&(pkt_len as u32).to_le_bytes());
-    pkt[6..8].copy_from_slice(&(map_n_val as u16).to_le_bytes());
-    let mut j: usize = 0;
-    for i in 0..MAX_MAP_PER_SERVER {
-        unsafe {
-            let mp = crate::database::map_db::get_map_ptr(i as u16);
-            if !mp.is_null() && !(*mp).tile.is_null() {
-                pkt[j * 2 + 8..j * 2 + 10].copy_from_slice(&(i as u16).to_le_bytes());
-                j += 1;
-            }
-        }
-        if j >= map_n_val { break; }
-    }
-    crate::game::map_char::send(pkt);
     send_minitext(sd, "Maps reloaded!");
     0
 }
