@@ -56,7 +56,7 @@ use crate::game::map_parse::combat::clif_sendanimations;
 
 /// Send an object-despawn packet to all nearby clients.
 ///
-pub unsafe fn clif_lookgone(bl: *mut BlockList) -> i32 {
+pub unsafe fn clif_lookgone(bl: *const BlockList) -> i32 {
     let mut buf = [0u8; 16];
 
     let bl_ref = &*bl;
@@ -90,7 +90,8 @@ pub unsafe fn clif_lookgone(bl: *mut BlockList) -> i32 {
         buf[8] = id_bytes[3];
     }
 
-    clif_send(buf.as_ptr(), 16, bl, AREA_WOS);
+    // SAFETY: clif_send only reads bl for area broadcast
+    clif_send(buf.as_ptr(), 16, bl as *const BlockList as *mut BlockList, AREA_WOS);
     0
 }
 

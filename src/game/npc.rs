@@ -310,7 +310,7 @@ pub unsafe fn npc_warp(nd: *mut NpcData, m: i32, x: i32, y: i32) -> i32 {
     if nd.bl.id < NPC_START_NUM { return 0; }
 
     map_delblock(&raw mut nd.bl);
-    clif_lookgone(&raw mut nd.bl);
+    clif_lookgone(&raw const nd.bl);
     nd.bl.m = m as u16;
     nd.bl.x = x as u16;
     nd.bl.y = y as u16;

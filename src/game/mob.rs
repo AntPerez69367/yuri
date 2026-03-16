@@ -833,7 +833,7 @@ pub unsafe fn mob_warp(mob: *mut MobSpawnData, m: i32, x: i32, y: i32) -> i32 {
         return 0;
     }
     map_delblock(&mut (*mob).bl);
-    clif_lookgone(&mut (*mob).bl);
+    clif_lookgone(&(*mob).bl);
     (*mob).bl.m = m as u16;
     (*mob).bl.x = x as u16;
     (*mob).bl.y = y as u16;

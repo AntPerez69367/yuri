@@ -107,7 +107,7 @@ unsafe fn rlong_be(fd: SessionId, pos: usize) -> u32 {
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 pub unsafe fn clif_quit(sd: *mut MapSessionData) -> i32 {
     map_delblock(&raw mut (*sd).bl);
-    clif_lookgone(&raw mut (*sd).bl);
+    clif_lookgone(&raw const (*sd).bl);
     0
 }
 

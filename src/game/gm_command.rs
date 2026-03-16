@@ -678,7 +678,7 @@ fn command_stealth(sd: &mut MapSessionData, _line: &str) -> i32 {
         unsafe { clif_refresh(as_ptr(sd)); }
         send_minitext(sd, "Stealth :OFF");
     } else {
-        unsafe { clif_lookgone(&mut sd.bl); }
+        unsafe { clif_lookgone(&sd.bl); }
         sd.optFlags ^= OPT_STEALTH;
         unsafe { clif_refresh(as_ptr(sd)); }
         send_minitext(sd, "Stealth :ON");

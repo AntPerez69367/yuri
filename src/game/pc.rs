@@ -559,7 +559,7 @@ use crate::game::scripting::pc_accessors::sl_pc_forcesave;
 use crate::game::time_util::gettick;
 unsafe fn gettick_pc() -> u32 { gettick() }
 use crate::game::map_parse::visual::clif_lookgone;
-unsafe fn clif_lookgone_pc(bl: *mut BlockList) { clif_lookgone(bl); }
+unsafe fn clif_lookgone_pc(bl: *const BlockList) { clif_lookgone(bl); }
 
 
 
@@ -3421,7 +3421,7 @@ pub unsafe fn pc_getitemscript(
         // It's gold — credit the amount and remove from map.
         (*sd).status.money += (*fl).data.amount as u32;
         clif_sendstatus(sd, SFLAG_XPMONEY);
-        clif_lookgone_pc(&mut (*fl).bl as *mut BlockList);
+        clif_lookgone_pc(&(*fl).bl as *const BlockList);
         map_delitem((*fl).bl.id);
 
         return 0;
@@ -3461,7 +3461,7 @@ pub unsafe fn pc_getitemscript(
     }
 
     if (*fl).data.amount <= 0 {
-        clif_lookgone_pc(&mut (*fl).bl as *mut BlockList);
+        clif_lookgone_pc(&(*fl).bl as *const BlockList);
         map_delitem((*fl).bl.id);
     }
 
