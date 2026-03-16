@@ -7,7 +7,137 @@ fn cstr_to_string(bytes: &[i8]) -> String {
     bytes[..len].iter().map(|&b| b as u8 as char).collect()
 }
 
+/// Convert a Rust String to a C-style i8 array. Null-terminated, truncated to fit.
+/// Inverse of `cstr_to_string`.
+fn string_to_i8_array<const N: usize>(src: &str, dst: &mut [i8; N]) {
+    let bytes = src.as_bytes();
+    let n = bytes.len().min(N - 1);
+    for i in 0..n {
+        dst[i] = bytes[i] as i8;
+    }
+    dst[n] = 0;
+}
+
 impl PlayerData {
+    /// Convert to the legacy MmoCharStatus. Used for wire compatibility (0x3803).
+    pub fn to_mmo_char_status(&self) -> Box<MmoCharStatus> {
+        use crate::servers::char::charstatus::*;
+
+        let mut s = alloc_zeroed_charstatus();
+
+        // ── Identity ──
+        s.id = self.identity.id;
+        string_to_i8_array(&self.identity.name, &mut s.name);
+        string_to_i8_array(&self.identity.pass, &mut s.pass);
+        string_to_i8_array(&self.identity.f1name, &mut s.f1name);
+        string_to_i8_array(&self.identity.title, &mut s.title);
+        string_to_i8_array(&self.identity.ipaddress, &mut s.ipaddress);
+        s.gm_level = self.identity.gm_level;
+        s.sex = self.identity.sex;
+        s.map_server = self.identity.map_server;
+        s.dest_pos = self.identity.dest_pos;
+        s.last_pos = self.identity.last_pos;
+
+        // ── Combat ──
+        s.hp = self.combat.hp;
+        s.basehp = self.combat.max_hp;
+        s.mp = self.combat.mp;
+        s.basemp = self.combat.max_mp;
+        s.might = self.combat.might;
+        s.will = self.combat.will;
+        s.grace = self.combat.grace;
+        s.basemight = self.combat.base_might;
+        s.basewill = self.combat.base_will;
+        s.basegrace = self.combat.base_grace;
+        s.basearmor = self.combat.base_armor;
+        s.state = self.combat.state;
+        s.side = self.combat.side;
+
+        // ── Progression ──
+        s.level = self.progression.level;
+        s.class = self.progression.class;
+        s.tier = self.progression.tier;
+        s.mark = self.progression.mark;
+        s.totem = self.progression.totem;
+        s.country = self.progression.country;
+        s.magic_number = self.progression.magic_number;
+        s.exp = self.progression.exp;
+        s.tnl = self.progression.tnl;
+        s.nextlevelxp = self.progression.next_level_xp;
+        s.maxtnl = self.progression.max_tnl;
+        s.realtnl = self.progression.real_tnl;
+        s.class_rank = self.progression.class_rank;
+        s.clan_rank = self.progression.clan_rank;
+        s.percentage = self.progression.percentage;
+        s.int_percentage = self.progression.int_percentage;
+        s.expsold_magic = self.progression.expsold_magic;
+        s.expsold_health = self.progression.expsold_health;
+        s.expsold_stats = self.progression.expsold_stats;
+
+        // ── Spells ──
+        let n = self.spells.skills.len().min(MAX_SPELLS);
+        s.skill[..n].copy_from_slice(&self.spells.skills[..n]);
+        let n = self.spells.dura_aether.len().min(MAX_MAGIC_TIMERS);
+        s.dura_aether[..n].copy_from_slice(&self.spells.dura_aether[..n]);
+
+        // ── Inventory ──
+        let n = self.inventory.equip.len().min(MAX_EQUIP);
+        s.equip[..n].copy_from_slice(&self.inventory.equip[..n]);
+        let n = self.inventory.inventory.len().min(MAX_INVENTORY);
+        s.inventory[..n].copy_from_slice(&self.inventory.inventory[..n]);
+        let n = self.inventory.banks.len().min(MAX_BANK_SLOTS);
+        s.banks[..n].copy_from_slice(&self.inventory.banks[..n]);
+        s.money = self.inventory.money;
+        s.bankmoney = self.inventory.bank_money;
+        s.maxinv = self.inventory.max_inv;
+        s.maxslots = self.inventory.max_slots;
+
+        // ── Appearance ──
+        s.face = self.appearance.face;
+        s.hair = self.appearance.hair;
+        s.face_color = self.appearance.face_color;
+        s.hair_color = self.appearance.hair_color;
+        s.armor_color = self.appearance.armor_color;
+        s.skin_color = self.appearance.skin_color;
+        s.disguise = self.appearance.disguise;
+        s.disguise_color = self.appearance.disguise_color;
+        s.setting_flags = self.appearance.setting_flags;
+        s.heroes = self.appearance.heroes;
+        s.mini_map_toggle = self.appearance.mini_map_toggle;
+        s.profile_vitastats = self.appearance.profile_vitastats;
+        s.profile_equiplist = self.appearance.profile_equiplist;
+        s.profile_legends = self.appearance.profile_legends;
+        s.profile_spells = self.appearance.profile_spells;
+        s.profile_inventory = self.appearance.profile_inventory;
+        s.profile_bankitems = self.appearance.profile_bankitems;
+
+        // ── Social ──
+        s.partner = self.social.partner;
+        s.clan = self.social.clan;
+        string_to_i8_array(&self.social.clan_title, &mut s.clan_title);
+        s.clan_chat = self.social.clan_chat;
+        s.pk = self.social.pk;
+        s.killedby = self.social.killed_by;
+        s.killspk = self.social.kills_pk;
+        s.pkduration = self.social.pk_duration;
+        s.karma = self.social.karma;
+        s.alignment = self.social.alignment;
+        s.novice_chat = self.social.novice_chat;
+        s.subpath_chat = self.social.subpath_chat;
+        s.mute = self.social.mute;
+        s.tutor = self.social.tutor;
+        string_to_i8_array(&self.social.afk_message, &mut s.afkmessage);
+
+        // ── Registries → fixed arrays ──
+        write_registries_to_mmo(&self.registries, &mut s);
+
+        // ── Legends ──
+        let n = self.legends.legends.len().min(MAX_LEGENDS);
+        s.legends[..n].copy_from_slice(&self.legends.legends[..n]);
+
+        s
+    }
+
     /// Convert from the legacy MmoCharStatus. Used during migration and for testing.
     pub fn from_mmo_char_status(old: &MmoCharStatus) -> Self {
         PlayerData {
@@ -117,6 +247,63 @@ impl PlayerData {
     }
 }
 
+/// Allocate a zeroed MmoCharStatus on the heap (3MB — too large for stack).
+fn alloc_zeroed_charstatus() -> Box<MmoCharStatus> {
+    unsafe {
+        let layout = std::alloc::Layout::new::<MmoCharStatus>();
+        let ptr = std::alloc::alloc_zeroed(layout) as *mut MmoCharStatus;
+        if ptr.is_null() {
+            std::alloc::handle_alloc_error(layout);
+        }
+        Box::from_raw(ptr)
+    }
+}
+
+/// Write HashMap-based registries back into MmoCharStatus fixed arrays.
+fn write_registries_to_mmo(regs: &PlayerRegistries, s: &mut MmoCharStatus) {
+    use crate::servers::char::charstatus::MAX_GLOBALREG;
+    use crate::servers::char::charstatus::MAX_GLOBALQUESTREG;
+    use crate::servers::char::charstatus::MAX_KILLREG;
+
+    // Global integer registries
+    for (i, (key, &val)) in regs.global_reg.iter().enumerate().take(MAX_GLOBALREG) {
+        string_to_i8_array(key, &mut s.global_reg[i].str);
+        s.global_reg[i].val = val;
+    }
+    s.global_reg_num = regs.global_reg.len().min(MAX_GLOBALREG) as i32;
+
+    // Global string registries
+    for (i, (key, val)) in regs.global_regstring.iter().enumerate().take(MAX_GLOBALREG) {
+        string_to_i8_array(key, &mut s.global_regstring[i].str);
+        string_to_i8_array(val, &mut s.global_regstring[i].val);
+    }
+    s.global_regstring_num = regs.global_regstring.len().min(MAX_GLOBALREG) as i32;
+
+    // Account registries
+    for (i, (key, &val)) in regs.acct_reg.iter().enumerate().take(MAX_GLOBALREG) {
+        string_to_i8_array(key, &mut s.acctreg[i].str);
+        s.acctreg[i].val = val;
+    }
+
+    // NPC integer registries
+    for (i, (key, &val)) in regs.npc_int_reg.iter().enumerate().take(MAX_GLOBALREG) {
+        string_to_i8_array(key, &mut s.npcintreg[i].str);
+        s.npcintreg[i].val = val;
+    }
+
+    // Quest registries
+    for (i, (key, &val)) in regs.quest_reg.iter().enumerate().take(MAX_GLOBALQUESTREG) {
+        string_to_i8_array(key, &mut s.questreg[i].str);
+        s.questreg[i].val = val;
+    }
+
+    // Kill registries
+    for (i, (&mob_id, &amount)) in regs.kill_reg.iter().enumerate().take(MAX_KILLREG) {
+        s.killreg[i].mob_id = mob_id;
+        s.killreg[i].amount = amount;
+    }
+}
+
 /// Convert fixed-array registries to HashMaps.
 /// Only non-empty entries (key string not empty) are included.
 fn convert_registries(old: &MmoCharStatus) -> PlayerRegistries {
@@ -178,7 +365,7 @@ fn convert_registries(old: &MmoCharStatus) -> PlayerRegistries {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::servers::char::charstatus::MmoCharStatus;
+    use crate::common::types::Point;
 
     #[test]
     fn roundtrip_preserves_identity() {
@@ -329,15 +516,105 @@ mod tests {
         assert_eq!(new.legends.legends.len(), 1000);
     }
 
-    /// Allocate a zeroed MmoCharStatus on the heap (too large for stack).
-    fn alloc_zeroed_charstatus() -> Box<MmoCharStatus> {
-        unsafe {
-            let layout = std::alloc::Layout::new::<MmoCharStatus>();
-            let ptr = std::alloc::alloc_zeroed(layout) as *mut MmoCharStatus;
-            if ptr.is_null() {
-                std::alloc::handle_alloc_error(layout);
-            }
-            Box::from_raw(ptr)
-        }
+    #[test]
+    fn string_to_i8_roundtrip() {
+        let original = "TestPlayer";
+        let mut buf = [0i8; 16];
+        string_to_i8_array(original, &mut buf);
+        let back = cstr_to_string(&buf);
+        assert_eq!(back, original);
+    }
+
+    #[test]
+    fn string_to_i8_truncates() {
+        let long = "ThisStringIsTooLongForTheBuffer";
+        let mut buf = [0i8; 10];
+        string_to_i8_array(long, &mut buf);
+        let back = cstr_to_string(&buf);
+        assert_eq!(back, "ThisStrin"); // 9 chars + null
+    }
+
+    #[test]
+    fn string_to_i8_empty() {
+        let mut buf = [0x7Fi8; 16]; // fill with non-zero
+        string_to_i8_array("", &mut buf);
+        assert_eq!(buf[0], 0); // null terminator at index 0
+    }
+
+    #[test]
+    fn reverse_bridge_roundtrip_identity() {
+        let mut pd = PlayerData::default();
+        pd.identity.id = 12345;
+        pd.identity.name = "TestPlayer".to_string();
+        pd.identity.gm_level = 5;
+        pd.identity.sex = 1;
+        pd.identity.map_server = 3;
+        pd.identity.dest_pos = Point::new(100, 50, 25);
+
+        let mmo = pd.to_mmo_char_status();
+        let back = PlayerData::from_mmo_char_status(&mmo);
+        assert_eq!(back.identity.id, 12345);
+        assert_eq!(back.identity.name, "TestPlayer");
+        assert_eq!(back.identity.gm_level, 5);
+        assert_eq!(back.identity.sex, 1);
+        assert_eq!(back.identity.dest_pos, Point::new(100, 50, 25));
+    }
+
+    #[test]
+    fn reverse_bridge_roundtrip_combat() {
+        let mut pd = PlayerData::default();
+        pd.combat.hp = 500;
+        pd.combat.max_hp = 600;
+        pd.combat.state = -1;
+        pd.combat.base_armor = -10;
+
+        let mmo = pd.to_mmo_char_status();
+        let back = PlayerData::from_mmo_char_status(&mmo);
+        assert_eq!(back.combat.hp, 500);
+        assert_eq!(back.combat.max_hp, 600);
+        assert_eq!(back.combat.state, -1);
+        assert_eq!(back.combat.base_armor, -10);
+    }
+
+    #[test]
+    fn reverse_bridge_roundtrip_registries() {
+        let mut pd = PlayerData::default();
+        pd.registries.set_reg("test_var", 42);
+        pd.registries.set_reg("another", 99);
+        pd.registries.set_reg_str("str_key", "hello");
+
+        let mmo = pd.to_mmo_char_status();
+        let back = PlayerData::from_mmo_char_status(&mmo);
+        assert_eq!(back.registries.get_reg("test_var"), Some(42));
+        assert_eq!(back.registries.get_reg("another"), Some(99));
+        assert_eq!(back.registries.get_reg_str("str_key"), Some("hello"));
+    }
+
+    #[test]
+    fn reverse_bridge_roundtrip_inventory() {
+        let mut pd = PlayerData::default();
+        pd.inventory.inventory[0].id = 100;
+        pd.inventory.inventory[0].amount = 5;
+        pd.inventory.equip[3].id = 200;
+        pd.inventory.money = 50000;
+
+        let mmo = pd.to_mmo_char_status();
+        let back = PlayerData::from_mmo_char_status(&mmo);
+        assert_eq!(back.inventory.inventory[0].id, 100);
+        assert_eq!(back.inventory.inventory[0].amount, 5);
+        assert_eq!(back.inventory.equip[3].id, 200);
+        assert_eq!(back.inventory.money, 50000);
+    }
+
+    #[test]
+    fn reverse_bridge_roundtrip_kills() {
+        let mut pd = PlayerData::default();
+        pd.registries.kill_reg.insert(1001, 5);
+        pd.registries.kill_reg.insert(2002, 10);
+
+        let mmo = pd.to_mmo_char_status();
+        let back = PlayerData::from_mmo_char_status(&mmo);
+        assert_eq!(back.registries.get_kill_count(1001), 5);
+        assert_eq!(back.registries.get_kill_count(2002), 10);
     }
 }
