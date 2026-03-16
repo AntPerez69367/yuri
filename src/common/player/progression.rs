@@ -1,5 +1,7 @@
+use serde::{Serialize, Deserialize};
+
 /// Level, class, experience, and advancement state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerProgression {
     pub level: u8,
     pub class: u8,

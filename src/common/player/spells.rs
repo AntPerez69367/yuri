@@ -1,10 +1,11 @@
 use crate::common::types::SkillInfo;
+use serde::{Serialize, Deserialize};
 
 /// Spell book and active effects. Pre-allocated to MAX sizes.
 pub const MAX_SPELLS: usize = 52;
 pub const MAX_MAGIC_TIMERS: usize = 200;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerSpells {
     /// Known spells — slot-indexed, pre-allocated to MAX_SPELLS.
     /// Empty slot = 0.

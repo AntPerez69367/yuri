@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use serde::{Serialize, Deserialize};
 
 /// Script variable registries. HashMap-based (replaces linear search over fixed arrays).
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlayerRegistries {
     pub global_reg: HashMap<String, i32>,
     pub global_regstring: HashMap<String, String>,

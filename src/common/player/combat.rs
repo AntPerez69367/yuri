@@ -1,5 +1,7 @@
+use serde::{Serialize, Deserialize};
+
 /// Combat state — hot path, small. Contains hp/mp, stats, and entity state.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlayerCombat {
     pub hp: u32,
     pub max_hp: u32,

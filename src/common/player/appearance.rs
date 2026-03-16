@@ -1,5 +1,7 @@
+use serde::{Serialize, Deserialize};
+
 /// Visual appearance and UI settings. Small, mostly client-sync.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlayerAppearance {
     pub face: u16,
     pub hair: u16,

@@ -1,5 +1,7 @@
+use serde::{Serialize, Deserialize};
+
 /// Clan, PK, karma, and chat state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerSocial {
     pub partner: u32,
     pub clan: u32,

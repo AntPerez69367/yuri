@@ -23,6 +23,8 @@ libc = "0.2.182"
 mlua = { version = "0.10", features = ["luajit", "async"] }
 
 serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3"
+serde-big-array = "0.5"
 serde_yaml = "0.9.34-deprecated"
 anyhow = "1.0.102"
 thiserror = "2.0.18"

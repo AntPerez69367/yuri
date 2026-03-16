@@ -1,7 +1,8 @@
 use crate::common::types::Point;
+use serde::{Serialize, Deserialize};
 
 /// Core identity — ID, name, login info, saved position. Rarely mutated after init.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerIdentity {
     pub id: u32,
     pub name: String,

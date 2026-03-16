@@ -1,11 +1,12 @@
 use crate::common::types::{BankData, Item};
+use serde::{Serialize, Deserialize};
 
 /// Equipment, inventory, banks, and currency. Pre-allocated to MAX sizes.
 pub const MAX_EQUIP: usize = 15;
 pub const MAX_INVENTORY: usize = 52;
 pub const MAX_BANK_SLOTS: usize = 255;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerInventory {
     /// Equipped items — slot-indexed, pre-allocated.
     /// Empty slot has id = 0.

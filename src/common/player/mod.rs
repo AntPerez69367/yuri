@@ -27,7 +27,9 @@ pub use legends::PlayerLegends;
 /// let PlayerData { ref mut combat, ref inventory, ref progression, .. } = *player;
 /// combat.calc_stats(inventory, progression);
 /// ```
-#[derive(Debug, Clone, Default)]
+use serde::{Serialize, Deserialize};
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PlayerData {
     pub identity: PlayerIdentity,
     pub combat: PlayerCombat,
@@ -54,5 +56,32 @@ mod tests {
         assert_eq!(p.spells.skills.len(), spells::MAX_SPELLS);
         assert!(p.registries.global_reg.is_empty());
         assert_eq!(p.legends.legends.len(), legends::MAX_LEGENDS);
+    }
+
+    #[test]
+    fn bincode_roundtrip() {
+        let mut p = PlayerData::default();
+        p.identity.id = 12345;
+        p.identity.name = "TestPlayer".to_string();
+        p.combat.hp = 100;
+        p.combat.max_hp = 200;
+        p.progression.level = 50;
+        p.inventory.money = 9999;
+        p.registries.global_reg.insert("test_key".to_string(), 42);
+        p.social.clan = 7;
+        p.legends.legends[0].icon = 5;
+
+        let bytes = bincode::serialize(&p).expect("serialize");
+        let p2: PlayerData = bincode::deserialize(&bytes).expect("deserialize");
+
+        assert_eq!(p2.identity.id, 12345);
+        assert_eq!(p2.identity.name, "TestPlayer");
+        assert_eq!(p2.combat.hp, 100);
+        assert_eq!(p2.combat.max_hp, 200);
+        assert_eq!(p2.progression.level, 50);
+        assert_eq!(p2.inventory.money, 9999);
+        assert_eq!(p2.registries.global_reg.get("test_key"), Some(&42));
+        assert_eq!(p2.social.clan, 7);
+        assert_eq!(p2.legends.legends[0].icon, 5);
     }
 }

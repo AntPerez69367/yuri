@@ -35,7 +35,7 @@ unsafe impl bytemuck::Pod for Point {}
 /// (`_pad0`, `_pad1`) replace implicit compiler padding so the struct is
 /// `Pod`-safe (no uninitialized bytes).
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct Item {
     pub id: u32,
     pub owner: u32,
@@ -50,10 +50,14 @@ pub struct Item {
     pub custom_look_color: u32,
     pub custom_icon_color: u32,
     pub protected: u32,
+    #[serde(with = "serde_big_array::BigArray")]
     pub traps_table: [u32; 100],
+    #[serde(with = "serde_big_array::BigArray")]
     pub buytext: [u8; 64],
+    #[serde(with = "serde_big_array::BigArray")]
     pub note: [i8; 300],
     pub repair: i8,
+    #[serde(with = "serde_big_array::BigArray")]
     pub real_name: [i8; 64],
     pub _pad1: [u8; 3],
 }
@@ -65,7 +69,7 @@ unsafe impl bytemuck::Pod for Item {}
 
 /// Bank slot item.  400 bytes.  Matches `struct bank_data` from `mmo.h`.
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct BankData {
     pub item_id: u32,
     pub amount: u32,
@@ -73,10 +77,12 @@ pub struct BankData {
     pub time: u32,
     pub custom_icon: u32,
     pub custom_look: u32,
+    #[serde(with = "serde_big_array::BigArray")]
     pub real_name: [i8; 64],
     pub custom_look_color: u32,
     pub custom_icon_color: u32,
     pub protected: u32,
+    #[serde(with = "serde_big_array::BigArray")]
     pub note: [i8; 300],
 }
 
@@ -145,11 +151,13 @@ pub struct GfxViewer {
 
 /// Achievement/legend entry. 328 bytes.
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct Legend {
     pub icon: u16,
     pub color: u16,
+    #[serde(with = "serde_big_array::BigArray")]
     pub text: [i8; 255],
+    #[serde(with = "serde_big_array::BigArray")]
     pub name: [i8; 64],
     pub _pad0: [u8; 1],
     pub tchaid: u32,
@@ -162,7 +170,7 @@ unsafe impl bytemuck::Pod for Legend {}
 
 /// Active spell/aether effect. 48 bytes.
 #[repr(C)]
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct SkillInfo {
     pub duration: i32,
     pub aether: i32,
