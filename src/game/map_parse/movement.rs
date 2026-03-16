@@ -1662,8 +1662,8 @@ pub unsafe fn clif_refreshnoclick(sd: *mut MapSessionData) -> i32 {
 /// Broadcast an NPC position packet to a nearby player.
 /// `bl` is cast to `*mut MapSessionData` (the receiving player).
 /// Builds a 32-byte buffer and calls `clif_send(buf, 32, &nd->bl, AREA_WOS)`.
-pub unsafe fn clif_npc_move_inner(bl: *mut BlockList, nd: *mut NpcData) -> i32 {
-    let sd = bl as *mut MapSessionData;
+pub unsafe fn clif_npc_move_inner(bl: *const BlockList, nd: *const NpcData) -> i32 {
+    let sd = bl as *const MapSessionData;
     if sd.is_null() || nd.is_null() { return 0; }
 
     let mut buf = [0u8; 32];
@@ -1676,7 +1676,8 @@ pub unsafe fn clif_npc_move_inner(bl: *mut BlockList, nd: *mut NpcData) -> i32 {
     buf[11..13].copy_from_slice(&((*nd).bl.by as u16).to_be_bytes());
     buf[13] = (*nd).side as u8;
     // buf[14] = 0x00 (already zeroed)
-    clif_send(buf.as_ptr(), 32, &raw mut (*nd).bl, AREA_WOS);
+    // SAFETY: clif_send only reads bl for area broadcast
+    clif_send(buf.as_ptr(), 32, &raw const (*nd).bl as *mut BlockList, AREA_WOS);
     0
 }
 
@@ -1686,8 +1687,8 @@ pub unsafe fn clif_npc_move_inner(bl: *mut BlockList, nd: *mut NpcData) -> i32 {
 ///
 /// Send a mob-position packet to a player.
 /// `bl` is the viewing player, `mob` is the mob to render.
-pub unsafe fn clif_mob_move_inner(bl: *mut BlockList, mob: *mut MobSpawnData) -> i32 {
-    let sd = bl as *mut MapSessionData;
+pub unsafe fn clif_mob_move_inner(bl: *const BlockList, mob: *const MobSpawnData) -> i32 {
+    let sd = bl as *const MapSessionData;
     if sd.is_null() || mob.is_null() { return 0; }
     if (*mob).state == MOB_DEAD { return 0; }
     if !session_exists((*sd).fd) {

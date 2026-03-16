@@ -1366,7 +1366,7 @@ unsafe fn broadcast_move(
             let ids = block_grid::ids_in_area(grid, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_mob_move_inner(&mut sd_arc.write().bl, mob);
+                    clif_mob_move_inner(&sd_arc.read().bl, mob);
                 }
             }
         }
@@ -1646,7 +1646,7 @@ pub unsafe fn mob_move2(mob: *mut MobSpawnData, x: i32, y: i32, side: i32) -> i3
             let ids = block_grid::ids_in_area(grid, (*mob).bl.x as i32, (*mob).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_mob_move_inner(&mut sd_arc.write().bl, mob);
+                    clif_mob_move_inner(&sd_arc.read().bl, mob);
                 }
             }
         }
