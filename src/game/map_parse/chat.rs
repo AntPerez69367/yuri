@@ -14,7 +14,7 @@ use crate::game::pc::{
     groups,
     map_msg,
 };
-use crate::servers::char::charstatus::MAX_SPELLS;
+use crate::common::player::spells::MAX_SPELLS;
 
 use super::packet::{
     encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow, wfifoheader,

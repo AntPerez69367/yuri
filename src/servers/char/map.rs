@@ -228,10 +228,17 @@ async fn handle_request_char(state: &Arc<CharState>, map_idx: usize, pkt: &[u8])
 
     tracing::info!("[char] [mapif] handle_request_char char_id={} session_id={} login_name={}", char_id, session_id, login_name);
 
-    let char_bytes = match db::load_char_bytes(&state.db, char_id, login_name).await {
+    let player = match db::load_player(&state.db, char_id, login_name).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("[char] [mapif] load_player FAILED for char_id={}: {}", char_id, e);
+            return;
+        }
+    };
+    let char_bytes = match bincode::serialize(&player) {
         Ok(b) => b,
         Err(e) => {
-            tracing::error!("[char] [mapif] load_char_bytes FAILED for char_id={}: {}", char_id, e);
+            tracing::error!("[char] [mapif] bincode serialize FAILED for char_id={}: {}", char_id, e);
             return;
         }
     };
@@ -269,12 +276,18 @@ async fn handle_save_char(state: &Arc<CharState>, pkt: &[u8]) -> Option<u32> {
     if dec.read_to_end(&mut raw).is_err() {
         return None;
     }
-    if raw.len() < 4 {
-        return None;
-    }
-    let char_id = u32::from_le_bytes([raw[0], raw[1], raw[2], raw[3]]);
+
+    let player: crate::common::player::PlayerData = match bincode::deserialize(&raw) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("[char] [save_char] bincode deserialize failed: {}", e);
+            return None;
+        }
+    };
+
+    let char_id = player.identity.id;
     tracing::debug!("[char] [save_char] char_id={} decompressed_bytes={}", char_id, raw.len());
-    if let Err(e) = db::save_char_bytes(&state.db, &raw).await {
+    if let Err(e) = db::save_player(&state.db, &player).await {
         tracing::error!("[char] [save_char] char_id={} failed: {}", char_id, e);
     }
     Some(char_id)

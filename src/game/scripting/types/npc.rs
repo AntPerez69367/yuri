@@ -12,7 +12,7 @@ use crate::game::mob::mobspawn_onetime;
 use crate::game::scripting::types::mob::MobObject;
 use crate::game::scripting::types::registry::{GameRegObject, MapRegObject, NpcRegObject};
 use crate::game::scripting::types::shared;
-use crate::servers::char::charstatus::MAX_EQUIP;
+use crate::common::player::inventory::MAX_EQUIP;
 
 pub struct NpcObject { pub ptr: *mut std::ffi::c_void }
 // SAFETY: NpcObject is used exclusively within a single-threaded Lua runtime.

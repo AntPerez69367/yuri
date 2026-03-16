@@ -7,8 +7,6 @@ pub mod appearance;
 pub mod social;
 pub mod registries;
 pub mod legends;
-pub mod bridge;
-
 pub use identity::PlayerIdentity;
 pub use combat::PlayerCombat;
 pub use progression::PlayerProgression;

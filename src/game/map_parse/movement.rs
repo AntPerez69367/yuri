@@ -25,7 +25,7 @@ use crate::game::pc::{
     OPT_FLAG_STEALTH, OPT_FLAG_GHOSTS,
     FLAG_FASTMOVE, FLAG_HELM, FLAG_NECKLACE,
 };
-use crate::servers::char::charstatus::{MAX_SPELLS, MAX_MAGIC_TIMERS};
+use crate::common::player::spells::{MAX_SPELLS, MAX_MAGIC_TIMERS};
 
 use super::packet::{
     encrypt, rfifob, rfifol, rfifow,

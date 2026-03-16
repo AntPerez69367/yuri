@@ -1,4 +1,3 @@
-pub mod charstatus;
 pub mod db;
 pub mod login;
 pub mod map;

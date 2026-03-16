@@ -258,7 +258,7 @@ fn command_debug(sd: &mut MapSessionData, line: &str) -> i32 {
 }
 
 fn command_item(sd: &mut MapSessionData, line: &str) -> i32 {
-    use crate::servers::char::charstatus::Item;
+    use crate::common::types::Item;
     let mut itemnum: u32 = 0;
     let mut itemid: u32 = 0;
 

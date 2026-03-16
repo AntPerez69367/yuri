@@ -6,7 +6,7 @@ use flate2::read::ZlibDecoder;
 use crate::database::board_db;
 use crate::database::class_db;
 use crate::database::map_db::{self, MAP_SLOTS};
-use crate::game::map_char::call_intif_mmo_tosd;
+use crate::game::map_char::intif_install_player;
 use crate::game::map_server::nmail_sendmessage;
 use crate::game::pc::{MapSessionData, FLAG_MAIL};
 use crate::network::crypt::encrypt;
@@ -119,12 +119,6 @@ impl ClientPacket {
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Read a null-terminated string from a fixed-size `[i8; N]` field.
-fn read_str_fixed(arr: &[i8]) -> String {
-    let bytes = unsafe { std::slice::from_raw_parts(arr.as_ptr() as *const u8, arr.len()) };
-    let nul = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-    String::from_utf8_lossy(&bytes[..nul]).into_owned()
-}
-
 fn read_str(src: &[u8], offset: usize, len: usize) -> String {
     let end = (offset + len).min(src.len());
     let s = &src[offset..end];
@@ -252,14 +246,23 @@ async fn handle_charload(_state: &Arc<MapState>, pkt: &[u8]) {
     let fd = session_fd as i32;
     let sid = SessionId::from_raw(fd);
 
+    let player: crate::common::player::PlayerData = match bincode::deserialize(&raw) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!("[map] [charif] charload: bincode deserialize failed: {}", e);
+            session_set_eof(sid, 7);
+            return;
+        }
+    };
+
     // Suppress write notifications during spawn so packets flush as a single batch.
     let manager = get_session_manager();
     if let Some(session_arc) = manager.get_session(sid) {
         session_arc.lock().await.suppress_notify = true;
     }
 
-    let rc = call_intif_mmo_tosd(fd, &mut raw);
-    tracing::info!("[map] [charif] intif_mmo_tosd returned rc={}", rc);
+    let rc = intif_install_player(fd, player);
+    tracing::info!("[map] [charif] intif_install_player returned rc={}", rc);
 
     if let Some(session_arc) = manager.get_session(sid) {
         let mut session = session_arc.lock().await;
@@ -277,7 +280,7 @@ fn handle_checkonline(pkt: &[u8]) {
     for fd in manager.get_all_fds() {
         if !session_exists(fd) || session_get_eof(fd) != 0 { continue; }
         let Some(sd) = get_sd(fd) else { continue };
-        if sd.status.id == char_id {
+        if sd.player.identity.id == char_id {
             tracing::warn!("[map] [charif] checkonline: kicking char_id={} fd={}", char_id, fd);
             session_set_eof(fd, 1);
             return;
@@ -329,7 +332,7 @@ fn handle_showposts_response(pkt: &[u8]) {
     };
 
     // Verify the response is for the right player (matches C: strcasecmp check).
-    let sd_name = read_str_fixed(&sd.status.name);
+    let sd_name = &sd.player.identity.name;
     if !sd_name.eq_ignore_ascii_case(&player_name) {
         tracing::warn!("[map] [packet] 0x3809 name mismatch sd={} pkt={}", sd_name, player_name);
         return;
@@ -405,7 +408,7 @@ fn handle_userlist_response(pkt: &[u8]) {
         Some(sd) => sd,
         None => { tracing::warn!("[map] [packet] 0x380A invalid fd={}", fd); return; }
     };
-    let sd_clan = sd.status.clan as i32;
+    let sd_clan = sd.player.social.clan as i32;
 
     // Client packet uses 0x36, not 0x31/3 board packet.
     let mut buf = vec![0xAAu8, 0, 0, 0x36, 0];
@@ -545,7 +548,7 @@ fn handle_readpost_response(pkt: &[u8]) {
     };
 
     // Verify player name matches.
-    let sd_name = read_str_fixed(&sd.status.name);
+    let sd_name = &sd.player.identity.name;
     if !sd_name.eq_ignore_ascii_case(&name) {
         tracing::warn!("[map] [packet] 0x380F name mismatch sd={} pkt={}", sd_name, name);
         return;

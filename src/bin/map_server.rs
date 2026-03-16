@@ -175,10 +175,8 @@ async fn main() -> Result<()> {
 
     let state = Arc::new(MapState::new(pool, config));
 
-    // Register state with FFI bridge so C game logic can send packets to char_server.
+    // Register state with FFI bridge so game logic can send packets to char_server.
     yuri::game::map_char::set_map_state(Arc::clone(&state));
-    // intif_mmo_tosd is now called directly from call_intif_mmo_tosd in map_char.rs.
-    // set_mmo_tosd_fn is kept as a no-op for source compatibility.
 
     // Spawn auth DB expiry timer (replaces auth_timer — every 30s).
     // Does not touch Lua, safe on any thread.

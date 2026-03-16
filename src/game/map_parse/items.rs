@@ -35,7 +35,8 @@ const MAP_EQCOAT:     usize = 26;
 
 use crate::game::mob::MobSpawnData;
 use crate::game::scripting::types::floor::FloorItemData;
-use crate::servers::char::charstatus::{MAX_INVENTORY, MAX_MAGIC_TIMERS};
+use crate::common::player::inventory::MAX_INVENTORY;
+use crate::common::player::spells::MAX_MAGIC_TIMERS;
 
 use super::packet::{
     encrypt,
@@ -224,7 +225,7 @@ pub unsafe fn clif_sendadditem(sd: *mut MapSessionData, num: i32) -> i32 {
     let id = (&(*sd).player.inventory.inventory)[n].id;
 
     if id < 4 {
-        (&mut (*sd).player.inventory.inventory)[n] = crate::servers::char::charstatus::Item {
+        (&mut (*sd).player.inventory.inventory)[n] = crate::common::types::Item {
             id: 0, owner: 0, custom: 0, time: 0, dura: 0, amount: 0,
             pos: 0, _pad0: [0; 3], custom_look: 0, custom_icon: 0,
             custom_look_color: 0, custom_icon_color: 0, protected: 0,
@@ -237,7 +238,7 @@ pub unsafe fn clif_sendadditem(sd: *mut MapSessionData, num: i32) -> i32 {
     let item = item_db::search(id);
     let item_name = item.name.as_ptr();
     if id > 0 && strcasecmp_rs(item_name, b"??\0".as_ptr()) == 0 {
-        (&mut (*sd).player.inventory.inventory)[n] = crate::servers::char::charstatus::Item {
+        (&mut (*sd).player.inventory.inventory)[n] = crate::common::types::Item {
             id: 0, owner: 0, custom: 0, time: 0, dura: 0, amount: 0,
             pos: 0, _pad0: [0; 3], custom_look: 0, custom_icon: 0,
             custom_look_color: 0, custom_icon_color: 0, protected: 0,
@@ -501,7 +502,7 @@ pub unsafe fn clif_sendequip(sd: *mut MapSessionData, id: i32) -> i32 {
     if (&(*sd).player.inventory.equip)[slot].id > 0
         && strcasecmp_rs(eq_item.name.as_ptr(), b"??\0".as_ptr()) == 0
     {
-        (&mut (*sd).player.inventory.equip)[slot] = crate::servers::char::charstatus::Item {
+        (&mut (*sd).player.inventory.equip)[slot] = crate::common::types::Item {
             id: 0, owner: 0, custom: 0, time: 0, dura: 0, amount: 0,
             pos: 0, _pad0: [0; 3], custom_look: 0, custom_icon: 0,
             custom_look_color: 0, custom_icon_color: 0, protected: 0,
@@ -907,7 +908,7 @@ pub unsafe fn clif_throwitem_sub(
     std::ptr::copy_nonoverlapping(
         &(&(*sd).player.inventory.inventory)[id as usize] as *const _ as *const u8,
         &raw mut (*fl).data as *mut u8,
-        std::mem::size_of::<crate::servers::char::charstatus::Item>(),
+        std::mem::size_of::<crate::common::types::Item>(),
     );
 
     (*sd).invslot = id as u8;
@@ -939,7 +940,7 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
     std::ptr::copy_nonoverlapping(
         &(&(*sd).player.inventory.inventory)[id] as *const _ as *const u8,
         &raw mut (*fl).data as *mut u8,
-        std::mem::size_of::<crate::servers::char::charstatus::Item>(),
+        std::mem::size_of::<crate::common::types::Item>(),
     );
 
     let mut def = [0i32; 1];
@@ -958,7 +959,7 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
     (&mut (*sd).player.inventory.inventory)[id].amount -= 1;
 
     if item_type != 0 || (&(*sd).player.inventory.inventory)[id].amount == 0 {
-        (&mut (*sd).player.inventory.inventory)[id] = crate::servers::char::charstatus::Item {
+        (&mut (*sd).player.inventory.inventory)[id] = crate::common::types::Item {
             id: 0, owner: 0, custom: 0, time: 0, dura: 0, amount: 0,
             pos: 0, _pad0: [0; 3], custom_look: 0, custom_icon: 0,
             custom_look_color: 0, custom_icon_color: 0, protected: 0,

@@ -17,7 +17,7 @@ use crate::game::pc::{
     SFLAG_HPMP, SFLAG_FULLSTATS,
     FLAG_MAGIC,
 };
-use crate::servers::char::charstatus::MAX_SPELLS;
+use crate::common::player::spells::MAX_SPELLS;
 
 use super::packet::{
     encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow, wfifoheader,

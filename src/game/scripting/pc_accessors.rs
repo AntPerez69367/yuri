@@ -5,7 +5,9 @@ use crate::game::pc::{MapSessionData, EQ_FACEACCTWO, SFLAG_HPMP, SFLAG_FULLSTATS
 use crate::session::SessionId;
 use crate::database::map_db::BlockList;
 use crate::game::mob::{MobSpawnData, MAX_THREATCOUNT};
-use crate::servers::char::charstatus::{MAX_INVENTORY, MAX_SPELLS, MAX_EQUIP, MAX_MAGIC_TIMERS, MAX_LEGENDS, MAX_BANK_SLOTS};
+use crate::common::player::inventory::{MAX_INVENTORY, MAX_EQUIP, MAX_BANK_SLOTS};
+use crate::common::player::spells::{MAX_SPELLS, MAX_MAGIC_TIMERS};
+use crate::common::player::legends::MAX_LEGENDS;
 
 // ─── Read: block_list embedded fields ────────────────────────────────────────
 
@@ -1234,7 +1236,7 @@ pub unsafe fn sl_pc_addlegend(
     sd: &mut MapSessionData, text: *const i8, name: *const i8,
     icon: i32, color: i32, tchaid: u32,
 ) {
-    use crate::servers::char::charstatus::MAX_LEGENDS;
+    use crate::common::player::legends::MAX_LEGENDS;
     for x in 0..MAX_LEGENDS {
         let empty_now  = sd.player.legends.legends[x].name[0] == 0;
         let empty_next = x + 1 >= MAX_LEGENDS || sd.player.legends.legends[x + 1].name[0] == 0;
@@ -1251,7 +1253,7 @@ pub unsafe fn sl_pc_addlegend(
 }
 
 pub unsafe fn sl_pc_haslegend(sd: &mut MapSessionData, name: *const i8) -> i32 {
-    use crate::servers::char::charstatus::MAX_LEGENDS;
+    use crate::common::player::legends::MAX_LEGENDS;
     let cmp = if name.is_null() { b"" as &[u8] } else { std::ffi::CStr::from_ptr(name).to_bytes() };
     for i in 0..MAX_LEGENDS {
         let leg_name = sd.player.legends.legends[i].name;
@@ -1402,7 +1404,7 @@ pub unsafe fn sl_pc_removehealth_extend(sd: &mut MapSessionData, damage: i32) {
 
 /// getEquippedDura — return durability of equipped item at slot, or -1 if not found.
 pub fn sl_pc_getequippeddura(sd: &mut MapSessionData, id: u32, slot: i32) -> i32 {
-    use crate::servers::char::charstatus::MAX_EQUIP;
+    use crate::common::player::inventory::MAX_EQUIP;
     if slot >= 0 && (slot as usize) < MAX_EQUIP {
         let s = slot as usize;
         if sd.player.inventory.equip[s].id == id { return sd.player.inventory.equip[s].dura; }
@@ -1623,7 +1625,7 @@ pub unsafe fn sl_pc_additem(
     dura: i32, owner: u32,
     engrave: *const i8,
 ) {
-    let mut fl: crate::servers::char::charstatus::Item = std::mem::zeroed();
+    let mut fl: crate::common::types::Item = std::mem::zeroed();
     fl.id     = id;
     fl.amount = amount as i32;
     fl.owner  = owner;
@@ -1908,7 +1910,7 @@ pub unsafe fn sl_pc_buy_send(
 ) {
     if n <= 0 { return; }
     let nu = n as usize;
-    let mut ilist: Vec<crate::servers::char::charstatus::Item> = vec![std::mem::zeroed(); nu];
+    let mut ilist: Vec<crate::common::types::Item> = vec![std::mem::zeroed(); nu];
     for i in 0..nu {
         ilist[i].id = *items.add(i) as u32;
         if !displaynames.is_null() && !(*displaynames.add(i)).is_null() {
@@ -1928,7 +1930,7 @@ pub unsafe fn sl_pc_buydialog_send(
 ) {
     if n <= 0 { return; }
     let nu = n as usize;
-    let mut ilist: Vec<crate::servers::char::charstatus::Item> = vec![std::mem::zeroed(); nu];
+    let mut ilist: Vec<crate::common::types::Item> = vec![std::mem::zeroed(); nu];
     for i in 0..nu { ilist[i].id = *items.add(i) as u32; }
     clif_buydialog_pc(sd, sd.last_click, msg, ilist.as_mut_ptr(), std::ptr::null_mut(), n);
 }
@@ -1940,7 +1942,7 @@ pub unsafe fn sl_pc_buyextend_send(
 ) {
     if n <= 0 { return; }
     let nu = n as usize;
-    let mut ilist: Vec<crate::servers::char::charstatus::Item> = vec![std::mem::zeroed(); nu];
+    let mut ilist: Vec<crate::common::types::Item> = vec![std::mem::zeroed(); nu];
     for i in 0..nu { ilist[i].id = *items.add(i) as u32; }
     clif_buydialog_pc(sd, sd.last_click, msg, ilist.as_mut_ptr(), prices as *mut i32, n);
 }

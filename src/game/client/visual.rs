@@ -19,7 +19,7 @@ use crate::session::{
 };
 use crate::game::map_parse::packet::{rfifop, rfiforest, wfifohead, wfifop, wfifoset};
 use crate::game::pc::MapSessionData;
-use crate::servers::char::charstatus::MAX_INVENTORY;
+use crate::common::player::inventory::MAX_INVENTORY;
 
 use crate::network::crypt::encrypt;
 
@@ -1859,7 +1859,7 @@ pub unsafe fn broadcast_update_state(src: *mut MapSessionData) {
 
 use crate::database::map_db::BlockList;
 use crate::game::pc::{map_msg, FLAG_EXCHANGE, FLAG_GROUP};
-use crate::servers::char::charstatus::MAX_LEGENDS;
+use crate::common::player::legends::MAX_LEGENDS;
 
 // Direct Rust imports (with _cop suffix aliases to avoid name conflicts)
 use crate::database::clan_db;

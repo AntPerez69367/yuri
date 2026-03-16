@@ -444,7 +444,7 @@ pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: SessionId) -> i3
     let _ = (legendicon, legendiconcolor, rewardranks);
 
     // Assign legend slot
-    use crate::servers::char::charstatus::MAX_LEGENDS;
+    use crate::common::player::legends::MAX_LEGENDS;
     for i in 0..MAX_LEGENDS {
         let leg_name_ptr  = (&(*sd).player.legends.legends)[i].name.as_ptr();
         let leg_name1_ptr = if i + 1 < MAX_LEGENDS { (&(*sd).player.legends.legends)[i + 1].name.as_ptr() } else { b"\0".as_ptr() as *const i8 };

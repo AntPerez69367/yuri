@@ -4,7 +4,8 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use crate::database::map_db::{BlockList, GlobalReg};
-use crate::servers::char::charstatus::{Item, MAX_EQUIP};
+use crate::common::types::Item;
+use crate::common::player::inventory::MAX_EQUIP;
 use crate::game::types::GfxViewer;
 
 use crate::database::map_db::{WarpList, BLOCK_SIZE};

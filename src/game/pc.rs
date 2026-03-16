@@ -7,7 +7,6 @@ use crate::common::player::PlayerData;
 use crate::database::map_db::BlockList;
 // MobSpawnData is used by future porting tasks (Tasks 6+); import it when needed.
 use crate::game::types::GfxViewer;
-use crate::servers::char::charstatus::MmoCharStatus;
 
 // ─── Helper structs (from map_server.h) ───────────────────────────────────────
 
@@ -48,7 +47,7 @@ unsafe impl Send for SdIgnoreList {}
 
 // ─── Nested sub-structs for MapSessionData ────────────────────────────────────
 
-use crate::servers::char::charstatus::Item;
+use crate::common::types::Item;
 
 /// Anonymous `exchange` sub-struct inside `map_sessiondata`.
 #[repr(C)]
@@ -85,11 +84,7 @@ pub struct MapSessionData {
     pub bl:                BlockList,
     pub fd:                SessionId,
 
-    // mmo
-    pub status:            MmoCharStatus,
-
-    // New domain-typed player data. Migrated callers read/write this instead of `status`.
-    // Synced from `status` at char-load and back to `status` at char-save.
+    // Domain-typed player persistence data (replaces MmoCharStatus).
     pub player:            PlayerData,
 
     // status timers
@@ -343,9 +338,9 @@ unsafe impl Sync for MapSessionData {}
 #[cfg(test)]
 mod layout_tests {
     use super::*;
-    // C baseline was 3335344. The `player: PlayerData` Rust-only field adds 824 bytes.
+    // MmoCharStatus removed — struct is now ~165KB (was ~3.3MB with the legacy status field).
     // Update this constant when PlayerData sub-structs grow or new fields are added.
-    const EXPECTED_SIZE: usize = 3336168;
+    const EXPECTED_SIZE: usize = 164816;
     #[test]
     fn map_session_data_size() {
         assert_eq!(std::mem::size_of::<MapSessionData>(), EXPECTED_SIZE);
@@ -3167,7 +3162,7 @@ pub unsafe fn pc_equipscript(sd: *mut MapSessionData) -> i32 {
     libc::memcpy(
         &mut (&mut (*sd).player.inventory.equip)[ret as usize] as *mut _ as *mut libc::c_void,
         &(&(*sd).player.inventory.inventory)[invslot] as *const _ as *const libc::c_void,
-        std::mem::size_of::<crate::servers::char::charstatus::Item>(),
+        std::mem::size_of::<crate::common::types::Item>(),
     );
 
     pc_delitem(sd, invslot as i32, 1, 6);
@@ -3228,17 +3223,17 @@ pub unsafe fn pc_unequipscript(sd: *mut MapSessionData) -> i32 {
 
     if (*sd).equipid > 0 {
         // Swap: move old equip item to inventory, place new inventory item in slot.
-        let mut it = std::mem::zeroed::<crate::servers::char::charstatus::Item>();
+        let mut it = std::mem::zeroed::<crate::common::types::Item>();
         let invslot = (*sd).invslot as usize;
         libc::memcpy(
             &mut it as *mut _ as *mut libc::c_void,
             &(&(*sd).player.inventory.equip)[type_] as *const _ as *const libc::c_void,
-            std::mem::size_of::<crate::servers::char::charstatus::Item>(),
+            std::mem::size_of::<crate::common::types::Item>(),
         );
         libc::memcpy(
             &mut (&mut (*sd).player.inventory.equip)[type_] as *mut _ as *mut libc::c_void,
             &(&(*sd).player.inventory.inventory)[invslot] as *const _ as *const libc::c_void,
-            std::mem::size_of::<crate::servers::char::charstatus::Item>(),
+            std::mem::size_of::<crate::common::types::Item>(),
         );
 
         pc_delitem(sd, invslot as i32, 1, 6);
@@ -3247,11 +3242,11 @@ pub unsafe fn pc_unequipscript(sd: *mut MapSessionData) -> i32 {
         (&mut (*sd).player.inventory.equip)[type_].amount = 1;
     } else {
         // Simple unequip: clear slot and return item to inventory.
-        let mut it = std::mem::zeroed::<crate::servers::char::charstatus::Item>();
+        let mut it = std::mem::zeroed::<crate::common::types::Item>();
         libc::memcpy(
             &mut it as *mut _ as *mut libc::c_void,
             &(&(*sd).player.inventory.equip)[type_] as *const _ as *const libc::c_void,
-            std::mem::size_of::<crate::servers::char::charstatus::Item>(),
+            std::mem::size_of::<crate::common::types::Item>(),
         );
 
         // Guard against a zeroed-out slot (C checks `&it.id <= 0` — bogus pointer
@@ -3263,7 +3258,7 @@ pub unsafe fn pc_unequipscript(sd: *mut MapSessionData) -> i32 {
         libc::memset(
             &mut (&mut (*sd).player.inventory.equip)[type_] as *mut _ as *mut libc::c_void,
             0,
-            std::mem::size_of::<crate::servers::char::charstatus::Item>(),
+            std::mem::size_of::<crate::common::types::Item>(),
         );
         (*sd).target   = (*sd).bl.id as i32;
         (*sd).attacker = (*sd).bl.id;
@@ -3324,7 +3319,7 @@ pub unsafe fn pc_getitemscript(
         return 0;
     }
 
-    let mut it = std::mem::zeroed::<crate::servers::char::charstatus::Item>();
+    let mut it = std::mem::zeroed::<crate::common::types::Item>();
     let add: bool;
 
     if (*sd).pickuptype == 0
@@ -3335,7 +3330,7 @@ pub unsafe fn pc_getitemscript(
         libc::memcpy(
             &mut it as *mut _ as *mut libc::c_void,
             &(*fl).data as *const _ as *const libc::c_void,
-            std::mem::size_of::<crate::servers::char::charstatus::Item>(),
+            std::mem::size_of::<crate::common::types::Item>(),
         );
         it.amount = 1;
         (*fl).data.amount -= 1;
@@ -3345,7 +3340,7 @@ pub unsafe fn pc_getitemscript(
         libc::memcpy(
             &mut it as *mut _ as *mut libc::c_void,
             &(*fl).data as *const _ as *const libc::c_void,
-            std::mem::size_of::<crate::servers::char::charstatus::Item>(),
+            std::mem::size_of::<crate::common::types::Item>(),
         );
         (*fl).data.amount = 0;
         add = true;
@@ -3415,7 +3410,7 @@ pub async unsafe fn pc_warp(
     mut x: i32,
     mut y: i32,
 ) -> i32 {
-    use crate::servers::char::charstatus::{MAX_SPELLS, MAX_MAGIC_TIMERS};
+    use crate::common::player::spells::{MAX_SPELLS, MAX_MAGIC_TIMERS};
     use crate::database::map_db::map_is_loaded;
 
     if sd.is_null() { return 0; }
@@ -3512,7 +3507,7 @@ pub async unsafe fn pc_warp(
 /// `int pc_loadmagic(USER* sd)` — sends each of the player's known spells to
 /// the client via `clif_sendmagic`.
 pub unsafe fn pc_loadmagic(sd: *mut MapSessionData) -> i32 {
-    use crate::servers::char::charstatus::MAX_SPELLS;
+    use crate::common::player::spells::MAX_SPELLS;
     for i in 0..MAX_SPELLS {
         if (&(*sd).player.spells.skills)[i] > 0 {
             clif_sendmagic(&mut *sd, i as i32);
@@ -3527,7 +3522,7 @@ pub unsafe fn pc_loadmagic(sd: *mut MapSessionData) -> i32 {
 /// calls the `recast` Lua hook on the spell.  Also sends any pending aether
 /// (cooldown) values.
 pub unsafe fn pc_magic_startup(sd: *mut MapSessionData) -> i32 {
-    use crate::servers::char::charstatus::MAX_MAGIC_TIMERS;
+    use crate::common::player::spells::MAX_MAGIC_TIMERS;
 
     if sd.is_null() { return 0; }
 
@@ -3562,7 +3557,7 @@ pub unsafe fn pc_magic_startup(sd: *mut MapSessionData) -> i32 {
 /// `int pc_reload_aether(USER* sd)` — resends active aether (spell cooldown)
 /// values to the client.  Called when the client reconnects.
 pub unsafe fn pc_reload_aether(sd: *mut MapSessionData) -> i32 {
-    use crate::servers::char::charstatus::MAX_MAGIC_TIMERS;
+    use crate::common::player::spells::MAX_MAGIC_TIMERS;
     for x in 0..MAX_MAGIC_TIMERS {
         let p = &(&(*sd).player.spells.dura_aether)[x];
         if p.id > 0 && p.aether > 0 {
@@ -3589,7 +3584,7 @@ pub unsafe fn pc_die(sd: *mut MapSessionData) -> i32 {
 /// - Resets combat state (enchanted, flank, backstab, dmgshield).
 /// - Recalculates stats and broadcasts updated state.
 pub unsafe fn pc_diescript(sd: *mut MapSessionData) -> i32 {
-    use crate::servers::char::charstatus::MAX_MAGIC_TIMERS;
+    use crate::common::player::spells::MAX_MAGIC_TIMERS;
     use crate::game::mob::{
         MAX_THREATCOUNT,
         MOB_SPAWN_START, MOB_SPAWN_MAX,

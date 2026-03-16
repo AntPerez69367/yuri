@@ -22,7 +22,7 @@ use crate::game::pc::{
 
 // BL_ALL: all block-list types (from map_server.h enum)
 const BL_ALL: i32 = 0x0F;
-use crate::servers::char::charstatus::MAX_INVENTORY;
+use crate::common::player::inventory::MAX_INVENTORY;
 
 use super::packet::{
     encrypt,

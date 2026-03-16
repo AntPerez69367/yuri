@@ -1,7 +1,10 @@
 use sqlx::{MySqlPool, Row, Transaction, MySql};
 use anyhow::Result;
 use md5::{Md5, Digest};
-use crate::servers::char::charstatus::*;
+use crate::common::types::{Item, SkillInfo, Legend, BankData};
+use crate::common::player::inventory::{MAX_EQUIP, MAX_INVENTORY, MAX_BANK_SLOTS};
+use crate::common::player::spells::{MAX_SPELLS, MAX_MAGIC_TIMERS};
+use crate::common::player::legends::MAX_LEGENDS;
 use crate::common::player::{
     PlayerData, PlayerIdentity, PlayerCombat, PlayerProgression,
     PlayerSpells, PlayerInventory, PlayerAppearance, PlayerSocial,
@@ -529,13 +532,6 @@ pub async fn load_player(pool: &MySqlPool, char_id: u32, login_name: &str) -> Re
     Ok(pd)
 }
 
-/// Load a character from DB and return it as a raw byte blob for zlib transfer.
-pub async fn load_char_bytes(pool: &MySqlPool, char_id: u32, login_name: &str) -> Result<Vec<u8>> {
-    let player = load_player(pool, char_id, login_name).await?;
-    let mmo = player.to_mmo_char_status();
-    Ok(char_status_to_bytes(&mmo).to_vec())
-}
-
 /// Save a PlayerData to the database.
 pub async fn save_player(pool: &MySqlPool, player: &PlayerData) -> Result<()> {
     let char_id = player.identity.id;
@@ -653,13 +649,6 @@ pub async fn save_player(pool: &MySqlPool, player: &PlayerData) -> Result<()> {
 }
 
 /// Save a character from a raw byte blob back to the DB (thin wrapper for wire compat).
-pub async fn save_char_bytes(pool: &MySqlPool, raw: &[u8]) -> Result<()> {
-    let mmo = char_status_from_bytes(raw)
-        .ok_or_else(|| anyhow::anyhow!("invalid char bytes: too short"))?;
-    let player = PlayerData::from_mmo_char_status(&mmo);
-    save_player(pool, &player).await
-}
-
 // ── String helpers ────────────────────────────────────────────────────────────
 
 fn copy_str_to_i8<const N: usize>(dst: &mut [i8; N], src: &str) {

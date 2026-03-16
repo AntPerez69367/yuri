@@ -17,7 +17,7 @@ use crate::game::pc::{
     // SFLAG_* constants (from map_server.h)
     SFLAG_ALWAYSON, SFLAG_FULLSTATS, SFLAG_GMON, SFLAG_HPMP, SFLAG_XPMONEY,
 };
-use crate::servers::char::charstatus::MAX_LEGENDS;
+use crate::common::player::legends::MAX_LEGENDS;
 
 use super::packet::{
     encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow,

@@ -8,7 +8,7 @@ use crate::database::mob_db::MobDbData;
 use crate::database::map_db::{get_map_ptr as ffi_get_map_ptr, map_is_loaded as ffi_map_is_loaded};
 use crate::game::pc::MapSessionData;
 use crate::game::types::GfxViewer;
-use crate::servers::char::charstatus::{Item, SkillInfo};
+use crate::common::types::{Item, SkillInfo};
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
 
 // ─── Constants ──────────────────────────────────────────────────────────────

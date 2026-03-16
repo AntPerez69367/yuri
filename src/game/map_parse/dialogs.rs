@@ -13,7 +13,7 @@ use crate::game::pc::{
     EQ_ARMOR, EQ_COAT, EQ_WEAP, EQ_SHIELD, EQ_HELM,
     EQ_FACEACC, EQ_CROWN, EQ_FACEACCTWO, EQ_MANTLE, EQ_NECKLACE, EQ_BOOTS,
 };
-use crate::servers::char::charstatus::Item;
+use crate::common::types::Item;
 use crate::session::{SessionId, session_exists};
 
 use super::packet::{
