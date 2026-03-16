@@ -1,0 +1,30 @@
+use crate::common::types::Legend;
+
+/// Achievement legends display. Pre-allocated to MAX size.
+pub const MAX_LEGENDS: usize = 1000;
+
+#[derive(Debug, Clone)]
+pub struct PlayerLegends {
+    /// Legend entries — slot-indexed, pre-allocated.
+    /// Empty slot has icon = 0.
+    pub legends: Vec<Legend>,
+}
+
+impl Default for PlayerLegends {
+    fn default() -> Self {
+        Self {
+            legends: vec![Legend::default(); MAX_LEGENDS],
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_preallocated() {
+        let l = PlayerLegends::default();
+        assert_eq!(l.legends.len(), MAX_LEGENDS);
+    }
+}
