@@ -251,8 +251,8 @@ pub unsafe fn clif_sendchararea(sd: *mut MapSessionData) -> i32 {
         let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(pc_arc) = map_id2sd_pc(id) {
-                let mut pc = pc_arc.write();
-                clif_charlook_inner(&raw mut pc.bl, LOOK_SEND, sd);
+                let pc = pc_arc.read();
+                clif_charlook_inner(&raw const pc.bl, LOOK_SEND, sd as *const MapSessionData);
             }
         }
     }
@@ -821,22 +821,22 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
             clif_mob_look_close(sd);
             for &id in &rect_ids {
                 if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook_inner(&raw mut pc_arc.write().bl, LOOK_GET, sd);
+                    clif_charlook_inner(&raw const pc_arc.read().bl, LOOK_GET, sd as *const MapSessionData);
                 }
             }
             for &id in &rect_ids {
                 if let Some(npc_arc) = map_id2npc_ref(id) {
-                    clif_cnpclook_inner(&raw mut npc_arc.write().bl, LOOK_GET, sd as *mut BlockList);
+                    clif_cnpclook_inner(&raw const npc_arc.read().bl, LOOK_GET, sd as *const BlockList);
                 }
             }
             for &id in &rect_ids {
                 if let Some(mob_arc) = map_id2mob_ref(id) {
-                    clif_cmoblook_inner(&raw mut mob_arc.write().bl, LOOK_GET, sd as *mut BlockList);
+                    clif_cmoblook_inner(&raw const mob_arc.read().bl, LOOK_GET, sd as *const BlockList);
                 }
             }
             for &id in &rect_ids {
                 if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook_inner(&raw mut pc_arc.write().bl, LOOK_SEND, sd);
+                    clif_charlook_inner(&raw const pc_arc.read().bl, LOOK_SEND, sd as *const MapSessionData);
                 }
             }
         }
@@ -1066,22 +1066,22 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> i32 {
             clif_mob_look_close(sd);
             for &id in &rect_ids {
                 if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook_inner(&raw mut pc_arc.write().bl, LOOK_GET, sd);
+                    clif_charlook_inner(&raw const pc_arc.read().bl, LOOK_GET, sd as *const MapSessionData);
                 }
             }
             for &id in &rect_ids {
                 if let Some(npc_arc) = map_id2npc_ref(id) {
-                    clif_cnpclook_inner(&raw mut npc_arc.write().bl, LOOK_GET, sd as *mut BlockList);
+                    clif_cnpclook_inner(&raw const npc_arc.read().bl, LOOK_GET, sd as *const BlockList);
                 }
             }
             for &id in &rect_ids {
                 if let Some(mob_arc) = map_id2mob_ref(id) {
-                    clif_cmoblook_inner(&raw mut mob_arc.write().bl, LOOK_GET, sd as *mut BlockList);
+                    clif_cmoblook_inner(&raw const mob_arc.read().bl, LOOK_GET, sd as *const BlockList);
                 }
             }
             for &id in &rect_ids {
                 if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook_inner(&raw mut pc_arc.write().bl, LOOK_SEND, sd);
+                    clif_charlook_inner(&raw const pc_arc.read().bl, LOOK_SEND, sd as *const MapSessionData);
                 }
             }
         }
@@ -1502,22 +1502,22 @@ pub unsafe fn clif_parseviewchange(sd: *mut MapSessionData) -> i32 {
         clif_mob_look_close(sd);
         for &id in &rect_ids {
             if let Some(pc_arc) = map_id2sd_pc(id) {
-                clif_charlook_inner(&raw mut pc_arc.write().bl, LOOK_GET, sd);
+                clif_charlook_inner(&raw const pc_arc.read().bl, LOOK_GET, sd as *const MapSessionData);
             }
         }
         for &id in &rect_ids {
             if let Some(npc_arc) = map_id2npc_ref(id) {
-                clif_cnpclook_inner(&raw mut npc_arc.write().bl, LOOK_GET, sd as *mut BlockList);
+                clif_cnpclook_inner(&raw const npc_arc.read().bl, LOOK_GET, sd as *const BlockList);
             }
         }
         for &id in &rect_ids {
             if let Some(mob_arc) = map_id2mob_ref(id) {
-                clif_cmoblook_inner(&raw mut mob_arc.write().bl, LOOK_GET, sd as *mut BlockList);
+                clif_cmoblook_inner(&raw const mob_arc.read().bl, LOOK_GET, sd as *const BlockList);
             }
         }
         for &id in &rect_ids {
             if let Some(pc_arc) = map_id2sd_pc(id) {
-                clif_charlook_inner(&raw mut pc_arc.write().bl, LOOK_SEND, sd);
+                clif_charlook_inner(&raw const pc_arc.read().bl, LOOK_SEND, sd as *const MapSessionData);
             }
         }
     }

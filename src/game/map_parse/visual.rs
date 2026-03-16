@@ -270,15 +270,15 @@ pub unsafe fn clif_object_look_sub_inner(bl: *mut BlockList, look_type: i32, arg
 /// Send a single-object look packet immediately (not batched).
 /// Same argument layout as `clif_object_look_sub_inner`.
 /// Mirrors `clif_object_look_sub2` (~line 1592).
-pub unsafe fn clif_object_look_sub2_inner(bl: *mut BlockList, look_type: i32, arg: *mut BlockList) -> i32 {
-    let (sd, b): (*mut MapSessionData, *mut BlockList) = if look_type == LOOK_SEND {
+pub unsafe fn clif_object_look_sub2_inner(bl: *const BlockList, look_type: i32, arg: *const BlockList) -> i32 {
+    let (sd, b): (*const MapSessionData, *const BlockList) = if look_type == LOOK_SEND {
         if bl.is_null() { return 0; }
         if arg.is_null() { return 0; }
-        (bl as *mut MapSessionData, arg)
+        (bl as *const MapSessionData, arg)
     } else {
         if bl.is_null() { return 0; }
         if arg.is_null() { return 0; }
-        (arg as *mut MapSessionData, bl)
+        (arg as *const MapSessionData, bl)
     };
 
     if !session_exists((*sd).fd) {
@@ -301,7 +301,7 @@ pub unsafe fn clif_object_look_sub2_inner(bl: *mut BlockList, look_type: i32, ar
 
     match (*b).bl_type {
         t if t == BL_MOB_U8 => {
-            let mob = b as *mut MobSpawnData;
+            let mob = b as *const MobSpawnData;
             if (*mob).state == MOB_DEAD || (*(*mob).data).mobtype == 1 { return 0; }
 
             if (*(*mob).data).isnpc == 0 {
@@ -333,7 +333,7 @@ pub unsafe fn clif_object_look_sub2_inner(bl: *mut BlockList, look_type: i32, ar
             }
         }
         t if t == BL_NPC_U8 => {
-            let nd = b as *mut NpcData;
+            let nd = b as *const NpcData;
             if (*b).subtype != 0 || (*nd).bl.subtype != 0 || (*nd).npctype == 1 { return 0; }
 
             wfifob((*sd).fd, 11, 12);
@@ -344,7 +344,7 @@ pub unsafe fn clif_object_look_sub2_inner(bl: *mut BlockList, look_type: i32, ar
             wfifob((*sd).fd, 22, 0);
         }
         t if t == BL_ITEM_U8 => {
-            let item = b as *mut FloorItemData;
+            let item = b as *const FloorItemData;
 
             let mut in_table = false;
             for &spotter in (*item).data.traps_table.iter() {
@@ -518,16 +518,16 @@ pub unsafe fn clif_mob_look_close(sd: *mut MapSessionData) -> i32 {
 ///                  if `LOOK_SEND`, `bl` is the player and `arg` is cast to `*mut NpcData`.
 ///
 /// Mirrors `clif_cnpclook_sub` (~line 2773).
-pub unsafe fn clif_cnpclook_inner(bl: *mut BlockList, look_type: i32, arg: *mut BlockList) -> i32 {
-    let (nd, sd): (*mut NpcData, *mut MapSessionData) = if look_type == LOOK_GET {
+pub unsafe fn clif_cnpclook_inner(bl: *const BlockList, look_type: i32, arg: *const BlockList) -> i32 {
+    let (nd, sd): (*const NpcData, *const MapSessionData) = if look_type == LOOK_GET {
         if bl.is_null() { return 0; }
         if arg.is_null() { return 0; }
-        (bl as *mut NpcData, arg as *mut MapSessionData)
+        (bl as *const NpcData, arg as *const MapSessionData)
     } else {
         // LOOK_SEND
         if bl.is_null() { return 0; }
         if arg.is_null() { return 0; }
-        (arg as *mut NpcData, bl as *mut MapSessionData)
+        (arg as *const NpcData, bl as *const MapSessionData)
     };
 
     if (*nd).bl.m != (*sd).bl.m || (*nd).npctype != 1 {
@@ -780,16 +780,16 @@ pub unsafe fn clif_cnpclook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
 ///                  if `LOOK_SEND`, `bl` is the player and `arg` is cast to `*mut MobSpawnData`.
 ///
 /// Mirrors `clif_cmoblook_sub` (~line 3016).
-pub unsafe fn clif_cmoblook_inner(bl: *mut BlockList, look_type: i32, arg: *mut BlockList) -> i32 {
-    let (mob, sd): (*mut MobSpawnData, *mut MapSessionData) = if look_type == LOOK_GET {
+pub unsafe fn clif_cmoblook_inner(bl: *const BlockList, look_type: i32, arg: *const BlockList) -> i32 {
+    let (mob, sd): (*const MobSpawnData, *const MapSessionData) = if look_type == LOOK_GET {
         if bl.is_null() { return 0; }
         if arg.is_null() { return 0; }
-        (bl as *mut MobSpawnData, arg as *mut MapSessionData)
+        (bl as *const MobSpawnData, arg as *const MapSessionData)
     } else {
         // LOOK_SEND
         if bl.is_null() { return 0; }
         if arg.is_null() { return 0; }
-        (arg as *mut MobSpawnData, bl as *mut MapSessionData)
+        (arg as *const MobSpawnData, bl as *const MapSessionData)
     };
 
     if (*mob).bl.m != (*sd).bl.m || (*(*mob).data).mobtype != 1 || (*mob).state == 1 {
@@ -1040,19 +1040,21 @@ pub unsafe fn clif_cmoblook_inner(bl: *mut BlockList, look_type: i32, arg: *mut 
 ///                  if `LOOK_SEND`, `bl` is the viewer and `arg` is the player whose appearance we send.
 ///
 /// Mirrors `clif_charlook_sub` (~line 3285).
-pub unsafe fn clif_charlook_inner(bl: *mut BlockList, look_type: i32, arg: *mut MapSessionData) -> i32 {
+pub unsafe fn clif_charlook_inner(bl: *const BlockList, look_type: i32, arg: *const MapSessionData) -> i32 {
     // sd  = the player whose appearance we send
     // src_sd = the player receiving the packet
+    // SAFETY: locals are *mut for callees (clif_isingroup, pc_isequip) that still expect *mut.
+    // This function is verified read-only — no field mutations.
     let (sd, src_sd): (*mut MapSessionData, *mut MapSessionData) = if look_type == LOOK_GET {
         if bl.is_null() { return 0; }
         if arg.is_null() { return 0; }
         // C: sd=(USER*)bl, src_sd=va_arg — if src_sd==sd return 0
-        if bl as *mut MapSessionData == arg { return 0; }
-        (bl as *mut MapSessionData, arg)
+        if bl as *const MapSessionData == arg { return 0; }
+        (bl as *const MapSessionData as *mut MapSessionData, arg as *const MapSessionData as *mut MapSessionData)
     } else {
         if bl.is_null() { return 0; }
         if arg.is_null() { return 0; }
-        (arg, bl as *mut MapSessionData)
+        (arg as *const MapSessionData as *mut MapSessionData, bl as *const MapSessionData as *mut MapSessionData)
     };
 
     if (*sd).bl.m != (*src_sd).bl.m { return 0; }

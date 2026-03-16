@@ -2224,13 +2224,13 @@ unsafe fn pc_dropitemfull_inner(sd: *mut MapSessionData, fl2: *const Item) -> i3
     if def[0] == 0 {
         let fl_raw = Box::into_raw(fl);
         map_additem(&mut (*fl_raw).bl);
-        let fl_bl = &mut (*fl_raw).bl as *mut BlockList;
+        let fl_bl = &(*fl_raw).bl as *const BlockList;
         if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
             let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
             let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_object_look_sub2_inner(&mut tsd_arc.write().bl as *mut BlockList, LOOK_SEND, fl_bl);
+                    clif_object_look_sub2_inner(&tsd_arc.read().bl as *const BlockList, LOOK_SEND, fl_bl);
                 }
             }
         }
@@ -2662,13 +2662,13 @@ pub unsafe fn pc_dropitemmap(
         let fl_raw = Box::into_raw(fl);
         map_additem(&mut (*fl_raw).bl);
         sl_doscript_2_pc(c"characterLog".as_ptr(), c"dropWrite".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*fl_raw).bl as *mut BlockList);
-        let fl_bl = &mut (*fl_raw).bl as *mut BlockList;
+        let fl_bl = &(*fl_raw).bl as *const BlockList;
         if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
             let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
             let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_object_look_sub2_inner(&mut tsd_arc.write().bl as *mut BlockList, LOOK_SEND, fl_bl);
+                    clif_object_look_sub2_inner(&tsd_arc.read().bl as *const BlockList, LOOK_SEND, fl_bl);
                 }
             }
         }

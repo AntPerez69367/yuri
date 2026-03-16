@@ -794,7 +794,7 @@ pub unsafe fn mob_respawn(mob: *mut MobSpawnData) -> i32 {
             if d.mobtype == 1 {
                 for id in ids {
                     if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                        clif_cmoblook_inner(&mut sd_arc.write().bl, LOOK_SEND, mob as *mut _);
+                        clif_cmoblook_inner(&sd_arc.read().bl, LOOK_SEND, mob as *const _);
                     }
                 }
             } else {
@@ -847,14 +847,14 @@ pub unsafe fn mob_warp(mob: *mut MobSpawnData, m: i32, x: i32, y: i32) -> i32 {
         if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
             for id in ids {
                 if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_cmoblook_inner(&mut sd_arc.write().bl, LOOK_SEND, mob as *mut _);
+                    clif_cmoblook_inner(&sd_arc.read().bl, LOOK_SEND, mob as *const _);
                 }
             }
         } else {
-            let mob_bl = &raw mut (*mob).bl;
+            let mob_bl = &raw const (*mob).bl;
             for id in ids {
                 if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_object_look_sub2_inner(&mut sd_arc.write().bl, LOOK_SEND, mob_bl);
+                    clif_object_look_sub2_inner(&sd_arc.read().bl, LOOK_SEND, mob_bl);
                 }
             }
         }
@@ -1328,7 +1328,7 @@ unsafe fn broadcast_move(
             if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
                 for id in &rect_ids {
                     if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(*id) {
-                        clif_cmoblook_inner(&mut sd_arc.write().bl, LOOK_SEND, mob as *mut _);
+                        clif_cmoblook_inner(&sd_arc.read().bl, LOOK_SEND, mob as *const _);
                     }
                 }
             } else {
@@ -1850,11 +1850,11 @@ pub unsafe fn mob_dropitem(
         map_additem(&raw mut (*fl_raw).bl);
         if let Some(grid) = block_grid::get_grid(m as usize) {
             let slot = &*ffi_get_map_ptr(m as u16);
-            let fl_bl = &raw mut (*fl_raw).bl;
+            let fl_bl = &raw const (*fl_raw).bl;
             let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_object_look_sub2_inner(&mut sd_arc.write().bl, LOOK_SEND, fl_bl);
+                    clif_object_look_sub2_inner(&sd_arc.read().bl, LOOK_SEND, fl_bl);
                 }
             }
         }

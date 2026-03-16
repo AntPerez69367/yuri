@@ -911,11 +911,11 @@ pub unsafe fn clif_getchararea(sd: *mut MapSessionData) -> i32 {
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_charlook_inner(&raw mut pc_arc.write().bl, LOOK_GET, sd);
+                clif_charlook_inner(&raw const pc_arc.read().bl, LOOK_GET, sd as *const MapSessionData);
             } else if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(id) {
-                clif_cnpclook_inner(&raw mut npc_arc.write().bl, LOOK_GET, sd as *mut BlockList);
+                clif_cnpclook_inner(&raw const npc_arc.read().bl, LOOK_GET, sd as *const BlockList);
             } else if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(id) {
-                clif_cmoblook_inner(&raw mut mob_arc.write().bl, LOOK_GET, sd as *mut BlockList);
+                clif_cmoblook_inner(&raw const mob_arc.read().bl, LOOK_GET, sd as *const BlockList);
             }
         }
     }

@@ -323,19 +323,19 @@ pub unsafe fn npc_warp(nd: *mut NpcData, m: i32, x: i32, y: i32) -> i32 {
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
-        let nd_bl = nd as *mut NpcData as *mut BlockList;
+        let nd_bl = nd as *const NpcData as *const BlockList;
         if nd.npctype == 1 {
             for id in ids {
                 if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    let pc = &mut *arc.write();
-                    clif_cnpclook_inner(&raw mut pc.bl, LOOK_SEND, nd_bl);
+                    let pc = &*arc.read();
+                    clif_cnpclook_inner(&raw const pc.bl, LOOK_SEND, nd_bl);
                 }
             }
         } else {
             for id in ids {
                 if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    let pc = &mut *arc.write();
-                    clif_object_look_sub2_inner(&raw mut pc.bl, LOOK_SEND, nd_bl);
+                    let pc = &*arc.read();
+                    clif_object_look_sub2_inner(&raw const pc.bl, LOOK_SEND, nd_bl);
                 }
             }
         }
@@ -1076,10 +1076,10 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> i32 {
             if let Some(grid) = block_grid::get_grid(nm as usize) {
                 let rect_ids = grid.ids_in_rect(x0, y0, x0 + x1 - 1, y0 + y1 - 1);
                 if nd.npctype == 1 {
-                    let nd_bl = nd as *mut NpcData as *mut BlockList;
+                    let nd_bl = nd as *const NpcData as *const BlockList;
                     for &id in &rect_ids {
                         if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_cnpclook_inner(&raw mut pc_arc.write().bl, LOOK_SEND, nd_bl);
+                            clif_cnpclook_inner(&raw const pc_arc.read().bl, LOOK_SEND, nd_bl);
                         }
                     }
                 } else {

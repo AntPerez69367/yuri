@@ -807,13 +807,13 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
 
         sl_doscript_2(b"characterLog\0".as_ptr().cast(), b"dropWrite\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl_raw).bl);
 
-        let fl_bl = &raw mut (*fl_raw).bl;
+        let fl_bl = &raw const (*fl_raw).bl;
         if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
             let slot = &*raw_map_ptr().add((*sd).bl.m as usize);
             let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_object_look_sub2_inner(&raw mut pc_arc.write().bl, LOOK_SEND, fl_bl);
+                    clif_object_look_sub2_inner(&raw const pc_arc.read().bl, LOOK_SEND, fl_bl);
                 }
             }
         }
@@ -1024,13 +1024,13 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
     if def[0] == 0 {
         let fl_raw = Box::into_raw(fl);
         map_additem(&raw mut (*fl_raw).bl);
-        let fl_bl = &raw mut (*fl_raw).bl;
+        let fl_bl = &raw const (*fl_raw).bl;
         if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
             let slot = &*raw_map_ptr().add((*sd).bl.m as usize);
             let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_object_look_sub2_inner(&raw mut pc_arc.write().bl, LOOK_SEND, fl_bl);
+                    clif_object_look_sub2_inner(&raw const pc_arc.read().bl, LOOK_SEND, fl_bl);
                 }
             }
         }
