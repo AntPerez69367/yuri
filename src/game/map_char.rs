@@ -16,18 +16,7 @@ use crate::game::pc::MapSessionData;
 // Constants mirrored from map_server.h / map_parse.h
 // ---------------------------------------------------------------------------
 
-const SFLAG_FULLSTATS: i32 = 0x40;
-const SFLAG_HPMP: i32      = 0x20;
-const SFLAG_XPMONEY: i32   = 0x10;
-
-const BL_ALL: i32 = 0x0F;
-const BL_PC:  i32 = 0x01;
-
-// enum { LOOK_GET, LOOK_SEND } from map_parse.h
-const LOOK_GET: i32 = 0;
-
-// optFlag_walkthrough = 128 (from map_server.h)
-const OPT_WALKTHROUGH: u64 = 128;
+use crate::common::constants::entity::player::{SFLAG_FULLSTATS, SFLAG_HPMP, SFLAG_XPMONEY, OPT_FLAG_WALKTHROUGH};
 
 // ---------------------------------------------------------------------------
 
@@ -139,7 +128,7 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
     }
 
     if (*sd).player.identity.gm_level != 0 {
-        (*sd).optFlags |= OPT_WALKTHROUGH;
+        (*sd).optFlags |= OPT_FLAG_WALKTHROUGH;
     }
 
     if !crate::game::block::map_is_loaded((*sd).player.identity.last_pos.m as i32) {

@@ -696,8 +696,7 @@ pub async unsafe fn map_addmob(
 // Board / N-Mail packet constants
 // ---------------------------------------------------------------------------
 
-const BOARD_CAN_WRITE: i32 = 1;
-const BOARD_CAN_DEL:   i32 = 2;
+use crate::common::constants::world::{BOARD_CAN_WRITE, BOARD_CAN_DEL};
 
 
 // ---------------------------------------------------------------------------
@@ -2048,8 +2047,7 @@ pub unsafe fn map_src_add(r1: *const i8) -> i32 {
 // Server-wide key/value integer store backed by the `GameRegistry<serverid>` table.
 // ---------------------------------------------------------------------------
 
-/// Capacity of the game-global registry.
-const MAX_GAMEREG: usize = 5000;
+use crate::common::constants::world::MAX_GAMEREG;
 
 /// Game-global registry entry.
 ///

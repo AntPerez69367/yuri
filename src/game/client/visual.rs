@@ -20,6 +20,7 @@ use crate::session::{
 use crate::game::map_parse::packet::{rfifop, rfiforest, wfifohead, wfifop, wfifoset};
 use crate::game::mob::BL_MOB;
 use crate::game::pc::MapSessionData;
+use crate::common::constants::entity::player::FLAG_WEATHER;
 use crate::common::player::inventory::MAX_INVENTORY;
 
 use crate::network::crypt::encrypt;
@@ -780,7 +781,6 @@ pub unsafe fn clif_sendweather(
         return 0;
     }
 
-    const FLAG_WEATHER: u32 = 32;
     let weather_byte: u8 = if sdr.player.appearance.setting_flags & FLAG_WEATHER != 0 {
         let map_ptr = crate::database::map_db::raw_map_ptr();
         if map_ptr.is_null() {
@@ -856,8 +856,6 @@ pub unsafe fn clif_show_ghost(
     }
 
     if map_slot.pvp != 0 {
-        // optFlag_ghosts = 256 (map_server.h line 34). optFlags is u64 (64-bit on Linux).
-        const OPT_FLAG_GHOSTS: u64 = 256;
         if sdr.player.combat.state == 1 && (sdr.optFlags as u64 & OPT_FLAG_GHOSTS) != 0 {
             1
         } else {
@@ -1490,8 +1488,7 @@ use crate::game::pc::{
 use crate::game::block::AreaType;
 use crate::game::block_grid;
 
-// optFlag_ghosts = 256 (bit 8 of optFlags).
-const OPT_FLAG_GHOSTS: u64 = 256;
+use crate::common::constants::entity::player::OPT_FLAG_GHOSTS;
 
 // Direct Rust imports (with _us suffix aliases to avoid name conflicts)
 use crate::game::map_parse::groups::clif_isingroup as clif_isingroup_us;

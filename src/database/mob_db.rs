@@ -8,7 +8,7 @@ use super::{blocking_run, get_pool};
 use super::item_db::str_to_fixed;
 use crate::common::types::Item;
 
-const MAX_EQUIP: usize = 15;
+use crate::common::constants::entity::player::MAX_EQUIP;
 
 /// Mob database entry.
 pub struct MobDbData {

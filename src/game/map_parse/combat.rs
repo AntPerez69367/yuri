@@ -27,10 +27,6 @@ use super::packet::{
 use crate::game::block::AreaType;
 use crate::game::block_grid;
 
-// enum { LOOK_GET = 0, LOOK_SEND = 1 } from map_parse.h
-const LOOK_GET: i32 = 0;
-
-
 use crate::game::map_parse::player_state::clif_sendstatus;
 use crate::game::map_parse::groups::{clif_grouphealth_update, clif_isingroup};
 use crate::game::map_parse::chat::{clif_sendmsg, clif_sendminitext, clif_playsound_entity};

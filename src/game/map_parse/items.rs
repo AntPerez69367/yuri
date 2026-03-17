@@ -17,20 +17,11 @@ use crate::game::pc::{
 };
 
 // MAP_EQ* message indices
-const MAP_EQHELM:     usize = 13;
-const MAP_EQWEAP:     usize = 14;
-const MAP_EQARMOR:    usize = 15;
-const MAP_EQSHIELD:   usize = 16;
-const MAP_EQLEFT:     usize = 17;
-const MAP_EQRIGHT:    usize = 18;
-const MAP_EQSUBLEFT:  usize = 19;
-const MAP_EQSUBRIGHT: usize = 20;
-const MAP_EQFACEACC:  usize = 21;
-const MAP_EQCROWN:    usize = 22;
-const MAP_EQMANTLE:   usize = 23;
-const MAP_EQNECKLACE: usize = 24;
-const MAP_EQBOOTS:    usize = 25;
-const MAP_EQCOAT:     usize = 26;
+use crate::common::constants::entity::player::{
+    MAP_EQHELM, MAP_EQWEAP, MAP_EQARMOR, MAP_EQSHIELD, MAP_EQLEFT, MAP_EQRIGHT,
+    MAP_EQSUBLEFT, MAP_EQSUBRIGHT, MAP_EQFACEACC, MAP_EQCROWN, MAP_EQMANTLE,
+    MAP_EQNECKLACE, MAP_EQBOOTS, MAP_EQCOAT,
+};
 
 use crate::game::scripting::types::floor::FloorItemData;
 use crate::common::player::inventory::MAX_INVENTORY;
@@ -44,8 +35,7 @@ use super::packet::{
     SAMEAREA,
 };
 
-// optFlag_stealth = 32 (from map_server.h)
-const OPT_FLAG_STEALTH: i32 = 32;
+use crate::common::constants::entity::player::OPT_FLAG_STEALTH;
 
 // SCRIPT subtype constant (enum { SCRIPT=0, FLOOR=1 } in map_server.h)
 const SCRIPT: u8 = 0;
@@ -1049,7 +1039,7 @@ pub unsafe fn clif_throw_check_id(entity_id: u32, found: *mut i32) -> i32 {
         if mob.state == MOB_DEAD { return 0; }
     } else if let Some(arc) = crate::game::map_server::map_id2sd_pc(entity_id) {
         let sd = arc.read();
-        if sd.player.combat.state == 1 || (sd.optFlags & OPT_FLAG_STEALTH as u64) != 0 {
+        if sd.player.combat.state == 1 || (sd.optFlags & OPT_FLAG_STEALTH) != 0 {
             return 0;
         }
     } else {

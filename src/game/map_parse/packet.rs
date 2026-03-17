@@ -7,17 +7,14 @@ use crate::session::{
 };
 
 // ─── Send-target constants (enum in map_parse.h) ─────────────────────────────
+// Re-exported from crate::common::constants::network for callers that import
+// these via `super::packet::*` or named imports from this module.
 
-pub const ALL_CLIENT: i32  = 0;
-pub const SAMESRV: i32     = 1;
-pub const SAMEMAP: i32     = 2;
-pub const SAMEMAP_WOS: i32 = 3;
-pub const AREA: i32        = 4;
-pub const AREA_WOS: i32    = 5;
-pub const SAMEAREA: i32    = 6;
-pub const SAMEAREA_WOS: i32 = 7;
-pub const CORNER: i32      = 8;
-pub const SELF: i32        = 9;
+pub use crate::common::constants::network::{
+    ALL_CLIENT, SAMESRV, SAMEMAP, SAMEMAP_WOS,
+    AREA, AREA_WOS, SAMEAREA, SAMEAREA_WOS,
+    CORNER, SELF,
+};
 // Note: AREA_WOC not present in C source (map_parse.h enum ends at SELF = 9)
 
 // ─── Byte-order helpers ───────────────────────────────────────────────────────

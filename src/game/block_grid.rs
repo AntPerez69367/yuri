@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use crate::database::map_db::BLOCK_SIZE;
 use crate::game::map_server::{map_id2entity, GameEntity};
-use crate::game::mob::{BL_ITEM, BL_MOB, BL_NPC};
+use crate::common::constants::entity::{BL_ITEM, BL_MOB, BL_NPC, BL_PC_U8};
 
 /// Single-threaded grid storage. Uses `UnsafeCell` to avoid `static mut`
 /// deprecation while keeping the same zero-overhead access pattern.
@@ -52,8 +52,6 @@ pub struct BlockGrid {
     pub user_count: i32,
 }
 
-// BL_PC constant for user_count tracking.
-const BL_PC: u8 = 0x01;
 
 impl BlockGrid {
     /// Create a new grid for a map with dimensions `xs * ys` tiles.
@@ -84,7 +82,7 @@ impl BlockGrid {
         if idx >= self.cells.len() { return; }
         self.cells[idx].push(id);
         self.positions.insert(id, (idx, x, y, bl_type));
-        if bl_type == BL_PC { self.user_count += 1; }
+        if bl_type == BL_PC_U8 { self.user_count += 1; }
     }
 
     /// Remove entity from the grid using tracked position. All data (cell index,
@@ -97,7 +95,7 @@ impl BlockGrid {
                     cell.swap_remove(pos);
                 }
             }
-            if stored_type == BL_PC { self.user_count -= 1; }
+            if stored_type == BL_PC_U8 { self.user_count -= 1; }
             true
         } else {
             false
@@ -205,9 +203,7 @@ impl BlockGrid {
     }
 }
 
-/// Viewport half-widths matching the original constants.
-const NX: i32 = 18; // AREAX_SIZE
-const NY: i32 = 16; // AREAY_SIZE
+use crate::common::constants::world::{AREAX_SIZE, AREAY_SIZE};
 
 /// Compute entity IDs in the viewport area around (x, y) on a map of size (map_xs, map_ys).
 pub fn ids_in_area(
@@ -220,13 +216,13 @@ pub fn ids_in_area(
 ) -> Vec<u32> {
     match area {
         AreaType::Area => {
-            grid.ids_in_rect(x - NX - 1, y - NY - 1, x + NX + 1, y + NY + 1)
+            grid.ids_in_rect(x - AREAX_SIZE - 1, y - AREAY_SIZE - 1, x + AREAX_SIZE + 1, y + AREAY_SIZE + 1)
         }
         AreaType::SameArea => {
-            let mut sx = x - NX;
-            let mut sy = y - NY;
-            let mut ex = x + NX;
-            let mut ey = y + NY;
+            let mut sx = x - AREAX_SIZE;
+            let mut sy = y - AREAY_SIZE;
+            let mut ex = x + AREAX_SIZE;
+            let mut ey = y + AREAY_SIZE;
             if sx < 0 { ex -= sx; sx = 0; }
             if sy < 0 { ey -= sy; sy = 0; }
             if ex >= map_xs { sx -= ex - map_xs + 1; ex = map_xs - 1; }
@@ -260,7 +256,7 @@ pub fn filter_by_type(ids: &[u32], bl_type_mask: i32) -> Vec<u32> {
         .filter(|&id| {
             if let Some(ent) = map_id2entity(id) {
                 let ty = match &ent {
-                    GameEntity::Player(_) => crate::game::mob::BL_PC,
+                    GameEntity::Player(_) => crate::common::constants::entity::BL_PC,
                     GameEntity::Mob(_) => BL_MOB,
                     GameEntity::Npc(_) => BL_NPC,
                     GameEntity::Item(_) => BL_ITEM,

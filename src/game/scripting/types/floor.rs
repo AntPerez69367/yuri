@@ -5,8 +5,7 @@ use crate::game::scripting::types::item::{
     BoundItem, fixed_str, item_data_getattr, write_str_field,
 };
 
-// MAX_GROUP_MEMBERS from map_server.h
-const MAX_GROUP_MEMBERS: usize = 256;
+use crate::common::constants::world::MAX_GROUP_MEMBERS;
 
 #[repr(C)]
 pub struct FloorItemData {

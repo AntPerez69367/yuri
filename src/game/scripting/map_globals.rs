@@ -383,8 +383,6 @@ pub unsafe fn sl_g_sendparcel(
 
 // ─── Task 1.4: NPC/Animation/Packet Broadcast Functions ──────────────────────
 
-/// BL_PC type constant — matches C enum value.
-const BL_PC_TYPE: i32 = 0x01;
 
 /// Broadcast a spell/skill animation to all PCs in AREA around the entity.
 ///
@@ -821,11 +819,7 @@ pub unsafe fn sl_g_setmap(
     // ── Registry + client update ────────────────────────────────────────────
     map_loadregistry(m);
     // Refresh viewport for all players on this map.
-    // Viewport dimensions: 19 tiles wide (offset -9), 17 tiles tall (offset -8).
-    const VIEW_W: i32 = 19;
-    const VIEW_H: i32 = 17;
-    const VIEW_OX: i32 = 9;  // x offset from player to viewport left edge
-    const VIEW_OY: i32 = 8;  // y offset from player to viewport top edge
+    use crate::common::constants::world::{VIEW_W, VIEW_H, VIEW_OX, VIEW_OY};
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
         let ids = block_grid::ids_in_area(grid, 0, 0, AreaType::SameMap, slot.xs as i32, slot.ys as i32);

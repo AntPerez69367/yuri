@@ -9,7 +9,7 @@ use sqlx::Row;
 
 use super::{blocking_run, get_pool};
 
-const ITM_ETC: u8 = 18;
+use crate::common::constants::entity::player::ITM_ETC_U8;
 
 pub struct ItemData {
     pub id: u32,
@@ -107,7 +107,7 @@ fn make_default(id: u32) -> ItemData {
         yname: [0; 64],
         text: [0; 64],
         buytext: [0; 64],
-        typ: ITM_ETC,
+        typ: ITM_ETC_U8,
         class: 0,
         sex: 0,
         level: 0,
@@ -186,7 +186,7 @@ async fn load_items() -> Result<usize, sqlx::Error> {
         str_to_fixed(&mut item.name, &row.try_get::<String, _>(1).unwrap_or_default());
         str_to_fixed(&mut item.yname, &row.try_get::<String, _>(2).unwrap_or_default());
         item.rank        = row.try_get::<u32, _>(3).map(|v| v as i32).unwrap_or(0);
-        item.typ         = row.try_get::<u32, _>(4).map(|v| v as u8).unwrap_or(ITM_ETC);
+        item.typ         = row.try_get::<u32, _>(4).map(|v| v as u8).unwrap_or(ITM_ETC_U8);
         item.price       = row.try_get::<u32, _>(5).map(|v| v as i32).unwrap_or(0);
         item.sell        = row.try_get::<u32, _>(6).map(|v| v as i32).unwrap_or(0);
         item.stack_amount = row.try_get::<u32, _>(7).map(|v| v as i32).unwrap_or(1);

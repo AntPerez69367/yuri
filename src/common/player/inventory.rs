@@ -2,9 +2,7 @@ use crate::common::types::{BankData, Item};
 use serde::{Serialize, Deserialize};
 
 /// Equipment, inventory, banks, and currency. Pre-allocated to MAX sizes.
-pub const MAX_EQUIP: usize = 15;
-pub const MAX_INVENTORY: usize = 52;
-pub const MAX_BANK_SLOTS: usize = 255;
+pub use crate::common::constants::entity::player::{MAX_EQUIP, MAX_INVENTORY, MAX_BANK_SLOTS};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerInventory {

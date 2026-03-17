@@ -455,156 +455,90 @@ mod layout_tests {
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-pub const MAX_GLOBALREG:       usize = 5000;
-pub const MAX_GLOBALPLAYERREG: usize = 500;
-pub const MAX_GLOBALQUESTREG:  usize = 250;
-pub const MAX_GLOBALNPCREG:    usize = 100;
+
+// Registry capacity limits
+pub use crate::common::constants::entity::player::{
+    MAX_GLOBALREG, MAX_GLOBALPLAYERREG, MAX_GLOBALQUESTREG, MAX_GLOBALNPCREG,
+};
 
 // BL_* type flags
-pub const BL_PC:   i32 = 0x01;
-pub const BL_MOB:  i32 = 0x02;
-pub const BL_NPC:  i32 = 0x04;
-pub const BL_ITEM: i32 = 0x08;
+pub use crate::common::constants::entity::{BL_PC, BL_MOB, BL_NPC, BL_ITEM};
 
 // PC state values
-pub const PC_ALIVE:    i32 = 0;
-pub const PC_DIE:      i32 = 1;
-pub const PC_INVIS:    i32 = 2;
-pub const PC_MOUNTED:  i32 = 3;
-pub const PC_DISGUISE: i32 = 4;
+pub use crate::common::constants::entity::player::{
+    PC_ALIVE, PC_DIE, PC_INVIS, PC_MOUNTED, PC_DISGUISE,
+};
 
 // optFlags values
-pub const OPT_FLAG_STEALTH:     u64 = 32;
-pub const OPT_FLAG_NOCLICK:     u64 = 64;
-pub const OPT_FLAG_WALKTHROUGH: u64 = 128;
-pub const OPT_FLAG_GHOSTS:      u64 = 256;
+pub use crate::common::constants::entity::player::{
+    OPT_FLAG_STEALTH, OPT_FLAG_NOCLICK, OPT_FLAG_WALKTHROUGH, OPT_FLAG_GHOSTS,
+};
 
 // uFlags values
-pub const U_FLAG_NONE:       u64 = 0;
-pub const U_FLAG_SILENCED:   u64 = 1;
-pub const U_FLAG_CANPK:      u64 = 2;
-pub const U_FLAG_CANBEPK:    u64 = 3;
-pub const U_FLAG_IMMORTAL:   u64 = 8;
-pub const U_FLAG_UNPHYSICAL: u64 = 16;
-pub const U_FLAG_EVENTHOST:  u64 = 32;
-pub const U_FLAG_CONSTABLE:  u64 = 64;
-pub const U_FLAG_ARCHON:     u64 = 128;
-pub const U_FLAG_GM:         u64 = 256;
+pub use crate::common::constants::entity::player::{
+    U_FLAG_NONE, U_FLAG_SILENCED, U_FLAG_CANPK, U_FLAG_CANBEPK,
+    U_FLAG_IMMORTAL, U_FLAG_UNPHYSICAL, U_FLAG_EVENTHOST, U_FLAG_CONSTABLE,
+    U_FLAG_ARCHON, U_FLAG_GM,
+};
 
 // SFLAG values for clif_sendstatus
-pub const SFLAG_UNKNOWN1:   i32 = 0x01;
-pub const SFLAG_UNKNOWN2:   i32 = 0x02;
-pub const SFLAG_UNKNOWN3:   i32 = 0x04;
-pub const SFLAG_ALWAYSON:   i32 = 0x08;
-pub const SFLAG_XPMONEY:    i32 = 0x10;
-pub const SFLAG_HPMP:       i32 = 0x20;
-pub const SFLAG_FULLSTATS:  i32 = 0x40;
-pub const SFLAG_GMON:       i32 = 0x80;
+pub use crate::common::constants::entity::player::{
+    SFLAG_UNKNOWN1, SFLAG_UNKNOWN2, SFLAG_UNKNOWN3, SFLAG_ALWAYSON,
+    SFLAG_XPMONEY, SFLAG_HPMP, SFLAG_FULLSTATS, SFLAG_GMON,
+};
 
 // settingFlags values
-pub const FLAG_WHISPER:   u32 = 1;
-pub const FLAG_GROUP:     u32 = 2;
-pub const FLAG_SHOUT:     u32 = 4;
-pub const FLAG_ADVICE:    u32 = 8;
-pub const FLAG_MAGIC:     u32 = 16;
-pub const FLAG_WEATHER:   u32 = 32;
-pub const FLAG_REALM:     u32 = 64;
-pub const FLAG_EXCHANGE:  u32 = 128;
-pub const FLAG_FASTMOVE:  u32 = 256;
-pub const FLAG_SOUND:     u32 = 4096;
-pub const FLAG_HELM:      u32 = 8192;
-pub const FLAG_NECKLACE:  u32 = 16384;
+pub use crate::common::constants::entity::player::{
+    FLAG_WHISPER, FLAG_GROUP, FLAG_SHOUT, FLAG_ADVICE, FLAG_MAGIC,
+    FLAG_WEATHER, FLAG_REALM, FLAG_EXCHANGE, FLAG_FASTMOVE, FLAG_SOUND,
+    FLAG_HELM, FLAG_NECKLACE,
+};
 
 // normalFlags
-pub const FLAG_PARCEL: u64 = 1;
-pub const FLAG_MAIL:   u64 = 16;
+pub use crate::common::constants::entity::player::{FLAG_PARCEL, FLAG_MAIL};
 
-pub const MAX_MAP_PER_SERVER: i32 = 65535;
+pub use crate::common::constants::world::MAX_MAP_PER_SERVER;
 
 // SP_* parameter type constants
-pub const SP_HP:  i32 = 0;
-pub const SP_MP:  i32 = 1;
-pub const SP_MHP: i32 = 2;
-pub const SP_MMP: i32 = 3;
+pub use crate::common::constants::entity::player::{SP_HP, SP_MP, SP_MHP, SP_MMP};
 
 // AREA broadcast constant
-pub const AREA: i32 = 4;
+pub use crate::common::constants::network::AREA;
 
 // LOOK_SEND
-pub const LOOK_SEND: i32 = 1;
+pub use crate::common::constants::network::LOOK_SEND;
 
-// FLOOR subtype constant
-pub const FLOOR: u8 = 1;
+// FLOOR subtype constant — re-exported so callers using game::pc::FLOOR continue to work
+pub use crate::common::constants::entity::SUBTYPE_FLOOR as FLOOR;
 
-// BLOCK_SIZE
-pub const BLOCK_SIZE_PC: i32 = 8;
+// BLOCK_SIZE (i32 variant for pc.rs arithmetic)
+pub const BLOCK_SIZE_PC: i32 = crate::common::constants::world::BLOCK_SIZE as i32;
 
 // MAX_GROUP_MEMBERS
-pub const MAX_GROUP_MEMBERS: usize = 256;
+pub use crate::common::constants::world::MAX_GROUP_MEMBERS;
 
 // ITM_* item type constants
-pub const ITM_EAT:       i32 = 0;
-pub const ITM_USE:       i32 = 1;
-pub const ITM_SMOKE:     i32 = 2;
-pub const ITM_WEAP:      i32 = 3;
-pub const ITM_ARMOR:     i32 = 4;
-pub const ITM_SHIELD:    i32 = 5;
-pub const ITM_HELM:      i32 = 6;
-pub const ITM_LEFT:      i32 = 7;
-pub const ITM_RIGHT:     i32 = 8;
-pub const ITM_SUBLEFT:   i32 = 9;
-pub const ITM_SUBRIGHT:  i32 = 10;
-pub const ITM_FACEACC:   i32 = 11;
-pub const ITM_CROWN:     i32 = 12;
-pub const ITM_MANTLE:    i32 = 13;
-pub const ITM_NECKLACE:  i32 = 14;
-pub const ITM_BOOTS:     i32 = 15;
-pub const ITM_COAT:      i32 = 16;
-pub const ITM_HAND:      i32 = 17;
-pub const ITM_ETC:       i32 = 18;
-pub const ITM_USESPC:    i32 = 19;
-pub const ITM_TRAPS:     i32 = 20;
-pub const ITM_BAG:       i32 = 21;
-pub const ITM_MAP:       i32 = 22;
-pub const ITM_QUIVER:    i32 = 23;
-pub const ITM_MOUNT:     i32 = 24;
-pub const ITM_FACE:      i32 = 25;
-pub const ITM_SET:       i32 = 26;
-pub const ITM_SKIN:      i32 = 27;
-pub const ITM_HAIR_DYE:  i32 = 28;
-pub const ITM_FACEACCTWO: i32 = 29;
+pub use crate::common::constants::entity::player::{
+    ITM_EAT, ITM_USE, ITM_SMOKE, ITM_WEAP, ITM_ARMOR, ITM_SHIELD, ITM_HELM,
+    ITM_LEFT, ITM_RIGHT, ITM_SUBLEFT, ITM_SUBRIGHT, ITM_FACEACC, ITM_CROWN,
+    ITM_MANTLE, ITM_NECKLACE, ITM_BOOTS, ITM_COAT, ITM_HAND, ITM_ETC,
+    ITM_USESPC, ITM_TRAPS, ITM_BAG, ITM_MAP, ITM_QUIVER, ITM_MOUNT, ITM_FACE,
+    ITM_SET, ITM_SKIN, ITM_HAIR_DYE, ITM_FACEACCTWO,
+};
 
 // EQ_* equip slot constants
-pub const EQ_WEAP:      i32 = 0;
-pub const EQ_ARMOR:     i32 = 1;
-pub const EQ_SHIELD:    i32 = 2;
-pub const EQ_HELM:      i32 = 3;
-pub const EQ_LEFT:      i32 = 4;
-pub const EQ_RIGHT:     i32 = 5;
-pub const EQ_SUBLEFT:   i32 = 6;
-pub const EQ_SUBRIGHT:  i32 = 7;
-pub const EQ_FACEACC:   i32 = 8;
-pub const EQ_CROWN:     i32 = 9;
-pub const EQ_MANTLE:    i32 = 10;
-pub const EQ_NECKLACE:  i32 = 11;
-pub const EQ_BOOTS:     i32 = 12;
-pub const EQ_COAT:      i32 = 13;
-pub const EQ_FACEACCTWO: i32 = 14;
+pub use crate::common::constants::entity::player::{
+    EQ_WEAP, EQ_ARMOR, EQ_SHIELD, EQ_HELM, EQ_LEFT, EQ_RIGHT,
+    EQ_SUBLEFT, EQ_SUBRIGHT, EQ_FACEACC, EQ_CROWN, EQ_MANTLE,
+    EQ_NECKLACE, EQ_BOOTS, EQ_COAT, EQ_FACEACCTWO,
+};
 
 // MAP_ERR* message indices
-pub const MAP_WHISPFAIL:    usize = 0;
-pub const MAP_ERRGHOST:     usize = 1;
-pub const MAP_ERRITMLEVEL:  usize = 2;
-pub const MAP_ERRITMMIGHT:  usize = 3;
-pub const MAP_ERRITMGRACE:  usize = 4;
-pub const MAP_ERRITMWILL:   usize = 5;
-pub const MAP_ERRITMSEX:    usize = 6;
-pub const MAP_ERRITMFULL:   usize = 7;
-pub const MAP_ERRITMMAX:    usize = 8;
-pub const MAP_ERRITMPATH:   usize = 9;
-pub const MAP_ERRITMMARK:   usize = 10;
-pub const MAP_ERRITM2H:     usize = 11;
-pub const MAP_ERRMOUNT:     usize = 12;
+pub use crate::common::constants::entity::player::{
+    MAP_WHISPFAIL, MAP_ERRGHOST, MAP_ERRITMLEVEL, MAP_ERRITMMIGHT, MAP_ERRITMGRACE,
+    MAP_ERRITMWILL, MAP_ERRITMSEX, MAP_ERRITMFULL, MAP_ERRITMMAX, MAP_ERRITMPATH,
+    MAP_ERRITMMARK, MAP_ERRITM2H, MAP_ERRMOUNT,
+};
 
 pub use crate::game::map_server::{MapMsgData, map_msg};
 pub use crate::game::map_server::groups;

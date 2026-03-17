@@ -6,12 +6,11 @@ use mlua::{Lua, Value};
 
 use crate::database::get_pool;
 use crate::database::map_db::get_map_ptr;
-use crate::game::pc::{BL_PC, BL_MOB, BL_NPC, BL_ITEM};
+use crate::common::constants::entity::{BL_PC, BL_MOB, BL_NPC, BL_ITEM, BL_ALL};
 use crate::game::map_server::{cur_year, cur_season, cur_day, cur_time, map_changepostcolor};
 use crate::game::map_parse::chat::{clif_broadcast, clif_gmbroadcast};
 use crate::game::scripting::map_globals::{sl_g_setmap, sl_g_throw, sl_g_sendmeta};
 
-const BL_ALL: i32 = 0x0F;
 
 /// Register all 91 Lua globals on the given Lua state.
 pub fn register(lua: &Lua) -> mlua::Result<()> {

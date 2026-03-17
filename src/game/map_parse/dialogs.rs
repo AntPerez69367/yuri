@@ -930,9 +930,6 @@ pub unsafe fn clif_inputseq(
 
 // ─── clif_handle_clickgetinfo ─────────────────────────────────────────────────
 
-// FLOOR subtype constant — mirrors `enum { SCRIPT, FLOOR }` in map_parse.h
-const FLOOR: i32 = 1;
-
 /// Handle a click/getinfo request from the client.  Mirrors
 pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
     let fd = (*sd).fd;
@@ -984,7 +981,7 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
         let Some(arc) = crate::game::map_server::map_id2npc_ref(target_id) else { return 0; };
         let nd = &*arc.data_ptr();
         let mut radius = 10i32;
-        if nd.subtype as i32 == FLOOR { radius = 0; }
+        if nd.subtype as i32 == crate::common::constants::entity::SUBTYPE_FLOOR as i32 { radius = 0; }
 
         // F1 NPC: map id 0 always accessible; otherwise check proximity
         let same_map_or_f1 = pos.m == 0

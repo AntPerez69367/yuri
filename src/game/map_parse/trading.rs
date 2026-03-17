@@ -13,14 +13,8 @@
 
 
 use crate::session::{session_exists, session_set_eof};
-use crate::game::pc::{
-    MapSessionData,
-    BL_MOB, BL_NPC, BL_PC,
-    FLAG_EXCHANGE,
-};
-
-// BL_ALL: all block-list types (from map_server.h enum)
-const BL_ALL: i32 = 0x0F;
+use crate::game::pc::{MapSessionData, FLAG_EXCHANGE};
+use crate::common::constants::entity::{BL_ALL, BL_MOB, BL_NPC, BL_PC};
 use crate::common::player::inventory::MAX_INVENTORY;
 
 use super::packet::{
@@ -29,9 +23,7 @@ use super::packet::{
     wfifob, wfifop, wfifow, wfifoset, wfifohead,
 };
 
-// ─── optFlag_stealth (from map_server.h) ─────────────────────────────────────
-
-const OPT_FLAG_STEALTH: u64 = 32;
+use crate::common::constants::entity::player::OPT_FLAG_STEALTH;
 
 
 use crate::game::map_parse::chat::clif_sendminitext;
@@ -55,14 +47,10 @@ fn sl_doscript_coro_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i
 }
 
 
-// SFLAG_XPMONEY (from map_server.h)
-const SFLAG_XPMONEY: i32 = 4;
+use crate::common::constants::entity::player::SFLAG_XPMONEY;
 
 // Item type constants (from item_db.h)
-const ITM_SMOKE:  i32 = 23;
-const ITM_BAG:    i32 = 25;
-const ITM_MAP:    i32 = 24;
-const ITM_QUIVER: i32 = 26;
+use crate::common::constants::entity::player::{ITM_SMOKE, ITM_BAG, ITM_MAP, ITM_QUIVER};
 
 // ─── string_truncate: mirror of C stringTruncate ─────────────────────────────
 

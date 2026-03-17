@@ -8,12 +8,12 @@ use crate::game::mob::{MobSpawnData, MOB_DEAD};
 use crate::game::npc::NpcData;
 use crate::game::pc::{
     MapSessionData, LookAccum,
-    BL_PC, BL_MOB, BL_NPC, BL_ITEM,
     EQ_ARMOR, EQ_COAT, EQ_WEAP, EQ_SHIELD, EQ_HELM,
     EQ_FACEACC, EQ_CROWN, EQ_FACEACCTWO, EQ_MANTLE, EQ_NECKLACE, EQ_BOOTS,
     FLAG_HELM, FLAG_NECKLACE,
-    OPT_FLAG_STEALTH,
 };
+use crate::common::constants::entity::{BL_PC_U8, BL_MOB_U8, BL_NPC_U8, BL_ITEM_U8};
+use crate::common::constants::entity::player::OPT_FLAG_STEALTH;
 use crate::game::scripting::types::floor::FloorItemData;
 use super::packet::{
     encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow, wfifoheader,
@@ -23,15 +23,8 @@ use crate::session::{SessionId, session_exists};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-/// `ITM_TRAPS` item type constant (from item_db).
-const ITM_TRAPS: i32 = 4;
+use crate::common::constants::entity::player::ITM_TRAPS;
 
-/// `bl_type` field is `u8`; BL_* constants from pc.rs are `i32`.
-/// These local aliases allow direct comparison without casts at every use site.
-const BL_PC_U8:   u8 = BL_PC   as u8;
-const BL_MOB_U8:  u8 = BL_MOB  as u8;
-const BL_NPC_U8:  u8 = BL_NPC  as u8;
-const BL_ITEM_U8: u8 = BL_ITEM as u8;
 
 
 use crate::game::client::clif_send;

@@ -10,35 +10,17 @@ use crate::game::pc::MapSessionData;
 use crate::game::types::GfxViewer;
 use crate::common::types::{Item, SkillInfo};
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
-
-// ─── Constants ──────────────────────────────────────────────────────────────
-pub const MOB_START_NUM: u32 = 1073741823;
-pub const MOBOT_START_NUM: u32 = 1173741823;
-pub const NPC_START_NUM: u32 = 3221225472;
-pub const FLOORITEM_START_NUM: u32 = 2047483647;
-
-pub const MAX_MAGIC_TIMERS: usize = 200;
-pub const MAX_INVENTORY: usize = 52;
-pub const MAX_GLOBALMOBREG: usize = 50;
-pub const MAX_THREATCOUNT: usize = 50;
-
-pub const BL_PC: i32 = 0x01;
-pub const BL_MOB: i32 = 0x02;
-pub const BL_NPC: i32 = 0x04;
-pub const BL_ITEM: i32 = 0x08;
+pub use crate::common::constants::entity::{BL_PC, BL_MOB, BL_NPC, BL_ITEM};
+pub use crate::common::constants::entity::mob::{
+    MOB_START_NUM, MOBOT_START_NUM, MAX_MAGIC_TIMERS, MAX_INVENTORY, MAX_GLOBALMOBREG, MAX_THREATCOUNT,
+};
+pub use crate::common::constants::entity::npc::NPC_START_NUM;
+pub use crate::common::constants::entity::item::FLOORITEM_START_NUM;
 
 // mob state constants
-pub const MOB_ALIVE: u8 = 0;
-pub const MOB_DEAD: u8 = 1;
-pub const MOB_PARA: u8 = 2;
-pub const MOB_BLIND: u8 = 3;
-pub const MOB_HIT: u8 = 4;
-pub const MOB_ESCAPE: u8 = 5;
+pub use crate::common::constants::entity::mob::{MOB_ALIVE, MOB_DEAD, MOB_PARA, MOB_BLIND, MOB_HIT, MOB_ESCAPE};
 
-/// Viewport area query type constant.
-const AREA: i32 = 4;
-/// Floor item subtype (as opposed to script item).
-const FLOOR: u8 = 1;
+use crate::common::constants::entity::SUBTYPE_FLOOR;
 
 // ─── ThreatTable ─────────────────────────────────────────────────────────────
 
@@ -1088,8 +1070,8 @@ pub unsafe fn mob_trap_look_inner(nd: *mut crate::game::npc::NpcData, mob: *mut 
     if nd.is_null() {
         return 0;
     }
-    // Only FLOOR (subtype==1) or sub-2 NPCs are traps
-    if (*nd).subtype != FLOOR && (*nd).subtype != 2 {
+    // Only SUBTYPE_FLOOR (subtype==1) or sub-2 NPCs are traps
+    if (*nd).subtype != SUBTYPE_FLOOR && (*nd).subtype != 2 {
         return 0;
     }
     if !def.is_null() && *def != 0 {
@@ -1790,7 +1772,7 @@ pub unsafe fn mob_dropitem(
     y: i32,
     sd: *mut MapSessionData,
 ) -> i32 {
-    use crate::game::pc::MAX_GROUP_MEMBERS;
+    use crate::common::constants::world::MAX_GROUP_MEMBERS;
     use crate::game::scripting::types::floor::FloorItemData;
     let mob_arc_holder = if blockid >= MOB_START_NUM as u32 && blockid < FLOORITEM_START_NUM as u32 {
         crate::game::map_server::map_id2mob_ref(blockid)

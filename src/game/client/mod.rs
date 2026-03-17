@@ -161,19 +161,13 @@ type SD = *mut crate::game::pc::MapSessionData;
 
 // ─── Send-type constants (from map_parse.h) ───────────────────────────────────
 
-const ALL_CLIENT:  i32 = 0;
-const SAMESRV:     i32 = 1;
-const SAMEMAP:     i32 = 2;
-const SAMEMAP_WOS: i32 = 3;
-const AREA:        i32 = 4;
-const AREA_WOS:    i32 = 5;
-const SAMEAREA:    i32 = 6;
-const SAMEAREA_WOS: i32 = 7;
-const CORNER:      i32 = 8;
-const SELF:        i32 = 9;
+use crate::common::constants::network::{
+    ALL_CLIENT, SAMESRV, SAMEMAP, SAMEMAP_WOS,
+    AREA, AREA_WOS, SAMEAREA, SAMEAREA_WOS,
+    CORNER, SELF,
+};
 
-/// BL_PC type constant (from map_server.h).
-const BL_PC: u8 = 0x01;
+use crate::common::constants::entity::BL_PC_U8;
 
 // ─── clif_send / clif_sendtogm ────────────────────────────────────────────────
 
@@ -195,7 +189,7 @@ pub unsafe fn clif_send(
 ) -> i32 {
     // Compute once: source player pointer, non-null only when src is BL_PC.
     // Hold arc + guard alive for the duration of the function. Read-only access.
-    let _arc = if bl_type == BL_PC { crate::game::map_server::map_id2sd_pc(src_id) } else { None };
+    let _arc = if bl_type == BL_PC_U8 { crate::game::map_server::map_id2sd_pc(src_id) } else { None };
     let _guard = _arc.as_ref().map(|a| a.read());
     let tsd: *const MapSessionData = match _guard.as_deref() {
         Some(sd) => sd as *const MapSessionData,
@@ -360,7 +354,7 @@ pub unsafe fn clif_sendtogm(
                     continue;
                 }
                 // Skip sending to source itself when it is a player.
-                if bl_type == BL_PC && (*sd).id == src_id {
+                if bl_type == BL_PC_U8 && (*sd).id == src_id {
                     continue;
                 }
                 send_to_fd(i_fd, buf, len);
@@ -480,7 +474,7 @@ unsafe fn should_send_to(
 
     // Derive tsd: source player (non-null only when src is BL_PC).
     // Hold arc + guard alive for the duration of the function. Read-only access.
-    let _arc = if bl_type == BL_PC { crate::game::map_server::map_id2sd_pc(src_id) } else { None };
+    let _arc = if bl_type == BL_PC_U8 { crate::game::map_server::map_id2sd_pc(src_id) } else { None };
     let _guard = _arc.as_ref().map(|a| a.read());
     let tsd: *const MapSessionData = match _guard.as_deref() {
         Some(sd_ref) => sd_ref as *const MapSessionData,

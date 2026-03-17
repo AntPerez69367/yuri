@@ -12,11 +12,9 @@ static SOUNDFX:      AtomicI32 = AtomicI32::new(0);
 static DOWNTIMER:    AtomicI32 = AtomicI32::new(0);
 static COMMAND_CODE: AtomicI8  = AtomicI8::new(b'/' as i8);
 
-const OPT_STEALTH:    u64 = 32;
-const OPT_GHOSTS:     u64 = 256;
-const UFLAG_SILENCED: u64 = 1;
-const UFLAG_IMMORTAL: u64 = 8;
-const UFLAG_UNPHYS:   u64 = 16;
+use crate::common::constants::entity::player::{
+    OPT_FLAG_STEALTH, OPT_FLAG_GHOSTS, U_FLAG_SILENCED, U_FLAG_IMMORTAL, U_FLAG_UNPHYSICAL,
+};
 
 use crate::config_globals::{XP_RATE, D_RATE};
 use crate::game::mob::{MOB_SPAWN_START, MOB_SPAWN_MAX, MOB_ONETIME_START, MOB_ONETIME_MAX};
@@ -664,13 +662,13 @@ fn command_kc(sd: &mut MapSessionData, _line: &str) -> i32 {
 fn command_blockcount(_sd: &mut MapSessionData, _line: &str) -> i32 { 0 }
 
 fn command_stealth(sd: &mut MapSessionData, _line: &str) -> i32 {
-    if sd.optFlags & OPT_STEALTH != 0 {
-        sd.optFlags ^= OPT_STEALTH;
+    if sd.optFlags & OPT_FLAG_STEALTH != 0 {
+        sd.optFlags ^= OPT_FLAG_STEALTH;
         unsafe { clif_refresh(as_ptr(sd)); }
         send_minitext(sd, "Stealth :OFF");
     } else {
         unsafe { clif_lookgone_by_id(sd.id); }
-        sd.optFlags ^= OPT_STEALTH;
+        sd.optFlags ^= OPT_FLAG_STEALTH;
         unsafe { clif_refresh(as_ptr(sd)); }
         send_minitext(sd, "Stealth :ON");
     }
@@ -678,9 +676,9 @@ fn command_stealth(sd: &mut MapSessionData, _line: &str) -> i32 {
 }
 
 fn command_ghosts(sd: &mut MapSessionData, _line: &str) -> i32 {
-    sd.optFlags ^= OPT_GHOSTS;
+    sd.optFlags ^= OPT_FLAG_GHOSTS;
     unsafe { clif_refresh(as_ptr(sd)); }
-    if sd.optFlags & OPT_GHOSTS != 0 {
+    if sd.optFlags & OPT_FLAG_GHOSTS != 0 {
         send_minitext(sd, "Ghosts :ON");
     } else {
         send_minitext(sd, "Ghosts :OFF");
@@ -689,8 +687,8 @@ fn command_ghosts(sd: &mut MapSessionData, _line: &str) -> i32 {
 }
 
 fn command_unphysical(sd: &mut MapSessionData, _line: &str) -> i32 {
-    sd.uFlags ^= UFLAG_UNPHYS;
-    if sd.uFlags & UFLAG_UNPHYS != 0 {
+    sd.uFlags ^= U_FLAG_UNPHYSICAL;
+    if sd.uFlags & U_FLAG_UNPHYSICAL != 0 {
         send_minitext(sd, "Unphysical :ON");
     } else {
         send_minitext(sd, "Unphysical :OFF");
@@ -699,8 +697,8 @@ fn command_unphysical(sd: &mut MapSessionData, _line: &str) -> i32 {
 }
 
 fn command_immortality(sd: &mut MapSessionData, _line: &str) -> i32 {
-    sd.uFlags ^= UFLAG_IMMORTAL;
-    if sd.uFlags & UFLAG_IMMORTAL != 0 {
+    sd.uFlags ^= U_FLAG_IMMORTAL;
+    if sd.uFlags & U_FLAG_IMMORTAL != 0 {
         send_minitext(sd, "Immortality :ON");
     } else {
         send_minitext(sd, "Immortality :OFF");
@@ -715,8 +713,8 @@ fn command_silence(sd: &mut MapSessionData, line: &str) -> i32 {
     let tsd = unsafe { map_name2sd(name.as_ptr()) };
     if !tsd.is_null() {
         unsafe {
-            (*tsd).uFlags ^= UFLAG_SILENCED;
-            if (*tsd).uFlags & UFLAG_SILENCED != 0 {
+            (*tsd).uFlags ^= U_FLAG_SILENCED;
+            if (*tsd).uFlags & U_FLAG_SILENCED != 0 {
                 send_minitext(sd, "Silenced.");
                 clif_sendminitext(tsd, c"You have been silenced.".as_ptr());
             } else {

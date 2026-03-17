@@ -24,7 +24,6 @@ use super::packet::{
 
 // Constants not in packet.rs — defined locally (from map_server.h / map_parse.h).
 const OUT_STATUS: u8 = 0x08; // packet id for clif_sendstatus
-const BL_ALL:  i32 = 0x0F;  // all block-list types
 
 // ─── Local helpers ────────────────────────────────────────────────────────────
 
@@ -78,14 +77,7 @@ use crate::game::map_parse::visual::{
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-
-// BL_* type constants (from map_server.h)
-const BL_PC:  i32 = 0x01;
-const BL_MOB: i32 = 0x02;
-const BL_NPC: i32 = 0x04;
-
-// optFlag_walkthrough = 128 (from map_server.h)
-const OPT_WALKTHROUGH: u64 = 128;
+use crate::common::constants::entity::player::OPT_FLAG_WALKTHROUGH;
 
 // ─── clif_sendack ─────────────────────────────────────────────────────────────
 
@@ -482,7 +474,7 @@ pub unsafe fn clif_sendstatus(sd: *mut MapSessionData, flags: i32) -> i32 {
     // within the current level band using classdb_level DB lookups.
     let percentage: f32 = clif_getXPBarPercent(sd) as f32;
 
-    if (*sd).player.identity.gm_level != 0 && (*sd).optFlags & OPT_WALKTHROUGH != 0 {
+    if (*sd).player.identity.gm_level != 0 && (*sd).optFlags & OPT_FLAG_WALKTHROUGH != 0 {
         f |= SFLAG_GMON;
     }
 

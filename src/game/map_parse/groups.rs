@@ -30,7 +30,7 @@ use crate::game::block_grid;
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const MAX_GROUPS: usize = 256;
+use crate::common::constants::world::MAX_GROUPS;
 
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::map_server::{map_name2sd, groups as groups_raw};

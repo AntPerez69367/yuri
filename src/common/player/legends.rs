@@ -2,7 +2,7 @@ use crate::common::types::Legend;
 use serde::{Serialize, Deserialize};
 
 /// Achievement legends display. Pre-allocated to MAX size.
-pub const MAX_LEGENDS: usize = 1000;
+pub use crate::common::constants::entity::player::MAX_LEGENDS;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerLegends {

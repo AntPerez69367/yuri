@@ -527,7 +527,8 @@ pub unsafe fn clif_runfloor_sub_inner(entity_id: u32, sd: *mut MapSessionData) -
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 pub unsafe fn clif_addtokillreg(sd: *mut MapSessionData, mob: i32) -> i32 {
-    use crate::game::pc::{groups, MAX_GROUP_MEMBERS};
+    use crate::game::pc::groups;
+    use crate::common::constants::world::MAX_GROUP_MEMBERS;
     if sd.is_null() { return 0; }
     let grp = groups();
     for x in 0..(*sd).group_count as usize {
@@ -587,9 +588,6 @@ pub unsafe fn clif_parsedropitem(sd: *mut MapSessionData) -> i32 {
 }
 
 // ─── Constants needed by handler functions ─────────────────────────────────
-
-#[allow(dead_code)]
-const SAMEAREA: i32 = 6;
 
 // ─── Board questionnaire struct ─────────────────────────────────────────────
 

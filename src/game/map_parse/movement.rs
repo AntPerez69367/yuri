@@ -37,24 +37,11 @@ use super::packet::{
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 
-// Equipment slot indices (from map_server.h EQ_* enum)
-const EQ_ARMOR:      i32 = 0;
-const EQ_COAT:       i32 = 1;
-const EQ_WEAP:       i32 = 2;
-const EQ_SHIELD:     i32 = 3;
-const EQ_HELM:       i32 = 4;
-const EQ_FACEACC:    i32 = 5;
-const EQ_CROWN:      i32 = 6;
-const EQ_FACEACCTWO: i32 = 7;
-const EQ_MANTLE:     i32 = 8;
-const EQ_NECKLACE:   i32 = 9;
-const EQ_BOOTS:      i32 = 10;
-
-// PC state values (from map_server.h enum)
-const PC_DIE:      i8 = 1;
-const PC_INVIS:    i8 = 2;
-const PC_MOUNTED:  i8 = 3;
-const PC_DISGUISE: i8 = 4;
+use crate::common::constants::entity::player::{
+    PC_DIE_I8 as PC_DIE, PC_INVIS_I8 as PC_INVIS, PC_MOUNTED_I8 as PC_MOUNTED, PC_DISGUISE_I8 as PC_DISGUISE,
+    EQ_WEAP, EQ_ARMOR, EQ_SHIELD, EQ_HELM, EQ_FACEACC, EQ_CROWN,
+    EQ_FACEACCTWO, EQ_MANTLE, EQ_NECKLACE, EQ_BOOTS, EQ_COAT,
+};
 
 
 // CRC lookup table for the NexCRCC checksum algorithm.

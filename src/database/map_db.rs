@@ -12,8 +12,7 @@ use sqlx::Row;
 
 use crate::database::{blocking_run, get_pool};
 
-pub const BLOCK_SIZE: usize = 8;
-pub const MAX_MAPREG: usize = 500;
+pub use crate::common::constants::world::{BLOCK_SIZE, MAX_MAPREG};
 pub const MAP_SLOTS: usize = 65535;
 
 pub use crate::common::types::GlobalReg;

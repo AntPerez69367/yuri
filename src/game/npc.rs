@@ -13,14 +13,9 @@ use crate::database::{blocking_run_async, get_pool};
 use crate::database::map_db::{get_map_ptr, map_is_loaded};
 
 // MAX_EQUIP is defined in charstatus::MAX_EQUIP (imported above) — same slot count.
-pub const MAX_GLOBALNPCREG: usize = 100;
-pub const NPC_START_NUM: u32      = 3221225472;
-pub const NPCT_START_NUM: u32     = 3321225472;
-pub const F1_NPC: u32             = 4294967295;
-
-pub const BL_PC:  i32 = 0x01;
-pub const BL_MOB: i32 = 0x02;  // used by npc_move_sub (Task 10)
-pub const BL_NPC: i32 = 0x04;
+pub use crate::common::constants::entity::player::MAX_GLOBALNPCREG;
+pub use crate::common::constants::entity::npc::{NPC_START_NUM, NPCT_START_NUM, F1_NPC};
+pub use crate::common::constants::entity::{BL_PC, BL_MOB, BL_NPC};
 
 ///
 /// # Layout
@@ -120,10 +115,6 @@ fn sl_doscript_simple(root: &str, method: Option<&str>, id: u32) -> i32 {
 fn sl_doscript_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
     crate::game::scripting::doscript_blargs_id(root, method, &[id1, id2])
 }
-
-/// Enum value for `AREA`:
-/// `enum { ALL_CLIENT=0, SAMESRV=1, SAMEMAP=2, SAMEMAP_WOS=3, AREA=4, ... }`
-const AREA: i32 = 4;
 
 /// Returns an available NPC ID, allocating a new one if needed.
 ///
