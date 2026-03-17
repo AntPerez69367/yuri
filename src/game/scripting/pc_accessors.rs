@@ -3,7 +3,6 @@
 use crate::game::map_parse::packet::rfifob;
 use crate::game::pc::{MapSessionData, EQ_FACEACCTWO, SFLAG_HPMP, SFLAG_FULLSTATS, SFLAG_XPMONEY};
 use crate::session::SessionId;
-use crate::database::map_db::BlockList;
 use crate::game::mob::{MobSpawnData, MAX_THREATCOUNT};
 use crate::common::player::inventory::{MAX_INVENTORY, MAX_EQUIP, MAX_BANK_SLOTS};
 use crate::common::player::spells::{MAX_SPELLS, MAX_MAGIC_TIMERS};
@@ -299,7 +298,6 @@ use crate::game::pc::{
 };
 use crate::game::map_parse::movement::{
     clif_refreshnoclick, clif_noparsewalk, clif_blockmovement,
-    clif_parselookat_scriptsub,
 };
 use crate::game::map_parse::visual::clif_spawn;
 use crate::game::map_parse::items::{clif_throwitem_script, clif_sendadditem, clif_checkinvbod};
@@ -307,7 +305,6 @@ use crate::game::map_parse::chat::{clif_guitextsd, clif_sendminitext, clif_sends
 use crate::game::map_server::{boards_showposts, boards_readpost, nmail_sendmail};
 use crate::game::map_parse::dialogs::clif_send_timer;
 // map lookups — use typed versions
-use crate::game::mob::map_id2bl;
 use crate::database::{magic_db, class_db, clan_db};
 
 /// Convert a `*const i8` C string to `&str` for database API calls.
@@ -334,10 +331,6 @@ fn map_id2sd_acc(id: u32) -> *mut MapSessionData {
     crate::game::map_server::map_id2sd_pc(id)
         .map(|arc| &*arc.write() as *const MapSessionData as *mut MapSessionData)
         .unwrap_or(std::ptr::null_mut())
-}
-#[inline(always)]
-fn map_id2bl_acc(id: u32) -> *mut BlockList {
-    map_id2bl(id)
 }
 #[inline(always)]
 fn map_id2mob_acc(id: u32) -> *mut MobSpawnData {
@@ -456,8 +449,7 @@ pub fn sl_pc_set_profile_spells(sd: &mut MapSessionData, v: i32)    { sd.player.
 pub fn sl_pc_set_profile_inventory(sd: &mut MapSessionData, v: i32) { sd.player.appearance.profile_inventory = v as u8; }
 pub fn sl_pc_set_profile_bankitems(sd: &mut MapSessionData, v: i32) { sd.player.appearance.profile_bankitems = v as u8; }
 pub fn sl_pc_set_mute(sd: &mut MapSessionData, v: i32)       { sd.player.social.mute = v as i8; }
-// C casts to (unsigned int) but Rust field is u16; low 16 bits are preserved identically.
-pub fn sl_pc_set_settingFlags(sd: &mut MapSessionData, v: i32) { sd.player.appearance.setting_flags = v as u16; }
+pub fn sl_pc_set_settingFlags(sd: &mut MapSessionData, v: i32) { sd.player.appearance.setting_flags = v as u32; }
 pub fn sl_pc_set_heroshow(sd: &mut MapSessionData, v: i32)   { sd.player.appearance.heroes = v as u32; }
 pub fn sl_pc_set_sex(sd: &mut MapSessionData, v: i32)        { sd.player.identity.sex = v as i8; }
 pub fn sl_pc_set_classRank(sd: &mut MapSessionData, v: i32)  { sd.player.progression.class_rank = v; }
@@ -787,9 +779,8 @@ pub unsafe fn sl_pc_move(sd: &mut MapSessionData, speed: i32) {
     clif_noparsewalk(sd, speed as i8);
 }
 
-pub unsafe fn sl_pc_lookat(sd: &mut MapSessionData, id: i32) {
-    let bl = map_id2bl_acc(id as u32);
-    if !bl.is_null() { clif_parselookat_scriptsub(sd, bl); }
+pub unsafe fn sl_pc_lookat(_sd: &mut MapSessionData, _id: i32) {
+    // clif_parselookat_scriptsub is a no-op stub — nothing to do
 }
 
 pub unsafe fn sl_pc_minirefresh(sd: &mut MapSessionData) {
@@ -922,13 +913,10 @@ pub unsafe fn sl_pc_sendurl(sd: &mut MapSessionData, kind: i32, url: *const i8) 
 }
 
 pub unsafe fn sl_pc_swingtarget(sd: &mut MapSessionData, id: i32) {
-    use crate::game::mob::BL_MOB;
-    let bl = map_id2bl_acc(id as u32);
-    if bl.is_null() { return; }
-    if (*bl).bl_type as i32 == BL_MOB {
-        clif_mob_damage(&mut *sd, &mut *(bl as *mut MobSpawnData));
-    } else {
-        clif_pc_damage(&mut *sd, &mut *(bl as *mut MapSessionData));
+    if let Some(arc) = crate::game::map_server::map_id2mob_ref(id as u32) {
+        clif_mob_damage(sd, &mut *arc.data_ptr());
+    } else if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
+        clif_pc_damage(sd, &mut *arc.data_ptr());
     }
 }
 

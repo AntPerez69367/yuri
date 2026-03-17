@@ -5,15 +5,15 @@
 //! Here we achieve the same with free functions called from each type's __index.
 
 
-use crate::database::map_db::{BlockList, MapData};
+use crate::database::map_db::MapData;
 use crate::game::types::GfxViewer;
 use crate::database::map_db::get_map_ptr;
-use crate::game::map_server::map_id2bl_ref;
+use crate::game::map_server::entity_position;
 use crate::game::scripting::object_collect::{
-    sl_g_getobjectscell, sl_g_getobjectscellwithtraps, sl_g_getaliveobjectscell,
-    sl_g_getobjectsarea, sl_g_getaliveobjectsarea,
-    sl_g_getobjectssamemap, sl_g_getaliveobjectssamemap,
-    sl_g_getobjectsinmap,
+    get_objects_cell, get_objects_cell_with_traps, get_alive_objects_cell,
+    get_objects_area, get_alive_objects_area,
+    get_objects_same_map, get_alive_objects_same_map,
+    get_objects_in_map,
 };
 use crate::game::scripting::map_globals::{
     sl_g_sendanimation, sl_g_playsound, sl_g_sendaction, sl_g_msg,
@@ -26,81 +26,56 @@ use crate::game::scripting::types::item::fixed_str;
 
 // ── Object collection methods ─────────────────────────────────────────────────
 
+/// Helper: convert a Vec<u32> of entity IDs into a Lua table of typed objects.
+fn ids_to_lua_table(lua: &mlua::Lua, ids: &[u32]) -> mlua::Result<mlua::Table> {
+    let tbl = lua.create_table()?;
+    for (i, &id) in ids.iter().enumerate() {
+        let val = crate::game::scripting::id_to_lua(lua, id)?;
+        tbl.raw_set(i + 1, val)?;
+    }
+    Ok(tbl)
+}
+
 /// Create a `getObjectsInCell` / `getAliveObjectsInCell` / `getObjectsInCellWithTraps`
-/// Lua function. `variant` is the method name string that selects the FFI call.
+/// Lua function. `variant` is the method name string that selects the query.
 pub fn make_cell_query_fn(lua: &mlua::Lua, variant: &str) -> mlua::Result<mlua::Value> {
     let variant = variant.to_string();
     lua.create_function(
         move |lua, (_self, m, x, y, bl_type): (mlua::Value, i32, i32, i32, i32)| {
-            const MAX: usize = 256;
-            let mut ptrs = vec![std::ptr::null_mut::<std::ffi::c_void>(); MAX];
-            let raw_count = unsafe {
-                match variant.as_str() {
-                    "getAliveObjectsInCell" =>
-                        sl_g_getaliveobjectscell(m, x, y, bl_type, ptrs.as_mut_ptr(), MAX as i32),
-                    "getObjectsInCellWithTraps" =>
-                        sl_g_getobjectscellwithtraps(m, x, y, bl_type, ptrs.as_mut_ptr(), MAX as i32),
-                    _ =>
-                        sl_g_getobjectscell(m, x, y, bl_type, ptrs.as_mut_ptr(), MAX as i32),
-                }
+            let ids = match variant.as_str() {
+                "getAliveObjectsInCell" =>
+                    get_alive_objects_cell(m, x, y, bl_type),
+                "getObjectsInCellWithTraps" =>
+                    get_objects_cell_with_traps(m, x, y, bl_type),
+                _ =>
+                    get_objects_cell(m, x, y, bl_type),
             };
-            let count = (raw_count.max(0) as usize).min(MAX);
-            let tbl = lua.create_table()?;
-            for (i, &bl) in ptrs[..count].iter().enumerate() {
-                let val = unsafe {
-                    crate::game::scripting::bl_to_lua(lua, bl).unwrap_or(mlua::Value::Nil)
-                };
-                tbl.raw_set(i + 1, val)?;
-            }
-            Ok(tbl)
+            ids_to_lua_table(lua, &ids).map(mlua::Value::Table)
         },
     )
     .map(mlua::Value::Function)
 }
 
 /// Create a `getObjectsInArea` / `getAliveObjectsInArea` / `getObjectsInSameMap` /
-/// `getAliveObjectsInSameMap` Lua method. Unlike `make_cell_query_fn`, these use
-/// the entity's own position (bl->m, bl->x, bl->y) rather than explicit coords.
-/// The entity's stable numeric ID is captured at __index lookup time and re-resolved
-/// to a live pointer via `map_id2bl` on each invocation, so the closure never holds
-/// a dangling pointer if the C entity is freed between calls.
-pub fn make_area_query_fn(lua: &mlua::Lua, variant: &str, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
-    if self_ptr.is_null() {
-        return Err(mlua::Error::external("null self_ptr in make_area_query_fn"));
-    }
+/// `getAliveObjectsInSameMap` Lua method. Uses entity's position via `entity_position`.
+pub fn make_area_query_fn(lua: &mlua::Lua, variant: &str, entity_id: u32) -> mlua::Result<mlua::Value> {
     let variant = variant.to_string();
-    // Extract the stable BL id now; the raw pointer may dangle after the entity is freed.
-    let entity_id: u32 = unsafe { (*(self_ptr as *mut BlockList)).id };
     lua.create_function(
         move |lua, (_self, bl_type): (mlua::Value, i32)| {
-            const MAX: usize = 512;
-            // Re-resolve the entity pointer on every call so we never use a dangling ptr.
-            let bl_ptr = map_id2bl_ref(entity_id) as *mut std::ffi::c_void;
-            if bl_ptr.is_null() {
-                return Ok(lua.create_table()?);
-            }
-            let mut ptrs = vec![std::ptr::null_mut::<std::ffi::c_void>(); MAX];
-            let raw_count = unsafe {
-                match variant.as_str() {
-                    "getAliveObjectsInArea" =>
-                        sl_g_getaliveobjectsarea(bl_ptr, bl_type, ptrs.as_mut_ptr(), MAX as i32),
-                    "getObjectsInSameMap" =>
-                        sl_g_getobjectssamemap(bl_ptr, bl_type, ptrs.as_mut_ptr(), MAX as i32),
-                    "getAliveObjectsInSameMap" =>
-                        sl_g_getaliveobjectssamemap(bl_ptr, bl_type, ptrs.as_mut_ptr(), MAX as i32),
-                    _ =>
-                        sl_g_getobjectsarea(bl_ptr, bl_type, ptrs.as_mut_ptr(), MAX as i32),
-                }
+            let Some((pos, _)) = entity_position(entity_id) else {
+                return lua.create_table().map(mlua::Value::Table);
             };
-            let count = (raw_count.max(0) as usize).min(MAX);
-            let tbl = lua.create_table()?;
-            for (i, &bl) in ptrs[..count].iter().enumerate() {
-                let val = unsafe {
-                    crate::game::scripting::bl_to_lua(lua, bl).unwrap_or(mlua::Value::Nil)
-                };
-                tbl.raw_set(i + 1, val)?;
-            }
-            Ok(tbl)
+            let ids = match variant.as_str() {
+                "getAliveObjectsInArea" =>
+                    get_alive_objects_area(pos.m, pos.x, pos.y, bl_type),
+                "getObjectsInSameMap" =>
+                    get_objects_same_map(pos.m, bl_type),
+                "getAliveObjectsInSameMap" =>
+                    get_alive_objects_same_map(pos.m, bl_type),
+                _ =>
+                    get_objects_area(pos.m, pos.x, pos.y, bl_type),
+            };
+            ids_to_lua_table(lua, &ids).map(mlua::Value::Table)
         },
     )
     .map(mlua::Value::Function)
@@ -109,33 +84,17 @@ pub fn make_area_query_fn(lua: &mlua::Lua, variant: &str, self_ptr: *mut std::ff
 /// Create a `getObjectsInMap` Lua function.
 pub fn make_map_query_fn(lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
     lua.create_function(|lua, (_self, m, bl_type): (mlua::Value, i32, i32)| {
-        const MAX: usize = 4096;
-        let mut ptrs = vec![std::ptr::null_mut::<std::ffi::c_void>(); MAX];
-        let raw_count = unsafe {
-            sl_g_getobjectsinmap(m, bl_type, ptrs.as_mut_ptr(), MAX as i32)
-        };
-        let count = (raw_count.max(0) as usize).min(MAX);
-        let tbl = lua.create_table()?;
-        for (i, &bl) in ptrs[..count].iter().enumerate() {
-            let val = unsafe {
-                crate::game::scripting::bl_to_lua(lua, bl).unwrap_or(mlua::Value::Nil)
-            };
-            tbl.raw_set(i + 1, val)?;
-        }
-        Ok(tbl)
+        let ids = get_objects_in_map(m, bl_type);
+        ids_to_lua_table(lua, &ids).map(mlua::Value::Table)
     })
     .map(mlua::Value::Function)
 }
 
 /// Create a `getBlock` Lua method.
-/// Takes a BL id (integer), calls `map_id2bl`, and returns the typed object or nil.
+/// Takes a BL id (integer) and returns the typed object or nil.
 pub fn make_getblock_fn(lua: &mlua::Lua) -> mlua::Result<mlua::Value> {
     lua.create_function(|lua, (_self, id): (mlua::Value, u32)| {
-        let bl = map_id2bl_ref(id) as *mut std::ffi::c_void;
-        if bl.is_null() {
-            return Ok(mlua::Value::Nil);
-        }
-        unsafe { crate::game::scripting::bl_to_lua(lua, bl) }
+        crate::game::scripting::id_to_lua(lua, id)
     })
     .map(mlua::Value::Function)
 }
@@ -168,63 +127,36 @@ fn val_to_item_id(v: &mlua::Value) -> i32 {
     }
 }
 
-/// Safely extract the stable BL entity id from a raw pointer at factory-creation time.
-/// Returns `None` if `ptr` is null, avoiding unsafe dereference of a null pointer.
-fn extract_entity_id(ptr: *mut std::ffi::c_void) -> Option<u32> {
-    if ptr.is_null() {
-        return None;
-    }
-    Some(unsafe { (*(ptr as *mut BlockList)).id })
-}
-
-pub fn make_sendanimation_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
-    let Some(entity_id) = extract_entity_id(self_ptr) else {
-        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
-    };
+pub fn make_sendanimation_fn(lua: &mlua::Lua, entity_id: u32) -> mlua::Result<mlua::Value> {
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let anim  = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let times = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = map_id2bl_ref(entity_id) as *mut std::ffi::c_void;
-        if bl_ptr.is_null() { return Ok(()); }
-        unsafe { sl_g_sendanimation(bl_ptr, anim, times); }
+        unsafe { sl_g_sendanimation(entity_id, anim, times); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
-pub fn make_playsound_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
-    let Some(entity_id) = extract_entity_id(self_ptr) else {
-        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
-    };
+pub fn make_playsound_fn(lua: &mlua::Lua, entity_id: u32) -> mlua::Result<mlua::Value> {
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let sound = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = map_id2bl_ref(entity_id) as *mut std::ffi::c_void;
-        if bl_ptr.is_null() { return Ok(()); }
-        unsafe { sl_g_playsound(bl_ptr, sound); }
+        sl_g_playsound(entity_id, sound);
         Ok(())
     }).map(mlua::Value::Function)
 }
 
-pub fn make_sendaction_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
-    let Some(entity_id) = extract_entity_id(self_ptr) else {
-        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
-    };
+pub fn make_sendaction_fn(lua: &mlua::Lua, entity_id: u32) -> mlua::Result<mlua::Value> {
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let action = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let speed  = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = map_id2bl_ref(entity_id) as *mut std::ffi::c_void;
-        if bl_ptr.is_null() { return Ok(()); }
-        unsafe { sl_g_sendaction(bl_ptr, action, speed); }
+        sl_g_sendaction(entity_id, action, speed);
         Ok(())
     }).map(mlua::Value::Function)
 }
 
-pub fn make_msg_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
-    let Some(entity_id) = extract_entity_id(self_ptr) else {
-        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
-    };
+pub fn make_msg_fn(lua: &mlua::Lua, entity_id: u32) -> mlua::Result<mlua::Value> {
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let color  = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -239,33 +171,23 @@ pub fn make_msg_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Re
                 e.nul_position()
             ))
         })?;
-        let bl_ptr = map_id2bl_ref(entity_id) as *mut std::ffi::c_void;
-        if bl_ptr.is_null() { return Ok(()); }
-        unsafe { sl_g_msg(bl_ptr, color, cs.as_ptr(), target); }
+        unsafe { sl_g_msg(entity_id, color, cs.as_ptr(), target); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
-pub fn make_dropitem_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
-    let Some(entity_id) = extract_entity_id(self_ptr) else {
-        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
-    };
+pub fn make_dropitem_fn(lua: &mlua::Lua, entity_id: u32) -> mlua::Result<mlua::Value> {
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let item   = a.get(1).map(|v| val_to_item_id(v)).unwrap_or(0);
         let amount = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
         let owner  = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = map_id2bl_ref(entity_id) as *mut std::ffi::c_void;
-        if bl_ptr.is_null() { return Ok(()); }
-        unsafe { sl_g_dropitem(bl_ptr, item, amount, owner); }
+        unsafe { sl_g_dropitem(entity_id, item, amount, owner); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
-pub fn make_dropitemxy_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
-    let Some(entity_id) = extract_entity_id(self_ptr) else {
-        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
-    };
+pub fn make_dropitemxy_fn(lua: &mlua::Lua, entity_id: u32) -> mlua::Result<mlua::Value> {
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let item   = a.get(1).map(|v| val_to_item_id(v)).unwrap_or(0);
@@ -274,78 +196,53 @@ pub fn make_dropitemxy_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> m
         let x      = a.get(4).map(|v| val_to_int(v)).unwrap_or(0);
         let y      = a.get(5).map(|v| val_to_int(v)).unwrap_or(0);
         let owner  = a.get(6).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = map_id2bl_ref(entity_id) as *mut std::ffi::c_void;
-        if bl_ptr.is_null() { return Ok(()); }
-        unsafe { sl_g_dropitemxy(bl_ptr, item, amount, m, x, y, owner); }
+        unsafe { sl_g_dropitemxy(entity_id, item, amount, m, x, y, owner); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
-pub fn make_objectcanmove_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
-    let Some(entity_id) = extract_entity_id(self_ptr) else {
-        return lua.create_function(|_, _: mlua::MultiValue| Ok(false)).map(mlua::Value::Function);
-    };
+pub fn make_objectcanmove_fn(lua: &mlua::Lua, entity_id: u32) -> mlua::Result<mlua::Value> {
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let x    = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let y    = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
         let side = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = map_id2bl_ref(entity_id) as *mut std::ffi::c_void;
-        if bl_ptr.is_null() { return Ok(false); }
-        Ok(unsafe { sl_g_objectcanmove(bl_ptr, x, y, side) } != 0)
+        Ok(sl_g_objectcanmove(entity_id, x, y, side) != 0)
     }).map(mlua::Value::Function)
 }
 
-pub fn make_objectcanmovefrom_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
-    let Some(entity_id) = extract_entity_id(self_ptr) else {
-        return lua.create_function(|_, _: mlua::MultiValue| Ok(false)).map(mlua::Value::Function);
-    };
+pub fn make_objectcanmovefrom_fn(lua: &mlua::Lua, entity_id: u32) -> mlua::Result<mlua::Value> {
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let x    = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let y    = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
         let side = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = map_id2bl_ref(entity_id) as *mut std::ffi::c_void;
-        if bl_ptr.is_null() { return Ok(false); }
-        Ok(unsafe { sl_g_objectcanmovefrom(bl_ptr, x, y, side) } != 0)
+        Ok(sl_g_objectcanmovefrom(entity_id, x, y, side) != 0)
     }).map(mlua::Value::Function)
 }
 
-pub fn make_repeatanimation_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
-    let Some(entity_id) = extract_entity_id(self_ptr) else {
-        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
-    };
+pub fn make_repeatanimation_fn(lua: &mlua::Lua, entity_id: u32) -> mlua::Result<mlua::Value> {
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let anim     = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let duration = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = map_id2bl_ref(entity_id) as *mut std::ffi::c_void;
-        if bl_ptr.is_null() { return Ok(()); }
-        unsafe { sl_g_repeatanimation(bl_ptr, anim, duration); }
+        unsafe { sl_g_repeatanimation(entity_id, anim, duration); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
-pub fn make_selfanimation_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
-    let Some(entity_id) = extract_entity_id(self_ptr) else {
-        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
-    };
+pub fn make_selfanimation_fn(lua: &mlua::Lua, entity_id: u32) -> mlua::Result<mlua::Value> {
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let target = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
         let anim   = a.get(2).map(|v| val_to_int(v)).unwrap_or(0);
         let times  = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = map_id2bl_ref(entity_id) as *mut std::ffi::c_void;
-        if bl_ptr.is_null() { return Ok(()); }
-        unsafe { sl_g_selfanimation(bl_ptr, target, anim, times); }
+        unsafe { sl_g_selfanimation(entity_id, target, anim, times); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
-pub fn make_selfanimationxy_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
-    let Some(entity_id) = extract_entity_id(self_ptr) else {
-        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
-    };
+pub fn make_selfanimationxy_fn(lua: &mlua::Lua, entity_id: u32) -> mlua::Result<mlua::Value> {
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let target = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -353,17 +250,12 @@ pub fn make_selfanimationxy_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void)
         let x      = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
         let y      = a.get(4).map(|v| val_to_int(v)).unwrap_or(0);
         let times  = a.get(5).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = map_id2bl_ref(entity_id) as *mut std::ffi::c_void;
-        if bl_ptr.is_null() { return Ok(()); }
-        unsafe { sl_g_selfanimationxy(bl_ptr, target, anim, x, y, times); }
+        unsafe { sl_g_selfanimationxy(entity_id, target, anim, x, y, times); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
-pub fn make_sendparcel_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
-    let Some(entity_id) = extract_entity_id(self_ptr) else {
-        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
-    };
+pub fn make_sendparcel_fn(lua: &mlua::Lua, entity_id: u32) -> mlua::Result<mlua::Value> {
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let receiver = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -382,17 +274,12 @@ pub fn make_sendparcel_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> m
                 e.nul_position()
             ))
         })?;
-        let bl_ptr = map_id2bl_ref(entity_id) as *mut std::ffi::c_void;
-        if bl_ptr.is_null() { return Ok(()); }
-        unsafe { sl_g_sendparcel(bl_ptr, receiver, sender, item, amount, owner, cs.as_ptr(), npcflag); }
+        unsafe { sl_g_sendparcel(entity_id, receiver, sender, item, amount, owner, cs.as_ptr(), npcflag); }
         Ok(())
     }).map(mlua::Value::Function)
 }
 
-pub fn make_throwblock_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
-    let Some(entity_id) = extract_entity_id(self_ptr) else {
-        return lua.create_function(|_, _: mlua::MultiValue| Ok(())).map(mlua::Value::Function);
-    };
+pub fn make_throwblock_fn(lua: &mlua::Lua, entity_id: u32) -> mlua::Result<mlua::Value> {
     lua.create_function(move |_, args: mlua::MultiValue| {
         let a: Vec<mlua::Value> = args.into_iter().collect();
         let x      = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
@@ -400,9 +287,7 @@ pub fn make_throwblock_fn(lua: &mlua::Lua, self_ptr: *mut std::ffi::c_void) -> m
         let icon   = a.get(3).map(|v| val_to_int(v)).unwrap_or(0);
         let color  = a.get(4).map(|v| val_to_int(v)).unwrap_or(0);
         let action = a.get(5).map(|v| val_to_int(v)).unwrap_or(0);
-        let bl_ptr = map_id2bl_ref(entity_id) as *mut std::ffi::c_void;
-        if bl_ptr.is_null() { return Ok(()); }
-        unsafe { sl_g_throwblock(bl_ptr, x, y, icon, color, action); }
+        sl_g_throwblock(entity_id, x, y, icon, color, action);
         Ok(())
     }).map(mlua::Value::Function)
 }

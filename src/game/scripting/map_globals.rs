@@ -1,20 +1,20 @@
 //! Global scripting helpers.
 
 
-use crate::database::map_db::{BlockList, WarpList, BLOCK_SIZE, MAX_MAPREG};
+use crate::database::map_db::{WarpList, BLOCK_SIZE, MAX_MAPREG};
 use crate::game::block::map_delblock_id;
 use crate::database::map_db::get_map_ptr;
 use crate::session::{session_exists, session_get_data, session_get_eof, SessionId};
 use crate::game::block::{map_is_loaded, AreaType};
 use crate::game::block_grid;
 use crate::game::client::visual::clif_sendweather;
-use crate::game::map_server::{map_deliddb, map_id2sd_pc, map_readglobalreg, map_setglobalreg};
+use crate::game::map_server::{entity_position, map_deliddb, map_id2sd_pc, map_readglobalreg, map_setglobalreg};
 use crate::game::pc::MapSessionData;
 
-use crate::game::map_parse::chat::{clif_sendmsg, clif_playsound, clif_speak_inner};
-use crate::game::map_parse::visual::clif_lookgone;
-use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from, clif_sendside};
-use crate::game::map_parse::combat::{clif_sendaction, clif_sendanimation_inner, clif_sendanimation_xy_inner};
+use crate::game::map_parse::chat::{clif_sendmsg, clif_playsound_entity, clif_speak_inner};
+use crate::game::map_parse::visual::clif_lookgone_by_id;
+use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from, clif_sendside_pc, clif_sendside_mob, clif_sendside_npc};
+use crate::game::map_parse::combat::{clif_sendanimation_inner, clif_sendanimation_xy_inner};
 use crate::game::client::clif_send;
 use crate::network::crypt::send_metalist;
 use crate::game::block::map_addblock_id;
@@ -119,19 +119,12 @@ pub async unsafe fn sl_g_setweatherm(m: i32, weather: u8) {
 /// Collect pointers to all online player block-lists into `out_ptrs`.
 ///
 /// Returns the count written.
-pub unsafe fn sl_g_getusers(out_ptrs: *mut *mut std::ffi::c_void, max_count: i32) -> i32 {
-    let mut count = 0i32;
-    for i in 0..crate::session::get_fd_max() {
-        if count >= max_count { break; }
-        let sid = SessionId::from_raw(i);
-        if !session_exists(sid) { continue; }
-        if session_get_eof(sid) != 0 { continue; }
-        let tsd = session_get_data(sid);
-        if tsd.is_null() { continue; }
-        *out_ptrs.add(count as usize) = (*tsd).as_bl_mut() as *mut _ as *mut std::ffi::c_void;
-        count += 1;
-    }
-    count
+pub fn sl_g_getusers_ids() -> Vec<u32> {
+    let mut ids = Vec::new();
+    crate::game::map_server::for_each_player(|arc| {
+        ids.push(arc.id);
+    });
+    ids
 }
 
 /// Return `map[m].pvp`, or 0 if the map slot is not loaded.
@@ -165,127 +158,150 @@ pub unsafe fn sl_g_getmaptitle(m: i32, buf: *mut i8, buflen: i32) -> i32 {
 /// Send a colored message to a specific player by ID.
 ///
 /// `target == 0` is a no-op (area broadcast not implemented here).
-pub unsafe fn sl_g_msg(bl: *mut std::ffi::c_void, color: i32, msg: *const i8, target: i32) {
-    if bl.is_null() || msg.is_null() || target == 0 { return; }
+pub unsafe fn sl_g_msg(_entity_id: u32, color: i32, msg: *const i8, target: i32) {
+    if msg.is_null() || target == 0 { return; }
     if let Some(arc) = map_id2sd_pc(target as u32) {
         let tsd = &mut *arc.write();
         clif_sendmsg(tsd as *mut _, color, msg);
     }
 }
 
-/// Return 1 if cell (x, y) on bl's map is passable from `side`, else 0.
+/// Return 1 if cell (x, y) on the entity's map is passable from `side`, else 0.
 ///
-pub unsafe fn sl_g_objectcanmove(bl: *mut std::ffi::c_void, x: i32, y: i32, side: i32) -> i32 {
-    if bl.is_null() { return 0; }
-    let m = (*(bl as *mut BlockList)).m as i32;
-    if clif_object_canmove(m, x, y, side) != 0 { 0 } else { 1 }
+pub fn sl_g_objectcanmove(entity_id: u32, x: i32, y: i32, side: i32) -> i32 {
+    let Some((pos, _)) = entity_position(entity_id) else { return 0; };
+    if unsafe { clif_object_canmove(pos.m as i32, x, y, side) } != 0 { 0 } else { 1 }
 }
 
 /// Return 1 if the block at (x, y) can move from that cell toward `side`, else 0.
 ///
-pub unsafe fn sl_g_objectcanmovefrom(bl: *mut std::ffi::c_void, x: i32, y: i32, side: i32) -> i32 {
-    if bl.is_null() { return 0; }
-    let m = (*(bl as *mut BlockList)).m as i32;
-    if clif_object_canmove_from(m, x, y, side) != 0 { 0 } else { 1 }
+pub fn sl_g_objectcanmovefrom(entity_id: u32, x: i32, y: i32, side: i32) -> i32 {
+    let Some((pos, _)) = entity_position(entity_id) else { return 0; };
+    if unsafe { clif_object_canmove_from(pos.m as i32, x, y, side) } != 0 { 0 } else { 1 }
 }
 
 /// Remove a floor item from the spatial grid and ID DB, broadcasting disappearance.
 ///
 /// Does NOT free memory — the Lua object may still hold references.
-pub unsafe fn sl_fl_delete(bl_ptr: *mut std::ffi::c_void) {
+pub fn sl_fl_delete(entity_id: u32) {
     use crate::game::pc::BL_PC;
-    if bl_ptr.is_null() { return; }
-    let bl = bl_ptr as *mut BlockList;
-    if (*bl).bl_type as i32 == BL_PC { return; }
-    map_delblock_id((*bl).id, (*bl).m);
-    if (*bl).id > 0 { clif_lookgone(bl); }
-    map_deliddb((*bl).id);
+    let Some((pos, bl_type)) = entity_position(entity_id) else { return; };
+    if bl_type as i32 == BL_PC { return; }
+    map_delblock_id(entity_id, pos.m);
+    if entity_id > 0 { unsafe { clif_lookgone_by_id(entity_id); } }
+    map_deliddb(entity_id);
 }
 
 /// Remove block from the grid and the map ID database.
 ///
-pub unsafe fn sl_g_deliddb(bl_ptr: *mut std::ffi::c_void) {
-    if bl_ptr.is_null() { return; }
-    let bl = bl_ptr as *mut BlockList;
-    map_delblock_id((*bl).id, (*bl).m);
-    map_deliddb((*bl).id);
+pub fn sl_g_deliddb(entity_id: u32) {
+    let Some((pos, _)) = entity_position(entity_id) else { return; };
+    map_delblock_id(entity_id, pos.m);
+    map_deliddb(entity_id);
 }
 
 /// No-op — permanent spawn tracking is handled in Lua.
 ///
-pub unsafe fn sl_g_addpermanentspawn(_bl_ptr: *mut std::ffi::c_void) {}
+pub fn sl_g_addpermanentspawn(_entity_id: u32) {}
 
 /// Broadcast block's look packet to surrounding players.
 ///
-pub unsafe fn sl_g_sendside(bl: *mut std::ffi::c_void) {
-    if bl.is_null() { return; }
-    clif_sendside(bl as *mut BlockList);
+pub fn sl_g_sendside(entity_id: u32) {
+    let Some((_, bl_type)) = entity_position(entity_id) else { return; };
+    match bl_type as i32 {
+        crate::game::mob::BL_PC => {
+            if let Some(arc) = map_id2sd_pc(entity_id) {
+                unsafe { clif_sendside_pc(&*arc.read()); }
+            }
+        }
+        crate::game::mob::BL_MOB => {
+            if let Some(arc) = crate::game::map_server::map_id2mob_ref(entity_id) {
+                unsafe { clif_sendside_mob(&*arc.read()); }
+            }
+        }
+        crate::game::mob::BL_NPC => {
+            if let Some(arc) = crate::game::map_server::map_id2npc_ref(entity_id) {
+                unsafe { clif_sendside_npc(&*arc.read()); }
+            }
+        }
+        _ => {}
+    }
 }
 
-/// Play a sound effect at bl's position.
+/// Play a sound effect at the entity's position.
 ///
-pub unsafe fn sl_g_playsound(bl: *mut std::ffi::c_void, sound: i32) {
-    if bl.is_null() { return; }
-    clif_playsound(bl as *mut BlockList, sound);
+pub fn sl_g_playsound(entity_id: u32, sound: i32) {
+    let Some((pos, bl_type)) = entity_position(entity_id) else { return; };
+    unsafe { clif_playsound_entity(entity_id, pos.m, pos.x, pos.y, bl_type, sound); }
 }
 
 /// Delete a non-PC block from the world and free its memory.
 ///
 /// Unlike `sl_fl_delete`, this removes the block from the world.
-/// Deallocation is handled by `map_deliddb` (drops the Box from the typed map).
-pub unsafe fn sl_g_delete_bl(bl_ptr: *mut std::ffi::c_void) {
+/// Deallocation is handled by `map_deliddb` (drops the Arc from the typed map).
+pub fn sl_g_delete_bl(entity_id: u32) {
     use crate::game::pc::BL_PC;
-    if bl_ptr.is_null() { return; }
-    let bl = bl_ptr as *mut BlockList;
-    if (*bl).bl_type as i32 == BL_PC { return; }
-    map_delblock_id((*bl).id, (*bl).m);
-    if (*bl).id > 0 {
-        clif_lookgone(bl);
+    let Some((pos, bl_type)) = entity_position(entity_id) else { return; };
+    if bl_type as i32 == BL_PC { return; }
+    map_delblock_id(entity_id, pos.m);
+    if entity_id > 0 {
+        unsafe { clif_lookgone_by_id(entity_id); }
     }
     // map_deliddb drops the Arc from the typed entity map.
-    map_deliddb((*bl).id);
+    map_deliddb(entity_id);
 }
 
-/// Broadcast an action animation at bl's position.
+/// Broadcast an action animation at the entity's position.
 ///
-pub unsafe fn sl_g_sendaction(bl_ptr: *mut std::ffi::c_void, action: i32, speed: i32) {
-    if bl_ptr.is_null() { return; }
-    clif_sendaction(&mut *(bl_ptr as *mut BlockList), action, speed, 0);
+pub fn sl_g_sendaction(entity_id: u32, action: i32, speed: i32) {
+    let Some((pos, bl_type)) = entity_position(entity_id) else { return; };
+    let mut buf = [0u8; 32];
+    buf[0] = 0xAA;
+    buf[1] = 0x00;
+    buf[2] = 0x0B;
+    buf[3] = 0x1A;
+    buf[5] = (entity_id >> 24) as u8;
+    buf[6] = (entity_id >> 16) as u8;
+    buf[7] = (entity_id >>  8) as u8;
+    buf[8] = entity_id as u8;
+    buf[9]  = action as u8;
+    buf[10] = 0x00;
+    buf[11] = speed as u8;
+    buf[12] = 0x00;
+    unsafe { clif_send(buf.as_ptr(), 32, entity_id, pos.m, pos.x, pos.y, bl_type, 6); } // SAMEAREA
 }
 
-/// Send a throw animation packet from bl's position toward (x, y).
+/// Send a throw animation packet from the entity's position toward (x, y).
 ///
 /// Packet layout: opcode 0xAA, length 0x001B, type 0x16 subtype 0x03.
-pub unsafe fn sl_g_throwblock(
-    bl_ptr: *mut std::ffi::c_void,
+pub fn sl_g_throwblock(
+    entity_id: u32,
     x: i32, y: i32,
     icon: i32, color: i32, action: i32,
 ) {
-    if bl_ptr.is_null() { return; }
-    let bl = bl_ptr as *mut BlockList;
+    let Some((pos, bl_type)) = entity_position(entity_id) else { return; };
     let mut buf = [0u8; 30];
     buf[0]       = 0xAA;
     buf[1..3].copy_from_slice(&0x001Bu16.to_be_bytes());
     buf[3]       = 0x16;
     buf[4]       = 0x03;
-    buf[5..9].copy_from_slice(&((*bl).id as u32).to_be_bytes());
+    buf[5..9].copy_from_slice(&entity_id.to_be_bytes());
     buf[9..11].copy_from_slice(&((icon + 49152) as u16).to_be_bytes());
     buf[11]      = color as u8;
     // buf[12..16] = 0 (already zero-initialized)
-    buf[16..18].copy_from_slice(&((*bl).x as u16).to_be_bytes());
-    buf[18..20].copy_from_slice(&((*bl).y as u16).to_be_bytes());
+    buf[16..18].copy_from_slice(&pos.x.to_be_bytes());
+    buf[18..20].copy_from_slice(&pos.y.to_be_bytes());
     buf[20..22].copy_from_slice(&(x as u16).to_be_bytes());
     buf[22..24].copy_from_slice(&(y as u16).to_be_bytes());
     // buf[24..28] = 0, buf[29] = 0
     buf[28]      = action as u8;
-    clif_send(buf.as_ptr(), 30, bl, 6 /* SAMEAREA */);
+    unsafe { clif_send(buf.as_ptr(), 30, entity_id, pos.m, pos.x, pos.y, bl_type, 6 /* SAMEAREA */); }
 }
 
-/// Drop an item at bl's position.
+/// Drop an item at the entity's position.
 ///
-pub unsafe fn sl_g_dropitem(bl_ptr: *mut std::ffi::c_void, item_id: i32, amount: i32, owner: i32) {
-    if bl_ptr.is_null() { return; }
-    let bl = bl_ptr as *mut BlockList;
+pub unsafe fn sl_g_dropitem(entity_id: u32, item_id: i32, amount: i32, owner: i32) {
+    let Some((pos, _)) = entity_position(entity_id) else { return; };
     let id = item_id as u32;
     let sd = if owner != 0 {
         map_id2sd_pc(owner as u32).map(|arc| &mut *arc.write() as *mut MapSessionData).unwrap_or(std::ptr::null_mut())
@@ -294,15 +310,15 @@ pub unsafe fn sl_g_dropitem(bl_ptr: *mut std::ffi::c_void, item_id: i32, amount:
     };
     let db = crate::database::item_db::search(id);
     crate::game::mob::mob_dropitem(
-        (*bl).id as u32, id, amount, db.dura, db.protected, 0,
-        (*bl).m as i32, (*bl).x as i32, (*bl).y as i32, sd,
+        entity_id, id, amount, db.dura, db.protected, 0,
+        pos.m as i32, pos.x as i32, pos.y as i32, sd,
     );
 }
 
-/// Drop an item at a specific map coordinate, ignoring bl's position.
+/// Drop an item at a specific map coordinate, ignoring the entity's position.
 ///
 pub unsafe fn sl_g_dropitemxy(
-    _bl_ptr: *mut std::ffi::c_void,
+    _entity_id: u32,
     item_id: i32, amount: i32,
     m: i32, x: i32, y: i32,
     owner: i32,
@@ -320,7 +336,7 @@ pub unsafe fn sl_g_dropitemxy(
 /// Insert a parcel into the Parcels table, assigning the next available slot.
 ///
 pub unsafe fn sl_g_sendparcel(
-    _bl_ptr: *mut std::ffi::c_void,
+    _entity_id: u32,
     receiver: i32, sender: i32,
     item: i32, amount: i32, owner: i32,
     engrave: *const i8, npcflag: i32,
@@ -370,70 +386,60 @@ pub unsafe fn sl_g_sendparcel(
 /// BL_PC type constant — matches C enum value.
 const BL_PC_TYPE: i32 = 0x01;
 
-/// Broadcast a spell/skill animation to all PCs in AREA around bl.
+/// Broadcast a spell/skill animation to all PCs in AREA around the entity.
 ///
-pub unsafe fn sl_g_sendanimation(bl_ptr: *mut std::ffi::c_void, anim: i32, times: i32) {
-    if bl_ptr.is_null() { return; }
-    let bl = bl_ptr as *mut BlockList;
-    let m  = (*bl).m as i32;
-    let x  = (*bl).x as i32;
-    let y  = (*bl).y as i32;
-    if let Some(grid) = block_grid::get_grid(m as usize) {
-        let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
-        let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
+pub unsafe fn sl_g_sendanimation(entity_id: u32, anim: i32, times: i32) {
+    let Some((pos, _)) = entity_position(entity_id) else { return; };
+    if let Some(grid) = block_grid::get_grid(pos.m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add(pos.m as usize);
+        let ids = block_grid::ids_in_area(grid, pos.x as i32, pos.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(arc) = map_id2sd_pc(id) {
-                let pc = &*arc.read();
-                clif_sendanimation_inner(pc.as_bl(), anim, bl, times);
+                let pc = arc.read();
+                clif_sendanimation_inner(pc.fd, pc.player.appearance.setting_flags, anim, entity_id, times);
             }
         }
     }
 }
 
-/// Broadcast an animation at position (x, y) to all PCs in AREA around bl.
+/// Broadcast an animation at position (x, y) to all PCs in AREA around the entity.
 ///
 pub unsafe fn sl_g_sendanimxy(
-    bl_ptr: *mut std::ffi::c_void,
+    entity_id: u32,
     anim: i32,
     x: i32,
     y: i32,
     times: i32,
 ) {
-    if bl_ptr.is_null() { return; }
-    let bl = bl_ptr as *mut BlockList;
-    let m  = (*bl).m as i32;
-    let bx = (*bl).x as i32;
-    let by = (*bl).y as i32;
+    let Some((pos, _)) = entity_position(entity_id) else { return; };
+    let m  = pos.m as i32;
+    let bx = pos.x as i32;
+    let by = pos.y as i32;
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
         let ids = block_grid::ids_in_area(grid, bx, by, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(arc) = map_id2sd_pc(id) {
                 let pc = &*arc.read();
-                clif_sendanimation_xy_inner(pc.as_bl(), anim, times, x, y);
+                clif_sendanimation_xy_inner(&*pc, anim, times, x, y);
             }
         }
     }
 }
 
-/// Broadcast a repeating animation to all PCs in AREA around bl.
+/// Broadcast a repeating animation to all PCs in AREA around the entity.
 ///
 /// `duration` is in milliseconds; divided by 1000 before sending on the wire.
-pub unsafe fn sl_g_repeatanimation(bl_ptr: *mut std::ffi::c_void, anim: i32, duration: i32) {
-    if bl_ptr.is_null() { return; }
-    let bl = bl_ptr as *mut BlockList;
-    let m  = (*bl).m as i32;
-    let x  = (*bl).x as i32;
-    let y  = (*bl).y as i32;
-    // Integer division: sub-second durations (1-999 ms) truncate to wire value 0,
-    // same as the C original. Callers should pass multiples of 1000.
+pub unsafe fn sl_g_repeatanimation(entity_id: u32, anim: i32, duration: i32) {
+    let Some((pos, _)) = entity_position(entity_id) else { return; };
     let wire_dur = if duration > 0 { duration / 1000 } else { duration };
-    if let Some(grid) = block_grid::get_grid(m as usize) {
-        let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
-        let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
+    if let Some(grid) = block_grid::get_grid(pos.m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add(pos.m as usize);
+        let ids = block_grid::ids_in_area(grid, pos.x as i32, pos.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(pc_arc) = map_id2sd_pc(id) {
-                clif_sendanimation_inner(pc_arc.read().as_bl(), anim, bl, wire_dur);
+                let guard = pc_arc.read();
+                clif_sendanimation_inner(guard.fd, guard.player.appearance.setting_flags, anim, entity_id, wire_dur);
             }
         }
     }
@@ -444,21 +450,19 @@ pub unsafe fn sl_g_repeatanimation(bl_ptr: *mut std::ffi::c_void, anim: i32, dur
 /// Resolves the target's map/cell via `map_id2sd`, then broadcasts to that
 /// Sends a self-animation to all players in the exact cell.
 pub unsafe fn sl_g_selfanimation(
-    bl_ptr: *mut std::ffi::c_void,
+    entity_id: u32,
     target_id: i32,
     anim: i32,
     times: i32,
 ) {
-    if bl_ptr.is_null() { return; }
-    let bl = bl_ptr as *mut BlockList;
     let Some(arc) = map_id2sd_pc(target_id as u32) else { return; };
     let (m, tx, ty) = { let sd = arc.read(); (sd.m as i32, sd.x as i32, sd.y as i32) };
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let cell_ids = grid.ids_at_tile(tx as u16, ty as u16);
         for id in cell_ids {
             if let Some(arc) = map_id2sd_pc(id) {
-                let pc = &*arc.read();
-                clif_sendanimation_inner(pc.as_bl(), anim, bl, times);
+                let pc = arc.read();
+                clif_sendanimation_inner(pc.fd, pc.player.appearance.setting_flags, anim, entity_id, times);
             }
         }
     }
@@ -469,7 +473,7 @@ pub unsafe fn sl_g_selfanimation(
 /// Resolves the target's map/cell, then broadcasts the XY animation to that
 /// Sends a self-animation at the specified (x,y) to players in the exact cell.
 pub unsafe fn sl_g_selfanimationxy(
-    _bl_ptr: *mut std::ffi::c_void,
+    _entity_id: u32,
     target_id: i32,
     anim: i32,
     x: i32,
@@ -482,8 +486,8 @@ pub unsafe fn sl_g_selfanimationxy(
         let cell_ids = grid.ids_at_tile(sx as u16, sy as u16);
         for id in cell_ids {
             if let Some(arc) = map_id2sd_pc(id) {
-                let pc = &*arc.read();
-                clif_sendanimation_xy_inner(pc.as_bl(), anim, times, x, y);
+                let pc = arc.read();
+                clif_sendanimation_xy_inner(&*pc, anim, times, x, y);
             }
         }
     }
@@ -491,19 +495,16 @@ pub unsafe fn sl_g_selfanimationxy(
 
 /// Send a talk/speech packet from `bl` to all PCs in AREA.
 ///
-pub unsafe fn sl_g_talk(bl_ptr: *mut std::ffi::c_void, talk_type: i32, msg: *const i8) {
-    if bl_ptr.is_null() || msg.is_null() { return; }
-    let bl = bl_ptr as *mut BlockList;
-    let m  = (*bl).m as i32;
-    let x  = (*bl).x as i32;
-    let y  = (*bl).y as i32;
-    if let Some(grid) = block_grid::get_grid(m as usize) {
-        let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
-        let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
+pub unsafe fn sl_g_talk(entity_id: u32, talk_type: i32, msg: *const i8) {
+    if msg.is_null() { return; }
+    let Some((pos, _)) = entity_position(entity_id) else { return; };
+    if let Some(grid) = block_grid::get_grid(pos.m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add(pos.m as usize);
+        let ids = block_grid::ids_in_area(grid, pos.x as i32, pos.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(arc) = map_id2sd_pc(id) {
-                let pc = &*arc.read();
-                clif_speak_inner(pc.bl_ptr(), msg, bl, talk_type);
+                let pc = arc.read();
+                clif_speak_inner(pc.fd, msg, entity_id, talk_type);
             }
         }
     }
@@ -577,14 +578,7 @@ pub unsafe fn sl_g_throw(
     // buf[24..28] = 0, buf[29] = 0
     buf[28]     = action as u8;
 
-    // Anchor BlockList at (m, x, y) so clif_send can locate the area.
-    // clif_send with type SAMEAREA (6) handles broadcasting to all nearby PCs
-    // internally — no outer foreach_in_area loop is needed or correct here.
-    let mut anchor: BlockList = std::mem::zeroed();
-    anchor.m = m as u16;
-    anchor.x = x as u16;
-    anchor.y = y as u16;
-    clif_send(buf.as_ptr(), 30, &mut anchor as *mut BlockList, 6 /* SAMEAREA */);
+    clif_send(buf.as_ptr(), 30, id as u32, m as u16, x as u16, y as u16, 0, 6 /* SAMEAREA */);
 }
 
 /// Allocate and register a scripted temporary NPC.
@@ -636,7 +630,7 @@ pub unsafe fn sl_g_addnpc(
         dst[n] = 0;
     }
 
-    // Fill BlockList header.
+    // Fill entity header fields.
     (*raw).bl_type     = BL_NPC as u8;
     (*raw).subtype     = subtype as u8;
     (*raw).m           = m as u16;
@@ -826,13 +820,21 @@ pub unsafe fn sl_g_setmap(
 
     // ── Registry + client update ────────────────────────────────────────────
     map_loadregistry(m);
+    // Refresh viewport for all players on this map.
+    // Viewport dimensions: 19 tiles wide (offset -9), 17 tiles tall (offset -8).
+    const VIEW_W: i32 = 19;
+    const VIEW_H: i32 = 17;
+    const VIEW_OX: i32 = 9;  // x offset from player to viewport left edge
+    const VIEW_OY: i32 = 8;  // y offset from player to viewport top edge
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
         let ids = block_grid::ids_in_area(grid, 0, 0, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(arc) = map_id2sd_pc(id) {
-                let pc = &mut *arc.write();
-                crate::game::scripting::sl_updatepeople(pc.bl_ptr_mut() as *mut std::ffi::c_void, std::ptr::null_mut());
+                let sd = &mut *arc.write();
+                let x = (sd.x as i32).max(VIEW_OX).min(slot.xs as i32 - (VIEW_W - VIEW_OX));
+                let y = (sd.y as i32).max(VIEW_OY).min(slot.ys as i32 - (VIEW_H - VIEW_OY));
+                crate::game::map_parse::movement::clif_sendmapdata(sd, sd.m as i32, x - VIEW_OX, y - VIEW_OY, VIEW_W, VIEW_H, 0);
             }
         }
     }

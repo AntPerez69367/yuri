@@ -11,7 +11,7 @@ pub struct PlayerAppearance {
     pub skin_color: u16,
     pub disguise: u16,
     pub disguise_color: u16,
-    pub setting_flags: u16,
+    pub setting_flags: u32,
     pub heroes: u32,
     pub mini_map_toggle: u32,
     pub profile_vitastats: u8,

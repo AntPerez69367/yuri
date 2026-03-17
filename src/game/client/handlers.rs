@@ -15,13 +15,12 @@
 use std::ffi::CStr;
 
 use crate::database::get_pool;
-use crate::database::map_db::BlockList;
 // map_delblock removed — now using map_delblock_id directly
 use crate::game::scripting::{sl_resumemenu, carray_to_str};
 use crate::game::map_parse::packet::{rfifob, rfifop, wfifohead, wfifop, wfifoset};
 use crate::game::map_server::{
     boards_delete, boards_post, boards_readpost, boards_showposts, hasCoref,
-    map_changepostcolor, map_deliddb, map_getpostcolor, map_id2bl_ref, map_id2sd_pc,
+    map_changepostcolor, map_deliddb, map_getpostcolor, map_id2sd_pc, entity_position,
     nmail_sendmessage, nmail_write,
 };
 use crate::game::map_parse::chat::clif_sendminitext;
@@ -30,7 +29,7 @@ use crate::game::map_parse::groups::clif_leavegroup;
 use crate::game::map_parse::movement::clif_charspecific;
 use crate::game::map_parse::player_state::clif_sendxy;
 use crate::game::map_parse::trading::{clif_exchange_close, clif_exchange_message};
-use crate::game::map_parse::visual::{clif_lookgone, clif_object_look_specific};
+use crate::game::map_parse::visual::{clif_lookgone_by_id, clif_object_look_specific};
 use crate::game::mob::{BL_PC, MAX_MAGIC_TIMERS};
 use crate::game::pc::{pc_stoptimer, MapSessionData};
 
@@ -46,14 +45,14 @@ use crate::game::scripting::sl_async_freeco;
 use crate::game::map_char::intif_save_impl::sl_intif_savequit;
 use crate::game::client::visual::clif_showboards;
 use crate::database::board_db;
-use crate::game::map_parse::combat::clif_sendaction;
+use crate::game::map_parse::combat::clif_sendaction_pc;
 use crate::database::item_db;
 use crate::database::magic_db;
 use crate::session::{session_exists, session_set_eof, SessionId};
 
 use crate::game::block::AreaType;
 use crate::game::block_grid;
-use crate::game::map_parse::visual::clif_object_look_sub_inner;
+use crate::game::map_parse::visual::{clif_object_look_by_id, clif_mob_look_start_func_inner, clif_mob_look_close_func_inner};
 
 /// Dispatch a Lua event with a single entity ID argument.
 fn sl_doscript_simple(root: &str, method: Option<&str>, id: u32) -> i32 {
@@ -105,7 +104,7 @@ unsafe fn rlong_be(fd: SessionId, pos: usize) -> u32 {
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 pub unsafe fn clif_quit(sd: *mut MapSessionData) -> i32 {
     crate::game::block::map_delblock_id((*sd).id, (*sd).m);
-    clif_lookgone((*sd).bl_ptr());
+    clif_lookgone_by_id((*sd).id);
     0
 }
 
@@ -173,9 +172,8 @@ pub async unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 pub unsafe fn clif_handle_missingobject(sd: *mut MapSessionData) -> i32 {
     let id = rlong_be((*sd).fd, 5);
-    let bl = map_id2bl_ref(id);
-    if !bl.is_null() {
-        if (*bl).bl_type as i32 == BL_PC {
+    if let Some((_pos, bl_type)) = entity_position(id) {
+        if bl_type as i32 == BL_PC {
             clif_charspecific((*sd).player.identity.id as i32, id as i32);
             clif_charspecific(id as i32, (*sd).player.identity.id as i32);
         } else {
@@ -513,14 +511,14 @@ pub unsafe fn clif_sendheartbeat(id: i32, _none: i32) -> i32 {
 }
 
 /// `foreach_in_cell` callback: run the floor NPC's "click2" script.
-pub unsafe fn clif_runfloor_sub_inner(bl: *mut crate::database::map_db::BlockList, sd: *mut MapSessionData) -> i32 {
+pub unsafe fn clif_runfloor_sub_inner(entity_id: u32, sd: *mut MapSessionData) -> i32 {
     use crate::game::pc::FLOOR;
-    if bl.is_null() || sd.is_null() { return 0; }
-    use crate::game::npc::NpcData;
-    if (*bl).subtype as i32 != FLOOR as i32 { return 0; }
-    let nd = bl as *mut NpcData;
+    if sd.is_null() { return 0; }
+    let Some(arc) = crate::game::map_server::map_id2npc_ref(entity_id) else { return 0; };
+    let nd = &*arc.data_ptr();
+    if nd.subtype as i32 != FLOOR as i32 { return 0; }
     sl_async_freeco(sd);
-    sl_doscript_2(carray_to_str(&(*nd).name), Some("click2"), (*sd).id, (*nd).id);
+    sl_doscript_2(carray_to_str(&nd.name), Some("click2"), (*sd).id, nd.id);
     0
 }
 
@@ -569,7 +567,7 @@ pub unsafe fn clif_parsedropitem(sd: *mut MapSessionData) -> i32 {
             return 0;
         }
     }
-    clif_sendaction((*sd).as_bl_mut(), 5, 20, 0);
+    clif_sendaction_pc(&mut *sd, 5, 20, 0);
     (*sd).invslot = id as u8;
     let drop_item = item_db::search((&(*sd).player.inventory.inventory)[id as usize].id as u32);
     sl_doscript_simple(carray_to_str(&drop_item.yname), Some("on_drop"), (*sd).id);
@@ -592,7 +590,6 @@ pub unsafe fn clif_parsedropitem(sd: *mut MapSessionData) -> i32 {
 
 #[allow(dead_code)]
 const SAMEAREA: i32 = 6;
-const LOOK_GET:  i32 = 0;
 
 // ─── Board questionnaire struct ─────────────────────────────────────────────
 
@@ -869,7 +866,7 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
     use crate::game::map_parse::{
         movement::clif_sendchararea,
         player_state::{clif_getchararea, clif_sendmapinfo, clif_sendstatus},
-        visual::{clif_mob_look_close, clif_mob_look_start, clif_spawn},
+        visual::clif_spawn,
         groups::clif_findmount,
         chat::clif_sendminitext,
     };
@@ -899,8 +896,8 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
             }
         }
         0x01 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_WHISPER as u16;
-            if (*sd).player.appearance.setting_flags & FLAG_WHISPER as u16 != 0 {
+            (*sd).player.appearance.setting_flags ^= FLAG_WHISPER;
+            if (*sd).player.appearance.setting_flags & FLAG_WHISPER != 0 {
                 clif_sendminitext(sd, c"Listen to whisper:ON".as_ptr());
             } else {
                 clif_sendminitext(sd, c"Listen to whisper:OFF".as_ptr());
@@ -908,8 +905,8 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
             clif_sendstatus(sd, 0);
         }
         0x02 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_GROUP as u16;
-            if (*sd).player.appearance.setting_flags & FLAG_GROUP as u16 != 0 {
+            (*sd).player.appearance.setting_flags ^= FLAG_GROUP;
+            if (*sd).player.appearance.setting_flags & FLAG_GROUP != 0 {
                 clif_sendminitext(sd, c"Join a group     :ON".as_ptr());
             } else {
                 if (*sd).group_count > 0 { clif_leavegroup(sd); }
@@ -918,8 +915,8 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
             clif_sendstatus(sd, 0);
         }
         0x03 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_SHOUT as u16;
-            if (*sd).player.appearance.setting_flags & FLAG_SHOUT as u16 != 0 {
+            (*sd).player.appearance.setting_flags ^= FLAG_SHOUT;
+            if (*sd).player.appearance.setting_flags & FLAG_SHOUT != 0 {
                 clif_sendminitext(sd, c"Listen to shout  :ON".as_ptr());
             } else {
                 clif_sendminitext(sd, c"Listen to shout  :OFF".as_ptr());
@@ -927,8 +924,8 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
             clif_sendstatus(sd, 0);
         }
         0x04 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_ADVICE as u16;
-            if (*sd).player.appearance.setting_flags & FLAG_ADVICE as u16 != 0 {
+            (*sd).player.appearance.setting_flags ^= FLAG_ADVICE;
+            if (*sd).player.appearance.setting_flags & FLAG_ADVICE != 0 {
                 clif_sendminitext(sd, c"Listen to advice :ON".as_ptr());
             } else {
                 clif_sendminitext(sd, c"Listen to advice :OFF".as_ptr());
@@ -936,8 +933,8 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
             clif_sendstatus(sd, 0);
         }
         0x05 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_MAGIC as u16;
-            if (*sd).player.appearance.setting_flags & FLAG_MAGIC as u16 != 0 {
+            (*sd).player.appearance.setting_flags ^= FLAG_MAGIC;
+            if (*sd).player.appearance.setting_flags & FLAG_MAGIC != 0 {
                 clif_sendminitext(sd, c"Believe in magic :ON".as_ptr());
             } else {
                 clif_sendminitext(sd, c"Believe in magic :OFF".as_ptr());
@@ -945,8 +942,8 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
             clif_sendstatus(sd, 0);
         }
         0x06 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_WEATHER as u16;
-            if (*sd).player.appearance.setting_flags & FLAG_WEATHER as u16 != 0 {
+            (*sd).player.appearance.setting_flags ^= FLAG_WEATHER;
+            if (*sd).player.appearance.setting_flags & FLAG_WEATHER != 0 {
                 clif_sendminitext(sd, c"Weather change   :ON".as_ptr());
             } else {
                 clif_sendminitext(sd, c"Weather change   :OFF".as_ptr());
@@ -958,28 +955,25 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
             let oldm = (*sd).m as i32;
             let oldx = (*sd).x as i32;
             let oldy = (*sd).y as i32;
-            (*sd).player.appearance.setting_flags ^= FLAG_REALM as u16;
+            (*sd).player.appearance.setting_flags ^= FLAG_REALM;
             clif_quit(sd);
             clif_sendmapinfo(sd);
             pc_setpos(sd, oldm, oldx, oldy);
             clif_sendmapinfo(sd);
             clif_spawn(sd);
-            clif_mob_look_start(sd);
+            clif_mob_look_start_func_inner((*sd).fd, &mut (*sd).net.look);
             if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
                 let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).m as usize);
                 let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
                 for id in ids {
-                    let bl_ptr = crate::game::map_server::map_id2bl_ref(id);
-                    if !bl_ptr.is_null() {
-                        clif_object_look_sub_inner(bl_ptr, LOOK_GET, sd as *mut BlockList);
-                    }
+                    clif_object_look_by_id((*sd).fd, &mut (*sd).net.look, (*sd).player.identity.id, id);
                 }
             }
-            clif_mob_look_close(sd);
+            clif_mob_look_close_func_inner((*sd).fd, &mut (*sd).net.look);
             crate::game::client::visual::clif_destroyold(sd);
             clif_sendchararea(sd);
             clif_getchararea(sd);
-            if (*sd).player.appearance.setting_flags & FLAG_REALM as u16 != 0 {
+            if (*sd).player.appearance.setting_flags & FLAG_REALM != 0 {
                 clif_sendminitext(sd, c"Realm-centered   :ON".as_ptr());
             } else {
                 clif_sendminitext(sd, c"Realm-centered   :OFF".as_ptr());
@@ -987,8 +981,8 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
             clif_sendstatus(sd, 0);
         }
         0x08 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_EXCHANGE as u16;
-            if (*sd).player.appearance.setting_flags & FLAG_EXCHANGE as u16 != 0 {
+            (*sd).player.appearance.setting_flags ^= FLAG_EXCHANGE;
+            if (*sd).player.appearance.setting_flags & FLAG_EXCHANGE != 0 {
                 clif_sendminitext(sd, c"Exchange         :ON".as_ptr());
             } else {
                 clif_sendminitext(sd, c"Exchange         :OFF".as_ptr());
@@ -996,8 +990,8 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
             clif_sendstatus(sd, 0);
         }
         0x09 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_FASTMOVE as u16;
-            if (*sd).player.appearance.setting_flags & FLAG_FASTMOVE as u16 != 0 {
+            (*sd).player.appearance.setting_flags ^= FLAG_FASTMOVE;
+            if (*sd).player.appearance.setting_flags & FLAG_FASTMOVE != 0 {
                 clif_sendminitext(sd, c"Fast Move        :ON".as_ptr());
             } else {
                 clif_sendminitext(sd, c"Fast Move        :OFF".as_ptr());
@@ -1014,8 +1008,8 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
         }
         13 => {
             if rbyte((*sd).fd, 4) == 3 { return 0; }
-            (*sd).player.appearance.setting_flags ^= FLAG_SOUND as u16;
-            if (*sd).player.appearance.setting_flags & FLAG_SOUND as u16 != 0 {
+            (*sd).player.appearance.setting_flags ^= FLAG_SOUND;
+            if (*sd).player.appearance.setting_flags & FLAG_SOUND != 0 {
                 clif_sendminitext(sd, c"Hear sounds      :ON".as_ptr());
             } else {
                 clif_sendminitext(sd, c"Hear sounds      :OFF".as_ptr());
@@ -1023,8 +1017,8 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
             clif_sendstatus(sd, 0);
         }
         14 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_HELM as u16;
-            if (*sd).player.appearance.setting_flags & FLAG_HELM as u16 != 0 {
+            (*sd).player.appearance.setting_flags ^= FLAG_HELM;
+            if (*sd).player.appearance.setting_flags & FLAG_HELM != 0 {
                 clif_sendminitext(sd, c"Show Helmet      :ON".as_ptr());
                 pc_setglobalreg(sd, c"show_helmet".as_ptr(), 1);
             } else {
@@ -1036,8 +1030,8 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
             clif_getchararea(sd);
         }
         15 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_NECKLACE as u16;
-            if (*sd).player.appearance.setting_flags & FLAG_NECKLACE as u16 != 0 {
+            (*sd).player.appearance.setting_flags ^= FLAG_NECKLACE;
+            if (*sd).player.appearance.setting_flags & FLAG_NECKLACE != 0 {
                 clif_sendminitext(sd, c"Show Necklace      :ON".as_ptr());
                 pc_setglobalreg(sd, c"show_necklace".as_ptr(), 1);
             } else {

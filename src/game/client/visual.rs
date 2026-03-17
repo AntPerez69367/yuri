@@ -18,6 +18,7 @@ use crate::session::{
     session_set_eof,
 };
 use crate::game::map_parse::packet::{rfifop, rfiforest, wfifohead, wfifop, wfifoset};
+use crate::game::mob::BL_MOB;
 use crate::game::pc::MapSessionData;
 use crate::common::player::inventory::MAX_INVENTORY;
 
@@ -779,8 +780,7 @@ pub unsafe fn clif_sendweather(
         return 0;
     }
 
-    // FLAG_WEATHER = 32 (mmo.h line 45). setting_flags is u16.
-    const FLAG_WEATHER: u16 = 32;
+    const FLAG_WEATHER: u32 = 32;
     let weather_byte: u8 = if sdr.player.appearance.setting_flags & FLAG_WEATHER != 0 {
         let map_ptr = crate::database::map_db::raw_map_ptr();
         if map_ptr.is_null() {
@@ -1476,7 +1476,7 @@ pub unsafe fn clif_sendmob_side(mob: *mut crate::game::mob::MobSpawnData) -> i32
     buf[9] = mob.side as u8;
 
     // clif_send(buf, 16, &mob->bl, AREA_WOS=5)
-    super::clif_send(buf.as_ptr(), 16, mob.bl_ptr() as *mut _, 5)
+    super::clif_send(buf.as_ptr(), 16, mob.id, mob.m, mob.x, mob.y, BL_MOB as u8, 5)
 }
 
 // ─── clif_updatestate / broadcast_update_state ────────────────────────────────
@@ -1656,7 +1656,7 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
 
         // helm  (offsets 30–32)
         if pc_isequip_us(sd_mut,EQ_HELM) == 0
-            || (sd_r.player.appearance.setting_flags & FLAG_HELM as u16) == 0
+            || (sd_r.player.appearance.setting_flags & FLAG_HELM) == 0
             || item_db::search(pc_isequip_us(sd_mut,EQ_HELM) as u32).look == -1
         {
             wb(p, 30, 0);
@@ -1716,7 +1716,7 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
 
         // necklace  (offsets 45–47)
         if pc_isequip_us(sd_mut,EQ_NECKLACE) == 0
-            || (sd_r.player.appearance.setting_flags & FLAG_NECKLACE as u16) == 0
+            || (sd_r.player.appearance.setting_flags & FLAG_NECKLACE) == 0
             || item_db::search(pc_isequip_us(sd_mut,EQ_NECKLACE) as u32).look == -1
         {
             ww_be(p, 45, 0xFFFF);
@@ -1911,7 +1911,6 @@ pub unsafe fn broadcast_update_state(src: *mut MapSessionData) {
 
 // ─── clif_clickonplayer ───────────────────────────────────────────────────────
 
-use crate::database::map_db::BlockList;
 use crate::game::pc::{map_msg, FLAG_EXCHANGE, FLAG_GROUP};
 use crate::common::player::legends::MAX_LEGENDS;
 
@@ -1969,14 +1968,14 @@ unsafe fn replace_str_rust(src: *const i8, orig: &[u8], rep: *const i8, buf: &mu
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-/// `bl` must be a valid, non-null pointer to a [`BlockList`] that belongs to a
+/// `target_id` must be the entity ID of the player being clicked on.
 /// [`MapSessionData`] (i.e. `bl_type == BL_PC`), retrievable via `map_id2sd`.
-pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockList) -> i32 {
-    if sd.is_null() || bl.is_null() {
+pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, target_id: u32) -> i32 {
+    if sd.is_null() {
         return 0;
     }
 
-    let tsd = map_id2sd_cop((*bl).id);
+    let tsd = map_id2sd_cop(target_id);
     if tsd.is_null() {
         return 0;
     }
@@ -2158,7 +2157,7 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
 
     // ── Helm slot ─────────────────────────────────────────────────────────────
     if pc_isequip_us(tsd, EQ_HELM) == 0
-        || ((*tsd).player.appearance.setting_flags & FLAG_HELM as u16) == 0
+        || ((*tsd).player.appearance.setting_flags & FLAG_HELM) == 0
         || item_db::search(pc_isequip_us(tsd, EQ_HELM) as u32).look == -1
     {
         wb(p, len + 4, 0);
@@ -2224,7 +2223,7 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
 
     // ── Necklace slot ─────────────────────────────────────────────────────────
     if pc_isequip_us(tsd, EQ_NECKLACE) == 0
-        || ((*tsd).player.appearance.setting_flags & FLAG_NECKLACE as u16) == 0
+        || ((*tsd).player.appearance.setting_flags & FLAG_NECKLACE) == 0
         || item_db::search(pc_isequip_us(tsd, EQ_NECKLACE) as u32).look == -1
     {
         ww_be(p, len + 4, 0xFFFF);
@@ -2352,12 +2351,12 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
     len += equip_len + 1;
 
     // ── Target player ID ──────────────────────────────────────────────────────
-    wl_be(p, len + 6, (*bl).id as u32);
+    wl_be(p, len + 6, target_id);
     len += 4;
 
     // ── Group / exchange / gender flags ───────────────────────────────────────
-    wb(p, len + 6, if ((*tsd).player.appearance.setting_flags & FLAG_GROUP as u16) != 0 { 1 } else { 0 });
-    wb(p, len + 7, if ((*tsd).player.appearance.setting_flags & FLAG_EXCHANGE as u16) != 0 { 1 } else { 0 });
+    wb(p, len + 6, if ((*tsd).player.appearance.setting_flags & FLAG_GROUP) != 0 { 1 } else { 0 });
+    wb(p, len + 7, if ((*tsd).player.appearance.setting_flags & FLAG_EXCHANGE) != 0 { 1 } else { 0 });
     wb(p, len + 8, (2u8).wrapping_sub((*tsd).player.identity.sex as u8));
     len += 3;
 

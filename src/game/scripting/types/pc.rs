@@ -20,7 +20,7 @@ use crate::game::scripting::pc_accessors::{
     sl_pc_repairextend_send, sl_pc_repairall_send,
 };
 use crate::game::scripting::map_globals::{
-    sl_g_getusers, sl_g_deliddb, sl_g_addpermanentspawn,
+    sl_g_getusers_ids, sl_g_deliddb, sl_g_addpermanentspawn,
 };
 use crate::game::scripting::types::mob::MobObject;
 use crate::game::scripting::types::registry::{
@@ -127,7 +127,7 @@ impl UserData for PcObject {
             };
             let sd = unsafe { &mut *arc.data_ptr() };
             let sd_ptr = sd as *mut crate::game::pc::MapSessionData;
-            let sd_void = sd_ptr as *mut std::ffi::c_void;
+            let entity_id = this.id;
             macro_rules! int_ {
                 ($f:expr) => {
                     Ok(mlua::Value::Integer($f(sd) as i64))
@@ -393,17 +393,10 @@ impl UserData for PcObject {
                 "getUsers" => {
                     return Ok(mlua::Value::Function(lua.create_function(
                         |lua, _: mlua::MultiValue| {
-                            const MAX: usize = 4096;
-                            let mut ptrs: Vec<*mut std::ffi::c_void> = vec![std::ptr::null_mut(); MAX];
-                            let count =
-                                unsafe { sl_g_getusers(ptrs.as_mut_ptr(), MAX as i32) }
-                                    as usize;
+                            let ids = sl_g_getusers_ids();
                             let tbl = lua.create_table()?;
-                            for (i, &bl) in ptrs[..count].iter().enumerate() {
-                                let val = unsafe {
-                                    crate::game::scripting::bl_to_lua(lua, bl)
-                                        .unwrap_or(mlua::Value::Nil)
-                                };
+                            for (i, &id) in ids.iter().enumerate() {
+                                let val = crate::game::scripting::id_to_lua(lua, id)?;
                                 tbl.raw_set(i + 1, val)?;
                             }
                             Ok(tbl)
@@ -418,7 +411,7 @@ impl UserData for PcObject {
                 }
                 "getObjectsInArea" | "getAliveObjectsInArea"
                 | "getObjectsInSameMap" | "getAliveObjectsInSameMap" => {
-                    return shared::make_area_query_fn(lua, key.as_str(), sd_void)
+                    return shared::make_area_query_fn(lua, key.as_str(), entity_id)
                 }
                 "getPK" => {
                     let capture_id = this.id;
@@ -434,27 +427,24 @@ impl UserData for PcObject {
                     )?));
                 }
                 "getObjectsInMap" => return shared::make_map_query_fn(lua),
-                "sendAnimation"     => return shared::make_sendanimation_fn(lua, sd_void),
-                "playSound"         => return shared::make_playsound_fn(lua, sd_void),
-                "sendAction"        => return shared::make_sendaction_fn(lua, sd_void),
-                "msg"               => return shared::make_msg_fn(lua, sd_void),
-                "dropItem"          => return shared::make_dropitem_fn(lua, sd_void),
-                "dropItemXY"        => return shared::make_dropitemxy_fn(lua, sd_void),
-                "objectCanMove"     => return shared::make_objectcanmove_fn(lua, sd_void),
-                "objectCanMoveFrom" => return shared::make_objectcanmovefrom_fn(lua, sd_void),
-                "repeatAnimation"   => return shared::make_repeatanimation_fn(lua, sd_void),
-                "selfAnimation"     => return shared::make_selfanimation_fn(lua, sd_void),
-                "selfAnimationXY"   => return shared::make_selfanimationxy_fn(lua, sd_void),
-                "sendParcel"        => return shared::make_sendparcel_fn(lua, sd_void),
-                "throw"             => return shared::make_throwblock_fn(lua, sd_void),
+                "sendAnimation"     => return shared::make_sendanimation_fn(lua, entity_id),
+                "playSound"         => return shared::make_playsound_fn(lua, entity_id),
+                "sendAction"        => return shared::make_sendaction_fn(lua, entity_id),
+                "msg"               => return shared::make_msg_fn(lua, entity_id),
+                "dropItem"          => return shared::make_dropitem_fn(lua, entity_id),
+                "dropItemXY"        => return shared::make_dropitemxy_fn(lua, entity_id),
+                "objectCanMove"     => return shared::make_objectcanmove_fn(lua, entity_id),
+                "objectCanMoveFrom" => return shared::make_objectcanmovefrom_fn(lua, entity_id),
+                "repeatAnimation"   => return shared::make_repeatanimation_fn(lua, entity_id),
+                "selfAnimation"     => return shared::make_selfanimation_fn(lua, entity_id),
+                "selfAnimationXY"   => return shared::make_selfanimationxy_fn(lua, entity_id),
+                "sendParcel"        => return shared::make_sendparcel_fn(lua, entity_id),
+                "throw"             => return shared::make_throwblock_fn(lua, entity_id),
                 "delFromIDDB" => {
                     let capture_id = this.id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if let Some(arc) = crate::game::map_server::map_id2sd_pc(capture_id) {
-                                let sd = unsafe { &mut *arc.data_ptr() };
-                                unsafe { sl_g_deliddb(sd as *mut _ as *mut std::ffi::c_void); }
-                            }
+                            sl_g_deliddb(capture_id);
                             Ok(())
                         }
                     )?));
@@ -463,10 +453,7 @@ impl UserData for PcObject {
                     let capture_id = this.id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if let Some(arc) = crate::game::map_server::map_id2sd_pc(capture_id) {
-                                let sd = unsafe { &mut *arc.data_ptr() };
-                                unsafe { sl_g_addpermanentspawn(sd as *mut _ as *mut std::ffi::c_void); }
-                            }
+                            sl_g_addpermanentspawn(capture_id);
                             Ok(())
                         }
                     )?));

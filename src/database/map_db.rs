@@ -18,64 +18,6 @@ pub const MAP_SLOTS: usize = 65535;
 
 pub use crate::common::types::GlobalReg;
 
-/// Intrusive linked-list node for entities on the block grid. 48 bytes on 64-bit.
-/// Intrusive doubly-linked list header embedded as first field in every entity
-/// struct (mob, pc, npc, flooritem). `bl_type` selects which grid chain is used.
-#[repr(C)]
-pub struct BlockList {
-    pub next:          *mut BlockList,
-    pub prev:          *mut BlockList,
-    pub id:            u32,
-    pub bx:            u32,
-    pub by:            u32,
-    pub graphic_id:    u32,
-    pub graphic_color: u32,
-    pub m:             u16,
-    pub x:             u16,
-    pub y:             u16,
-    pub bl_type:       u8,
-    pub subtype:       u8,
-}
-// SAFETY: BlockList contains raw pointers to C-managed intrusive list nodes.
-// All access is gated behind unsafe blocks; no Rust code aliases these pointers.
-unsafe impl Send for BlockList {}
-// SAFETY: same as Send — no interior mutability, no aliasing through Rust references.
-unsafe impl Sync for BlockList {}
-
-/// Macro to add BlockList-compatible pointer methods to an entity struct.
-/// All entity structs (MapSessionData, MobSpawnData, NpcData, FloorItemData) are `#[repr(C)]`
-/// and start with the same field sequence as BlockList (next, prev, id, bx, by, ...).
-/// This allows safe pointer casting to `*const BlockList` / `*mut BlockList`.
-#[macro_export]
-macro_rules! impl_as_blocklist {
-    ($T:ty) => {
-        impl $T {
-            /// Borrow as `&BlockList` (read-only).
-            #[inline(always)]
-            pub fn as_bl(&self) -> &BlockList {
-                // SAFETY: #[repr(C)] struct with BlockList-compatible header at offset 0.
-                unsafe { &*(self as *const Self as *const BlockList) }
-            }
-            /// Borrow as `&mut BlockList` (mutable).
-            #[inline(always)]
-            pub fn as_bl_mut(&mut self) -> &mut BlockList {
-                // SAFETY: #[repr(C)] struct with BlockList-compatible header at offset 0.
-                unsafe { &mut *(self as *mut Self as *mut BlockList) }
-            }
-            /// Raw const pointer as `*const BlockList`.
-            #[inline(always)]
-            pub fn bl_ptr(&self) -> *const BlockList {
-                self as *const Self as *const BlockList
-            }
-            /// Raw mut pointer as `*mut BlockList`.
-            #[inline(always)]
-            pub fn bl_ptr_mut(&mut self) -> *mut BlockList {
-                self as *mut Self as *mut BlockList
-            }
-        }
-    };
-}
-
 /// Warp portal entry for map-to-map teleportation. 40 bytes on 64-bit.
 #[repr(C)]
 pub struct WarpList {
@@ -100,8 +42,8 @@ pub struct MapData {
     pub title: [i8; 64],
     pub mapfile: [i8; 1024],
     pub maprejectmsg: [i8; 64],
-    pub block:     *mut *mut BlockList,
-    pub block_mob: *mut *mut BlockList,
+    pub block:     *mut *mut u8,     // legacy — spatial indexing uses block_grid
+    pub block_mob: *mut *mut u8,     // legacy — spatial indexing uses block_grid
     pub warp:      *mut *mut WarpList,
     pub registry: *mut GlobalReg,
     pub max_sweep_count: i32,
@@ -643,13 +585,6 @@ mod layout_tests {
         let size = std::mem::size_of::<MapData>();
         println!("MapData size = {size}");
         assert_eq!(size, 1304, "MapData size mismatch");
-    }
-
-    #[test]
-    fn block_list_layout() {
-        assert_eq!(std::mem::size_of::<BlockList>(), 48);
-        assert_eq!(std::mem::offset_of!(BlockList, m),       36);
-        assert_eq!(std::mem::offset_of!(BlockList, bl_type), 42);
     }
 
     #[test]

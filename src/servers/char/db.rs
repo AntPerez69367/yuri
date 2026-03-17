@@ -330,7 +330,7 @@ pub async fn load_player(pool: &MySqlPool, char_id: u32, login_name: &str) -> Re
             skin_color: row.try_get::<u32, _>(28).unwrap_or(0) as u16,
             disguise: row.try_get::<u32, _>(35).unwrap_or(0) as u16,
             disguise_color: row.try_get::<u32, _>(36).unwrap_or(0) as u16,
-            setting_flags: row.try_get::<u32, _>(33).unwrap_or(0) as u16,
+            setting_flags: row.try_get::<u32, _>(33).unwrap_or(0),
             heroes: row.try_get::<u32, _>(45).unwrap_or(0),
             mini_map_toggle: row.try_get::<u32, _>(54).unwrap_or(0),
             profile_vitastats: row.try_get::<u32, _>(59).unwrap_or(0) as u8,

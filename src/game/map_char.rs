@@ -10,7 +10,6 @@ use std::ptr;
 
 use crate::common::player::PlayerData;
 use crate::database::{blocking_run_async, get_pool};
-use crate::database::map_db::BlockList;
 use crate::game::pc::MapSessionData;
 
 // ---------------------------------------------------------------------------
@@ -43,12 +42,12 @@ use crate::game::pc::{
     pc_loaditem, pc_loadequip, pc_magic_startup,
     pc_calcstat, pc_checklevel,
 };
-use crate::game::map_parse::visual::{clif_spawn, clif_mob_look_start, clif_mob_look_close};
+use crate::game::map_parse::visual::clif_spawn;
 use crate::game::client::visual::broadcast_update_state;
 
 use crate::game::block::AreaType;
 use crate::game::block_grid;
-use crate::game::map_parse::visual::clif_object_look_sub_inner;
+use crate::game::map_parse::visual::{clif_object_look_by_id, clif_mob_look_start_func_inner, clif_mob_look_close_func_inner};
 
 // ---------------------------------------------------------------------------
 // intif_install_player — replaces intif_mmo_tosd (bincode era)
@@ -188,18 +187,15 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
     clif_getchararea(sd);
 
     tracing::info!("[map] [login] fd={} step=mob_look_start", fd);
-    clif_mob_look_start(sd);
+    clif_mob_look_start_func_inner((*sd).fd, &mut (*sd).net.look);
     if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
         let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).m as usize);
         let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            let bl_ptr = crate::game::map_server::map_id2bl_ref(id);
-            if !bl_ptr.is_null() {
-                clif_object_look_sub_inner(bl_ptr, LOOK_GET, sd as *mut BlockList);
-            }
+            clif_object_look_by_id((*sd).fd, &mut (*sd).net.look, (*sd).player.identity.id, id);
         }
     }
-    clif_mob_look_close(sd);
+    clif_mob_look_close_func_inner((*sd).fd, &mut (*sd).net.look);
 
     tracing::info!("[map] [login] fd={} step=loaditem", fd);
     pc_loaditem(sd);
@@ -211,7 +207,7 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
 
     tracing::info!("[map] [login] fd={} step=addiddb", fd);
     let sd_id = (*sd).id;
-    crate::game::map_server::map_addiddb_player(sd_id, sd_box);
+    crate::game::map_server::map_addiddb_player(sd_id, (*sd).fd, sd_box);
     let sd: *mut crate::game::pc::MapSessionData =
         crate::game::map_server::map_id2sd_pc(sd_id)
             .expect("player just inserted").data_ptr();

@@ -13,8 +13,6 @@ pub mod types;
 use mlua::Lua;
 use std::ffi::{CStr, CString};
 
-use crate::database::map_db::BlockList;
-use crate::game::pc::{BL_PC, BL_MOB, BL_NPC, BL_ITEM};
 use types::floor::FloorListObject;
 use types::item::*;
 use types::mob::MobObject;
@@ -331,23 +329,6 @@ pub unsafe fn sl_luasize() -> i32 {
 // Dispatch
 // ---------------------------------------------------------------------------
 
-pub(crate) unsafe fn bl_to_lua(lua: &Lua, bl: *mut std::ffi::c_void) -> mlua::Result<mlua::Value> {
-    debug_assert!(!bl.is_null(), "bl_to_lua: caller must not pass a null pointer");
-    if bl.is_null() { return Ok(mlua::Value::Nil); }
-    let bl_ref = &*(bl as *const BlockList);
-    let bl_type = bl_ref.bl_type as i32;
-    match bl_type {
-        BL_PC   => lua.pack(PcObject  { id: bl_ref.id }),
-        BL_MOB  => lua.pack(MobObject { id: bl_ref.id }),
-        BL_NPC  => lua.pack(NpcObject { id: bl_ref.id }),
-        BL_ITEM => lua.pack(FloorListObject { id: bl_ref.id }),
-        other => {
-            tracing::warn!("[scripting] bl_to_lua: unhandled bl_type={other:#04x}, returning nil");
-            Ok(mlua::Value::Nil)
-        }
-    }
-}
-
 /// Safe dispatch: look up entity by id and wrap in appropriate Lua userdata.
 /// Returns Nil if the entity no longer exists (killed, picked up, etc.).
 pub fn entity_to_lua(lua: &mlua::Lua, id: u32) -> mlua::Result<mlua::Value> {
@@ -576,20 +557,6 @@ pub unsafe fn sl_exec_str(user: *mut std::ffi::c_void, code: *const i8) {
     if let Err(e) = lua.load(s.as_ref()).eval::<()>() {
         tracing::warn!("[scripting] sl_exec error: {e}");
     }
-}
-
-pub unsafe fn sl_updatepeople_impl(_bl: *mut std::ffi::c_void, _ap: *mut std::ffi::c_void) -> i32 {
-    // Implement when map_foreachinarea is ported to Rust.
-    0
-}
-
-
-/// Direct symbol used as a function pointer callback in map_foreachinarea.
-pub unsafe fn sl_updatepeople(
-    bl: *mut std::ffi::c_void,
-    ap: *mut std::ffi::c_void,
-) -> i32 {
-    sl_updatepeople_impl(bl, ap)
 }
 
 pub unsafe fn sl_resumemenu(selection: u32, sd: *mut crate::game::pc::MapSessionData) {

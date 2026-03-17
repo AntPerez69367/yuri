@@ -6,7 +6,6 @@
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
 
-use crate::database::map_db::BlockList;
 use crate::database::map_db::{get_map_ptr, map_is_loaded};
 use crate::session::{session_exists, SessionId};
 use crate::game::mob::MobSpawnData;
@@ -14,7 +13,7 @@ use crate::database::get_pool;
 
 use crate::game::pc::{
     MapSessionData,
-    BL_MOB, BL_NPC, BL_PC,
+    BL_MOB,
     EQ_HELM, EQ_FACEACC, EQ_CROWN, EQ_FACEACCTWO,
     MAX_GROUP_MEMBERS,
     OPT_FLAG_STEALTH, OPT_FLAG_GHOSTS,
@@ -32,10 +31,6 @@ use crate::game::block_grid;
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const MAX_GROUPS: usize = 256;
-
-// BL_ALL: all block-list types (from map_server.h enum)
-const BL_ALL: i32 = 0x0F;
-
 
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::map_server::{map_name2sd, groups as groups_raw};
@@ -598,48 +593,60 @@ pub unsafe fn clif_isingroup(
 /// Sets `sd->canmove = 1` if `bl` blocks movement.
 /// C line 9148.
 pub unsafe fn clif_canmove_sub_inner(
-    bl: *mut BlockList,
+    entity_id: u32,
     sd: *mut MapSessionData,
 ) -> i32 {
-    if bl.is_null() { return 0; }
     if sd.is_null() { return 0; }
-
     if (*sd).canmove == 1 { return 0; }
 
-    if (*bl).bl_type as i32 == BL_PC {
-        let tsd = bl as *mut MapSessionData;
-        if !tsd.is_null() {
-            let show_ghosts = if map_is_loaded((*tsd).m) {
-                (*get_map_ptr((*tsd).m)).show_ghosts
-            } else { 0 };
+    // Try PC
+    if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(entity_id) {
+        let tsd = tsd_arc.read();
+        let show_ghosts = if map_is_loaded(tsd.m) {
+            (*get_map_ptr(tsd.m)).show_ghosts
+        } else { 0 };
 
-            if (show_ghosts != 0
-                && (*tsd).player.combat.state == 1    // tsd is dead (ghost)
-                && (*tsd).id != (*sd).id        // not self
-                && (*sd).player.combat.state != 1     // sd is alive
-                && ((*sd).optFlags & OPT_FLAG_GHOSTS) == 0)
-                || ((*tsd).player.combat.state == -1)
-                || ((*tsd).player.identity.gm_level != 0 && ((*tsd).optFlags & OPT_FLAG_STEALTH) != 0)
-            {
-                return 0;
-            }
-        }
-    }
-
-    if (*bl).bl_type as i32 == BL_MOB {
-        let mob = bl as *mut MobSpawnData;
-        if (*mob).state == crate::game::mob::MOB_DEAD {
+        if (show_ghosts != 0
+            && tsd.player.combat.state == 1    // tsd is dead (ghost)
+            && tsd.id != (*sd).id              // not self
+            && (*sd).player.combat.state != 1  // sd is alive
+            && ((*sd).optFlags & OPT_FLAG_GHOSTS) == 0)
+            || (tsd.player.combat.state == -1)
+            || (tsd.player.identity.gm_level != 0 && (tsd.optFlags & OPT_FLAG_STEALTH) != 0)
+        {
             return 0;
         }
-    }
 
-    if (*bl).bl_type as i32 == BL_NPC && (*bl).subtype == 2 {
+        if tsd.id != (*sd).id {
+            (*sd).canmove = 1;
+        }
         return 0;
     }
 
-    if (*bl).id != (*sd).id {
-        (*sd).canmove = 1;
+    // Try Mob
+    if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(entity_id) {
+        let mob = mob_arc.read();
+        if mob.state == crate::game::mob::MOB_DEAD {
+            return 0;
+        }
+        if mob.id != (*sd).id {
+            (*sd).canmove = 1;
+        }
+        return 0;
     }
+
+    // Try NPC
+    if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(entity_id) {
+        let npc = npc_arc.read();
+        if npc.subtype == 2 {
+            return 0;
+        }
+        if npc.id != (*sd).id {
+            (*sd).canmove = 1;
+        }
+        return 0;
+    }
+
     0
 }
 
@@ -668,20 +675,11 @@ pub unsafe fn clif_canmove(
     if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
         let cell_ids = grid.ids_at_tile((*sd).x, (*sd).y);
         for id in cell_ids {
-            if let Some(arc) = crate::game::map_server::map_id2mob_ref(id) {
-                let mut guard = arc.write();
-                clif_canmove_sub_inner(guard.bl_ptr_mut(), sd);
-            } else if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                let mut guard = arc.write();
-                clif_canmove_sub_inner(guard.bl_ptr_mut(), sd);
-            }
+            clif_canmove_sub_inner(id, sd);
         }
         let cell_ids2 = grid.ids_at_tile(nx as u16, ny as u16);
         for id in cell_ids2 {
-            if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                let mut guard = arc.write();
-                clif_canmove_sub_inner(guard.bl_ptr_mut(), sd);
-            }
+            clif_canmove_sub_inner(id, sd);
         }
     }
 
@@ -762,17 +760,14 @@ pub unsafe fn clif_mapselect(
 
 ///
 /// Powerboard callback: writes one player entry.
-/// `bl` is the player being rendered, `sd` is the player whose WFIFO buffer is being written,
+/// `tsd` is the player being rendered, `sd` is the player whose WFIFO buffer is being written,
 /// `len_ptr` points to `int[2]`: len[0] = byte offset, len[1] = count (mutated in-place).
 /// C line 9352.
 pub unsafe fn clif_pb_sub_inner(
-    bl: *mut BlockList,
+    tsd: *const MapSessionData,
     sd: *mut MapSessionData,
     len_ptr: *mut i32,
 ) -> i32 {
-    if bl.is_null() { return 0; }
-
-    let tsd = bl as *mut MapSessionData;
     if tsd.is_null() { return 0; }
     if sd.is_null() { return 0; }
     if len_ptr.is_null() { return 0; }
@@ -826,8 +821,8 @@ pub unsafe fn clif_sendpowerboard(sd: *mut MapSessionData) -> i32 {
         let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                let mut guard = arc.write();
-                clif_pb_sub_inner(guard.bl_ptr_mut(), sd, len_ptr);
+                let guard = arc.read();
+                clif_pb_sub_inner(&*guard as *const MapSessionData, sd, len_ptr);
             }
         }
     }

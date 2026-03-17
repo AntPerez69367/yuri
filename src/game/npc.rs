@@ -3,7 +3,7 @@
 #![allow(non_snake_case, dead_code)]
 
 use std::sync::atomic::{AtomicU32, Ordering};
-use crate::database::map_db::{BlockList, GlobalReg};
+use crate::database::map_db::GlobalReg;
 use crate::common::types::Item;
 use crate::common::player::inventory::MAX_EQUIP;
 use crate::game::types::GfxViewer;
@@ -25,30 +25,7 @@ pub const BL_NPC: i32 = 0x04;
 ///
 /// # Layout
 ///
-/// ```text
-/// offset     field               size
-/// ------     -----               ----
-///      0     bl                    48   (BlockList — two 8-byte pointers + 6×u32 + 3×u16 + 2×u8 + 2-byte implicit pad)
-///     48     equip[15]          13200   (15 × Item@880)
-///  13248     registry[100]       6800   (100 × GlobalReg@68)
-///  20048     gfx                   72   (GfxViewer)
-///  20120     id..item_dura         60   (15 × u32)
-///  20180     name[64]              64
-///  20244     npc_name[64]          64
-///  20308     itemreal_name[64]     64
-///  20372     state..retdist        10   (10 × i8)
-///  20382     _pad                   2   (align movetimer to 4-byte boundary)
-///  20384     movetimer              4
-///  20388     movetime               4
-///  20392     sex..starty           20   (10 × u16)
-///  20412     returning              1
-///  20413     [repr(C) trailing pad] 3   (align struct to 8 bytes)
-///  20416     END
-/// ```
-///
-/// `_pad: [u8; 2]` before `movetimer` is required because the preceding 10
-/// `i8` fields leave the current offset at 20382, which is not 4-byte
-/// aligned (20382 % 4 == 2).
+/// NPC entity data. Layout verified by `npc_data_size` and `npc_data_offsets` tests.
 #[repr(C)]
 pub struct NpcData {
     pub id:            u32,
@@ -111,7 +88,7 @@ pub struct NpcData {
 // All access is gated behind unsafe blocks; no Rust code aliases these pointers.
 unsafe impl Send for NpcData {}
 unsafe impl Sync for NpcData {}
-crate::impl_as_blocklist!(NpcData);
+
 
 // NPC ID counters — match C globals npc_id and npctemp_id.
 // #[export_name] exports as "npc_id" so map_server.c can read it directly
@@ -123,18 +100,14 @@ pub static NPCTEMP_ID: AtomicU32 = AtomicU32::new(NPCT_START_NUM);
 
 use crate::game::map_server::map_canmove;
 use crate::game::block::{map_addblock_id, map_delblock_id, map_moveblock_id};
-use crate::game::map_parse::visual::clif_lookgone;
+use crate::game::map_parse::visual::clif_lookgone_by_id;
 use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from};
-
-fn map_id2bl(id: u32) -> *mut BlockList {
-    crate::game::map_server::map_id2bl_ref(id)
-}
 
 use crate::game::block::AreaType;
 use crate::game::block_grid;
 use crate::game::map_parse::visual::{
-    clif_cnpclook_inner, clif_mob_look_start_func_inner, clif_mob_look_close_func_inner,
-    clif_object_look_sub_inner, clif_object_look_sub2_inner,
+    clif_cnpclook, clif_mob_look_start_func_inner, clif_mob_look_close_func_inner,
+    clif_object_look_npc, clif_object_look2_npc,
 };
 use crate::game::map_parse::movement::clif_npc_move_inner;
 
@@ -152,10 +125,6 @@ fn sl_doscript_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
 /// `enum { ALL_CLIENT=0, SAMESRV=1, SAMEMAP=2, SAMEMAP_WOS=3, AREA=4, ... }`
 const AREA: i32 = 4;
 
-/// Enum value for `LOOK_SEND`:
-/// `enum { LOOK_GET=0, LOOK_SEND=1 }`
-const LOOK_SEND: i32 = 1;
-
 /// Returns an available NPC ID, allocating a new one if needed.
 ///
 /// Scans from `NPC_START_NUM` upward for a slot not present in the ID
@@ -165,7 +134,7 @@ const LOOK_SEND: i32 = 1;
 /// # Safety
 ///
 /// Caller must hold the server-wide lock; mutates the `NPC_ID` global and
-/// calls `map_id2bl` which reads the C-managed entity table.
+/// calls `entity_position` to check if an ID slot is occupied.
 pub unsafe fn npc_get_new_npcid() -> u32 {
     let mut x = NPC_START_NUM;
     loop {
@@ -174,7 +143,7 @@ pub unsafe fn npc_get_new_npcid() -> u32 {
         if x == cur {
             NPC_ID.store(cur + 1, Ordering::Relaxed);
         }
-        if map_id2bl(x).is_null() {
+        if crate::game::map_server::entity_position(x).is_none() {
             return x;
         }
         x += 1;
@@ -200,7 +169,7 @@ pub unsafe fn npc_get_new_npctempid() -> u32 {
         if x == cur {
             NPCTEMP_ID.store(cur + 1, Ordering::Relaxed);
         }
-        if map_id2bl(x).is_null() {
+        if crate::game::map_server::entity_position(x).is_none() {
             return x;
         }
         x += 1;
@@ -324,7 +293,7 @@ pub unsafe fn npc_warp(nd: *mut NpcData, m: i32, x: i32, y: i32) -> i32 {
     if nd.id < NPC_START_NUM { return 0; }
 
     map_delblock_id(nd.id, nd.m);
-    clif_lookgone(nd.bl_ptr());
+    clif_lookgone_by_id(nd.id);
     nd.m = m as u16;
     nd.x = x as u16;
     nd.y = y as u16;
@@ -337,19 +306,17 @@ pub unsafe fn npc_warp(nd: *mut NpcData, m: i32, x: i32, y: i32) -> i32 {
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
-        let nd_bl = nd as *const NpcData as *const BlockList;
         if nd.npctype == 1 {
             for id in ids {
                 if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
                     let pc = &*arc.read();
-                    clif_cnpclook_inner(pc.bl_ptr(), LOOK_SEND, nd_bl);
+                    clif_cnpclook(&*nd, pc);
                 }
             }
         } else {
             for id in ids {
-                if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    let pc = &*arc.read();
-                    clif_object_look_sub2_inner(pc.bl_ptr(), LOOK_SEND, nd_bl);
+                if let Some(pe) = crate::game::map_server::map_id2sd_pc(id) {
+                    clif_object_look2_npc(pe.fd, nd);
                 }
             }
         }
@@ -843,49 +810,6 @@ pub unsafe fn npc_init() -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// ---------------------------------------------------------------------------
-
-/// Returns 1 if the MOB pointed to by `bl` is in the MOB_DEAD state, 0 otherwise.
-/// Called from `npc_move_sub` during NPC movement collision checks.
-///
-/// # Safety
-/// `bl` must point to a valid `MobSpawnData` (i.e. `bl.bl_type == BL_MOB`).
-pub unsafe fn npc_helper_mob_is_dead(bl: *mut BlockList) -> i32 {
-    if bl.is_null() { return 0; }
-    let mob = bl as *const crate::game::mob::MobSpawnData;
-    if (*mob).state == crate::game::mob::MOB_DEAD { 1 } else { 0 }
-}
-
-/// Returns 1 if the PC pointed to by `bl` should be skipped during NPC movement
-/// collision (dead, invisible state, or GM level >= 50), 0 otherwise.
-/// `npc_bl` is the NPC's block_list (used to read the map's show_ghosts flag).
-///
-/// # Safety
-/// `bl` must point to a valid `MapSessionData` and `npc_bl` to a valid `BlockList`
-/// whose `.m` field is a loaded map ID.
-pub unsafe fn npc_helper_pc_is_skip(bl: *mut BlockList, npc_bl: *mut BlockList) -> i32 {
-    use crate::game::pc::{MapSessionData, PC_DIE};
-    if bl.is_null() || npc_bl.is_null() { return 0; }
-    let sd = bl as *const MapSessionData;
-    let npc_m = (*npc_bl).m;
-    let show_ghosts: u8 = if map_is_loaded(npc_m) {
-        (*get_map_ptr(npc_m)).show_ghosts
-    } else {
-        0
-    };
-    let state = (*sd).player.combat.state;
-    if (show_ghosts != 0 && state == PC_DIE as i8)
-        || state == -1
-        || (*sd).player.identity.gm_level >= 50
-    {
-        1
-    } else {
-        0
-    }
-}
-
-
-// ---------------------------------------------------------------------------
 // npc_move_sub — callback for map_foreachincell during NPC movement
 // ---------------------------------------------------------------------------
 
@@ -895,35 +819,39 @@ pub unsafe fn npc_helper_pc_is_skip(bl: *mut BlockList, npc_bl: *mut BlockList) 
 ///
 /// - `BL_NPC`: skip if `bl.subtype != 0` (non-zero subtype NPCs don't block).
 /// - `BL_MOB`: skip if the mob is in `MOB_DEAD` state.
-/// - `BL_PC`:  skip if dead/invisible/GM (delegated to `npc_helper_pc_is_skip`).
-/// - Any other type: skip (return 0 without setting `canmove`).
+/// - `BL_PC`:  skip if dead/invisible/GM.
 ///
 /// # Safety
 ///
 /// Must only be called by `map_foreachincell`. `ap` must contain exactly one
 /// argument: a `*mut NpcData`.
-pub unsafe fn npc_move_sub_inner(bl: *mut BlockList, nd: *mut NpcData) -> i32 {
-    if nd.is_null() || bl.is_null() { return 0; }
+pub unsafe fn npc_move_sub_id(entity_id: u32, nd: *mut NpcData) -> i32 {
+    if nd.is_null() { return 0; }
     if (*nd).canmove == 1 { return 0; }
 
-    let bl_ref = &*bl;
-    match bl_ref.bl_type {
-        x if x == BL_NPC as u8 => {
-            // Non-zero subtype NPCs do not block movement.
-            if bl_ref.subtype != 0 { return 0; }
-        }
-        x if x == BL_MOB as u8 => {
-            // Dead mobs do not block movement.
-            if npc_helper_mob_is_dead(bl) != 0 { return 0; }
-        }
-        x if x == BL_PC as u8 => {
-            // Dead / invisible / GM players do not block movement.
-            if npc_helper_pc_is_skip(bl, (*nd).bl_ptr_mut() as *mut BlockList) != 0 { return 0; }
-        }
-        _ => {
-            // Unknown type — do not block.
+    if let Some(arc) = crate::game::map_server::map_id2npc_ref(entity_id) {
+        let npc = &*arc.data_ptr();
+        if npc.subtype != 0 { return 0; }
+    } else if let Some(arc) = crate::game::map_server::map_id2mob_ref(entity_id) {
+        let mob = &*arc.data_ptr();
+        if mob.state == crate::game::mob::MOB_DEAD { return 0; }
+    } else if let Some(arc) = crate::game::map_server::map_id2sd_pc(entity_id) {
+        let sd = arc.read();
+        let npc_m = (*nd).m;
+        let show_ghosts: u8 = if map_is_loaded(npc_m) {
+            (*get_map_ptr(npc_m)).show_ghosts
+        } else {
+            0
+        };
+        let state = sd.player.combat.state;
+        if (show_ghosts != 0 && state == crate::game::pc::PC_DIE as i8)
+            || state == -1
+            || sd.player.identity.gm_level >= 50
+        {
             return 0;
         }
+    } else {
+        return 0;
     }
 
     (*nd).canmove = 1;
@@ -1045,13 +973,7 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> i32 {
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
         for id in cell_ids {
-            let bl = crate::game::map_server::map_id2bl_ref(id);
-            if !bl.is_null() {
-                let ty = (*bl).bl_type as i32;
-                if ty == BL_MOB || ty == BL_PC || ty == BL_NPC {
-                    npc_move_sub_inner(bl, nd as *mut NpcData);
-                }
-            }
+            npc_move_sub_id(id, nd as *mut NpcData);
         }
     }
 
@@ -1091,27 +1013,25 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> i32 {
             if let Some(grid) = block_grid::get_grid(nm as usize) {
                 let rect_ids = grid.ids_in_rect(x0, y0, x0 + x1 - 1, y0 + y1 - 1);
                 if nd.npctype == 1 {
-                    let nd_bl = nd as *const NpcData as *const BlockList;
                     for &id in &rect_ids {
                         if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_cnpclook_inner(pc_arc.read().bl_ptr(), LOOK_SEND, nd_bl);
+                            clif_cnpclook(&*nd, &*pc_arc.read());
                         }
                     }
                 } else {
-                    let nd_bl = nd.bl_ptr_mut();
                     for &id in &rect_ids {
-                        if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_mob_look_start_func_inner(arc.write().bl_ptr_mut());
+                        if let Some(pe) = crate::game::map_server::map_id2sd_pc(id) {
+                            clif_mob_look_start_func_inner(pe.fd, &mut pe.net.write().look);
                         }
                     }
                     for &id in &rect_ids {
-                        if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_object_look_sub_inner(arc.write().bl_ptr_mut(), LOOK_SEND, nd_bl);
+                        if let Some(pe) = crate::game::map_server::map_id2sd_pc(id) {
+                            clif_object_look_npc(pe.fd, &mut pe.net.write().look, nd);
                         }
                     }
                     for &id in &rect_ids {
-                        if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_mob_look_close_func_inner(arc.write().bl_ptr_mut());
+                        if let Some(pe) = crate::game::map_server::map_id2sd_pc(id) {
+                            clif_mob_look_close_func_inner(pe.fd, &mut pe.net.write().look);
                         }
                     }
                 }
@@ -1123,8 +1043,8 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> i32 {
             let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
             let ids = block_grid::ids_in_area(grid, nd.x as i32, nd.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
-                if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_npc_move_inner(arc.read().bl_ptr(), nd_ptr);
+                if crate::game::map_server::map_id2sd_pc(id).is_some() {
+                    clif_npc_move_inner(nd_ptr);
                 }
             }
         }
@@ -1142,7 +1062,7 @@ mod tests {
         assert_eq!(
             std::mem::size_of::<NpcData>(),
             20388,
-            "NpcData size mismatch — BlockList eliminated, next/prev/bx/by removed"
+            "NpcData size mismatch"
         );
     }
 

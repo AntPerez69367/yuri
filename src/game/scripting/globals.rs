@@ -805,8 +805,8 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // Path member management
     // -----------------------------------------------------------------------
     g.set("removePathMember", lua.create_async_function(|_, id: i32| async move {
-        // Online path: mutate session data synchronously before any await point.
-        if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
+        // Online path: mutate in-memory state, then drop the lock before .await.
+        let online_class = if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
             let sd = &mut *arc.write();
             let new_class = crate::database::class_db::path(sd.player.progression.class as i32) as u8;
             sd.player.progression.class = new_class;
@@ -814,20 +814,23 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
             crate::database::blocking_run_async(
                         crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *const _ as usize)
                     );
-            let ok = sqlx::query!(
-                "UPDATE `Character` SET `ChaPthId`=?,`ChaPthRank`='0' WHERE `ChaId`=?",
-                new_class as u32, id as u32
-            ).execute(get_pool()).await.map(|r| r.rows_affected() > 0).unwrap_or(false);
-            return Ok(ok);
-        }
-        // Offline path: fetch current class, apply path(), update.
-        let pth: u32 = sqlx::query_scalar!(
-            "SELECT `ChaPthId` FROM `Character` WHERE `ChaId`=?", id as u32
-        ).fetch_optional(get_pool()).await.unwrap_or(None).unwrap_or(0);
-        let new_pth = crate::database::class_db::path(pth as i32) as u32;
+            Some(new_class)
+            // write lock drops here — before any .await
+        } else {
+            None
+        };
+        let new_class = if let Some(c) = online_class {
+            c as u32
+        } else {
+            // Offline path: fetch current class, apply path().
+            let pth: u32 = sqlx::query_scalar!(
+                "SELECT `ChaPthId` FROM `Character` WHERE `ChaId`=?", id as u32
+            ).fetch_optional(get_pool()).await.unwrap_or(None).unwrap_or(0);
+            crate::database::class_db::path(pth as i32) as u32
+        };
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaPthId`=?,`ChaPthRank`='0' WHERE `ChaId`=?",
-            new_pth, id as u32
+            new_class, id as u32
         ).execute(get_pool()).await.map(|r| r.rows_affected() > 0).unwrap_or(false);
         Ok(ok)
     })?)?;

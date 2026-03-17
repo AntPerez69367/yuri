@@ -2,7 +2,7 @@
 use std::ffi::CString;
 use std::sync::atomic::{AtomicI32, AtomicI8, Ordering};
 
-use crate::game::mob::{MobSpawnData, MOB_DEAD};
+use crate::game::mob::{MobSpawnData, MOB_DEAD, BL_PC};
 use crate::game::pc::{MapSessionData, PC_DIE, SFLAG_FULLSTATS, SFLAG_HPMP};
 
 // Module globals
@@ -30,12 +30,12 @@ use crate::game::block::AreaType;
 use crate::game::block_grid;
 
 // ── clif functions ─────────────────────────────────────────────────────────────
-use crate::game::map_parse::chat::{clif_sendminitext, clif_sendmsg, clif_broadcast, clif_playsound};
+use crate::game::map_parse::chat::{clif_sendminitext, clif_sendmsg, clif_broadcast, clif_playsound_entity};
 use crate::game::map_parse::movement::clif_sendchararea;
 use crate::game::map_parse::player_state::{clif_getchararea, clif_sendstatus, clif_mystaytus_by_addr, clif_refresh};
 use crate::game::client::visual::{broadcast_update_state, clif_sendweather, clif_sendurl};
 use crate::game::map_parse::combat::clif_sendanimation_inner;
-use crate::game::map_parse::visual::clif_lookgone;
+use crate::game::map_parse::visual::clif_lookgone_by_id;
 use crate::game::client::handlers::clif_transfer_test;
 
 // ── pc functions ───────────────────────────────────────────────────────────────
@@ -399,9 +399,9 @@ fn command_spell(sd: &mut MapSessionData, line: &str) -> i32 {
     if let Some((spell, sound)) = parse_two_ints(line) {
         SPELLGFX.store(spell, Ordering::Relaxed);
         SOUNDFX.store(sound, Ordering::Relaxed);
-        unsafe { clif_playsound(sd.as_bl_mut(), sound); }
+        unsafe { clif_playsound_entity(sd.id, sd.m, sd.x, sd.y, BL_PC as u8, sound); }
     }
-    let sd_bl = sd.bl_ptr_mut();
+
     let anim = SPELLGFX.load(Ordering::Relaxed);
     let times = SOUNDFX.load(Ordering::Relaxed);
     if let Some(grid) = block_grid::get_grid(sd.m as usize) {
@@ -410,7 +410,7 @@ fn command_spell(sd: &mut MapSessionData, line: &str) -> i32 {
         for id in ids {
             if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
                 let pc = arc.read();
-                clif_sendanimation_inner(pc.as_bl(), anim, sd_bl, times);
+                clif_sendanimation_inner(pc.fd, pc.player.appearance.setting_flags, anim, sd.id, times);
             }
         }
     }
@@ -669,7 +669,7 @@ fn command_stealth(sd: &mut MapSessionData, _line: &str) -> i32 {
         unsafe { clif_refresh(as_ptr(sd)); }
         send_minitext(sd, "Stealth :OFF");
     } else {
-        unsafe { clif_lookgone(sd.as_bl()); }
+        unsafe { clif_lookgone_by_id(sd.id); }
         sd.optFlags ^= OPT_STEALTH;
         unsafe { clif_refresh(as_ptr(sd)); }
         send_minitext(sd, "Stealth :ON");
@@ -1037,21 +1037,21 @@ fn command_musicq(sd: &mut MapSessionData, _line: &str) -> i32 {
 
 fn command_sound(sd: &mut MapSessionData, line: &str) -> i32 {
     if let Some(sound) = parse_int(line) { SOUNDFX.store(sound, Ordering::Relaxed); }
-    unsafe { clif_playsound(sd.as_bl_mut(), SOUNDFX.load(Ordering::Relaxed)); }
+    unsafe { clif_playsound_entity(sd.id, sd.m, sd.x, sd.y, BL_PC as u8, SOUNDFX.load(Ordering::Relaxed)); }
     0
 }
 
 fn command_nsound(sd: &mut MapSessionData, _line: &str) -> i32 {
     let s = (SOUNDFX.fetch_add(1, Ordering::Relaxed) + 1).min(125);
     SOUNDFX.store(s, Ordering::Relaxed);
-    unsafe { clif_playsound(sd.as_bl_mut(), s); }
+    unsafe { clif_playsound_entity(sd.id, sd.m, sd.x, sd.y, BL_PC as u8, s); }
     0
 }
 
 fn command_psound(sd: &mut MapSessionData, _line: &str) -> i32 {
     let s = (SOUNDFX.fetch_sub(1, Ordering::Relaxed) - 1).max(0);
     SOUNDFX.store(s, Ordering::Relaxed);
-    unsafe { clif_playsound(sd.as_bl_mut(), s); }
+    unsafe { clif_playsound_entity(sd.id, sd.m, sd.x, sd.y, BL_PC as u8, s); }
     0
 }
 
@@ -1063,7 +1063,7 @@ fn command_soundq(sd: &mut MapSessionData, _line: &str) -> i32 {
 fn command_nspell(sd: &mut MapSessionData, _line: &str) -> i32 {
     let g = (SPELLGFX.fetch_add(1, Ordering::Relaxed) + 1).min(427);
     SPELLGFX.store(g, Ordering::Relaxed);
-    let sd_bl = sd.bl_ptr_mut();
+
     let anim = g;
     let times = SOUNDFX.load(Ordering::Relaxed);
     if let Some(grid) = block_grid::get_grid(sd.m as usize) {
@@ -1072,7 +1072,7 @@ fn command_nspell(sd: &mut MapSessionData, _line: &str) -> i32 {
         for id in ids {
             if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
                 let pc = arc.read();
-                clif_sendanimation_inner(pc.as_bl(), anim, sd_bl, times);
+                clif_sendanimation_inner(pc.fd, pc.player.appearance.setting_flags, anim, sd.id, times);
             }
         }
     }
@@ -1082,7 +1082,7 @@ fn command_nspell(sd: &mut MapSessionData, _line: &str) -> i32 {
 fn command_pspell(sd: &mut MapSessionData, _line: &str) -> i32 {
     let g = (SPELLGFX.fetch_sub(1, Ordering::Relaxed) - 1).max(0);
     SPELLGFX.store(g, Ordering::Relaxed);
-    let sd_bl = sd.bl_ptr_mut();
+
     let anim = g;
     let times = SOUNDFX.load(Ordering::Relaxed);
     if let Some(grid) = block_grid::get_grid(sd.m as usize) {
@@ -1091,7 +1091,7 @@ fn command_pspell(sd: &mut MapSessionData, _line: &str) -> i32 {
         for id in ids {
             if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
                 let pc = arc.read();
-                clif_sendanimation_inner(pc.as_bl(), anim, sd_bl, times);
+                clif_sendanimation_inner(pc.fd, pc.player.appearance.setting_flags, anim, sd.id, times);
             }
         }
     }

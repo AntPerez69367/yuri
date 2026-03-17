@@ -4,8 +4,6 @@
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
 
-use crate::database::map_db::BlockList;
-use crate::game::mob::MobSpawnData;
 use crate::game::npc::NpcData;
 use crate::game::pc::{
     MapSessionData,
@@ -26,7 +24,6 @@ use super::packet::{
 
 
 
-use crate::game::map_server::map_id2bl_ref;
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::client::visual::clif_clickonplayer;
 use crate::game::scripting::{
@@ -50,11 +47,6 @@ fn map_id2npc_local(id: u32) -> *mut crate::game::npc::NpcData {
         .map(|arc| &mut *arc.write() as *mut crate::game::npc::NpcData)
         .unwrap_or(std::ptr::null_mut())
 }
-#[inline]
-fn map_id2bl(id: u32) -> *mut BlockList {
-    map_id2bl_ref(id)
-}
-
 fn sl_doscript_coro(root: &str, method: Option<&str>, id: u32) -> i32 {
     crate::game::scripting::doscript_coro_id(root, method, &[id])
 }
@@ -945,8 +937,8 @@ const FLOOR: i32 = 1;
 pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
     let fd = (*sd).fd;
 
-    let bl: *mut BlockList = if rfifol(fd, 6) == 0 {
-        map_id2bl((*sd).last_click)
+    let target_id = if rfifol(fd, 6) == 0 {
+        (*sd).last_click
     } else {
         let raw_id = swap32(rfifol(fd, 6));
         if raw_id == 0xFFFFFFFE {
@@ -960,22 +952,22 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
             }
             return 0;
         }
-        map_id2bl(raw_id)
+        raw_id
     };
 
-    if bl.is_null() {
+    let Some((pos, bl_type)) = crate::game::map_server::entity_position(target_id) else {
         return 0;
-    }
+    };
 
     let sd_ref = &*sd;
-    let bl_type = (*bl).bl_type as i32;
+    let bl_type = bl_type as i32;
 
     if bl_type == BL_PC {
-        let tsd = map_id2sd_local((*bl).id);
+        let tsd = map_id2sd_local(target_id);
         if !tsd.is_null() {
             let tsd_ref = &*tsd;
             // CheckProximity: same map, within 21 tiles
-            if (*bl).m == sd_ref.m
+            if pos.m == sd_ref.m
                 && (sd_ref.x as i32 - tsd_ref.x as i32).abs() <= 21
                 && (sd_ref.y as i32 - tsd_ref.y as i32).abs() <= 21
             {
@@ -987,53 +979,53 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
                 }
             }
         }
-        clif_clickonplayer(sd, bl).await;
+        clif_clickonplayer(sd, target_id).await;
     } else if bl_type == BL_NPC {
-        let nd = bl as *mut NpcData;
+        let Some(arc) = crate::game::map_server::map_id2npc_ref(target_id) else { return 0; };
+        let nd = &*arc.data_ptr();
         let mut radius = 10i32;
-        if (*bl).subtype as i32 == FLOOR { radius = 0; }
+        if nd.subtype as i32 == FLOOR { radius = 0; }
 
         // F1 NPC: map id 0 always accessible; otherwise check proximity
-        let same_map_or_f1 = (*bl).m == 0
-            || ((*bl).m == sd_ref.m
-                && (sd_ref.x as i32 - (*bl).x as i32).abs() <= radius
-                && (sd_ref.y as i32 - (*bl).y as i32).abs() <= radius);
+        let same_map_or_f1 = pos.m == 0
+            || (pos.m == sd_ref.m
+                && (sd_ref.x as i32 - pos.x as i32).abs() <= radius
+                && (sd_ref.y as i32 - pos.y as i32).abs() <= radius);
 
         if same_map_or_f1 {
-            (*sd).last_click = (*bl).id;
+            (*sd).last_click = target_id;
             sl_async_freeco(sd);
 
             if (*sd).player.social.karma <= -3.0f32 {
-                let nd_name = (*nd).name.as_ptr();
+                let nd_name = nd.name.as_ptr();
                 let is_f1npc = libc::strcmp(nd_name, b"f1npc\0".as_ptr() as *const i8) == 0;
                 let is_totem = libc::strcmp(nd_name, b"totem_npc\0".as_ptr() as *const i8) == 0;
                 if !is_f1npc && !is_totem {
-                    clif_scriptmes(sd, (*bl).id as i32, b"Go away scum!\0".as_ptr() as *const i8, 0, 0);
+                    clif_scriptmes(sd, target_id as i32, b"Go away scum!\0".as_ptr() as *const i8, 0, 0);
                     return 0;
                 }
             }
 
-            sl_doscript_coro_2(crate::game::scripting::carray_to_str(&(*nd).name), Some("click"), sd_ref.id, (*nd).id);
+            sl_doscript_coro_2(crate::game::scripting::carray_to_str(&nd.name), Some("click"), sd_ref.id, nd.id);
         }
     } else if bl_type == BL_MOB {
-        // cast block_list* → MobSpawnData* (bl is always first field)
-        let mob = bl as *mut MobSpawnData;
+        let Some(arc) = crate::game::map_server::map_id2mob_ref(target_id) else { return 0; };
+        let mob = &*arc.data_ptr();
         let mut radius = 10i32;
-        // mob->data->type == 3 → radius 0
-        if !(*mob).data.is_null() && (*(*mob).data).mobtype == 3 {
+        if !mob.data.is_null() && (*mob.data).mobtype == 3 {
             radius = 0;
         }
 
         // proximity check: same map, within radius tiles
-        if (*bl).m == sd_ref.m
-            && (sd_ref.x as i32 - (*bl).x as i32).abs() <= radius
-            && (sd_ref.y as i32 - (*bl).y as i32).abs() <= radius
+        if pos.m == sd_ref.m
+            && (sd_ref.x as i32 - pos.x as i32).abs() <= radius
+            && (sd_ref.y as i32 - pos.y as i32).abs() <= radius
         {
-            (*sd).last_click = (*bl).id;
+            (*sd).last_click = target_id;
             sl_async_freeco(sd);
-            sl_doscript_coro_2("onLook", None, sd_ref.id, (*bl).id);
-            if !(*mob).data.is_null() {
-                sl_doscript_coro_2(crate::game::scripting::carray_to_str(&(*(*mob).data).yname), Some("click"), sd_ref.id, (*bl).id);
+            sl_doscript_coro_2("onLook", None, sd_ref.id, target_id);
+            if !mob.data.is_null() {
+                sl_doscript_coro_2(crate::game::scripting::carray_to_str(&(*mob.data).yname), Some("click"), sd_ref.id, target_id);
             }
         }
     }

@@ -1,6 +1,6 @@
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
-use crate::database::map_db::{BlockList, MapData, get_map_ptr};
+use crate::database::map_db::{MapData, get_map_ptr};
 use crate::game::scripting::types::item::{
     BoundItem, fixed_str, item_data_getattr, write_str_field,
 };
@@ -27,7 +27,7 @@ pub struct FloorItemData {
 // All access is gated behind unsafe blocks; no Rust code aliases these pointers.
 unsafe impl Send for FloorItemData {}
 unsafe impl Sync for FloorItemData {}
-crate::impl_as_blocklist!(FloorItemData);
+
 
 /// Lua userdata for floor items. Stores entity ID; lookups via `map_id2fl_ref`.
 /// After `delete()`, the entity is removed from the map, so subsequent lookups
@@ -75,7 +75,6 @@ impl UserData for FloorListObject {
             };
             let fl = unsafe { &*arc.data_ptr() };
             let fl_ref = fl;
-            let bl = fl_ref.as_bl();
 
             macro_rules! int  { ($e:expr) => { Ok(mlua::Value::Integer($e as i64)) }; }
             macro_rules! cstr { ($arr:expr) => {{
@@ -128,11 +127,11 @@ impl UserData for FloorListObject {
 
             // ── block_list / map attributes ──────────────────────────────────
             match key.as_str() {
-                "x"          => int!(bl.x),
-                "y"          => int!(bl.y),
-                "m"          => int!(bl.m),
-                "blType"     => int!(bl.bl_type),
-                "ID"         => int!(bl.id),
+                "x"          => int!(fl_ref.x),
+                "y"          => int!(fl_ref.y),
+                "m"          => int!(fl_ref.m),
+                "blType"     => int!(fl_ref.bl_type),
+                "ID"         => int!(fl_ref.id),
                 "xmax" => {
                     let mp = unsafe { fl_map(fl) };
                     if mp.is_null() { return Ok(mlua::Value::Nil); }
@@ -207,10 +206,7 @@ impl UserData for FloorListObject {
                     let id = entity_id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if let Some(arc) = crate::game::map_server::map_id2fl_ref(id) {
-                                let ptr = arc.data_ptr() as *mut std::ffi::c_void;
-                                unsafe { crate::game::scripting::map_globals::sl_fl_delete(ptr); }
-                            }
+                            crate::game::scripting::map_globals::sl_fl_delete(id);
                             Ok(())
                         }
                     )?));

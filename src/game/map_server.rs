@@ -11,12 +11,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::database::get_pool;
 use crate::database::{blocking_run_async, boards as db_boards};
 use crate::game::pc::{
-    MapSessionData, FLAG_MAIL,
+    MapSessionData, PlayerEntity, FLAG_MAIL,
     U_FLAG_UNPHYSICAL,
 };
 use crate::servers::map::packet::ClientPacket;
 
-use crate::database::map_db::BlockList;
 
 use crate::game::map_parse::packet::{rfifob, rfifop, wfifohead, wfifop, wfifoset};
 
@@ -140,11 +139,11 @@ pub unsafe fn map_delitem(id: u32) {
 /// registers it in `ITEM_MAP`, and links it into the block grid.
 ///
 /// # Safety
-/// - `bl` must be a valid non-null pointer to a `FloorItemData` (cast to `BlockList`),
+/// - `fl` must be a valid non-null pointer to a `FloorItemData`,
 ///   allocated via `Box` (i.e., `Box::into_raw`), with `m`/`x`/`y` already set.
-/// - Caller must not use `bl` after this call — ownership transfers to `ITEM_MAP`.
+/// - Caller must not use `fl` after this call — ownership transfers to `ITEM_MAP`.
 /// - Must be called on the game thread (single-threaded game loop).
-pub unsafe fn map_additem(bl: *mut BlockList) {
+pub unsafe fn map_additem(fl: *mut crate::game::scripting::types::floor::FloorItemData) {
     let mut slots = object_slots();
 
     // Find first free slot.
@@ -154,7 +153,7 @@ pub unsafe fn map_additem(bl: *mut BlockList) {
         tracing::error!("map_additem: floor item capacity exceeded ({MAX_FLOORITEM})");
         // Drop the Box to avoid leaking the allocation — caller transferred
         // ownership to us via Box::into_raw, so we must reclaim it on all paths.
-        unsafe { drop(Box::from_raw(bl as *mut crate::game::scripting::types::floor::FloorItemData)); }
+        unsafe { drop(Box::from_raw(fl)); }
         return;
     }
 
@@ -168,11 +167,10 @@ pub unsafe fn map_additem(bl: *mut BlockList) {
     drop(slots); // release lock before calling map_addiddb_item / map_addblock
 
     let id = (i as u32).wrapping_add(crate::game::mob::FLOORITEM_START_NUM);
-    (*bl).id      = id;
-    (*bl).bl_type = crate::game::mob::BL_ITEM as u8;
+    (*fl).id      = id;
+    (*fl).bl_type = crate::game::mob::BL_ITEM as u8;
     // Take ownership of the Box<FloorItemData> into ITEM_MAP.
-    // SAFETY: bl was produced by Box::into_raw — Box::from_raw re-establishes ownership.
-    let item_box = Box::from_raw(bl as *mut crate::game::scripting::types::floor::FloorItemData);
+    let item_box = Box::from_raw(fl);
     map_addiddb_item(id, item_box);
     // After map_addiddb_item, the data lives inside Arc<RwLock<FloorItemData>>.
     // Read the Arc to get coordinates for the grid insert.
@@ -213,14 +211,14 @@ pub unsafe fn map_setmapip(id: i32, ip: u32, port: u16) -> i32 {
 // similarly won't contend in practice, but structurally enforces correct
 // access patterns and is ready for future multi-threading.
 
-static PLAYER_MAP: OnceLock<Mutex<crate::common::entity_manager::EntityManager<crate::game::pc::MapSessionData>>> = OnceLock::new();
+static PLAYER_MAP: OnceLock<Mutex<HashMap<u32, Arc<PlayerEntity>>>> = OnceLock::new();
 static MOB_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<crate::game::mob::MobSpawnData>>>>> = OnceLock::new();
 static NPC_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<crate::game::npc::NpcData>>>>> = OnceLock::new();
 static ITEM_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<crate::game::scripting::types::floor::FloorItemData>>>>> = OnceLock::new();
 
 #[inline]
-fn player_map() -> std::sync::MutexGuard<'static, crate::common::entity_manager::EntityManager<crate::game::pc::MapSessionData>> {
-    PLAYER_MAP.get_or_init(|| Mutex::new(crate::common::entity_manager::EntityManager::new())).lock().unwrap_or_else(|e| e.into_inner())
+fn player_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<PlayerEntity>>> {
+    PLAYER_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
 }
 #[inline]
 fn mob_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<RwLock<crate::game::mob::MobSpawnData>>>> {
@@ -240,11 +238,11 @@ fn item_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<RwLock<crate::g
 /// then releases the lock and iterates — eliminating any risk of dangling
 /// pointers if a player is removed mid-iteration (Arc keeps data alive).
 pub fn for_each_player<F: FnMut(&mut crate::game::pc::MapSessionData)>(mut f: F) {
-    let arcs: Vec<Arc<RwLock<crate::game::pc::MapSessionData>>> = {
-        player_map().iter().map(|(_, arc)| Arc::clone(arc)).collect()
+    let arcs: Vec<Arc<PlayerEntity>> = {
+        player_map().values().map(Arc::clone).collect()
     };
     for arc in arcs {
-        // data_ptr() returns raw pointer without acquiring any lock.
+        // data_ptr() returns raw pointer to legacy data without acquiring any lock.
         // SAFETY: single-threaded game loop, Arc keeps allocation alive.
         let ptr: *mut crate::game::pc::MapSessionData = arc.data_ptr();
         unsafe { f(&mut *ptr); }
@@ -259,66 +257,29 @@ pub fn map_termiddb() {
     item_map().clear();
 }
 
-/// Typed lookup returning a `*mut BlockList` pointer for any registered entity.
-/// Returns null if the id is not found in any entity map, or if the entity's
-/// RwLock is currently write-locked (re-entrant access from same thread).
-///
-/// Uses `try_read()` to avoid deadlocking when the entity is already
-/// write-locked on this thread. The read lock is released before returning —
-/// the pointer is only valid under the single-threaded game loop assumption.
-pub fn map_id2bl_ref(id: u32) -> *mut crate::database::map_db::BlockList {
-    use crate::game::mob::{MOB_START_NUM, FLOORITEM_START_NUM, NPC_START_NUM};
-
-    if id < MOB_START_NUM {
-        if let Some(arc) = map_id2sd_pc(id) {
-            if let Some(guard) = arc.try_read() {
-                return guard.bl_ptr() as *mut BlockList;
-            }
-        }
-    } else if id >= NPC_START_NUM {
-        if let Some(arc) = map_id2npc_ref(id) {
-            if let Some(guard) = arc.try_read() {
-                return guard.bl_ptr() as *mut BlockList;
-            }
-        }
-    } else if id >= FLOORITEM_START_NUM {
-        if let Some(arc) = map_id2fl_ref(id) {
-            if let Some(guard) = arc.try_read() {
-                return guard.bl_ptr() as *mut BlockList;
-            }
-        }
-    } else {
-        if let Some(arc) = map_id2mob_ref(id) {
-            if let Some(guard) = arc.try_read() {
-                return guard.bl_ptr() as *mut BlockList;
-            }
-        }
-    }
-    std::ptr::null_mut()
-}
-
-/// Return (m, x, y, bl_type) for any entity ID, using typed lookups.
-pub fn entity_position(id: u32) -> Option<(u16, u16, u16, u8)> {
+/// Return position and entity type for any entity ID, using typed lookups.
+pub fn entity_position(id: u32) -> Option<(crate::common::types::Point, u8)> {
+    use crate::common::types::Point;
     use crate::game::mob::{MOB_START_NUM, FLOORITEM_START_NUM, NPC_START_NUM};
     if id < MOB_START_NUM {
         if let Some(arc) = map_id2sd_pc(id) {
             let sd = arc.read();
-            return Some((sd.m, sd.x, sd.y, sd.bl_type));
+            return Some((Point::new(sd.m, sd.x, sd.y), sd.bl_type));
         }
     } else if id >= NPC_START_NUM {
         if let Some(arc) = map_id2npc_ref(id) {
             let nd = arc.read();
-            return Some((nd.m, nd.x, nd.y, nd.bl_type));
+            return Some((Point::new(nd.m, nd.x, nd.y), nd.bl_type));
         }
     } else if id >= FLOORITEM_START_NUM {
         if let Some(arc) = map_id2fl_ref(id) {
             let fi = arc.read();
-            return Some((fi.m, fi.x, fi.y, fi.bl_type));
+            return Some((Point::new(fi.m, fi.x, fi.y), fi.bl_type));
         }
     } else {
         if let Some(arc) = map_id2mob_ref(id) {
             let mob = arc.read();
-            return Some((mob.m, mob.x, mob.y, mob.bl_type));
+            return Some((Point::new(mob.m, mob.x, mob.y), mob.bl_type));
         }
     }
     None
@@ -341,9 +302,21 @@ unsafe fn box_into_arc_rwlock<T>(b: Box<T>) -> Arc<RwLock<T>> {
 }
 
 /// Insert a player — takes ownership of the Box, wrapping it in Arc<RwLock>.
-pub fn map_addiddb_player(id: u32, sd: Box<crate::game::pc::MapSessionData>) {
-    let arc = unsafe { box_into_arc_rwlock(sd) };
-    player_map().insert_arc(id, arc);
+pub fn map_addiddb_player(id: u32, fd: crate::session::SessionId, sd: Box<crate::game::pc::MapSessionData>) {
+    // Heap-allocate PlayerEntity without stack intermediary.
+    // parking_lot RawRwLock::INIT is all-zero bits, so zeroed RwLock is valid (unlocked).
+    // LookAccum fields are i32 = 0, matching Default.
+    let mut pe_box: Box<PlayerEntity> = unsafe { Box::new_zeroed().assume_init() };
+    pe_box.id = id;
+    pe_box.fd = fd;
+    // Copy MapSessionData from sd into legacy RwLock data slot, avoiding stack copy.
+    unsafe {
+        let src = Box::into_raw(sd);
+        std::ptr::copy_nonoverlapping(src, pe_box.legacy.data_ptr(), 1);
+        std::alloc::dealloc(src as *mut u8, std::alloc::Layout::for_value(&*src));
+    }
+    let arc = Arc::from(pe_box);
+    player_map().insert(id, arc);
 }
 
 /// Insert a mob — takes ownership of the Box, wrapping it in Arc<RwLock>.
@@ -361,12 +334,6 @@ pub fn map_addiddb_item(id: u32, item: Box<crate::game::scripting::types::floor:
     item_map().insert(id, unsafe { box_into_arc_rwlock(item) });
 }
 
-/// Legacy untyped insert — warns and no-ops. Replace call sites with typed versions.
-pub unsafe fn map_addiddb(bl: *mut BlockList) {
-    if bl.is_null() { return; }
-    tracing::warn!("[map_addiddb] untyped call for id={} — migrate to map_addiddb_*", (*bl).id);
-}
-
 /// Remove an entity from the typed maps by ID.
 ///
 /// With Arc<RwLock<T>>, this is safe — removing from the map drops one Arc
@@ -376,7 +343,7 @@ pub fn map_deliddb(id: u32) {
     use crate::game::mob::{MOB_START_NUM, FLOORITEM_START_NUM, NPC_START_NUM};
     if id == 0 { return; }
     if id < MOB_START_NUM {
-        player_map().remove(id);
+        player_map().remove(&id);
     } else if id >= NPC_START_NUM {
         npc_map().remove(&id);
     } else if id >= FLOORITEM_START_NUM {
@@ -393,11 +360,11 @@ pub fn map_deliddb(id: u32) {
 // can safely call back into game code without holding the entity map lock.
 // ────────────────────────────────────────────────────────────────────────────
 
-/// Typed lookup — returns `Arc<RwLock<MapSessionData>>` if id is a player.
+/// Typed lookup — returns `Arc<PlayerEntity>` if id is a player.
 #[must_use]
 #[inline]
-pub fn map_id2sd_pc(id: u32) -> Option<Arc<RwLock<crate::game::pc::MapSessionData>>> {
-    player_map().get_by_id(id)
+pub fn map_id2sd_pc(id: u32) -> Option<Arc<PlayerEntity>> {
+    player_map().get(&id).cloned()
 }
 
 /// Typed lookup — returns `Arc<RwLock<MobSpawnData>>` if id is a mob.
@@ -429,37 +396,10 @@ pub fn map_id2fl_ref(id: u32) -> Option<Arc<RwLock<crate::game::scripting::types
 /// Each variant holds an `Arc<RwLock<T>>` handle. Callers use `with_bl_mut`
 /// (callback pattern) since a reference through a lock guard cannot be returned.
 pub enum GameEntity {
-    Player(Arc<RwLock<crate::game::pc::MapSessionData>>),
+    Player(Arc<PlayerEntity>),
     Mob(Arc<RwLock<crate::game::mob::MobSpawnData>>),
     Npc(Arc<RwLock<crate::game::npc::NpcData>>),
     Item(Arc<RwLock<crate::game::scripting::types::floor::FloorItemData>>),
-}
-
-impl GameEntity {
-    /// Access the entity's block_list header mutably via a callback.
-    ///
-    /// The write lock is held for the duration of `f` and released on return.
-    pub fn with_bl_mut<R, F: FnOnce(&mut crate::database::map_db::BlockList) -> R>(&self, f: F) -> R {
-        match self {
-            Self::Player(a) => f(a.write().as_bl_mut()),
-            Self::Mob(a) => f(a.write().as_bl_mut()),
-            Self::Npc(a) => f(a.write().as_bl_mut()),
-            Self::Item(a) => f(a.write().as_bl_mut()),
-        }
-    }
-
-    /// Get a raw `*mut BlockList` pointer from the entity.
-    ///
-    /// This acquires a read lock momentarily. The pointer is only valid under
-    /// the single-threaded game loop assumption (no concurrent writer).
-    pub fn bl_ptr(&self) -> *mut crate::database::map_db::BlockList {
-        match self {
-            Self::Player(a) => a.read().bl_ptr() as *mut BlockList,
-            Self::Mob(a) => a.read().bl_ptr() as *mut BlockList,
-            Self::Npc(a) => a.read().bl_ptr() as *mut BlockList,
-            Self::Item(a) => a.read().bl_ptr() as *mut BlockList,
-        }
-    }
 }
 
 /// Extension trait for ergonomic entity access on `Option<Arc<RwLock<T>>>`.
@@ -3063,18 +3003,8 @@ pub unsafe fn map_reload() -> i32 {
         // map_isloaded(i): registry pointer is non-null iff the map was loaded.
         let slot = &*crate::database::map_db::raw_map_ptr().add(i);
         if !slot.registry.is_null() {
-            if let Some(grid) = crate::game::block_grid::get_grid(i) {
-                let ids = crate::game::block_grid::ids_in_area(grid, 0, 0, crate::game::block::AreaType::SameMap, slot.xs as i32, slot.ys as i32);
-                for id in ids {
-                    if let Some(arc) = map_id2sd_pc(id) {
-                        let bl_ptr = arc.write().as_bl_mut() as *mut BlockList as *mut std::ffi::c_void;
-                        crate::game::scripting::sl_updatepeople_impl(
-                            bl_ptr,
-                            std::ptr::null_mut(),
-                        );
-                    }
-                }
-            }
+            // TODO: broadcast viewport refresh to all players on this map
+            // (sl_updatepeople was a no-op stub — implement when needed)
         }
     }
 

@@ -16,7 +16,7 @@
 
 use std::ptr;
 
-use crate::database::map_db::{BlockList, WarpList, BLOCK_SIZE};
+use crate::database::map_db::{WarpList, BLOCK_SIZE};
 use crate::database::map_db::map_data;
 use crate::session::session_exists;
 use crate::game::pc::{
@@ -36,9 +36,6 @@ use super::packet::{
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-// enum { LOOK_GET = 0, LOOK_SEND = 1 } from map_parse.h
-const LOOK_GET:  i32 = 0;
-const LOOK_SEND: i32 = 1;
 
 // Equipment slot indices (from map_server.h EQ_* enum)
 const EQ_ARMOR:      i32 = 0;
@@ -127,13 +124,12 @@ use crate::game::client::visual::clif_destroyold;
 use crate::game::block::{map_moveblock_id, AreaType};
 use crate::game::block_grid;
 use crate::game::map_server::{
-    map_readglobalreg, map_id2sd_pc, map_id2mob_ref, map_id2npc_ref,
-    map_id2entity, object_flags,
+    map_readglobalreg, map_id2sd_pc, map_id2mob_ref, map_id2npc_ref, object_flags,
 };
 use crate::game::map_parse::visual::{
-    clif_mob_look_start, clif_mob_look_close,
-    clif_charlook_inner, clif_cnpclook_inner, clif_cmoblook_inner,
-    clif_object_look_sub_inner,
+    clif_charlook, clif_cnpclook, clif_cmoblook,
+    clif_object_look_by_id,
+    clif_mob_look_start_func_inner, clif_mob_look_close_func_inner,
 };
 use crate::game::map_parse::player_state::{
     clif_sendxy, clif_sendstatus, clif_sendxychange,
@@ -252,7 +248,7 @@ pub unsafe fn clif_sendchararea(sd: *mut MapSessionData) -> i32 {
         for id in ids {
             if let Some(pc_arc) = map_id2sd_pc(id) {
                 let pc = pc_arc.read();
-                clif_charlook_inner(pc.bl_ptr(), LOOK_SEND, sd as *const MapSessionData);
+                clif_charlook(&*sd, &*pc);
             }
         }
     }
@@ -722,13 +718,7 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
         if let Some(grid) = block_grid::get_grid(m as usize) {
             let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
             for id in cell_ids {
-                if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_canmove_sub_inner(pc_arc.write().bl_ptr_mut(), sd);
-                } else if let Some(mob_arc) = map_id2mob_ref(id) {
-                    clif_canmove_sub_inner(mob_arc.write().bl_ptr_mut(), sd);
-                } else if let Some(npc_arc) = map_id2npc_ref(id) {
-                    clif_canmove_sub_inner(npc_arc.write().bl_ptr_mut(), sd);
-                }
+                clif_canmove_sub_inner(id, sd);
             }
         }
         if read_pass(m, dx, dy) != 0 { (*sd).canmove = 1; }
@@ -800,9 +790,9 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
     buf[14] = 0x00;
 
     if ((*sd).optFlags & OPT_FLAG_STEALTH) != 0 {
-        clif_sendtogm(buf.as_mut_ptr(), 32, (*sd).as_bl_mut(), AREA_WOS);
+        clif_sendtogm(buf.as_mut_ptr(), 32, (*sd).id, (*sd).m, (*sd).x, (*sd).y, BL_PC as u8, AREA_WOS);
     } else {
-        clif_send(buf.as_ptr(), 32, (*sd).as_bl_mut(), AREA_WOS);
+        clif_send(buf.as_ptr(), 32, (*sd).id, (*sd).m, (*sd).x, (*sd).y, BL_PC as u8, AREA_WOS);
     }
 
     {
@@ -818,33 +808,29 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
         clif_sendmapdata(sd, m, x0, y0, x1, y1, checksum);
         if let Some(grid) = block_grid::get_grid(m as usize) {
             let rect_ids = grid.ids_in_rect(x0, y0, x0 + (x1 - 1), y0 + (y1 - 1));
-            clif_mob_look_start(sd);
+            clif_mob_look_start_func_inner((*sd).fd, &mut (*sd).net.look);
             for &id in &rect_ids {
-                if let Some(ent) = map_id2entity(id) {
-                    ent.with_bl_mut(|bl| {
-                        clif_object_look_sub_inner(bl as *mut BlockList, LOOK_GET, sd as *mut BlockList);
-                    });
-                }
+                clif_object_look_by_id((*sd).fd, &mut (*sd).net.look, (*sd).player.identity.id, id);
             }
-            clif_mob_look_close(sd);
+            clif_mob_look_close_func_inner((*sd).fd, &mut (*sd).net.look);
             for &id in &rect_ids {
                 if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook_inner(pc_arc.read().bl_ptr(), LOOK_GET, sd as *const MapSessionData);
+                    clif_charlook(&*pc_arc.read(), &*sd);
                 }
             }
             for &id in &rect_ids {
                 if let Some(npc_arc) = map_id2npc_ref(id) {
-                    clif_cnpclook_inner(npc_arc.read().bl_ptr(), LOOK_GET, sd as *const BlockList);
+                    clif_cnpclook(&*npc_arc.read(), &*sd);
                 }
             }
             for &id in &rect_ids {
                 if let Some(mob_arc) = map_id2mob_ref(id) {
-                    clif_cmoblook_inner(mob_arc.read().bl_ptr(), LOOK_GET, sd as *const BlockList);
+                    clif_cmoblook(&*mob_arc.read(), &*sd);
                 }
             }
             for &id in &rect_ids {
                 if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook_inner(pc_arc.read().bl_ptr(), LOOK_SEND, sd as *const MapSessionData);
+                    clif_charlook(&*sd, &*pc_arc.read());
                 }
             }
         }
@@ -964,13 +950,7 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> i32 {
         if let Some(grid) = block_grid::get_grid(m as usize) {
             let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
             for id in cell_ids {
-                if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_canmove_sub_inner(pc_arc.write().bl_ptr_mut(), sd);
-                } else if let Some(mob_arc) = map_id2mob_ref(id) {
-                    clif_canmove_sub_inner(mob_arc.write().bl_ptr_mut(), sd);
-                } else if let Some(npc_arc) = map_id2npc_ref(id) {
-                    clif_canmove_sub_inner(npc_arc.write().bl_ptr_mut(), sd);
-                }
+                clif_canmove_sub_inner(id, sd);
             }
         }
         if read_pass(m, dx, dy) != 0 { (*sd).canmove = 1; }
@@ -1008,7 +988,7 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> i32 {
     // Temporarily toggle off FASTMOVE (noparsewalk always sends the walk packet)
     let had_fastmove = ((*sd).player.appearance.setting_flags as u32 & FLAG_FASTMOVE) != 0;
     if had_fastmove {
-        (*sd).player.appearance.setting_flags ^= FLAG_FASTMOVE as u16;
+        (*sd).player.appearance.setting_flags ^= FLAG_FASTMOVE;
         clif_sendstatus(sd, 0);
     }
 
@@ -1033,7 +1013,7 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> i32 {
 
     // Restore FASTMOVE
     if had_fastmove {
-        (*sd).player.appearance.setting_flags ^= FLAG_FASTMOVE as u16;
+        (*sd).player.appearance.setting_flags ^= FLAG_FASTMOVE;
         clif_sendstatus(sd, 0);
     }
 
@@ -1050,9 +1030,9 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> i32 {
     buf[14] = 0x00;
 
     if ((*sd).optFlags & OPT_FLAG_STEALTH) != 0 {
-        clif_sendtogm(buf.as_mut_ptr(), 32, (*sd).as_bl_mut(), AREA_WOS);
+        clif_sendtogm(buf.as_mut_ptr(), 32, (*sd).id, (*sd).m, (*sd).x, (*sd).y, BL_PC as u8, AREA_WOS);
     } else {
-        clif_send(buf.as_ptr(), 32, (*sd).as_bl_mut(), AREA_WOS);
+        clif_send(buf.as_ptr(), 32, (*sd).id, (*sd).m, (*sd).x, (*sd).y, BL_PC as u8, AREA_WOS);
     }
 
     {
@@ -1071,33 +1051,29 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> i32 {
         clif_sendmapdata(sd, m, x0, y0, x1, y1, 0);
         if let Some(grid) = block_grid::get_grid(m as usize) {
             let rect_ids = grid.ids_in_rect(x0, y0, x0 + (x1 - 1), y0 + (y1 - 1));
-            clif_mob_look_start(sd);
+            clif_mob_look_start_func_inner((*sd).fd, &mut (*sd).net.look);
             for &id in &rect_ids {
-                if let Some(ent) = map_id2entity(id) {
-                    ent.with_bl_mut(|bl| {
-                        clif_object_look_sub_inner(bl as *mut BlockList, LOOK_GET, sd as *mut BlockList);
-                    });
-                }
+                clif_object_look_by_id((*sd).fd, &mut (*sd).net.look, (*sd).player.identity.id, id);
             }
-            clif_mob_look_close(sd);
+            clif_mob_look_close_func_inner((*sd).fd, &mut (*sd).net.look);
             for &id in &rect_ids {
                 if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook_inner(pc_arc.read().bl_ptr(), LOOK_GET, sd as *const MapSessionData);
+                    clif_charlook(&*pc_arc.read(), &*sd);
                 }
             }
             for &id in &rect_ids {
                 if let Some(npc_arc) = map_id2npc_ref(id) {
-                    clif_cnpclook_inner(npc_arc.read().bl_ptr(), LOOK_GET, sd as *const BlockList);
+                    clif_cnpclook(&*npc_arc.read(), &*sd);
                 }
             }
             for &id in &rect_ids {
                 if let Some(mob_arc) = map_id2mob_ref(id) {
-                    clif_cmoblook_inner(mob_arc.read().bl_ptr(), LOOK_GET, sd as *const BlockList);
+                    clif_cmoblook(&*mob_arc.read(), &*sd);
                 }
             }
             for &id in &rect_ids {
                 if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook_inner(pc_arc.read().bl_ptr(), LOOK_SEND, sd as *const MapSessionData);
+                    clif_charlook(&*sd, &*pc_arc.read());
                 }
             }
         }
@@ -1289,32 +1265,48 @@ pub unsafe fn clif_sendmapdata(
 ///
 /// PC: sent to AREA (including self). MOB/NPC: AREA_WOS.
 ///
-pub unsafe fn clif_sendside(bl: *mut BlockList) -> i32 {
-    if bl.is_null() { return 0; }
-
-    let (side_byte, target): (u8, i32) = if (*bl).bl_type == BL_PC as u8 {
-        let sd = bl as *mut MapSessionData;
-        ((*sd).player.combat.side as u8, AREA)
-    } else if (*bl).bl_type == BL_MOB as u8 {
-        let mob = bl as *mut MobSpawnData;
-        ((*mob).side as u8, AREA_WOS)
-    } else if (*bl).bl_type == BL_NPC as u8 {
-        let npc = bl as *mut NpcData;
-        ((*npc).side as u8, AREA_WOS)
-    } else {
-        return 0;
-    };
-
+/// Send a facing-direction packet for a PC.
+pub unsafe fn clif_sendside_pc(sd: &MapSessionData) -> i32 {
     let mut buf = [0u8; 32];
     buf[0] = 0xAA;
     buf[1] = 0x00;
     buf[2] = 0x08;
     buf[3] = 0x11;
-    buf[5..9].copy_from_slice(&(*bl).id.swap_bytes().to_ne_bytes());
-    buf[9]  = side_byte;
+    buf[5..9].copy_from_slice(&sd.id.to_be_bytes());
+    buf[9]  = sd.player.combat.side as u8;
     buf[10] = 0;
 
-    clif_send(buf.as_ptr(), 32, bl, target);
+    clif_send(buf.as_ptr(), 32, sd.id, sd.m, sd.x, sd.y, BL_PC as u8, AREA);
+    0
+}
+
+/// Send a facing-direction packet for a mob.
+pub unsafe fn clif_sendside_mob(mob: &MobSpawnData) -> i32 {
+    let mut buf = [0u8; 32];
+    buf[0] = 0xAA;
+    buf[1] = 0x00;
+    buf[2] = 0x08;
+    buf[3] = 0x11;
+    buf[5..9].copy_from_slice(&mob.id.to_be_bytes());
+    buf[9]  = mob.side as u8;
+    buf[10] = 0;
+
+    clif_send(buf.as_ptr(), 32, mob.id, mob.m, mob.x, mob.y, BL_MOB as u8, AREA_WOS);
+    0
+}
+
+/// Send a facing-direction packet for an NPC.
+pub unsafe fn clif_sendside_npc(npc: &NpcData) -> i32 {
+    let mut buf = [0u8; 32];
+    buf[0] = 0xAA;
+    buf[1] = 0x00;
+    buf[2] = 0x08;
+    buf[3] = 0x11;
+    buf[5..9].copy_from_slice(&npc.id.to_be_bytes());
+    buf[9]  = npc.side as u8;
+    buf[10] = 0;
+
+    clif_send(buf.as_ptr(), 32, npc.id, npc.m, npc.x, npc.y, BL_NPC as u8, AREA_WOS);
     0
 }
 
@@ -1329,7 +1321,7 @@ pub unsafe fn clif_parseside(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
     (*sd).player.combat.side = rfifob(fd, 5) as i8;
-    clif_sendside((*sd).as_bl_mut());
+    clif_sendside_pc(&*sd);
     sl_doscript_simple("onTurn", None, (*sd).id);
     0
 }
@@ -1507,33 +1499,29 @@ pub unsafe fn clif_parseviewchange(sd: *mut MapSessionData) -> i32 {
     let m2 = (*sd).m as i32;
     if let Some(grid) = block_grid::get_grid(m2 as usize) {
         let rect_ids = grid.ids_in_rect(x0, y0, x0 + (x1 - 1), y0 + (y1 - 1));
-        clif_mob_look_start(sd);
+        clif_mob_look_start_func_inner((*sd).fd, &mut (*sd).net.look);
         for &id in &rect_ids {
-            if let Some(ent) = map_id2entity(id) {
-                ent.with_bl_mut(|bl| {
-                    clif_object_look_sub_inner(bl as *mut BlockList, LOOK_GET, sd as *mut BlockList);
-                });
-            }
+            clif_object_look_by_id((*sd).fd, &mut (*sd).net.look, (*sd).player.identity.id, id);
         }
-        clif_mob_look_close(sd);
+        clif_mob_look_close_func_inner((*sd).fd, &mut (*sd).net.look);
         for &id in &rect_ids {
             if let Some(pc_arc) = map_id2sd_pc(id) {
-                clif_charlook_inner(pc_arc.read().bl_ptr(), LOOK_GET, sd as *const MapSessionData);
+                clif_charlook(&*pc_arc.read(), &*sd);
             }
         }
         for &id in &rect_ids {
             if let Some(npc_arc) = map_id2npc_ref(id) {
-                clif_cnpclook_inner(npc_arc.read().bl_ptr(), LOOK_GET, sd as *const BlockList);
+                clif_cnpclook(&*npc_arc.read(), &*sd);
             }
         }
         for &id in &rect_ids {
             if let Some(mob_arc) = map_id2mob_ref(id) {
-                clif_cmoblook_inner(mob_arc.read().bl_ptr(), LOOK_GET, sd as *const BlockList);
+                clif_cmoblook(&*mob_arc.read(), &*sd);
             }
         }
         for &id in &rect_ids {
             if let Some(pc_arc) = map_id2sd_pc(id) {
-                clif_charlook_inner(pc_arc.read().bl_ptr(), LOOK_SEND, sd as *const MapSessionData);
+                clif_charlook(&*sd, &*pc_arc.read());
             }
         }
     }
@@ -1546,17 +1534,16 @@ pub unsafe fn clif_parseviewchange(sd: *mut MapSessionData) -> i32 {
 
 ///
 /// Fires the "onLook" Lua event when player looks at a cell.
-/// Args: `bl` = the object being looked at, `sd` = the looking player.
-pub unsafe fn clif_parselookat_sub_inner(bl: *mut BlockList, sd: *mut MapSessionData) -> i32 {
-    if bl.is_null() || sd.is_null() { return 0; }
-    sl_doscript_2("onLook", None, (*sd).id, (*bl).id);
+/// Args: `entity_id` = the object being looked at, `sd` = the looking player.
+pub unsafe fn clif_parselookat_sub_inner(entity_id: u32, sd: *mut MapSessionData) -> i32 {
+    if sd.is_null() { return 0; }
+    sl_doscript_2("onLook", None, (*sd).id, entity_id);
     0
 }
 
 /// Dead code stub — body was removed in original C.
 pub unsafe fn clif_parselookat_scriptsub(
     _sd: *mut MapSessionData,
-    _bl: *mut BlockList,
 ) -> i32 {
     0
 }
@@ -1579,11 +1566,7 @@ pub unsafe fn clif_parselookat_2(sd: *mut MapSessionData) -> i32 {
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
         for id in cell_ids {
-            if let Some(ent) = map_id2entity(id) {
-                ent.with_bl_mut(|bl| {
-                    clif_parselookat_sub_inner(bl as *mut BlockList, sd);
-                });
-            }
+            sl_doscript_2("onLook", None, (*sd).id, id);
         }
     }
     0
@@ -1607,11 +1590,7 @@ pub unsafe fn clif_parselookat(sd: *mut MapSessionData) -> i32 {
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let cell_ids = grid.ids_at_tile(x as u16, y as u16);
         for id in cell_ids {
-            if let Some(ent) = map_id2entity(id) {
-                ent.with_bl_mut(|bl| {
-                    clif_parselookat_sub_inner(bl as *mut BlockList, sd);
-                });
-            }
+            sl_doscript_2("onLook", None, (*sd).id, id);
         }
     }
     0
@@ -1627,18 +1606,14 @@ pub unsafe fn clif_parselookat(sd: *mut MapSessionData) -> i32 {
 pub unsafe fn clif_refreshnoclick(sd: *mut MapSessionData) -> i32 {
     clif_sendmapinfo(sd);
     clif_sendxynoclick(sd);
-    clif_mob_look_start(sd);
+    clif_mob_look_start_func_inner((*sd).fd, &mut (*sd).net.look);
     if let (Some(grid), Some(slot)) = (block_grid::get_grid((*sd).m as usize), map_data((*sd).m as usize)) {
         let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
         for id in ids {
-            if let Some(ent) = map_id2entity(id) {
-                ent.with_bl_mut(|bl| {
-                    clif_object_look_sub_inner(bl as *mut BlockList, LOOK_GET, sd as *mut BlockList);
-                });
-            }
+            clif_object_look_by_id((*sd).fd, &mut (*sd).net.look, (*sd).player.identity.id, id);
         }
     }
-    clif_mob_look_close(sd);
+    clif_mob_look_close_func_inner((*sd).fd, &mut (*sd).net.look);
     clif_destroyold(sd);
     clif_sendchararea(sd);
     clif_getchararea(sd);
@@ -1661,8 +1636,8 @@ pub unsafe fn clif_refreshnoclick(sd: *mut MapSessionData) -> i32 {
 
     let Some(md) = map_data((*sd).m as usize) else { return 0; };
     if md.can_group == 0 {
-        (*sd).player.appearance.setting_flags ^= FLAG_GROUP as u16;
-        if (*sd).player.appearance.setting_flags & FLAG_GROUP as u16 == 0 && (*sd).group_count > 0 {
+        (*sd).player.appearance.setting_flags ^= FLAG_GROUP;
+        if (*sd).player.appearance.setting_flags & FLAG_GROUP == 0 && (*sd).group_count > 0 {
             clif_leavegroup(sd);
             clif_sendstatus(sd, 0);
             clif_sendminitext(sd, c"Join a group     :OFF".as_ptr());
@@ -1675,12 +1650,10 @@ pub unsafe fn clif_refreshnoclick(sd: *mut MapSessionData) -> i32 {
 
 
 ///
-/// Broadcast an NPC position packet to a nearby player.
-/// `bl` is cast to `*mut MapSessionData` (the receiving player).
-/// Builds a 32-byte buffer and calls `clif_send(buf, 32, &nd->bl, AREA_WOS)`.
-pub unsafe fn clif_npc_move_inner(bl: *const BlockList, nd: *const NpcData) -> i32 {
-    let sd = bl as *const MapSessionData;
-    if sd.is_null() || nd.is_null() { return 0; }
+/// Broadcast an NPC position packet to nearby players.
+/// Builds a 32-byte buffer and calls `clif_send(buf, 32, ..., AREA_WOS)`.
+pub unsafe fn clif_npc_move_inner(nd: *const NpcData) -> i32 {
+    if nd.is_null() { return 0; }
 
     let mut buf = [0u8; 32];
     buf[0] = 0xAA;
@@ -1693,7 +1666,7 @@ pub unsafe fn clif_npc_move_inner(bl: *const BlockList, nd: *const NpcData) -> i
     buf[13] = (*nd).side as u8;
     // buf[14] = 0x00 (already zeroed)
     // SAFETY: clif_send only reads bl for area broadcast
-    clif_send(buf.as_ptr(), 32, (*nd).bl_ptr() as *mut BlockList, AREA_WOS);
+    clif_send(buf.as_ptr(), 32, (*nd).id, (*nd).m, (*nd).x, (*nd).y, BL_NPC as u8, AREA_WOS);
     0
 }
 
@@ -1702,9 +1675,8 @@ pub unsafe fn clif_npc_move_inner(bl: *const BlockList, nd: *const NpcData) -> i
 
 ///
 /// Send a mob-position packet to a player.
-/// `bl` is the viewing player, `mob` is the mob to render.
-pub unsafe fn clif_mob_move_inner(bl: *const BlockList, mob: *const MobSpawnData) -> i32 {
-    let sd = bl as *const MapSessionData;
+/// `sd` is the viewing player, `mob` is the mob to render.
+pub unsafe fn clif_mob_move_inner(sd: *const MapSessionData, mob: *const MobSpawnData) -> i32 {
     if sd.is_null() || mob.is_null() { return 0; }
     if (*mob).state == MOB_DEAD { return 0; }
     if !session_exists((*sd).fd) {

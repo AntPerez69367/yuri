@@ -292,8 +292,8 @@ pub unsafe fn clif_startexchange(
         if !ph2.is_null() { ph2.write_unaligned(((len + 3) as u16).to_be()); }
         wfifoset((*tsd).fd, encrypt((*tsd).fd) as usize);
 
-        (*sd).player.appearance.setting_flags ^= FLAG_EXCHANGE as u16;
-        (*tsd).player.appearance.setting_flags ^= FLAG_EXCHANGE as u16;
+        (*sd).player.appearance.setting_flags ^= FLAG_EXCHANGE;
+        (*tsd).player.appearance.setting_flags ^= FLAG_EXCHANGE;
 
         (*sd).exchange.item_count  = 0;
         (*tsd).exchange.item_count = 0;
@@ -732,22 +732,23 @@ pub unsafe fn clif_handgold(sd: *mut MapSessionData) -> i32 {
     // Compute adjacent cell based on facing direction
     let (x, y) = side_cell(&*sd);
 
-    let bl = block_grid::first_in_cell((*sd).m as usize, x as u16, y as u16, BL_ALL)
-        .and_then(|id| { let p = crate::game::map_server::map_id2bl_ref(id); if p.is_null() { None } else { Some(p) } });
+    let target_id = block_grid::first_in_cell((*sd).m as usize, x as u16, y as u16, BL_ALL);
 
     (*sd).exchange.gold = gold;
 
-    if let Some(bl) = bl {
-        if (*bl).bl_type as i32 == BL_PC {
-            if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc((*bl).id) {
-                let mut tsd_guard = tsd_arc.write();
-                let tsd = &mut *tsd_guard as *mut MapSessionData;
-                if (*tsd).player.appearance.setting_flags as u32 & FLAG_EXCHANGE != 0 {
-                    clif_startexchange(sd, (*bl).id);
-                    clif_exchange_money(sd, tsd);
-                } else {
-                    let msg = b"They have refused to exchange with you\0".as_ptr() as *const i8;
-                    clif_sendminitext(sd, msg);
+    if let Some(target_id) = target_id {
+        if let Some((_, bl_type)) = crate::game::map_server::entity_position(target_id) {
+            if bl_type as i32 == BL_PC {
+                if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(target_id) {
+                    let mut tsd_guard = tsd_arc.write();
+                    let tsd = &mut *tsd_guard as *mut MapSessionData;
+                    if (*tsd).player.appearance.setting_flags as u32 & FLAG_EXCHANGE != 0 {
+                        clif_startexchange(sd, target_id);
+                        clif_exchange_money(sd, tsd);
+                    } else {
+                        let msg = b"They have refused to exchange with you\0".as_ptr() as *const i8;
+                        clif_sendminitext(sd, msg);
+                    }
                 }
             }
         }
@@ -773,18 +774,21 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
 
     (*sd).invslot = slot as u8;
 
-    let bl = match block_grid::first_in_cell((*sd).m as usize, x as u16, y as u16, BL_ALL)
-        .and_then(|id| { let p = crate::game::map_server::map_id2bl_ref(id); if p.is_null() { None } else { Some(p) } }) {
-        Some(p) => p,
+    let target_id = match block_grid::first_in_cell((*sd).m as usize, x as u16, y as u16, BL_ALL) {
+        Some(id) => id,
+        None => return 0,
+    };
+    let bl_type = match crate::game::map_server::entity_position(target_id) {
+        Some((_, t)) => t as i32,
         None => return 0,
     };
 
-    if (*bl).bl_type as i32 == BL_PC {
-        if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc((*bl).id) {
+    if bl_type == BL_PC {
+        if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(target_id) {
             let mut tsd_guard = tsd_arc.write();
             let tsd = &mut *tsd_guard as *mut MapSessionData;
             if (*tsd).player.appearance.setting_flags as u32 & FLAG_EXCHANGE != 0 {
-                clif_startexchange(sd, (*bl).id);
+                clif_startexchange(sd, target_id);
                 clif_exchange_additem(sd, tsd, slot as i32, amount);
             } else {
                 let msg = b"They have refused to exchange with you\0".as_ptr() as *const i8;
@@ -793,8 +797,8 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
         }
     }
 
-    if (*bl).bl_type as i32 == BL_MOB {
-        let mob_arc = match crate::game::map_server::map_id2mob_ref((*bl).id) {
+    if bl_type == BL_MOB {
+        let mob_arc = match crate::game::map_server::map_id2mob_ref(target_id) {
             Some(a) => a, None => return 0,
         };
         let mut mob_guard = mob_arc.write();
@@ -832,8 +836,8 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
         pc_delitem(sd, slot as i32, amount, 9);
     }
 
-    if (*bl).bl_type as i32 == BL_NPC {
-        let nd_arc = match crate::game::map_server::map_id2npc_ref((*bl).id) {
+    if bl_type == BL_NPC {
+        let nd_arc = match crate::game::map_server::map_id2npc_ref(target_id) {
             Some(a) => a, None => return 0,
         };
         let mut nd_guard = nd_arc.write();
@@ -865,7 +869,7 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
             wfifob((*sd).fd, 5, 0);
             {
                 let p = wfifop((*sd).fd, 6) as *mut u32;
-                if !p.is_null() { p.write_unaligned((*bl).id.to_be()); }
+                if !p.is_null() { p.write_unaligned(target_id.to_be()); }
             }
             wfifob((*sd).fd, 10, msg_len as u8);
             let dst = wfifop((*sd).fd, 11) as *mut u8;

@@ -2,14 +2,14 @@ use mlua::{MetaMethod, UserData, UserDataMethods};
 use std::ffi::CString;
 
 
-use crate::database::map_db::{BlockList, MapData};
+use crate::database::map_db::MapData;
 use crate::database::map_db::get_map_ptr;
 use crate::game::mob::{
     mob_calcstat, mob_warp, move_mob, move_mob_ignore_object, move_mob_intent, moveghost_mob,
     MobSpawnData, MAX_MAGIC_TIMERS, MAX_THREATCOUNT,
 };
 use crate::game::scripting::map_globals::{
-    sl_g_sendside, sl_g_delete_bl, sl_g_talk, sl_g_deliddb, sl_g_addpermanentspawn, sl_g_getusers,
+    sl_g_sendside, sl_g_delete_bl, sl_g_talk, sl_g_deliddb, sl_g_addpermanentspawn, sl_g_getusers_ids,
 };
 use crate::game::mob::mobspawn_onetime;
 use crate::game::scripting::types::item::fixed_str;
@@ -28,10 +28,6 @@ use crate::game::mob::{
 };
 use crate::game::map_parse::combat::clif_send_mob_healthscript;
 use crate::database::magic_db;
-fn map_id2bl_mob(id: u32) -> *mut BlockList {
-    crate::game::map_server::map_id2bl_ref(id)
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -76,7 +72,6 @@ impl UserData for MobObject {
                 None => return Ok(mlua::Value::Nil),
             };
             let mob = unsafe { &mut *arc.data_ptr() };
-            let bl = mob.as_bl();
             let mob_id = this.id;
 
             macro_rules! int {
@@ -211,11 +206,10 @@ impl UserData for MobObject {
                                 None => return Ok(0i32),
                             };
                             let mob = unsafe { &mut *arc.data_ptr() };
-                            let bl = map_id2bl_mob(target_id);
-                            if bl.is_null() {
+                            let Some((pos, _)) = crate::game::map_server::entity_position(target_id) else {
                                 return Ok(0i32);
-                            }
-                            Ok(unsafe { move_mob_intent(mob as *mut MobSpawnData, bl) })
+                            };
+                            Ok(unsafe { move_mob_intent(mob as *mut MobSpawnData, pos.x as i32, pos.y as i32) })
                         },
                     )?))
                 }
@@ -534,10 +528,7 @@ impl UserData for MobObject {
                 "sendSide" => {
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if let Some(arc) = crate::game::map_server::map_id2mob_ref(mob_id) {
-                                let mob = unsafe { &mut *arc.data_ptr() };
-                                unsafe { sl_g_sendside(mob as *mut _ as *mut std::ffi::c_void); }
-                            }
+                            sl_g_sendside(mob_id);
                             Ok(())
                         }
                     )?));
@@ -547,10 +538,7 @@ impl UserData for MobObject {
                     let capture_id = mob_id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if let Some(arc) = crate::game::map_server::map_id2mob_ref(capture_id) {
-                                let mob = unsafe { &mut *arc.data_ptr() };
-                                unsafe { sl_g_delete_bl(mob as *mut _ as *mut std::ffi::c_void); }
-                            }
+                            sl_g_delete_bl(capture_id);
                             Ok(())
                         }
                     )?));
@@ -573,7 +561,7 @@ impl UserData for MobObject {
                                 _ => String::new(),
                             };
                             if let Ok(cs) = CString::new(msg.as_bytes()) {
-                                unsafe { sl_g_talk(mob as *mut _ as *mut std::ffi::c_void, talk_type, cs.as_ptr()); }
+                                unsafe { sl_g_talk(mob_id, talk_type, cs.as_ptr()); }
                             }
                             Ok(())
                         }
@@ -592,7 +580,7 @@ impl UserData for MobObject {
 
             // ── block_list / map fields ──────────────────────────────────────
             // Shared map properties (pvp, mapTitle, bgm, etc.) — delegate to shared module.
-            if let Some(v) = unsafe { shared::map_field(lua, bl.m as i32, key.as_str()) } {
+            if let Some(v) = unsafe { shared::map_field(lua, mob.m as i32, key.as_str()) } {
                 return v;
             }
             // Shared GfxViewer properties (gfxFace, gfxWeap, etc.) — delegate to shared module.
@@ -601,11 +589,11 @@ impl UserData for MobObject {
             }
 
             match key.as_str() {
-                "x" => int!(bl.x),
-                "y" => int!(bl.y),
-                "m" => int!(bl.m),
-                "blType" => int!(bl.bl_type),
-                "ID" => int!(bl.id),
+                "x" => int!(mob.x),
+                "y" => int!(mob.y),
+                "m" => int!(mob.m),
+                "blType" => int!(mob.bl_type),
+                "ID" => int!(mob.id),
                 "xmax" => {
                     let mp = unsafe { mob_map(mob as *const MobSpawnData) };
                     if mp.is_null() { return Ok(mlua::Value::Nil); }
@@ -709,29 +697,26 @@ impl UserData for MobObject {
                     return shared::make_cell_query_fn(lua, key.as_str()),
                 "getObjectsInArea" | "getAliveObjectsInArea"
                 | "getObjectsInSameMap" | "getAliveObjectsInSameMap" =>
-                    return shared::make_area_query_fn(lua, key.as_str(), mob as *const _ as *mut std::ffi::c_void),
+                    return shared::make_area_query_fn(lua, key.as_str(), mob_id),
                 "getObjectsInMap" =>
                     return shared::make_map_query_fn(lua),
-                "sendAnimation"     => return shared::make_sendanimation_fn(lua, mob as *const _ as *mut std::ffi::c_void),
-                "playSound"         => return shared::make_playsound_fn(lua, mob as *const _ as *mut std::ffi::c_void),
-                "sendAction"        => return shared::make_sendaction_fn(lua, mob as *const _ as *mut std::ffi::c_void),
-                "msg"               => return shared::make_msg_fn(lua, mob as *const _ as *mut std::ffi::c_void),
-                "dropItem"          => return shared::make_dropitem_fn(lua, mob as *const _ as *mut std::ffi::c_void),
-                "dropItemXY"        => return shared::make_dropitemxy_fn(lua, mob as *const _ as *mut std::ffi::c_void),
-                "objectCanMove"     => return shared::make_objectcanmove_fn(lua, mob as *const _ as *mut std::ffi::c_void),
-                "objectCanMoveFrom" => return shared::make_objectcanmovefrom_fn(lua, mob as *const _ as *mut std::ffi::c_void),
-                "repeatAnimation"   => return shared::make_repeatanimation_fn(lua, mob as *const _ as *mut std::ffi::c_void),
-                "selfAnimation"     => return shared::make_selfanimation_fn(lua, mob as *const _ as *mut std::ffi::c_void),
-                "selfAnimationXY"   => return shared::make_selfanimationxy_fn(lua, mob as *const _ as *mut std::ffi::c_void),
-                "sendParcel"        => return shared::make_sendparcel_fn(lua, mob as *const _ as *mut std::ffi::c_void),
-                "throw"             => return shared::make_throwblock_fn(lua, mob as *const _ as *mut std::ffi::c_void),
+                "sendAnimation"     => return shared::make_sendanimation_fn(lua, mob_id),
+                "playSound"         => return shared::make_playsound_fn(lua, mob_id),
+                "sendAction"        => return shared::make_sendaction_fn(lua, mob_id),
+                "msg"               => return shared::make_msg_fn(lua, mob_id),
+                "dropItem"          => return shared::make_dropitem_fn(lua, mob_id),
+                "dropItemXY"        => return shared::make_dropitemxy_fn(lua, mob_id),
+                "objectCanMove"     => return shared::make_objectcanmove_fn(lua, mob_id),
+                "objectCanMoveFrom" => return shared::make_objectcanmovefrom_fn(lua, mob_id),
+                "repeatAnimation"   => return shared::make_repeatanimation_fn(lua, mob_id),
+                "selfAnimation"     => return shared::make_selfanimation_fn(lua, mob_id),
+                "selfAnimationXY"   => return shared::make_selfanimationxy_fn(lua, mob_id),
+                "sendParcel"        => return shared::make_sendparcel_fn(lua, mob_id),
+                "throw"             => return shared::make_throwblock_fn(lua, mob_id),
                 "delFromIDDB" => {
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if let Some(arc) = crate::game::map_server::map_id2mob_ref(mob_id) {
-                                let mob = unsafe { &mut *arc.data_ptr() };
-                                unsafe { sl_g_deliddb(mob as *mut _ as *mut std::ffi::c_void); }
-                            }
+                            sl_g_deliddb(mob_id);
                             Ok(())
                         }
                     )?));
@@ -739,10 +724,7 @@ impl UserData for MobObject {
                 "addPermanentSpawn" => {
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            if let Some(arc) = crate::game::map_server::map_id2mob_ref(mob_id) {
-                                let mob = unsafe { &mut *arc.data_ptr() };
-                                unsafe { sl_g_addpermanentspawn(mob as *mut _ as *mut std::ffi::c_void); }
-                            }
+                            sl_g_addpermanentspawn(mob_id);
                             Ok(())
                         }
                     )?));
@@ -797,16 +779,10 @@ impl UserData for MobObject {
                     return Ok(mlua::Value::Function(lua.create_function(
                         |lua, _: mlua::MultiValue| {
                             const MAX: usize = 4096;
-                            let mut ptrs: Vec<*mut std::ffi::c_void> = vec![std::ptr::null_mut(); MAX];
-                            let count = unsafe { sl_g_getusers(ptrs.as_mut_ptr(), MAX as i32) } as usize;
-                            if count >= MAX {
-                                tracing::warn!("[scripting] getUsers: result capped at {MAX}; some players may be missing");
-                            }
+                            let ids = sl_g_getusers_ids();
                             let tbl = lua.create_table()?;
-                            for (i, &bl) in ptrs[..count].iter().enumerate() {
-                                let val = unsafe {
-                                    crate::game::scripting::bl_to_lua(lua, bl).unwrap_or(mlua::Value::Nil)
-                                };
+                            for (i, &id) in ids.iter().enumerate() {
+                                let val = crate::game::scripting::id_to_lua(lua, id)?;
                                 tbl.raw_set(i + 1, val)?;
                             }
                             Ok(tbl)

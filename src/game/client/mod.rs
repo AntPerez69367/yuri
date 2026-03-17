@@ -28,7 +28,6 @@ use crate::session::{
     session_set_eof, SessionId,
 };
 use crate::session::get_session_manager;
-use crate::database::map_db::BlockList;
 use crate::game::pc::MapSessionData;
 
 // ─── Session buffer helpers ───────────────────────────────────────────────────
@@ -92,7 +91,7 @@ use crate::game::time_util::timer_insert;
 
 // Dispatcher wrappers — match dispatcher's *mut std::ffi::c_void calling convention.
 type SD = *mut crate::game::pc::MapSessionData;
-#[inline] unsafe fn clif_isignore(src: SD, dst: SD) -> i32 {
+#[inline] unsafe fn clif_isignore(src: *const crate::game::pc::MapSessionData, dst: SD) -> i32 {
     crate::game::map_parse::chat::clif_isignore(src, dst)
 }
 #[allow(dead_code)]
@@ -178,27 +177,29 @@ const BL_PC: u8 = 0x01;
 
 // ─── clif_send / clif_sendtogm ────────────────────────────────────────────────
 
-/// Send `buf[0..len]` to clients matching `type`, applying ignore-list filtering.
-///
-/// Send a packet to a specific client fd.
+/// Send `buf[0..len]` to clients matching `send_type`, applying ignore-list filtering.
 ///
 /// # Safety
 ///
 /// - `buf` must point to at least `len` readable bytes.
-/// - `bl` must be a valid pointer to an initialized `BlockList`. When
-///   `bl.bl_type == BL_PC`, it may be cast to `*mut MapSessionData`. When
-///   `send_type == SELF`, `bl` must point to a `MapSessionData` (`bl_type == BL_PC`).
+/// - When `send_type == SELF`, `src_id` must identify a valid player entity.
 pub unsafe fn clif_send(
     buf: *const u8,
     len: i32,
-    bl: *mut BlockList,
+    src_id: u32,
+    m: u16,
+    x: u16,
+    y: u16,
+    bl_type: u8,
     send_type: i32,
 ) -> i32 {
-    // Compute once: non-null only when `bl` is a player (BL_PC), used for ignore-list checks.
-    let tsd: *mut MapSessionData = if (*bl).bl_type == BL_PC {
-        bl as *mut MapSessionData
-    } else {
-        std::ptr::null_mut()
+    // Compute once: source player pointer, non-null only when src is BL_PC.
+    // Hold arc + guard alive for the duration of the function. Read-only access.
+    let _arc = if bl_type == BL_PC { crate::game::map_server::map_id2sd_pc(src_id) } else { None };
+    let _guard = _arc.as_ref().map(|a| a.read());
+    let tsd: *const MapSessionData = match _guard.as_deref() {
+        Some(sd) => sd as *const MapSessionData,
+        None => std::ptr::null(),
     };
 
     match send_type {
@@ -225,7 +226,7 @@ pub unsafe fn clif_send(
                 if sd.is_null() {
                     continue;
                 }
-                if (*sd).m != (*bl).m {
+                if (*sd).m != m {
                     continue;
                 }
                 if !tsd.is_null()
@@ -244,11 +245,11 @@ pub unsafe fn clif_send(
                 if sd.is_null() {
                     continue;
                 }
-                if (*sd).m != (*bl).m {
+                if (*sd).m != m {
                     continue;
                 }
-                // Skip sending to `bl` itself when it is a player.
-                if !tsd.is_null() && sd == tsd {
+                // Skip sending to source itself when it is a player.
+                if !tsd.is_null() && (*sd).id == src_id {
                     continue;
                 }
                 if !tsd.is_null()
@@ -263,63 +264,68 @@ pub unsafe fn clif_send(
         }
         AREA | AREA_WOS => {
             clif_send_area(
-                (*bl).m as i32,
-                (*bl).x as i32,
-                (*bl).y as i32,
+                m as i32,
+                x as i32,
+                y as i32,
                 AREA,
                 send_type,
                 buf,
                 len,
-                bl,
+                src_id,
+                bl_type,
             );
         }
         SAMEAREA | SAMEAREA_WOS => {
             clif_send_area(
-                (*bl).m as i32,
-                (*bl).x as i32,
-                (*bl).y as i32,
+                m as i32,
+                x as i32,
+                y as i32,
                 SAMEAREA,
                 send_type,
                 buf,
                 len,
-                bl,
+                src_id,
+                bl_type,
             );
         }
         CORNER => {
             clif_send_area(
-                (*bl).m as i32,
-                (*bl).x as i32,
-                (*bl).y as i32,
+                m as i32,
+                x as i32,
+                y as i32,
                 CORNER,
                 send_type,
                 buf,
                 len,
-                bl,
+                src_id,
+                bl_type,
             );
         }
         SELF => {
-            let sd = bl as *mut MapSessionData;
-            send_to_fd((*sd).fd, buf, len);
+            if let Some(arc) = crate::game::map_server::map_id2sd_pc(src_id) {
+                let sd = &*arc.read();
+                send_to_fd(sd.fd, buf, len);
+            }
         }
         _ => {}
     }
     0
 }
 
-/// Send `buf[0..len]` to clients matching `type`, without ignore-list filtering.
-///
-/// Send a packet to all GM players on the map.
+/// Send `buf[0..len]` to clients matching `send_type`, without ignore-list filtering.
 ///
 /// # Safety
 ///
 /// - `buf` must point to at least `len` readable bytes.
-/// - `bl` must be a valid pointer to an initialized `BlockList`. When
-///   `bl.bl_type == BL_PC`, it may be cast to `*mut MapSessionData`. When
-///   `send_type == SELF`, `bl` must point to a `MapSessionData` (`bl_type == BL_PC`).
+/// - When `send_type == SELF`, `src_id` must identify a valid player entity.
 pub unsafe fn clif_sendtogm(
     buf: *const u8,
     len: i32,
-    bl: *mut BlockList,
+    src_id: u32,
+    m: u16,
+    x: u16,
+    y: u16,
+    bl_type: u8,
     send_type: i32,
 ) -> i32 {
     match send_type {
@@ -338,27 +344,23 @@ pub unsafe fn clif_sendtogm(
                 if sd.is_null() {
                     continue;
                 }
-                if (*sd).m != (*bl).m {
+                if (*sd).m != m {
                     continue;
                 }
                 send_to_fd(i_fd, buf, len);
             }
         }
         SAMEMAP_WOS => {
-            let src_sd = if (*bl).bl_type == BL_PC {
-                bl as *mut MapSessionData
-            } else {
-                std::ptr::null_mut()
-            };
             for i_fd in get_session_manager().get_all_fds() {
                 let sd = session_get_data(i_fd);
                 if sd.is_null() {
                     continue;
                 }
-                if (*sd).m != (*bl).m {
+                if (*sd).m != m {
                     continue;
                 }
-                if !src_sd.is_null() && sd == src_sd {
+                // Skip sending to source itself when it is a player.
+                if bl_type == BL_PC && (*sd).id == src_id {
                     continue;
                 }
                 send_to_fd(i_fd, buf, len);
@@ -366,43 +368,48 @@ pub unsafe fn clif_sendtogm(
         }
         AREA | AREA_WOS => {
             clif_send_area(
-                (*bl).m as i32,
-                (*bl).x as i32,
-                (*bl).y as i32,
+                m as i32,
+                x as i32,
+                y as i32,
                 AREA,
                 send_type,
                 buf,
                 len,
-                bl,
+                src_id,
+                bl_type,
             );
         }
         SAMEAREA | SAMEAREA_WOS => {
             clif_send_area(
-                (*bl).m as i32,
-                (*bl).x as i32,
-                (*bl).y as i32,
+                m as i32,
+                x as i32,
+                y as i32,
                 SAMEAREA,
                 send_type,
                 buf,
                 len,
-                bl,
+                src_id,
+                bl_type,
             );
         }
         CORNER => {
             clif_send_area(
-                (*bl).m as i32,
-                (*bl).x as i32,
-                (*bl).y as i32,
+                m as i32,
+                x as i32,
+                y as i32,
                 CORNER,
                 send_type,
                 buf,
                 len,
-                bl,
+                src_id,
+                bl_type,
             );
         }
         SELF => {
-            let sd = bl as *mut MapSessionData;
-            send_to_fd((*sd).fd, buf, len);
+            if let Some(arc) = crate::game::map_server::map_id2sd_pc(src_id) {
+                let sd = &*arc.read();
+                send_to_fd(sd.fd, buf, len);
+            }
         }
         _ => {}
     }
@@ -453,13 +460,12 @@ const CHANNEL_REGS: &[(&str, u8)] = &[
 ///
 /// # Safety
 /// - `sd` must be a valid, initialized `MapSessionData`.
-/// - `src_bl` must be a valid `BlockList` pointer. It may be a `MapSessionData`
-///   when `bl_type == BL_PC`.
 /// - `buf` must point to at least `len` readable bytes.
 #[inline]
 unsafe fn should_send_to(
     sd: *mut MapSessionData,
-    src_bl: *mut BlockList,
+    src_id: u32,
+    bl_type: u8,
     send_type: i32,
     buf: *const u8,
     len: i32,
@@ -468,15 +474,17 @@ unsafe fn should_send_to(
     use crate::database::map_db::raw_map_ptr;
     use crate::database::map_db::MAP_SLOTS;
 
-    if sd.is_null() || src_bl.is_null() {
+    if sd.is_null() {
         return false;
     }
 
-    // Derive tsd: source player (non-null only when src_bl is BL_PC).
-    let tsd: *mut MapSessionData = if (*src_bl).bl_type == BL_PC {
-        src_bl as *mut MapSessionData
-    } else {
-        std::ptr::null_mut()
+    // Derive tsd: source player (non-null only when src is BL_PC).
+    // Hold arc + guard alive for the duration of the function. Read-only access.
+    let _arc = if bl_type == BL_PC { crate::game::map_server::map_id2sd_pc(src_id) } else { None };
+    let _guard = _arc.as_ref().map(|a| a.read());
+    let tsd: *const MapSessionData = match _guard.as_deref() {
+        Some(sd_ref) => sd_ref as *const MapSessionData,
+        None => std::ptr::null(),
     };
 
     // ── Stealth filter ────────────────────────────────────────────────────────
@@ -516,7 +524,7 @@ unsafe fn should_send_to(
     // ── WOS (without self) filter ─────────────────────────────────────────────
     match send_type {
         AREA_WOS | SAMEAREA_WOS => {
-            if src_bl == (*sd).bl_ptr_mut() {
+            if (*sd).id == src_id {
                 return false;
             }
         }
@@ -541,7 +549,6 @@ unsafe fn should_send_to(
 /// # Safety
 /// - `buf` must be a valid, writable pointer to at least `len` bytes.
 ///   The function temporarily mutates `buf[5]` for channel packets and restores it.
-/// - `src_bl` must be a valid `BlockList` pointer.
 /// - The `map` global and block grid must be initialized.
 unsafe fn send_to_area(
     m: i32,
@@ -550,12 +557,13 @@ unsafe fn send_to_area(
     area: crate::game::block::AreaType,
     buf: *mut u8,
     len: i32,
-    src_bl: *mut BlockList,
+    src_id: u32,
+    bl_type: u8,
     send_type: i32,
 ) {
     use crate::game::block_grid;
 
-    if buf.is_null() || src_bl.is_null() || len <= 0 {
+    if buf.is_null() || len <= 0 {
         return;
     }
 
@@ -570,15 +578,14 @@ unsafe fn send_to_area(
     for id in ids {
         let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) else { continue; };
         let sd = &mut *sd_arc.write() as *mut MapSessionData;
-        let bl = (*sd).bl_ptr_mut();
-        if !should_send_to(sd, src_bl, send_type, buf as *const u8, len) {
+        if !should_send_to(sd, src_id, bl_type, send_type, buf as *const u8, len) {
             continue;
         }
 
         let fd = (*sd).fd;
         if len >= 4 && *buf.add(3) == 0x1A {
             _send_count += 1;
-            tracing::debug!("[attack] send_to_area: sending 0x1A action to fd={} (player bl.id={})", fd, (*bl).id);
+            tracing::debug!("[attack] send_to_area: sending 0x1A action to fd={} (player id={})", fd, (*sd).id);
         }
 
         if is_channel_pkt {
@@ -638,7 +645,6 @@ unsafe fn send_to_area(
 ///
 /// # Safety
 /// - `buf` must be a valid, writable pointer to at least `len` bytes.
-/// - `src_bl` must be a valid `BlockList` pointer.
 pub unsafe fn clif_send_area(
     m: i32,
     x: i32,
@@ -647,7 +653,8 @@ pub unsafe fn clif_send_area(
     send_type: i32,
     buf: *const u8,
     len: i32,
-    src_bl: *mut BlockList,
+    src_id: u32,
+    bl_type: u8,
 ) {
     use crate::game::block::AreaType;
 
@@ -660,7 +667,7 @@ pub unsafe fn clif_send_area(
 
     // Cast away const: send_to_area temporarily mutates buf[5] for channel packets
     // and restores it before returning. The caller's buffer is logically unchanged.
-    send_to_area(m, x, y, area, buf as *mut u8, len, src_bl, send_type);
+    send_to_area(m, x, y, area, buf as *mut u8, len, src_id, bl_type, send_type);
 }
 
 // ─── Dual-login check ─────────────────────────────────────────────────────────

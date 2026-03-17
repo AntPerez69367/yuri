@@ -4,11 +4,10 @@
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
 
-use crate::database::map_db::BlockList;
 use crate::game::scripting::carray_to_str;
 use crate::database::mob_db::MobDbData;
 use crate::database::map_db::raw_map_ptr;
-use crate::session::{session_exists, session_set_eof};
+use crate::session::{SessionId, session_exists, session_set_eof};
 use crate::game::mob::{MobSpawnData, MOB_DEAD, MAX_MAGIC_TIMERS, MAX_THREATCOUNT};
 use crate::game::pc::{
     MapSessionData,
@@ -34,7 +33,7 @@ const LOOK_GET: i32 = 0;
 
 use crate::game::map_parse::player_state::clif_sendstatus;
 use crate::game::map_parse::groups::{clif_grouphealth_update, clif_isingroup};
-use crate::game::map_parse::chat::{clif_sendmsg, clif_sendminitext, clif_playsound};
+use crate::game::map_parse::chat::{clif_sendmsg, clif_sendminitext, clif_playsound_entity};
 use crate::game::map_parse::items::clif_unequipit;
 use crate::game::client::visual::{clif_getequiptype, broadcast_update_state};
 use crate::game::map_server::groups;
@@ -45,18 +44,12 @@ use crate::database::magic_db;
 use crate::game::mob::mob_flushmagic;
 use crate::game::scripting::sl_async_freeco;
 
-// map_id2bl returns raw *mut BlockList for legacy unsafe code paths.
-#[inline]
-fn map_id2bl(id: u32) -> *mut BlockList {
-    crate::game::map_server::map_id2bl_ref(id)
-}
-
 use std::sync::Arc;
 use parking_lot::RwLock;
 
 /// Arc-based player lookup.
 #[inline]
-fn map_id2sd_arc(id: u32) -> Option<Arc<RwLock<MapSessionData>>> {
+fn map_id2sd_arc(id: u32) -> Option<Arc<crate::game::pc::PlayerEntity>> {
     crate::game::map_server::map_id2sd_pc(id)
 }
 
@@ -128,8 +121,8 @@ pub fn clif_pc_damage(sd: &mut MapSessionData, src: &mut MapSessionData) -> i32 
 
         if sd.player.inventory.equip[EQ_WEAP as usize].id > 0 {
             unsafe {
-                clif_playsound(
-                    src.bl_ptr_mut(),
+                clif_playsound_entity(
+                    src.id, src.m, src.x, src.y, BL_PC as u8,
                     item_db::search(sd.player.inventory.equip[EQ_WEAP as usize].id).sound_hit as i32,
                 );
             }
@@ -180,16 +173,13 @@ pub fn clif_pc_damage(sd: &mut MapSessionData, src: &mut MapSessionData) -> i32 
 ///
 pub fn clif_send_pc_health(src: &mut MapSessionData, damage: i32, critical: i32) -> i32 {
     let _ = (damage, critical);
-    let attacker_bl_id = {
-        let bl = map_id2bl(src.attacker);
-        if bl.is_null() {
-            src.id
-        } else {
-            unsafe { (*bl).id }
-        }
+    let attacker_id = if crate::game::map_server::entity_position(src.attacker).is_some() {
+        src.attacker
+    } else {
+        src.id
     };
 
-    sl_doscript_2("player_combat", Some("on_attacked"), src.id, attacker_bl_id);
+    sl_doscript_2("player_combat", Some("on_attacked"), src.id, attacker_id);
     0
 }
 
@@ -206,23 +196,19 @@ pub fn clif_send_pc_healthscript(
     let maxvita = sd.max_hp;
     let mut currentvita = sd.player.combat.hp;
 
-    let bl = map_id2bl(sd.attacker);
     let mut tsd: *mut MapSessionData = std::ptr::null_mut();
+    let attacker_id = sd.attacker;
 
-    if !bl.is_null() {
-        unsafe {
-            if (*bl).bl_type == BL_PC as u8 {
-                tsd = bl as *mut MapSessionData;
-            } else if (*bl).bl_type == BL_MOB as u8 {
-                let tmob = bl as *mut MobSpawnData;
-                if (*tmob).owner < crate::game::mob::MOB_START_NUM && (*tmob).owner > 0 {
-                    tsd = map_id2sd_local((*tmob).owner);
-                }
-            }
+    if let Some(arc) = crate::game::map_server::map_id2sd_pc(attacker_id) {
+        tsd = unsafe { &mut *arc.data_ptr() };
+    } else if let Some(arc) = crate::game::map_server::map_id2mob_ref(attacker_id) {
+        let mob = unsafe { &*arc.data_ptr() };
+        if mob.owner < crate::game::mob::MOB_START_NUM && mob.owner > 0 {
+            tsd = map_id2sd_local(mob.owner);
         }
     }
 
-    let bl_id = if !bl.is_null() { unsafe { (*bl).id } } else { 0 };
+    let bl_id = if crate::game::map_server::entity_position(attacker_id).is_some() { attacker_id } else { 0 };
 
     if damage > 0 {
         for x in 0..MAX_SPELLS {
@@ -284,9 +270,9 @@ pub fn clif_send_pc_healthscript(
     buf[14] = dmg as u8;
 
     if sd.player.combat.state == 2 {
-        unsafe { clif_send(buf.as_ptr(), 32, sd.bl_ptr_mut(), SELF); }
+        unsafe { clif_send(buf.as_ptr(), 32, sd.id, sd.m, sd.x, sd.y, BL_PC as u8, SELF); }
     } else {
-        unsafe { clif_send(buf.as_ptr(), 32, sd.bl_ptr_mut(), AREA); }
+        unsafe { clif_send(buf.as_ptr(), 32, sd.id, sd.m, sd.x, sd.y, BL_PC as u8, AREA); }
     }
 
     if sd.player.combat.hp != 0 && damage > 0 {
@@ -396,43 +382,35 @@ pub fn clif_send_groupbars(sd: &mut MapSessionData, tsd: &mut MapSessionData) {
 /// Send a mob's health bar to a player.
 /// `bl` is the mob, `sd` is the receiving player.
 ///
-/// # Safety of the internal cast
-///
-/// SAFETY: These functions are called as foreach_in_area callbacks which dispatch
-/// *mut BlockList. The BlockList is embedded as the first field of MobSpawnData /
-/// MapSessionData, so casting bl to the entity type is valid. The &mut BlockList
-/// parameter is used at the boundary; the internal cast is confined to this unsafe block.
-pub fn clif_send_mobbars_inner(bl: &BlockList, sd: &MapSessionData) -> i32 {
-    let mob = bl as *const BlockList as *const MobSpawnData;
+/// Send mob health bar to a specific player.
+/// `mob` is the mob whose health bar is being sent, `sd` is the receiving player.
+pub fn clif_send_mobbars_inner(mob: &MobSpawnData, sd: &MapSessionData) -> i32 {
+    if mob.current_vita == 0 && mob.maxvita == 0 { return 1; }
 
-    unsafe {
-        if (*mob).current_vita == 0 && (*mob).maxvita == 0 { return 1; }
+    let mut percentage: f32 = if mob.current_vita == 0 {
+        0.0f32
+    } else {
+        (mob.current_vita as f32 / mob.maxvita as f32) * 100.0f32
+    };
 
-        let mut percentage: f32 = if (*mob).current_vita == 0 {
-            0.0f32
-        } else {
-            ((*mob).current_vita as f32 / (*mob).maxvita as f32) * 100.0f32
-        };
-
-        if (percentage as i32) == 0 && (*mob).current_vita != 0 {
-            percentage = 1.0f32;
-        }
-
-        if !session_exists(sd.fd) {
-            return 1;
-        }
-
-        let fd = sd.fd;
-        wfifohead(fd, 15);
-        wfifob(fd, 0, 0xAA);
-        wfifow(fd, 1, 12u16.swap_bytes());
-        wfifob(fd, 3, 0x13);
-        wfifol(fd, 5, (*mob).id.swap_bytes());
-        wfifob(fd, 9, 0);
-        wfifob(fd, 10, percentage as u8);
-        wfifol(fd, 11, 0u32.swap_bytes());
-        wfifoset(fd, encrypt(fd) as usize);
+    if (percentage as i32) == 0 && mob.current_vita != 0 {
+        percentage = 1.0f32;
     }
+
+    if !session_exists(sd.fd) {
+        return 1;
+    }
+
+    let fd = sd.fd;
+    wfifohead(fd, 15);
+    wfifob(fd, 0, 0xAA);
+    wfifow(fd, 1, 12u16.swap_bytes());
+    wfifob(fd, 3, 0x13);
+    wfifol(fd, 5, mob.id.swap_bytes());
+    wfifob(fd, 9, 0);
+    wfifob(fd, 10, percentage as u8);
+    wfifol(fd, 11, 0u32.swap_bytes());
+    wfifoset(fd, unsafe { encrypt(fd) } as usize);
 
     0
 }
@@ -454,20 +432,20 @@ pub fn clif_findspell_pos(sd: &mut MapSessionData, id: i32) -> i32 {
 
 /// Calculate whether an attack is a normal hit, critical hit, or miss.
 /// Returns 0 (miss), 1 (hit), or 2 (critical).
-///
-pub fn clif_calc_critical(sd: &mut MapSessionData, bl: &mut BlockList) -> i32 {
+/// `target_id` is the entity being attacked (PC or MOB).
+pub fn clif_calc_critical(sd: &mut MapSessionData, target_id: u32) -> i32 {
     let max_hit = 95;
     let mut equat: i32 = 0;
 
-    unsafe {
-        if bl.bl_type == BL_PC as u8 {
-            let tsd = bl as *mut BlockList as *mut MapSessionData;
-            equat = (55 + sd.grace / 2) - (*tsd).grace / 2
-                + (sd.hit as f32 * 1.5f32) as i32
-                + (sd.player.progression.level as i32 - (*tsd).player.progression.level as i32);
-        } else if bl.bl_type == BL_MOB as u8 {
-            let mob = bl as *mut BlockList as *mut MobSpawnData;
-            let data: *mut MobDbData = (*mob).data;
+    if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(target_id) {
+        let tsd = tsd_arc.read();
+        equat = (55 + sd.grace / 2) - tsd.grace / 2
+            + (sd.hit as f32 * 1.5f32) as i32
+            + (sd.player.progression.level as i32 - tsd.player.progression.level as i32);
+    } else if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(target_id) {
+        let mob = mob_arc.read();
+        let data: *mut MobDbData = mob.data;
+        unsafe {
             equat = (55 + sd.grace / 2) - (*data).grace / 2
                 + (sd.hit as f32 * 1.5f32) as i32
                 + (sd.player.progression.level as i32 - (*data).level);
@@ -622,8 +600,8 @@ pub fn clif_mob_damage(sd: &mut MapSessionData, mob: &mut MobSpawnData) -> i32 {
 
         if sd.player.inventory.equip[EQ_WEAP as usize].id > 0 {
             unsafe {
-                clif_playsound(
-                    mob.bl_ptr_mut(),
+                clif_playsound_entity(
+                    mob.id, mob.m, mob.x, mob.y, BL_MOB as u8,
                     item_db::search(sd.player.inventory.equip[EQ_WEAP as usize].id).sound_hit as i32,
                 );
             }
@@ -685,22 +663,19 @@ pub fn clif_mob_damage(sd: &mut MapSessionData, mob: &mut MobSpawnData) -> i32 {
 /// # Safety of the internal cast
 ///
 /// SAFETY: These functions are called as foreach_in_area callbacks which dispatch
-/// *mut BlockList. The BlockList is embedded as the first field of MobSpawnData /
-/// MapSessionData, so casting bl to the entity type is valid. The &mut BlockList
-/// parameter is used at the boundary; the internal cast is confined to this unsafe block.
+/// Send mob health/damage to a viewing player.
+/// `sd_viewer` is the receiving player, `sd` is the attacker, `mob` is the target mob.
 pub fn clif_send_mob_health_sub_inner(
-    bl: &mut BlockList,
+    sd_viewer: &mut MapSessionData,
     sd: &mut MapSessionData,
     mob: &mut MobSpawnData,
     critical: i32,
     percentage: i32,
     damage: i32,
 ) -> i32 {
-    let tsd = bl as *mut BlockList as *mut MapSessionData;
-
     unsafe {
-        if clif_isingroup(tsd, sd as *mut MapSessionData) == 0 {
-            if sd.id != bl.id {
+        if clif_isingroup(sd_viewer as *mut MapSessionData, sd as *mut MapSessionData) == 0 {
+            if sd.id != sd_viewer.id {
                 return 0;
             }
         }
@@ -710,12 +685,12 @@ pub fn clif_send_mob_health_sub_inner(
         }
 
         use crate::session::session_get_eof;
-        if !session_exists((*tsd).fd) || session_get_eof((*tsd).fd) != 0 {
-            session_set_eof((*tsd).fd, 8);
+        if !session_exists(sd_viewer.fd) || session_get_eof(sd_viewer.fd) != 0 {
+            session_set_eof(sd_viewer.fd, 8);
             return 0;
         }
 
-        let fd = (*tsd).fd;
+        let fd = sd_viewer.fd;
         wfifohead(fd, 15);
         wfifoheader(fd, 0x13, 12);
         wfifol(fd, 5, mob.id.swap_bytes());
@@ -729,39 +704,27 @@ pub fn clif_send_mob_health_sub_inner(
 
 // ─── clif_send_mob_health_sub_nosd ────────────────────────────────────────────
 
-///
 /// Send mob health bar to a player in the area (no-sd variant).
-/// `bl` is the receiving player.
-///
-/// # Safety of the internal cast
-///
-/// SAFETY: These functions are called as foreach_in_area callbacks which dispatch
-/// *mut BlockList. The BlockList is embedded as the first field of MobSpawnData /
-/// MapSessionData, so casting bl to the entity type is valid. The &mut BlockList
-/// parameter is used at the boundary; the internal cast is confined to this unsafe block.
+/// `sd_viewer` is the receiving player.
 pub fn clif_send_mob_health_sub_nosd_inner(
-    bl: &BlockList,
+    sd_viewer: &MapSessionData,
     mob: &MobSpawnData,
     critical: i32,
     percentage: i32,
     damage: i32,
 ) -> i32 {
-    let sd = bl as *const BlockList as *const MapSessionData;
-
-    unsafe {
-        if !session_exists((*sd).fd) {
-            return 0;
-        }
-
-        let fd = (*sd).fd;
-        wfifohead(fd, 15);
-        wfifoheader(fd, 0x13, 12);
-        wfifol(fd, 5, mob.id.swap_bytes());
-        wfifob(fd, 9, critical as u8);
-        wfifob(fd, 10, percentage as u8);
-        wfifol(fd, 11, (damage as u32).swap_bytes());
-        wfifoset(fd, encrypt(fd) as usize);
+    if !session_exists(sd_viewer.fd) {
+        return 0;
     }
+
+    let fd = sd_viewer.fd;
+    wfifohead(fd, 15);
+    wfifoheader(fd, 0x13, 12);
+    wfifol(fd, 5, mob.id.swap_bytes());
+    wfifob(fd, 9, critical as u8);
+    wfifob(fd, 10, percentage as u8);
+    wfifol(fd, 11, (damage as u32).swap_bytes());
+    wfifoset(fd, unsafe { encrypt(fd) } as usize);
     0
 }
 
@@ -773,13 +736,10 @@ pub fn clif_send_mob_health(mob: &mut MobSpawnData, damage: i32, critical: i32) 
     let _ = (damage, critical);
     if mob.bl_type != BL_MOB as u8 { return 0; }
 
-    let attacker_id = {
-        let bl = map_id2bl(mob.attacker);
-        if bl.is_null() {
-            mob.id
-        } else {
-            unsafe { (*bl).id }
-        }
+    let attacker_id = if crate::game::map_server::entity_position(mob.attacker).is_some() {
+        mob.attacker
+    } else {
+        mob.id
     };
 
     let data: *mut MobDbData = mob.data;
@@ -809,21 +769,15 @@ pub fn clif_send_mob_health(mob: &mut MobSpawnData, damage: i32, critical: i32) 
 pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, critical: i32) -> i32 {
     let _ = critical;
 
-    let bl: *mut BlockList = if mob.attacker > 0 {
-        map_id2bl(mob.attacker)
-    } else {
-        std::ptr::null_mut()
-    };
-
     let mut sd: *mut MapSessionData = std::ptr::null_mut();
     let mut tmob: *mut MobSpawnData = std::ptr::null_mut();
 
-    if !bl.is_null() {
-        unsafe {
-            if (*bl).bl_type == BL_PC as u8 {
-                sd = bl as *mut MapSessionData;
-            } else if (*bl).bl_type == BL_MOB as u8 {
-                tmob = bl as *mut MobSpawnData;
+    if mob.attacker > 0 {
+        if let Some(arc) = crate::game::map_server::map_id2sd_pc(mob.attacker) {
+            sd = unsafe { &mut *arc.data_ptr() };
+        } else if let Some(arc) = crate::game::map_server::map_id2mob_ref(mob.attacker) {
+            tmob = unsafe { &mut *arc.data_ptr() };
+            unsafe {
                 if (*tmob).owner < crate::game::mob::MOB_START_NUM && (*tmob).owner > 0 {
                     sd = map_id2sd_local((*tmob).owner);
                 }
@@ -864,7 +818,7 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
         if p < 1.0f32 && currentvita > 0 { 1.0f32 } else { p }
     };
 
-    let bl_id = if !bl.is_null() { unsafe { (*bl).id } } else { 0 };
+    let bl_id = mob.attacker;
 
     if currentvita > 0 && damage > 0 {
         for x in 0..MAX_MAGIC_TIMERS {
@@ -885,7 +839,7 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
                 for id in ids {
                     if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
                         let mut pc = pc_arc.write();
-                        clif_send_mob_health_sub_inner(pc.as_bl_mut(), &mut *sd, mob, critical, pct_int, damage);
+                        clif_send_mob_health_sub_inner(&mut *pc, &mut *sd, mob, critical, pct_int, damage);
                     }
                 }
             }
@@ -898,7 +852,7 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
                 for id in ids {
                     if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
                         let pc = pc_arc.read();
-                        clif_send_mob_health_sub_nosd_inner(pc.as_bl(), mob, critical, pct_int, damage);
+                        clif_send_mob_health_sub_nosd_inner(&*pc, mob, critical, pct_int, damage);
                     }
                 }
             }
@@ -1065,7 +1019,7 @@ pub async fn clif_mob_kill(mob: &mut MobSpawnData) -> i32 {
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
                     let pc = pc_arc.read();
-                    clif_send_destroy_inner(pc.as_bl(), mob_ptr);
+                    clif_send_destroy_inner(&*pc, mob_ptr);
                 }
             }
         }
@@ -1076,24 +1030,21 @@ pub async fn clif_mob_kill(mob: &mut MobSpawnData) -> i32 {
 
 // ─── clif_send_destroy_inner ──────────────────────────────────────────────────
 
-///
 /// Send despawn packet for a mob to one player.
-/// `bl` is the receiving player, `mob` is the mob being despawned.
+/// `sd` is the receiving player, `mob` is the mob being despawned.
 ///
-/// Note: `mob` is kept as `*mut MobSpawnData` rather than `&mut MobSpawnData`
+/// Note: `mob` is kept as `*const MobSpawnData` rather than `&MobSpawnData`
 /// because the call site captures it as `mob_ptr` from `foreach_in_area`. The
 /// borrow checker cannot simultaneously allow `&mut *mob` in the closure AND
 /// use `mob.m/x/y` as the area arguments to `foreach_in_area` in the same
 /// expression — both would require a mutable borrow of `mob`.
-pub fn clif_send_destroy_inner(bl: &BlockList, mob: *const MobSpawnData) -> i32 {
-    let sd = bl as *const BlockList as *const MapSessionData;
+pub fn clif_send_destroy_inner(sd: &MapSessionData, mob: *const MobSpawnData) -> i32 {
+    if !session_exists(sd.fd) {
+        return 0;
+    }
 
     unsafe {
-        if !session_exists((*sd).fd) {
-            return 0;
-        }
-
-        let fd = (*sd).fd;
+        let fd = sd.fd;
         let data: *mut MobDbData = (*mob).data;
         let packet_id: u8 = if (*data).mobtype == 1 { 0x0E } else { 0x5F };
 
@@ -1221,20 +1172,19 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
     sl_doscript_simple("onCast", None, sd.id);
 
     if sd.target != 0 {
-        let tbl = map_id2bl(sd.target as u32);
-        if tbl.is_null() { return 0; }
+        let target_id = sd.target as u32;
+        let Some((tpos, tbl_type)) = crate::game::map_server::entity_position(target_id) else { return 0; };
+        let tbl_type = tbl_type as i32;
 
-        let tsd2 = unsafe { map_id2sd_local((*tbl).id) };
-
-        unsafe {
-            if (*tbl).bl_type == BL_PC as u8 {
-                if !tsd2.is_null() && (*tsd2).optFlags & crate::game::pc::OPT_FLAG_STEALTH != 0 {
-                    return 0;
-                }
+        // Check stealth for PC targets
+        if tbl_type == BL_PC {
+            let tsd2 = map_id2sd_local(target_id);
+            if !tsd2.is_null() && unsafe { (*tsd2).optFlags } & crate::game::pc::OPT_FLAG_STEALTH != 0 {
+                return 0;
             }
         }
 
-        let one = unsafe { ((*tbl).m as i32, (*tbl).x as i32, (*tbl).y as i32) };
+        let one = (tpos.m as i32, tpos.x as i32, tpos.y as i32);
         let two = (sd.m as i32, sd.x as i32, sd.y as i32);
 
         if crate::game::util::check_proximity(one, two, 21) {
@@ -1242,14 +1192,19 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
             let mut twill: i32 = 0;
             let mut tprotection: i32 = 0;
 
-            unsafe {
-                if (*tbl).bl_type == BL_PC as u8 && !tsd2.is_null() {
-                    health = (*tsd2).player.combat.hp as i64;
-                    twill = (*tsd2).will;
-                    tprotection = (*tsd2).protection as i32;
-                } else if (*tbl).bl_type == BL_MOB as u8 {
-                    let tmob = map_id2mob_local((*tbl).id);
-                    if !tmob.is_null() {
+            if tbl_type == BL_PC {
+                let tsd2 = map_id2sd_local(target_id);
+                if !tsd2.is_null() {
+                    unsafe {
+                        health = (*tsd2).player.combat.hp as i64;
+                        twill = (*tsd2).will;
+                        tprotection = (*tsd2).protection as i32;
+                    }
+                }
+            } else if tbl_type == BL_MOB {
+                let tmob = map_id2mob_local(target_id);
+                if !tmob.is_null() {
+                    unsafe {
                         health = (*tmob).current_vita as i64;
                         twill = (*tmob).will;
                         tprotection = (*tmob).protection as i32;
@@ -1259,8 +1214,6 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
 
             if spell.canfail as i32 == 1 {
                 let will_diff = (twill - sd.will).max(0);
-                // C: (int)((willDiff / 10) + 0.5) — integer division then round-half-up via +0.5.
-                // Pure-integer equivalent: (will_diff + 5) / 10 (will_diff >= 0 here).
                 let prot = (tprotection + (will_diff + 5) / 10).max(0);
                 let fail_chance = (100.0f64 - (0.9f64.powi(prot) * 100.0f64) + 0.5f64) as i32;
                 let cast_test = rnd(100);
@@ -1270,10 +1223,10 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
                 }
             }
 
-            unsafe {
-                if health > 0 || (*tbl).bl_type == BL_PC as u8 {
+            if health > 0 || tbl_type == BL_PC {
+                unsafe {
                     sl_async_freeco(sd as *mut MapSessionData);
-                    sl_doscript_2(carray_to_str(&spell.yname), Some("cast"), sd.id, (*tbl).id);
+                    sl_doscript_2(carray_to_str(&spell.yname), Some("cast"), sd.id, target_id);
                 }
             }
         }
@@ -1287,15 +1240,15 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
 
 // ─── clif_sendaction ──────────────────────────────────────────────────────────
 
-/// Broadcast an action animation to the area, optionally play a sound.
+/// Broadcast a PC action animation to the area, optionally play a sound.
 ///
-pub fn clif_sendaction(bl: &mut BlockList, action_type: i32, time: i32, sound: i32) -> i32 {
+pub fn clif_sendaction_pc(sd: &mut MapSessionData, action_type: i32, time: i32, sound: i32) -> i32 {
     let mut buf = [0u8; 32];
     buf[0] = 0xAA;
     buf[1] = 0x00;
     buf[2] = 0x0B;
     buf[3] = 0x1A;
-    let blid = bl.id;
+    let blid = sd.id;
     buf[5] = (blid >> 24) as u8;
     buf[6] = (blid >> 16) as u8;
     buf[7] = (blid >>  8) as u8;
@@ -1306,18 +1259,15 @@ pub fn clif_sendaction(bl: &mut BlockList, action_type: i32, time: i32, sound: i
     buf[12] = 0x00;
 
     tracing::debug!("[attack] clif_sendaction: id={} action={} time={} sound={} m={} x={} y={}",
-        bl.id, action_type, time, sound, bl.m, bl.x, bl.y);
-    unsafe { clif_send(buf.as_ptr(), 32, bl as *mut BlockList, SAMEAREA); }
+        sd.id, action_type, time, sound, sd.m, sd.x, sd.y);
+    unsafe { clif_send(buf.as_ptr(), 32, sd.id, sd.m, sd.x, sd.y, BL_PC as u8, SAMEAREA); }
 
     if sound > 0 {
-        unsafe { clif_playsound(bl as *mut BlockList, sound); }
+        unsafe { clif_playsound_entity(sd.id, sd.m, sd.x, sd.y, BL_PC as u8, sound); }
     }
 
-    if bl.bl_type == BL_PC as u8 {
-        let sd = bl as *mut BlockList as *mut MapSessionData;
-        unsafe { (*sd).action = action_type as i8; }
-        sl_doscript_simple("onAction", None, bl.id);
-    }
+    sd.action = action_type as i8;
+    sl_doscript_simple("onAction", None, sd.id);
 
     0
 }
@@ -1344,11 +1294,11 @@ pub fn clif_sendmob_action(mob: &mut MobSpawnData, action_type: i32, time: i32, 
     buf[12] = 0x00;
 
     unsafe {
-        clif_send(buf.as_ptr(), 32, mob.bl_ptr_mut(), SAMEAREA);
+        clif_send(buf.as_ptr(), 32, mob.id, mob.m, mob.x, mob.y, BL_MOB as u8, SAMEAREA);
     }
 
     if sound > 0 {
-        unsafe { clif_playsound(mob.bl_ptr_mut(), sound); }
+        unsafe { clif_playsound_entity(mob.id, mob.m, mob.x, mob.y, BL_MOB as u8, sound); }
     }
 
     0
@@ -1360,65 +1310,46 @@ pub fn clif_sendmob_action(mob: &mut MobSpawnData, action_type: i32, time: i32, 
 /// Send a positional animation packet to one player.
 /// `bl` is the receiving player.
 ///
-/// # Safety of the internal cast
-///
-/// SAFETY: These functions are called as foreach_in_area callbacks which dispatch
-/// *mut BlockList. The BlockList is embedded as the first field of MobSpawnData /
-/// MapSessionData, so casting bl to the entity type is valid. The &mut BlockList
-/// parameter is used at the boundary; the internal cast is confined to this unsafe block.
-pub fn clif_sendanimation_xy_inner(bl: &BlockList, anim: i32, times: i32, x: i32, y: i32) -> i32 {
-    let src = bl as *const BlockList as *const MapSessionData;
-
-    unsafe {
-        if !session_exists((*src).fd) {
-            return 0;
-        }
-
-        let fd = (*src).fd;
-        wfifohead(fd, 0x30);
-        wfifob(fd, 0, 0xAA);
-        wfifow(fd, 1, 14u16.swap_bytes());
-        wfifob(fd, 3, 0x29);
-        wfifol(fd, 5, 0);
-        wfifow(fd, 9,  (anim  as u16).swap_bytes());
-        wfifow(fd, 11, (times as u16).swap_bytes());
-        wfifow(fd, 13, (x     as u16).swap_bytes());
-        wfifow(fd, 15, (y     as u16).swap_bytes());
-        wfifoset(fd, encrypt(fd) as usize);
+/// Send an XY animation packet to a single player.
+/// `sd` is the receiving player.
+pub fn clif_sendanimation_xy_inner(sd: &MapSessionData, anim: i32, times: i32, x: i32, y: i32) -> i32 {
+    if !session_exists(sd.fd) {
+        return 0;
     }
+
+    let fd = sd.fd;
+    wfifohead(fd, 0x30);
+    wfifob(fd, 0, 0xAA);
+    wfifow(fd, 1, 14u16.swap_bytes());
+    wfifob(fd, 3, 0x29);
+    wfifol(fd, 5, 0);
+    wfifow(fd, 9,  (anim  as u16).swap_bytes());
+    wfifow(fd, 11, (times as u16).swap_bytes());
+    wfifow(fd, 13, (x     as u16).swap_bytes());
+    wfifow(fd, 15, (y     as u16).swap_bytes());
+    wfifoset(fd, unsafe { encrypt(fd) } as usize);
     0
 }
 
 // ─── clif_sendanimation ───────────────────────────────────────────────────────
 
-///
 /// Send animation for a target to one player.
-/// `bl` is the receiving player, `t` is the animation target, `anim` is the anim ID,
+/// `fd` is the receiving player's session, `anim` is the animation ID,
 /// `times` is the loop count (pass -1 for duration-based).
-///
-/// # Safety of the internal cast
-///
-/// SAFETY: These functions are called as foreach_in_area callbacks which dispatch
-/// *mut BlockList. The BlockList is embedded as the first field of MobSpawnData /
-/// MapSessionData, so casting bl to the entity type is valid. The &mut BlockList
-/// parameter is used at the boundary; the internal cast is confined to this unsafe block.
-pub fn clif_sendanimation_inner(bl: &BlockList, anim: i32, t: *const BlockList, times: i32) -> i32 {
-    let sd = bl as *const BlockList as *const MapSessionData;
-
-    if t.is_null() { return 0; }
+pub fn clif_sendanimation_inner(fd: SessionId, setting_flags: u32, anim: i32, target_id: u32, times: i32) -> i32 {
+    if target_id == 0 { return 0; }
 
     unsafe {
-        if (*sd).player.appearance.setting_flags as u32 & FLAG_MAGIC != 0 {
-            if !session_exists((*sd).fd) {
+        if setting_flags & FLAG_MAGIC != 0 {
+            if !session_exists(fd) {
                 return 0;
             }
 
-            let fd = (*sd).fd;
             wfifohead(fd, 13);
             wfifob(fd, 0, 0xAA);
             wfifow(fd, 1, 0x000Au16.swap_bytes());
             wfifob(fd, 3, 0x29);
-            wfifol(fd, 5, (*t).id.swap_bytes());
+            wfifol(fd, 5, target_id.swap_bytes());
             wfifow(fd, 9,  (anim  as u16).swap_bytes());
             wfifow(fd, 11, (times as u16).swap_bytes());
             wfifoset(fd, encrypt(fd) as usize);
@@ -1495,9 +1426,9 @@ pub fn clif_parseattack(sd: &mut MapSessionData) -> i32 {
     let sound = weap_item.sound as i32;
 
     if sound == 0 {
-        clif_sendaction(sd.as_bl_mut(), 1, attackspeed, 9);
+        clif_sendaction_pc(sd, 1, attackspeed, 9);
     } else {
-        clif_sendaction(sd.as_bl_mut(), 1, attackspeed, sound);
+        clif_sendaction_pc(sd, 1, attackspeed, sound);
     }
 
     sl_doscript_simple("swingDamage", None, sd.id);

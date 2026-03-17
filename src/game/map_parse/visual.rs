@@ -4,11 +4,10 @@
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
 
-use crate::database::map_db::BlockList;
 use crate::game::mob::{MobSpawnData, MOB_DEAD};
 use crate::game::npc::NpcData;
 use crate::game::pc::{
-    MapSessionData,
+    MapSessionData, LookAccum,
     BL_PC, BL_MOB, BL_NPC, BL_ITEM,
     EQ_ARMOR, EQ_COAT, EQ_WEAP, EQ_SHIELD, EQ_HELM,
     EQ_FACEACC, EQ_CROWN, EQ_FACEACCTWO, EQ_MANTLE, EQ_NECKLACE, EQ_BOOTS,
@@ -20,12 +19,9 @@ use super::packet::{
     encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow, wfifoheader,
     AREA_WOS,
 };
-use crate::session::session_exists;
+use crate::session::{SessionId, session_exists};
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-
-const LOOK_GET:  i32 = 0;
-const LOOK_SEND: i32 = 1;
 
 /// `ITM_TRAPS` item type constant (from item_db).
 const ITM_TRAPS: i32 = 4;
@@ -45,24 +41,15 @@ use crate::game::map_parse::movement::clif_sendchararea;
 use crate::database::item_db;
 use crate::game::pc::pc_isequip;
 
-#[inline]
-fn map_id2bl(id: u32) -> *mut BlockList {
-    crate::game::map_server::map_id2bl_ref(id)
-}
-
 use crate::game::map_parse::combat::clif_sendanimations;
 
 // ─── clif_lookgone ────────────────────────────────────────────────────────────
 
 /// Send an object-despawn packet to all nearby clients.
 ///
-pub unsafe fn clif_lookgone(bl: *const BlockList) -> i32 {
+/// `is_char_type` should be `true` for PC, MOB, and NPC-with-npctype==1 entities.
+pub unsafe fn clif_lookgone_ex(id: u32, m: u16, x: u16, y: u16, bl_type: u8, is_char_type: bool) -> i32 {
     let mut buf = [0u8; 16];
-
-    let bl_ref = &*bl;
-    let is_char_type = bl_ref.bl_type == BL_PC_U8
-        || (bl_ref.bl_type == BL_NPC_U8 && (*(bl as *const NpcData)).npctype == 1)
-        || bl_ref.bl_type == BL_MOB_U8;
 
     if is_char_type {
         buf[0] = 0xAA;
@@ -71,7 +58,7 @@ pub unsafe fn clif_lookgone(bl: *const BlockList) -> i32 {
         buf[2] = size[1];
         buf[3] = 0x0E;
         buf[4] = 0x03;
-        let id_bytes = bl_ref.id.to_be_bytes();
+        let id_bytes = id.to_be_bytes();
         buf[5] = id_bytes[0];
         buf[6] = id_bytes[1];
         buf[7] = id_bytes[2];
@@ -83,16 +70,43 @@ pub unsafe fn clif_lookgone(bl: *const BlockList) -> i32 {
         buf[2] = size[1];
         buf[3] = 0x5F;
         buf[4] = 0x03;
-        let id_bytes = bl_ref.id.to_be_bytes();
+        let id_bytes = id.to_be_bytes();
         buf[5] = id_bytes[0];
         buf[6] = id_bytes[1];
         buf[7] = id_bytes[2];
         buf[8] = id_bytes[3];
     }
 
-    // SAFETY: clif_send only reads bl for area broadcast
-    clif_send(buf.as_ptr(), 16, bl as *const BlockList as *mut BlockList, AREA_WOS);
+    clif_send(buf.as_ptr(), 16, id, m, x, y, bl_type, AREA_WOS);
     0
+}
+
+/// Convenience: send object-despawn by entity ID, resolving position from entity maps.
+pub unsafe fn clif_lookgone_by_id(entity_id: u32) -> i32 {
+    use crate::game::map_server;
+    if let Some(entity) = map_server::map_id2entity(entity_id) {
+        match entity {
+            map_server::GameEntity::Player(arc) => {
+                let sd = arc.read();
+                clif_lookgone_ex(sd.id, sd.m, sd.x, sd.y, BL_PC_U8, true)
+            }
+            map_server::GameEntity::Mob(arc) => {
+                let mob = arc.read();
+                clif_lookgone_ex(mob.id, mob.m, mob.x, mob.y, BL_MOB_U8, true)
+            }
+            map_server::GameEntity::Npc(arc) => {
+                let npc = arc.read();
+                let is_char = npc.npctype == 1;
+                clif_lookgone_ex(npc.id, npc.m, npc.x, npc.y, BL_NPC_U8, is_char)
+            }
+            map_server::GameEntity::Item(arc) => {
+                let fl = arc.read();
+                clif_lookgone_ex(fl.id, fl.m, fl.x, fl.y, BL_ITEM_U8, false)
+            }
+        }
+    } else {
+        0
+    }
 }
 
 // ─── clif_mob_look_start_func ─────────────────────────────────────────────────
@@ -102,19 +116,14 @@ pub unsafe fn clif_lookgone(bl: *const BlockList) -> i32 {
 ///
 /// Called with `BL_PC` type so `bl` is a `MapSessionData`.
 /// Mirrors `clif_mob_look_start_func` (~line 1426).
-pub unsafe fn clif_mob_look_start_func_inner(bl: *mut BlockList) -> i32 {
-    let sd = bl as *mut MapSessionData;
-    if sd.is_null() { return 0; }
+pub unsafe fn clif_mob_look_start_func_inner(fd: SessionId, look: &mut LookAccum) -> i32 {
+    *look = LookAccum::default();
 
-    (*sd).mob_len   = 0;
-    (*sd).mob_count = 0;
-    (*sd).mob_item  = 0;
-
-    if !session_exists((*sd).fd) {
+    if !session_exists(fd) {
         return 0;
     }
 
-    wfifohead((*sd).fd, 65535);
+    wfifohead(fd, 65535);
     0
 }
 
@@ -123,349 +132,355 @@ pub unsafe fn clif_mob_look_start_func_inner(bl: *mut BlockList) -> i32 {
 ///
 /// Flush the accumulated mob-look packet buffer to the client.
 /// Mirrors `clif_mob_look_close_func` (~line 1446).
-pub unsafe fn clif_mob_look_close_func_inner(bl: *mut BlockList) -> i32 {
-    let sd = bl as *mut MapSessionData;
-    if sd.is_null() { return 0; }
+pub unsafe fn clif_mob_look_close_func_inner(fd: SessionId, look: &mut LookAccum) -> i32 {
+    if look.count == 0 { return 0; }
 
-    if (*sd).mob_count == 0 { return 0; }
-
-    if (*sd).mob_item == 0 {
-        wfifob((*sd).fd, ((*sd).mob_len + 7) as usize, 0);
-        (*sd).mob_len += 1;
+    if look.item == 0 {
+        wfifob(fd, (look.len + 7) as usize, 0);
+        look.len += 1;
     }
 
-    wfifoheader((*sd).fd, 0x07, ((*sd).mob_len + 4) as u16);
-    wfifow((*sd).fd, 5, ((*sd).mob_count as u16).swap_bytes());
-    wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
+    wfifoheader(fd, 0x07, (look.len + 4) as u16);
+    wfifow(fd, 5, (look.count as u16).swap_bytes());
+    wfifoset(fd, encrypt(fd) as usize);
 
-    (*sd).mob_len   = 0;
-    (*sd).mob_count = 0;
+    look.len   = 0;
+    look.count = 0;
     0
 }
 
-// ─── clif_object_look_sub ────────────────────────────────────────────────────
+// ─── Typed clif_object_look variants ─────────────────────────────────────────
 
-///
-/// Write one object entry into the batched mob-look packet buffer.
-///
-/// Args:
-///   - `bl`:        the block-list entry being iterated
-///   - `look_type`: `LOOK_GET` or `LOOK_SEND`
-///   - `arg`:       if `LOOK_SEND`, `bl` is the receiving player and `arg` is the object;
-///                  if `LOOK_GET`, `bl` is the object and `arg` is cast to `*mut MapSessionData`.
-///
-/// Mirrors `clif_object_look_sub` (~line 1472).
-pub unsafe fn clif_object_look_sub_inner(bl: *mut BlockList, look_type: i32, arg: *mut BlockList) -> i32 {
-    let (sd, b): (*mut MapSessionData, *mut BlockList) = if look_type == LOOK_SEND {
-        // bl is the receiving player, arg is the object
-        if bl.is_null() { return 0; }
-        if arg.is_null() { return 0; }
-        (bl as *mut MapSessionData, arg)
-    } else {
-        // bl is the object, arg is the receiving player
-        if bl.is_null() { return 0; }
-        if arg.is_null() { return 0; }
-        (arg as *mut MapSessionData, bl)
-    };
+/// Write common entity header (x, y, id) into the mob-look accumulation buffer.
+#[inline]
+unsafe fn look_write_header(fd: SessionId, look: &LookAccum, x: u16, y: u16, id: u32) {
+    let len = look.len as usize;
+    wfifow(fd, len + 7,  x.swap_bytes());
+    wfifow(fd, len + 9,  y.swap_bytes());
+    wfifol(fd, len + 12, id.swap_bytes());
+}
 
-    if (*b).bl_type == BL_PC_U8 { return 0; }
+/// Append a mob's visual data to the batched mob-look packet.
+pub unsafe fn clif_object_look_mob(fd: SessionId, look: &mut LookAccum, mob: &MobSpawnData) -> i32 {
+    if mob.state == MOB_DEAD || (*mob.data).mobtype == 1 { return 0; }
 
-    let len = (*sd).mob_len as usize;
+    look_write_header(fd, look, mob.x, mob.y, mob.id);
+    let len = look.len as usize;
 
-    wfifow((*sd).fd, len + 7,  ((*b).x as u16).swap_bytes());
-    wfifow((*sd).fd, len + 9,  ((*b).y as u16).swap_bytes());
-    wfifol((*sd).fd, len + 12, (*b).id.swap_bytes());
+    if (*mob.data).isnpc == 0 {
+        wfifob(fd, len + 11, 0x05);
+        wfifow(fd, len + 16, (32768u16.wrapping_add(mob.look)).swap_bytes());
+        wfifob(fd, len + 18, mob.look_color);
+        wfifob(fd, len + 19, mob.side as u8);
+        wfifob(fd, len + 20, 0);
+        wfifob(fd, len + 21, 0);
 
-    match (*b).bl_type {
-        t if t == BL_MOB_U8 => {
-            let mob = b as *mut MobSpawnData;
-            if (*mob).state == MOB_DEAD || (*(*mob).data).mobtype == 1 { return 0; }
-
-            let nlen;
-            if (*(*mob).data).isnpc == 0 {
-                wfifob((*sd).fd, len + 11, 0x05);
-                wfifow((*sd).fd, len + 16, (32768u16.wrapping_add((*mob).look)).swap_bytes());
-                wfifob((*sd).fd, len + 18, (*mob).look_color);
-                wfifob((*sd).fd, len + 19, (*mob).side as u8);
-                wfifob((*sd).fd, len + 20, 0);
-                wfifob((*sd).fd, len + 21, 0); // # of animations active
-
-                let mut animlen: i32 = 0;
-                let mut n: usize = 0;
-                for x in 0..50usize {
-                    if (*mob).da[x].duration != 0 && (*mob).da[x].animation != 0 {
-                        wfifow((*sd).fd, n + len + 22,     ((*mob).da[x].animation as u16).swap_bytes());
-                        wfifow((*sd).fd, n + len + 22 + 2, (((*mob).da[x].duration / 1000) as u16).swap_bytes());
-                        animlen += 1;
-                        n += 4;
-                    }
-                }
-                nlen = n;
-
-                wfifob((*sd).fd, len + 21, animlen as u8);
-                wfifob((*sd).fd, len + 22 + nlen, 0); // pass flag
-                (*sd).mob_len += 15 + nlen as i32;
-            } else if (*(*mob).data).isnpc == 1 {
-                wfifob((*sd).fd, len + 11, 12);
-                wfifow((*sd).fd, len + 16, (32768u16.wrapping_add((*mob).look)).swap_bytes());
-                wfifob((*sd).fd, len + 18, (*mob).look_color);
-                wfifob((*sd).fd, len + 19, (*mob).side as u8);
-                wfifow((*sd).fd, len + 20, 0);
-                wfifob((*sd).fd, len + 22, 0);
-                (*sd).mob_len += 15;
+        let mut animlen: i32 = 0;
+        let mut n: usize = 0;
+        for x in 0..50usize {
+            if mob.da[x].duration != 0 && mob.da[x].animation != 0 {
+                wfifow(fd, n + len + 22,     (mob.da[x].animation as u16).swap_bytes());
+                wfifow(fd, n + len + 22 + 2, ((mob.da[x].duration / 1000) as u16).swap_bytes());
+                animlen += 1;
+                n += 4;
             }
         }
-        t if t == BL_NPC_U8 => {
-            let nd = b as *mut NpcData;
-            if (*b).subtype != 0 || (*nd).subtype != 0 || (*nd).npctype == 1 { return 0; }
 
-            wfifob((*sd).fd, len + 11, 12);
-            wfifow((*sd).fd, len + 16, (32768u16.wrapping_add((*b).graphic_id as u16)).swap_bytes());
-            wfifob((*sd).fd, len + 18, (*b).graphic_color as u8);
-            wfifob((*sd).fd, len + 19, (*nd).side as u8);
-            wfifow((*sd).fd, len + 20, 0);
-            wfifob((*sd).fd, len + 22, 0);
-            (*sd).mob_len += 15;
-        }
-        t if t == BL_ITEM_U8 => {
-            let item = b as *mut FloorItemData;
-
-            let mut in_table = false;
-            for &spotter in (*item).data.traps_table.iter() {
-                if spotter == (*sd).player.identity.id { in_table = true; break; }
-            }
-
-            let item_entry = item_db::search((*item).data.id);
-
-            if item_entry.typ as i32 == ITM_TRAPS && !in_table {
-                return 0;
-            }
-
-            wfifob((*sd).fd, len + 11, 0x02);
-
-            if (*item).data.custom_icon != 0 {
-                wfifow((*sd).fd, len + 16, (((*item).data.custom_icon as u16).wrapping_add(49152)).swap_bytes());
-                wfifob((*sd).fd, len + 18, (*item).data.custom_icon_color as u8);
-            } else {
-                wfifow((*sd).fd, len + 16, (item_entry.icon as u16).swap_bytes());
-                wfifob((*sd).fd, len + 18, item_entry.icon_color as u8);
-            }
-
-            wfifob((*sd).fd, len + 19, 0);
-            wfifow((*sd).fd, len + 20, 0);
-            wfifob((*sd).fd, len + 22, 0);
-            (*sd).mob_len += 15;
-            (*sd).mob_item = 1;
-        }
-        _ => {}
+        wfifob(fd, len + 21, animlen as u8);
+        wfifob(fd, len + 22 + n, 0);
+        look.len += 15 + n as i32;
+    } else if (*mob.data).isnpc == 1 {
+        wfifob(fd, len + 11, 12);
+        wfifow(fd, len + 16, (32768u16.wrapping_add(mob.look)).swap_bytes());
+        wfifob(fd, len + 18, mob.look_color);
+        wfifob(fd, len + 19, mob.side as u8);
+        wfifow(fd, len + 20, 0);
+        wfifob(fd, len + 22, 0);
+        look.len += 15;
     }
 
-    (*sd).mob_count += 1;
+    look.count += 1;
     0
 }
 
-// ─── clif_object_look_sub2 ───────────────────────────────────────────────────
+/// Append an NPC's visual data to the batched mob-look packet.
+pub unsafe fn clif_object_look_npc(fd: SessionId, look: &mut LookAccum, npc: &NpcData) -> i32 {
+    if npc.subtype != 0 || npc.npctype == 1 { return 0; }
 
-///
-/// Send a single-object look packet immediately (not batched).
-/// Same argument layout as `clif_object_look_sub_inner`.
-/// Mirrors `clif_object_look_sub2` (~line 1592).
-pub unsafe fn clif_object_look_sub2_inner(bl: *const BlockList, look_type: i32, arg: *const BlockList) -> i32 {
-    let (sd, b): (*const MapSessionData, *const BlockList) = if look_type == LOOK_SEND {
-        if bl.is_null() { return 0; }
-        if arg.is_null() { return 0; }
-        (bl as *const MapSessionData, arg)
-    } else {
-        if bl.is_null() { return 0; }
-        if arg.is_null() { return 0; }
-        (arg as *const MapSessionData, bl)
-    };
+    look_write_header(fd, look, npc.x, npc.y, npc.id);
+    let len = look.len as usize;
 
-    if !session_exists((*sd).fd) {
+    wfifob(fd, len + 11, 12);
+    wfifow(fd, len + 16, (32768u16.wrapping_add(npc.graphic_id as u16)).swap_bytes());
+    wfifob(fd, len + 18, npc.graphic_color as u8);
+    wfifob(fd, len + 19, npc.side as u8);
+    wfifow(fd, len + 20, 0);
+    wfifob(fd, len + 22, 0);
+    look.len += 15;
+
+    look.count += 1;
+    0
+}
+
+/// Append a floor item's visual data to the batched mob-look packet.
+pub unsafe fn clif_object_look_item(fd: SessionId, look: &mut LookAccum, viewer_char_id: u32, item: &FloorItemData) -> i32 {
+    let mut in_table = false;
+    for &spotter in item.data.traps_table.iter() {
+        if spotter == viewer_char_id { in_table = true; break; }
+    }
+
+    let item_entry = item_db::search(item.data.id);
+
+    if item_entry.typ as i32 == ITM_TRAPS && !in_table {
         return 0;
     }
 
-    wfifohead((*sd).fd, 6000);
+    look_write_header(fd, look, item.x, item.y, item.id);
+    let len = look.len as usize;
 
-    if (*b).bl_type == BL_PC_U8 { return 0; }
+    wfifob(fd, len + 11, 0x02);
 
-    wfifob((*sd).fd, 0, 0xAA);
-    wfifow((*sd).fd, 1, 20u16.swap_bytes());
-    wfifob((*sd).fd, 3, 0x07);
-    wfifow((*sd).fd, 5, 1u16.swap_bytes());
-    wfifow((*sd).fd, 7, ((*b).x as u16).swap_bytes());
-    wfifow((*sd).fd, 9, ((*b).y as u16).swap_bytes());
-    wfifol((*sd).fd, 12, (*b).id.swap_bytes());
-
-    let mut nlen: usize = 0;
-
-    match (*b).bl_type {
-        t if t == BL_MOB_U8 => {
-            let mob = b as *const MobSpawnData;
-            if (*mob).state == MOB_DEAD || (*(*mob).data).mobtype == 1 { return 0; }
-
-            if (*(*mob).data).isnpc == 0 {
-                wfifob((*sd).fd, 11, 0x05);
-                wfifow((*sd).fd, 16, (32768u16.wrapping_add((*mob).look)).swap_bytes());
-                wfifob((*sd).fd, 18, (*mob).look_color);
-                wfifob((*sd).fd, 19, (*mob).side as u8);
-                wfifob((*sd).fd, 20, 0);
-                wfifob((*sd).fd, 21, 0);
-
-                for x in 0..50usize {
-                    if (*mob).da[x].duration != 0 && (*mob).da[x].animation != 0 {
-                        wfifow((*sd).fd, nlen + 22,     ((*mob).da[x].animation as u16).swap_bytes());
-                        wfifow((*sd).fd, nlen + 22 + 2, (((*mob).da[x].duration / 1000) as u16).swap_bytes());
-                        nlen += 4;
-                    }
-                }
-
-                wfifob((*sd).fd, 21, (nlen / 4) as u8);
-                wfifob((*sd).fd, nlen + 22, 0); // passflag
-            } else if (*(*mob).data).isnpc == 1 {
-                // NOTE: C uses `len` (always 0 here) — kept for fidelity
-                wfifob((*sd).fd, 11, 12);
-                wfifow((*sd).fd, 16, (32768u16.wrapping_add((*mob).look)).swap_bytes());
-                wfifob((*sd).fd, 18, (*mob).look_color);
-                wfifob((*sd).fd, 19, (*mob).side as u8);
-                wfifow((*sd).fd, 20, 0);
-                wfifob((*sd).fd, 22, 0);
-            }
-        }
-        t if t == BL_NPC_U8 => {
-            let nd = b as *const NpcData;
-            if (*b).subtype != 0 || (*nd).subtype != 0 || (*nd).npctype == 1 { return 0; }
-
-            wfifob((*sd).fd, 11, 12);
-            wfifow((*sd).fd, 16, (32768u16.wrapping_add((*b).graphic_id as u16)).swap_bytes());
-            wfifob((*sd).fd, 18, (*b).graphic_color as u8);
-            wfifob((*sd).fd, 19, (*nd).side as u8);
-            wfifow((*sd).fd, 20, 0);
-            wfifob((*sd).fd, 22, 0);
-        }
-        t if t == BL_ITEM_U8 => {
-            let item = b as *const FloorItemData;
-
-            let mut in_table = false;
-            for &spotter in (*item).data.traps_table.iter() {
-                if spotter == (*sd).player.identity.id { in_table = true; break; }
-            }
-
-            let item_entry = item_db::search((*item).data.id);
-
-            if item_entry.typ as i32 == ITM_TRAPS && !in_table {
-                return 0;
-            }
-
-            wfifob((*sd).fd, 11, 0x02);
-
-            if (*item).data.custom_icon != 0 {
-                wfifow((*sd).fd, 16, (((*item).data.custom_icon as u16).wrapping_add(49152)).swap_bytes());
-                wfifob((*sd).fd, 18, (*item).data.custom_icon_color as u8);
-            } else {
-                wfifow((*sd).fd, 16, (item_entry.icon as u16).swap_bytes());
-                wfifob((*sd).fd, 18, item_entry.icon_color as u8);
-            }
-
-            wfifob((*sd).fd, 19, 0);
-            wfifow((*sd).fd, 20, 0);
-            wfifob((*sd).fd, 22, 0);
-        }
-        _ => {}
+    if item.data.custom_icon != 0 {
+        wfifow(fd, len + 16, ((item.data.custom_icon as u16).wrapping_add(49152)).swap_bytes());
+        wfifob(fd, len + 18, item.data.custom_icon_color as u8);
+    } else {
+        wfifow(fd, len + 16, (item_entry.icon as u16).swap_bytes());
+        wfifob(fd, len + 18, item_entry.icon_color as u8);
     }
 
-    wfifow((*sd).fd, 1, (20u16.wrapping_add(nlen as u16)).swap_bytes());
-    wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
+    wfifob(fd, len + 19, 0);
+    wfifow(fd, len + 20, 0);
+    wfifob(fd, len + 22, 0);
+    look.len += 15;
+    look.item = 1;
+
+    look.count += 1;
     0
+}
+
+/// Dispatch entity look by ID — resolves type and calls the appropriate typed variant.
+pub unsafe fn clif_object_look_by_id(fd: SessionId, look: &mut LookAccum, viewer_char_id: u32, entity_id: u32) -> i32 {
+    use crate::game::map_server::{map_id2mob_ref, map_id2npc_ref, map_id2fl_ref};
+    if let Some(arc) = map_id2mob_ref(entity_id) {
+        clif_object_look_mob(fd, look, &*arc.read())
+    } else if let Some(arc) = map_id2npc_ref(entity_id) {
+        clif_object_look_npc(fd, look, &*arc.read())
+    } else if let Some(arc) = map_id2fl_ref(entity_id) {
+        clif_object_look_item(fd, look, viewer_char_id, &*arc.read())
+    } else {
+        0
+    }
+}
+
+// ─── Typed clif_object_look_sub2 variants ────────────────────────────────────
+
+/// Write a single-entity look packet header into the session write buffer.
+#[inline]
+unsafe fn look2_write_header(fd: SessionId, x: u16, y: u16, id: u32) {
+    wfifob(fd, 0, 0xAA);
+    wfifow(fd, 1, 20u16.swap_bytes());
+    wfifob(fd, 3, 0x07);
+    wfifow(fd, 5, 1u16.swap_bytes());
+    wfifow(fd, 7, x.swap_bytes());
+    wfifow(fd, 9, y.swap_bytes());
+    wfifol(fd, 12, id.swap_bytes());
+}
+
+/// Send a single mob's visual data immediately (not batched).
+pub unsafe fn clif_object_look2_mob(fd: SessionId, mob: &MobSpawnData) -> i32 {
+    if mob.state == MOB_DEAD || (*mob.data).mobtype == 1 { return 0; }
+    if !session_exists(fd) { return 0; }
+    wfifohead(fd, 6000);
+    look2_write_header(fd, mob.x, mob.y, mob.id);
+
+    let mut nlen: usize = 0;
+    if (*mob.data).isnpc == 0 {
+        wfifob(fd, 11, 0x05);
+        wfifow(fd, 16, (32768u16.wrapping_add(mob.look)).swap_bytes());
+        wfifob(fd, 18, mob.look_color);
+        wfifob(fd, 19, mob.side as u8);
+        wfifob(fd, 20, 0);
+        wfifob(fd, 21, 0);
+        for x in 0..50usize {
+            if mob.da[x].duration != 0 && mob.da[x].animation != 0 {
+                wfifow(fd, nlen + 22, (mob.da[x].animation as u16).swap_bytes());
+                wfifow(fd, nlen + 22 + 2, ((mob.da[x].duration / 1000) as u16).swap_bytes());
+                nlen += 4;
+            }
+        }
+        wfifob(fd, 21, (nlen / 4) as u8);
+        wfifob(fd, nlen + 22, 0);
+    } else if (*mob.data).isnpc == 1 {
+        wfifob(fd, 11, 12);
+        wfifow(fd, 16, (32768u16.wrapping_add(mob.look)).swap_bytes());
+        wfifob(fd, 18, mob.look_color);
+        wfifob(fd, 19, mob.side as u8);
+        wfifow(fd, 20, 0);
+        wfifob(fd, 22, 0);
+    }
+
+    wfifow(fd, 1, (20u16.wrapping_add(nlen as u16)).swap_bytes());
+    wfifoset(fd, encrypt(fd) as usize);
+    0
+}
+
+/// Send a single NPC's visual data immediately (not batched).
+pub unsafe fn clif_object_look2_npc(fd: SessionId, npc: &NpcData) -> i32 {
+    if npc.subtype != 0 || npc.npctype == 1 { return 0; }
+    if !session_exists(fd) { return 0; }
+    wfifohead(fd, 6000);
+    look2_write_header(fd, npc.x, npc.y, npc.id);
+
+    wfifob(fd, 11, 12);
+    wfifow(fd, 16, (32768u16.wrapping_add(npc.graphic_id as u16)).swap_bytes());
+    wfifob(fd, 18, npc.graphic_color as u8);
+    wfifob(fd, 19, npc.side as u8);
+    wfifow(fd, 20, 0);
+    wfifob(fd, 22, 0);
+
+    wfifoset(fd, encrypt(fd) as usize);
+    0
+}
+
+/// Send a single floor item's visual data immediately (not batched).
+pub unsafe fn clif_object_look2_item(fd: SessionId, viewer_char_id: u32, item: &FloorItemData) -> i32 {
+    let mut in_table = false;
+    for &spotter in item.data.traps_table.iter() {
+        if spotter == viewer_char_id { in_table = true; break; }
+    }
+    let item_entry = item_db::search(item.data.id);
+    if item_entry.typ as i32 == ITM_TRAPS && !in_table { return 0; }
+
+    if !session_exists(fd) { return 0; }
+    wfifohead(fd, 6000);
+    look2_write_header(fd, item.x, item.y, item.id);
+
+    wfifob(fd, 11, 0x02);
+    if item.data.custom_icon != 0 {
+        wfifow(fd, 16, ((item.data.custom_icon as u16).wrapping_add(49152)).swap_bytes());
+        wfifob(fd, 18, item.data.custom_icon_color as u8);
+    } else {
+        wfifow(fd, 16, (item_entry.icon as u16).swap_bytes());
+        wfifob(fd, 18, item_entry.icon_color as u8);
+    }
+    wfifob(fd, 19, 0);
+    wfifow(fd, 20, 0);
+    wfifob(fd, 22, 0);
+
+    wfifoset(fd, encrypt(fd) as usize);
+    0
+}
+
+// ─── Typed appearance wrappers ───────────────────────────────────────────────
+
+/// Send a PC's appearance to a viewer.
+pub unsafe fn clif_charlook(entity: &MapSessionData, viewer: &MapSessionData) -> i32 {
+    clif_charlook_inner(
+        entity as *const MapSessionData,
+        viewer as *const MapSessionData,
+    )
+}
+
+/// Send an NPC's appearance to a viewer.
+pub unsafe fn clif_cnpclook(npc: &NpcData, viewer: &MapSessionData) -> i32 {
+    clif_cnpclook_inner(
+        npc as *const NpcData,
+        viewer as *const MapSessionData,
+    )
+}
+
+/// Send a mob's appearance to a viewer.
+pub unsafe fn clif_cmoblook(mob: &MobSpawnData, viewer: &MapSessionData) -> i32 {
+    clif_cmoblook_inner(
+        mob as *const MobSpawnData,
+        viewer as *const MapSessionData,
+    )
 }
 
 // ─── clif_object_look_specific ───────────────────────────────────────────────
 
-/// Send a single-object look packet for a specific block-list ID.
+/// Send a single-object look packet for a specific entity ID.
 ///
 /// Mirrors `clif_object_look_specific` (~line 1716).
 pub unsafe fn clif_object_look_specific(sd: *mut MapSessionData, id: u32) -> i32 {
     if sd.is_null() { return 0; }
 
-    let b = map_id2bl(id);
-    if b.is_null() { return 0; }
+    let Some((pos, bl_type)) = crate::game::map_server::entity_position(id) else { return 0; };
+    if bl_type == BL_PC_U8 { return 0; }
 
-    if (*b).bl_type == BL_PC_U8 { return 0; }
+    let fd = (*sd).fd;
+    wfifoheader(fd, 0x07, 20);
+    wfifow(fd, 5, 1u16.swap_bytes());
+    wfifow(fd, 7, (pos.x).swap_bytes());
+    wfifow(fd, 9, (pos.y).swap_bytes());
+    wfifol(fd, 12, id.swap_bytes());
 
-    wfifoheader((*sd).fd, 0x07, 20);
-    wfifow((*sd).fd, 5, 1u16.swap_bytes());
-    wfifow((*sd).fd, 7, ((*b).x as u16).swap_bytes());
-    wfifow((*sd).fd, 9, ((*b).y as u16).swap_bytes());
-    wfifol((*sd).fd, 12, (*b).id.swap_bytes());
+    if bl_type == BL_MOB_U8 {
+        let Some(arc) = crate::game::map_server::map_id2mob_ref(id) else { return 0; };
+        let mob = &*arc.data_ptr();
+        if mob.state == MOB_DEAD || (*mob.data).mobtype == 1 { return 0; }
 
-    match (*b).bl_type {
-        t if t == BL_MOB_U8 => {
-            let mob = b as *mut MobSpawnData;
-            if (*mob).state == MOB_DEAD || (*(*mob).data).mobtype == 1 { return 0; }
-
-            if (*(*mob).data).isnpc == 0 {
-                wfifob((*sd).fd, 11, 0x05);
-                wfifow((*sd).fd, 16, (32768u16.wrapping_add((*mob).look)).swap_bytes());
-                wfifob((*sd).fd, 18, (*mob).look_color);
-                wfifob((*sd).fd, 19, (*mob).side as u8);
-                wfifow((*sd).fd, 20, 0);
-                wfifob((*sd).fd, 22, 0);
-            } else if (*(*mob).data).isnpc == 1 {
-                wfifob((*sd).fd, 11, 12);
-                wfifow((*sd).fd, 16, (32768u16.wrapping_add((*mob).look)).swap_bytes());
-                wfifob((*sd).fd, 18, (*mob).look_color);
-                wfifob((*sd).fd, 19, (*mob).side as u8);
-                wfifow((*sd).fd, 20, 0);
-                wfifob((*sd).fd, 22, 0);
-                (*sd).mob_len += 15;
-            }
+        if (*mob.data).isnpc == 0 {
+            wfifob(fd, 11, 0x05);
+            wfifow(fd, 16, (32768u16.wrapping_add(mob.look)).swap_bytes());
+            wfifob(fd, 18, mob.look_color);
+            wfifob(fd, 19, mob.side as u8);
+            wfifow(fd, 20, 0);
+            wfifob(fd, 22, 0);
+        } else if (*mob.data).isnpc == 1 {
+            wfifob(fd, 11, 12);
+            wfifow(fd, 16, (32768u16.wrapping_add(mob.look)).swap_bytes());
+            wfifob(fd, 18, mob.look_color);
+            wfifob(fd, 19, mob.side as u8);
+            wfifow(fd, 20, 0);
+            wfifob(fd, 22, 0);
+            (*sd).net.look.len += 15;
         }
-        t if t == BL_NPC_U8 => {
-            let nd = b as *mut NpcData;
-            if (*b).subtype != 0 || (*nd).subtype != 0 || (*nd).npctype == 1 { return 0; }
+    } else if bl_type == BL_NPC_U8 {
+        let Some(arc) = crate::game::map_server::map_id2npc_ref(id) else { return 0; };
+        let nd = &*arc.data_ptr();
+        if nd.subtype != 0 || nd.npctype == 1 { return 0; }
 
-            wfifob((*sd).fd, 11, 12);
-            wfifow((*sd).fd, 16, (32768u16.wrapping_add((*b).graphic_id as u16)).swap_bytes());
-            wfifob((*sd).fd, 18, (*b).graphic_color as u8);
-            wfifob((*sd).fd, 19, 2); // looking down
-            wfifow((*sd).fd, 20, 0);
-            wfifob((*sd).fd, 22, 0);
+        wfifob(fd, 11, 12);
+        wfifow(fd, 16, (32768u16.wrapping_add(nd.graphic_id as u16)).swap_bytes());
+        wfifob(fd, 18, nd.graphic_color as u8);
+        wfifob(fd, 19, 2); // looking down
+        wfifow(fd, 20, 0);
+        wfifob(fd, 22, 0);
+    } else if bl_type == BL_ITEM_U8 {
+        let Some(arc) = crate::game::map_server::map_id2fl_ref(id) else { return 0; };
+        let item = &*arc.data_ptr();
+
+        let mut in_table = false;
+        for &spotter in item.data.traps_table.iter() {
+            if spotter == (*sd).player.identity.id { in_table = true; break; }
         }
-        t if t == BL_ITEM_U8 => {
-            let item = b as *mut FloorItemData;
 
-            let mut in_table = false;
-            for &spotter in (*item).data.traps_table.iter() {
-                if spotter == (*sd).player.identity.id { in_table = true; break; }
-            }
+        let item_entry = item_db::search(item.data.id);
 
-            let item_entry = item_db::search((*item).data.id);
-
-            if item_entry.typ as i32 == ITM_TRAPS && !in_table {
-                return 0;
-            }
-
-            wfifob((*sd).fd, 11, 0x02);
-
-            if (*item).data.custom_icon != 0 {
-                wfifow((*sd).fd, 16, (((*item).data.custom_icon as u16).wrapping_add(49152)).swap_bytes());
-                wfifob((*sd).fd, 18, (*item).data.custom_icon_color as u8);
-            } else {
-                wfifow((*sd).fd, 16, (item_entry.icon as u16).swap_bytes());
-                wfifob((*sd).fd, 18, item_entry.icon_color as u8);
-            }
-
-            wfifob((*sd).fd, 19, 0);
-            wfifow((*sd).fd, 20, 0);
-            wfifob((*sd).fd, 22, 0);
-            wfifob((*sd).fd, 2, 0x13);
-            wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
+        if item_entry.typ as i32 == ITM_TRAPS && !in_table {
             return 0;
         }
-        _ => {}
+
+        wfifob(fd, 11, 0x02);
+
+        if item.data.custom_icon != 0 {
+            wfifow(fd, 16, ((item.data.custom_icon as u16).wrapping_add(49152)).swap_bytes());
+            wfifob(fd, 18, item.data.custom_icon_color as u8);
+        } else {
+            wfifow(fd, 16, (item_entry.icon as u16).swap_bytes());
+            wfifob(fd, 18, item_entry.icon_color as u8);
+        }
+
+        wfifob(fd, 19, 0);
+        wfifow(fd, 20, 0);
+        wfifob(fd, 22, 0);
+        wfifob(fd, 2, 0x13);
+        wfifoset(fd, encrypt(fd) as usize);
+        return 0;
     }
 
-    wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -475,9 +490,9 @@ pub unsafe fn clif_object_look_specific(sd: *mut MapSessionData, id: u32) -> i32
 ///
 /// Direct call (not callback). Mirrors `clif_mob_look_start` (~line 1813).
 pub unsafe fn clif_mob_look_start(sd: *mut MapSessionData) -> i32 {
-    (*sd).mob_count = 0;
-    (*sd).mob_len   = 0;
-    (*sd).mob_item  = 0;
+    (*sd).net.look.count = 0;
+    (*sd).net.look.len   = 0;
+    (*sd).net.look.item  = 0;
 
     if !session_exists((*sd).fd) {
         return 0;
@@ -493,42 +508,29 @@ pub unsafe fn clif_mob_look_start(sd: *mut MapSessionData) -> i32 {
 ///
 /// Direct call (not callback). Mirrors `clif_mob_look_close` (~line 1832).
 pub unsafe fn clif_mob_look_close(sd: *mut MapSessionData) -> i32 {
-    if (*sd).mob_count == 0 { return 0; }
+    if (*sd).net.look.count == 0 { return 0; }
 
-    if (*sd).mob_item == 0 {
-        wfifob((*sd).fd, ((*sd).mob_len + 7) as usize, 0);
-        (*sd).mob_len += 1;
+    if (*sd).net.look.item == 0 {
+        wfifob((*sd).fd, ((*sd).net.look.len + 7) as usize, 0);
+        (*sd).net.look.len += 1;
     }
 
-    wfifoheader((*sd).fd, 0x07, ((*sd).mob_len + 4) as u16);
-    wfifow((*sd).fd, 5, ((*sd).mob_count as u16).swap_bytes());
+    wfifoheader((*sd).fd, 0x07, ((*sd).net.look.len + 4) as u16);
+    wfifow((*sd).fd, 5, ((*sd).net.look.count as u16).swap_bytes());
     wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
     0
 }
 
 // ─── clif_cnpclook_sub ───────────────────────────────────────────────────────
 
-///
 /// Send full NPC (charstate NPC) appearance packet to a player.
 ///
-/// Args:
-///   - `bl`:        the block-list entry being iterated
-///   - `look_type`: `LOOK_GET` or `LOOK_SEND`
-///   - `arg`:       if `LOOK_GET`, `bl` is the NPC and `arg` is cast to `*mut MapSessionData`;
-///                  if `LOOK_SEND`, `bl` is the player and `arg` is cast to `*mut NpcData`.
+/// `nd` is the NPC whose appearance is being sent.
+/// `sd` is the player receiving the packet.
 ///
 /// Mirrors `clif_cnpclook_sub` (~line 2773).
-pub unsafe fn clif_cnpclook_inner(bl: *const BlockList, look_type: i32, arg: *const BlockList) -> i32 {
-    let (nd, sd): (*const NpcData, *const MapSessionData) = if look_type == LOOK_GET {
-        if bl.is_null() { return 0; }
-        if arg.is_null() { return 0; }
-        (bl as *const NpcData, arg as *const MapSessionData)
-    } else {
-        // LOOK_SEND
-        if bl.is_null() { return 0; }
-        if arg.is_null() { return 0; }
-        (arg as *const NpcData, bl as *const MapSessionData)
-    };
+unsafe fn clif_cnpclook_inner(nd: *const NpcData, sd: *const MapSessionData) -> i32 {
+    if nd.is_null() || sd.is_null() { return 0; }
 
     if (*nd).m != (*sd).m || (*nd).npctype != 1 {
         return 0;
@@ -770,27 +772,14 @@ pub unsafe fn clif_cnpclook_inner(bl: *const BlockList, look_type: i32, arg: *co
 
 // ─── clif_cmoblook_sub ───────────────────────────────────────────────────────
 
-///
 /// Send full character-mob (charstate mob) appearance packet to a player.
 ///
-/// Args:
-///   - `bl`:        the block-list entry being iterated
-///   - `look_type`: `LOOK_GET` or `LOOK_SEND`
-///   - `arg`:       if `LOOK_GET`, `bl` is the mob and `arg` is cast to `*mut MapSessionData`;
-///                  if `LOOK_SEND`, `bl` is the player and `arg` is cast to `*mut MobSpawnData`.
+/// `mob` is the mob whose appearance is being sent.
+/// `sd` is the player receiving the packet.
 ///
 /// Mirrors `clif_cmoblook_sub` (~line 3016).
-pub unsafe fn clif_cmoblook_inner(bl: *const BlockList, look_type: i32, arg: *const BlockList) -> i32 {
-    let (mob, sd): (*const MobSpawnData, *const MapSessionData) = if look_type == LOOK_GET {
-        if bl.is_null() { return 0; }
-        if arg.is_null() { return 0; }
-        (bl as *const MobSpawnData, arg as *const MapSessionData)
-    } else {
-        // LOOK_SEND
-        if bl.is_null() { return 0; }
-        if arg.is_null() { return 0; }
-        (arg as *const MobSpawnData, bl as *const MapSessionData)
-    };
+unsafe fn clif_cmoblook_inner(mob: *const MobSpawnData, sd: *const MapSessionData) -> i32 {
+    if mob.is_null() || sd.is_null() { return 0; }
 
     if (*mob).m != (*sd).m || (*(*mob).data).mobtype != 1 || (*mob).state == 1 {
         return 0;
@@ -1030,32 +1019,21 @@ pub unsafe fn clif_cmoblook_inner(bl: *const BlockList, look_type: i32, arg: *co
 
 // ─── clif_charlook_sub ───────────────────────────────────────────────────────
 
-///
 /// Send full player appearance packet to another player.
 ///
-/// Args:
-///   - `bl`:        the block-list entry being iterated
-///   - `look_type`: `LOOK_GET` or `LOOK_SEND`
-///   - `arg`:       if `LOOK_GET`, `bl` is the player whose appearance we send and `arg` is the viewer;
-///                  if `LOOK_SEND`, `bl` is the viewer and `arg` is the player whose appearance we send.
+/// `entity` is the player whose appearance we send.
+/// `viewer` is the player receiving the packet.
 ///
 /// Mirrors `clif_charlook_sub` (~line 3285).
-pub unsafe fn clif_charlook_inner(bl: *const BlockList, look_type: i32, arg: *const MapSessionData) -> i32 {
+unsafe fn clif_charlook_inner(entity: *const MapSessionData, viewer: *const MapSessionData) -> i32 {
+    if entity.is_null() || viewer.is_null() { return 0; }
+    if entity == viewer { return 0; }
     // sd  = the player whose appearance we send
     // src_sd = the player receiving the packet
     // SAFETY: locals are *mut for callees (clif_isingroup, pc_isequip) that still expect *mut.
     // This function is verified read-only — no field mutations.
-    let (sd, src_sd): (*mut MapSessionData, *mut MapSessionData) = if look_type == LOOK_GET {
-        if bl.is_null() { return 0; }
-        if arg.is_null() { return 0; }
-        // C: sd=(USER*)bl, src_sd=va_arg — if src_sd==sd return 0
-        if bl as *const MapSessionData == arg { return 0; }
-        (bl as *const MapSessionData as *mut MapSessionData, arg as *const MapSessionData as *mut MapSessionData)
-    } else {
-        if bl.is_null() { return 0; }
-        if arg.is_null() { return 0; }
-        (arg as *const MapSessionData as *mut MapSessionData, bl as *const MapSessionData as *mut MapSessionData)
-    };
+    let sd: *mut MapSessionData = entity as *mut MapSessionData;
+    let src_sd: *mut MapSessionData = viewer as *mut MapSessionData;
 
     if (*sd).m != (*src_sd).m { return 0; }
 
@@ -1206,7 +1184,7 @@ pub unsafe fn clif_charlook_inner(bl: *const BlockList, look_type: i32, arg: *co
     let helm_id = pc_isequip(sd, EQ_HELM) as u32;
     let helm_item = item_db::search(helm_id);
     if helm_id == 0
-        || ((*sd).player.appearance.setting_flags & FLAG_HELM as u16) == 0
+        || ((*sd).player.appearance.setting_flags & FLAG_HELM) == 0
         || helm_item.look == -1
     {
         wfifob((*src_sd).fd, 35, 0);
@@ -1276,7 +1254,7 @@ pub unsafe fn clif_charlook_inner(bl: *const BlockList, look_type: i32, arg: *co
     let necklace_id = pc_isequip(sd, EQ_NECKLACE) as u32;
     let necklace_item = item_db::search(necklace_id);
     if necklace_id == 0
-        || ((*sd).player.appearance.setting_flags & FLAG_NECKLACE as u16) == 0
+        || ((*sd).player.appearance.setting_flags & FLAG_NECKLACE) == 0
         || necklace_item.look == -1
     {
         wfifow((*src_sd).fd, 50, 0xFFFF);

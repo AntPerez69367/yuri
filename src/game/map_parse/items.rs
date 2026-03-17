@@ -3,18 +3,17 @@
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
 
-use crate::database::map_db::{BlockList, WarpList, BLOCK_SIZE};
+use crate::database::map_db::{WarpList, BLOCK_SIZE};
 use crate::database::map_db::raw_map_ptr;
 use crate::session::session_exists;
 use crate::game::mob::MOB_DEAD;
 use crate::game::pc::{
     MapSessionData,
-    BL_PC, BL_MOB, BL_NPC,
+    BL_PC,
     EQ_WEAP, EQ_ARMOR, EQ_SHIELD, EQ_HELM, EQ_LEFT, EQ_RIGHT,
     EQ_SUBLEFT, EQ_SUBRIGHT, EQ_FACEACC, EQ_CROWN, EQ_MANTLE, EQ_NECKLACE, EQ_BOOTS, EQ_COAT,
     SFLAG_FULLSTATS, SFLAG_HPMP, SFLAG_XPMONEY,
     map_msg,
-    LOOK_SEND,
 };
 
 // MAP_EQ* message indices
@@ -33,7 +32,6 @@ const MAP_EQNECKLACE: usize = 24;
 const MAP_EQBOOTS:    usize = 25;
 const MAP_EQCOAT:     usize = 26;
 
-use crate::game::mob::MobSpawnData;
 use crate::game::scripting::types::floor::FloorItemData;
 use crate::common::player::inventory::MAX_INVENTORY;
 use crate::common::player::spells::MAX_MAGIC_TIMERS;
@@ -56,7 +54,7 @@ const SCRIPT: u8 = 0;
 use crate::game::map_parse::player_state::clif_sendstatus;
 use crate::game::map_parse::chat::{clif_sendmsg, clif_sendminitext};
 use crate::game::client::visual::{clif_getequiptype, broadcast_update_state};
-use crate::game::map_parse::combat::clif_sendaction;
+use crate::game::map_parse::combat::clif_sendaction_pc;
 use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from};
 use crate::game::map_server::{map_id2name, map_additem};
 use crate::game::pc::{
@@ -71,7 +69,7 @@ use crate::database::magic_db;
 use crate::game::pc::pc_addtocurrent_inner;
 use crate::game::block::AreaType;
 use crate::game::block_grid;
-use crate::game::map_parse::visual::clif_object_look_sub2_inner;
+use crate::game::map_parse::visual::clif_object_look2_item;
 
 // ─── Lua dispatch helpers ─────────────────────────────────────────────────────
 
@@ -566,7 +564,7 @@ pub unsafe fn clif_parsegetitem(sd: *mut MapSessionData) -> i32 {
         broadcast_update_state(sd);
     }
 
-    clif_sendaction((*sd).as_bl_mut(), 4, 40, 0);
+    clif_sendaction_pc(&mut *sd, 4, 40, 0);
 
     (*sd).pickuptype = rfifob((*sd).fd, 5);
 
@@ -673,9 +671,8 @@ pub unsafe fn clif_parsewield(sd: *mut MapSessionData) -> i32 {
 
 /// foreach_in_cell callback: add gold to an existing floor item.
 ///
-pub unsafe fn clif_addtocurrent_inner(bl: *mut BlockList, def: *mut i32, amount: u32, _sd: *mut MapSessionData) -> i32 {
-    if bl.is_null() { return 0; }
-    let fl = bl as *mut FloorItemData;
+pub unsafe fn clif_addtocurrent_inner(fl: *mut FloorItemData, def: *mut i32, amount: u32, _sd: *mut MapSessionData) -> i32 {
+    if fl.is_null() { return 0; }
 
     if !def.is_null() && *def != 0 { return 0; }
 
@@ -718,7 +715,7 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
 
     let mut amount = amounts;
 
-    clif_sendaction((*sd).as_bl_mut(), 5, 20, 0);
+    clif_sendaction_pc(&mut *sd, 5, 20, 0);
 
     let mut fl = Box::new(unsafe { std::mem::zeroed::<FloorItemData>() });
     (*fl).m = (*sd).m;
@@ -775,14 +772,14 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
         let cell_ids = grid.ids_at_tile((*sd).x, (*sd).y);
         for id in cell_ids {
             if let Some(fl_arc) = crate::game::map_server::map_id2fl_ref(id) { let fl = &mut *fl_arc.write();
-                clif_addtocurrent_inner(fl.bl_ptr_mut(), def.as_mut_ptr(), amount, std::ptr::null_mut());
+                clif_addtocurrent_inner(fl as *mut FloorItemData, def.as_mut_ptr(), amount, std::ptr::null_mut());
             }
         }
     }
 
     if def[0] == 0 {
         let fl_raw = Box::into_raw(fl);
-        map_additem((*fl_raw).bl_ptr_mut());
+        map_additem(fl_raw as *mut FloorItemData);
 
         sl_doscript_2("after_drop_gold", None, (*sd).id, (*fl_raw).id);
 
@@ -804,13 +801,12 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
 
         sl_doscript_2("characterLog", Some("dropWrite"), (*sd).id, (*fl_raw).id);
 
-        let fl_bl = (*fl_raw).bl_ptr();
         if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
             let slot = &*raw_map_ptr().add((*sd).m as usize);
             let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_object_look_sub2_inner(pc_arc.read().bl_ptr(), LOOK_SEND, fl_bl);
+                    clif_object_look2_item(pc_arc.fd, pc_arc.read().player.identity.id, &*fl_raw);
                 }
             }
         }
@@ -946,7 +942,7 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
             let cell_ids = grid.ids_at_tile(x as u16, y as u16);
             for cid in cell_ids {
                 if let Some(fl_ref_arc) = crate::game::map_server::map_id2fl_ref(cid) { let fl_ref = &mut *fl_ref_arc.write();
-                    pc_addtocurrent_inner(fl_ref.bl_ptr_mut(), def.as_mut_ptr(), id as i32, item_type, sd);
+                    pc_addtocurrent_inner(&mut *fl_ref as *mut FloorItemData, def.as_mut_ptr(), id as i32, item_type, sd);
                 }
             }
         }
@@ -1013,21 +1009,20 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
         sndbuf[28] = 0x02;
         sndbuf[29] = 0x00;
 
-        clif_send(sndbuf.as_ptr(), 48, (*sd).bl_ptr_mut(), SAMEAREA);
+        clif_send(sndbuf.as_ptr(), 48, (*sd).id, (*sd).m, (*sd).x, (*sd).y, BL_PC as u8, SAMEAREA);
     } else {
-        clif_sendaction((*sd).as_bl_mut(), 2, 30, 0);
+        clif_sendaction_pc(&mut *sd, 2, 30, 0);
     }
 
     if def[0] == 0 {
         let fl_raw = Box::into_raw(fl);
-        map_additem((*fl_raw).bl_ptr_mut());
-        let fl_bl = (*fl_raw).bl_ptr();
+        map_additem(fl_raw as *mut FloorItemData);
         if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
             let slot = &*raw_map_ptr().add((*sd).m as usize);
             let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_object_look_sub2_inner(pc_arc.read().bl_ptr(), LOOK_SEND, fl_bl);
+                    clif_object_look2_item(pc_arc.fd, pc_arc.read().player.identity.id, &*fl_raw);
                 }
             }
         }
@@ -1042,23 +1037,23 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
 
 /// foreach_in_cell callback: check if a cell is blocked for throwing.
 ///
-pub unsafe fn clif_throw_check_inner(bl: *mut BlockList, found: *mut i32) -> i32 {
-    if bl.is_null() { return 0; }
-
+pub unsafe fn clif_throw_check_id(entity_id: u32, found: *mut i32) -> i32 {
     if !found.is_null() && *found != 0 { return 0; }
 
-    if (*bl).bl_type == BL_NPC as u8 {
-        if (*bl).subtype != SCRIPT as u8 { return 0; }
-    }
-    if (*bl).bl_type == BL_MOB as u8 {
-        let mob = bl as *mut MobSpawnData;
-        if (*mob).state == MOB_DEAD { return 0; }
-    }
-    if (*bl).bl_type == BL_PC as u8 {
-        let tsd = bl as *mut MapSessionData;
-        if (*tsd).player.combat.state == 1 || ((*tsd).optFlags & OPT_FLAG_STEALTH as u64) != 0 {
+    // Check entity type and alive status via typed lookups
+    if let Some(arc) = crate::game::map_server::map_id2npc_ref(entity_id) {
+        let nd = &*arc.data_ptr();
+        if nd.subtype != SCRIPT as u8 { return 0; }
+    } else if let Some(arc) = crate::game::map_server::map_id2mob_ref(entity_id) {
+        let mob = &*arc.data_ptr();
+        if mob.state == MOB_DEAD { return 0; }
+    } else if let Some(arc) = crate::game::map_server::map_id2sd_pc(entity_id) {
+        let sd = arc.read();
+        if sd.player.combat.state == 1 || (sd.optFlags & OPT_FLAG_STEALTH as u64) != 0 {
             return 0;
         }
+    } else {
+        return 0; // Entity not found
     }
 
     if !found.is_null() { *found += 1; }
@@ -1143,13 +1138,7 @@ pub unsafe fn clif_parsethrow(sd: *mut MapSessionData) -> i32 {
         if let Some(grid) = block_grid::get_grid(m as usize) {
             let cell_ids = grid.ids_at_tile(x1 as u16, y1 as u16);
             for cid in cell_ids {
-                let bl = crate::game::map_server::map_id2bl_ref(cid);
-                if !bl.is_null() {
-                    let ty = (*bl).bl_type as i32;
-                    if ty == BL_NPC || ty == BL_PC || ty == BL_MOB {
-                        clif_throw_check_inner(bl, found.as_mut_ptr());
-                    }
-                }
+                clif_throw_check_id(cid, found.as_mut_ptr());
             }
         }
         // read_pass(m, x, y) — accesses map[m].pass[x + y*xs]
