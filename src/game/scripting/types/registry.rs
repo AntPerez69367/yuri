@@ -243,7 +243,7 @@ impl UserData for MapRegObject {
             // Extract the map index synchronously from the session data pointer.
             let m = unsafe {
                 let sd = this.ptr as *const crate::game::pc::MapSessionData;
-                (*sd).bl.m as i32
+                (*sd).m as i32
             };
             crate::database::blocking_run_async(async move {
                 unsafe { crate::game::map_server::map_setglobalreg_str(m, key, val_i).await; }

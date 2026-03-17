@@ -10,8 +10,8 @@
 //! - `m` is a valid, loaded map slot index.
 #![allow(non_upper_case_globals)]
 
-use crate::database::map_db::{BlockList, MAP_SLOTS};
-use crate::game::mob::{BL_MOB, MOB_DEAD, MobSpawnData};
+use crate::database::map_db::MAP_SLOTS;
+use crate::game::mob::MOB_DEAD;
 
 /// Returns the live map pointer (delegates to `map_db::raw_map_ptr()`).
 #[inline(always)]
@@ -57,36 +57,33 @@ pub unsafe fn map_is_loaded(m: i32) -> bool {
 
 // ─── is_alive ────────────────────────────────────────────────────────────────
 
-/// Return `true` if the entity is alive and visible:
-/// - Mobs: `state != MOB_DEAD`.
-/// - PCs: not dead (`status.state != 1`) and not stealthed (`optFlags & OPT_FLAG_STEALTH == 0`).
-/// - All other entity types: always `true`.
-///
-/// # Safety
-/// `bl` must be a valid, aligned pointer to a live `BlockList` (or a struct
-/// that begins with `BlockList` as its first field, such as `MapSessionData`
-/// or `MobSpawnData`).
-pub unsafe fn is_alive(bl: *mut BlockList) -> bool {
-    use crate::game::mob::BL_PC;
-    use crate::game::pc::{MapSessionData, OPT_FLAG_STEALTH, PC_DIE};
 
-    if bl.is_null() {
-        return false;
-    }
-    let b = &*bl;
-    let bl_type = b.bl_type as i32;
+/// Return `true` if the entity with the given ID is alive, using typed lookups.
+pub fn is_alive_id(id: u32) -> bool {
+    use crate::game::mob::{MOB_START_NUM, FLOORITEM_START_NUM, NPC_START_NUM};
+    use crate::game::pc::{OPT_FLAG_STEALTH, PC_DIE};
+    use crate::game::map_server::{map_id2sd_pc, map_id2mob_ref};
 
-    if bl_type == BL_MOB {
-        let mob = bl as *mut MobSpawnData;
-        (*mob).state != MOB_DEAD
-    } else if bl_type == BL_PC {
-        let sd = bl as *mut MapSessionData;
-        let dead = (*sd).player.combat.state == PC_DIE as i8;
-        let stealth = ((*sd).optFlags & OPT_FLAG_STEALTH) != 0;
-        !dead && !stealth
+    if id < MOB_START_NUM {
+        // PC
+        if let Some(arc) = map_id2sd_pc(id) {
+            let sd = arc.read();
+            let dead = sd.player.combat.state == PC_DIE as i8;
+            let stealth = (sd.optFlags & OPT_FLAG_STEALTH) != 0;
+            return !dead && !stealth;
+        }
+    } else if id >= NPC_START_NUM {
+        return true; // NPCs are always alive
+    } else if id >= FLOORITEM_START_NUM {
+        return true; // Floor items are always alive
     } else {
-        true
+        // Mob
+        if let Some(arc) = map_id2mob_ref(id) {
+            let mob = arc.read();
+            return mob.state != MOB_DEAD;
+        }
     }
+    false
 }
 
 // ─── map_initblock ──────────────────────────────────────────────────────────
@@ -118,74 +115,37 @@ pub unsafe fn map_termblock() {}
 
 // ─── map_addblock ───────────────────────────────────────────────────────────
 
-/// Insert `bl` into the block grid.
-pub unsafe fn map_addblock(bl: *mut crate::database::map_db::BlockList) -> i32 {
-    if bl.is_null() { return 1; }
-    let bl = &mut *bl;
+// ─── Value-based grid API ────────────────────────────────────────────────────
 
-    let m = bl.m as usize;
-    if m >= crate::database::map_db::MAP_SLOTS || map_ptr().is_null() {
-        tracing::error!("[map_addblock] invalid map id id={} m={m}", bl.id);
-        return 1;
-    }
-    let slot = &*map_ptr().add(m);
-
-    if slot.registry.is_null() {
-        tracing::error!("[map_addblock] map not loaded id={} m={m}", bl.id);
-        return 1;
-    }
-
-    let x = bl.x as i32;
-    let y = bl.y as i32;
-    if x < 0 || x >= slot.xs as i32 || y < 0 || y >= slot.ys as i32 {
-        tracing::error!("[map_addblock] out-of-bounds m={m} x={x} y={y} xs={} ys={} id={}", slot.xs, slot.ys, bl.id);
-        return 1;
-    }
-
+/// Insert entity into the block grid by ID and coordinates.
+pub fn map_addblock_id(id: u32, bl_type: u8, m: u16, x: u16, y: u16) -> i32 {
+    let m = m as usize;
+    if m >= crate::database::map_db::MAP_SLOTS { return 1; }
     if let Some(g) = crate::game::block_grid::get_grid_mut(m) {
-        g.add(bl.id, bl.x, bl.y, bl.bl_type);
+        g.add(id, x, y, bl_type);
     }
-
     0
 }
 
-// ─── map_delblock ───────────────────────────────────────────────────────────
-
-/// Remove `bl` from the block grid.
-pub unsafe fn map_delblock(bl: *mut crate::database::map_db::BlockList) -> i32 {
-    if bl.is_null() { return 0; }
-    let bl = &mut *bl;
-
-    let m = bl.m as usize;
+/// Remove entity from the block grid by ID and map.
+pub fn map_delblock_id(id: u32, m: u16) -> i32 {
+    let m = m as usize;
+    if m >= crate::database::map_db::MAP_SLOTS { return 0; }
     if let Some(g) = crate::game::block_grid::get_grid_mut(m) {
-        g.remove(bl.id, bl.x, bl.y, bl.bl_type);
+        g.remove(id);
     }
-
     0
 }
 
-// ─── map_moveblock ──────────────────────────────────────────────────────────
-
-/// Remove `bl` from current cell, update coords, re-insert.
-pub unsafe fn map_moveblock(bl: *mut crate::database::map_db::BlockList, x1: i32, y1: i32) -> i32 {
-    if bl.is_null() { return 0; }
-    let b = &mut *bl;
-    let m = b.m as usize;
-    let old_x = b.x;
-    let old_y = b.y;
-    let new_x = x1 as u16;
-    let new_y = y1 as u16;
-
+/// Move entity on the grid by ID and coordinates.
+pub fn map_moveblock_id(id: u32, m: u16, old_x: u16, old_y: u16, new_x: u16, new_y: u16) -> i32 {
+    let m = m as usize;
+    if m >= crate::database::map_db::MAP_SLOTS { return 0; }
     if let Some(g) = crate::game::block_grid::get_grid_mut(m) {
-        g.move_entity(b.id, old_x, old_y, new_x, new_y);
+        g.move_entity(id, old_x, old_y, new_x, new_y);
     }
-
-    b.x = new_x;
-    b.y = new_y;
     0
 }
-
-// ─── Helper: map user count ─────────────────────────────────────────────────
 
 /// Return the number of players on map `m`, using the block grid's user_count.
 pub fn map_user_count(m: usize) -> i32 {

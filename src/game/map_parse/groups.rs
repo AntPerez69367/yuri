@@ -49,10 +49,9 @@ unsafe fn pc_isequip(sd: *mut MapSessionData, slot: i32) -> u32 {
     crate::game::pc::pc_isequip(sd, slot) as u32
 }
 
-/// Dispatch a Lua event with two block_list arguments.
-#[allow(dead_code)]
-unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
-    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
+/// Dispatch a Lua event with two entity ID arguments.
+fn sl_doscript_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
+    crate::game::scripting::doscript_blargs_id(root, method, &[id1, id2])
 }
 
 
@@ -194,7 +193,7 @@ pub unsafe fn clif_groupstatus(sd: *mut MapSessionData) -> i32 {
         let name_ptr = name_bytes.as_ptr();
         let name_len = name_bytes.len();
 
-        wfifol_be((*sd).fd, len + 7, (*tsd).bl.id);
+        wfifol_be((*sd).fd, len + 7, (*tsd).id);
         wfifob((*sd).fd, len + 11, name_len as u8);
         wfifop_copy((*sd).fd, len + 12, name_ptr as *const u8, name_len);
 
@@ -324,7 +323,7 @@ pub unsafe fn clif_grouphealth_update(sd: *mut MapSessionData) -> i32 {
         wfifob((*sd).fd, 4, 0x03);
         wfifob((*sd).fd, 5, 0x03);
 
-        wfifol_be((*sd).fd, 6, (*tsd).bl.id);
+        wfifol_be((*sd).fd, 6, (*tsd).id);
 
         let name_bytes = (*tsd).player.identity.name.as_bytes();
         let name_len = name_bytes.len();
@@ -372,7 +371,7 @@ pub unsafe fn clif_addgroup(sd: *mut MapSessionData) -> i32 {
     }
 
     if (*tsd).group_count != 0 {
-        if (*tsd).group_leader == (*sd).group_leader && (*sd).group_leader == (*sd).bl.id {
+        if (*tsd).group_leader == (*sd).group_leader && (*sd).group_leader == (*sd).id {
             clif_leavegroup(tsd);
             return 0;
         }
@@ -389,8 +388,8 @@ pub unsafe fn clif_addgroup(sd: *mut MapSessionData) -> i32 {
     }
 
     // Map canGroup check
-    let sd_map_ok = if map_is_loaded((*sd).bl.m) {
-        (*get_map_ptr((*sd).bl.m)).can_group
+    let sd_map_ok = if map_is_loaded((*sd).m) {
+        (*get_map_ptr((*sd).m)).can_group
     } else { 0 };
     if sd_map_ok == 0 {
         clif_sendminitext(sd,
@@ -398,8 +397,8 @@ pub unsafe fn clif_addgroup(sd: *mut MapSessionData) -> i32 {
         return 0;
     }
 
-    let tsd_map_ok = if map_is_loaded((*tsd).bl.m) {
-        (*get_map_ptr((*tsd).bl.m)).can_group
+    let tsd_map_ok = if map_is_loaded((*tsd).m) {
+        (*get_map_ptr((*tsd).m)).can_group
     } else { 0 };
     if tsd_map_ok == 0 {
         clif_sendminitext(sd,
@@ -539,7 +538,7 @@ pub unsafe fn clif_leavegroup(sd: *mut MapSessionData) -> i32 {
 pub unsafe fn clif_findmount(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
 
-    let (mut x, mut y) = ((*sd).bl.x as i32, (*sd).bl.y as i32);
+    let (mut x, mut y) = ((*sd).x as i32, (*sd).y as i32);
     match (*sd).player.combat.side {
         0 => { y -= 1; }
         1 => { x += 1; }
@@ -548,7 +547,7 @@ pub unsafe fn clif_findmount(sd: *mut MapSessionData) -> i32 {
         _ => {}
     }
 
-    let mob_id = match block_grid::first_in_cell((*sd).bl.m as usize, x as u16, y as u16, BL_MOB) {
+    let mob_id = match block_grid::first_in_cell((*sd).m as usize, x as u16, y as u16, BL_MOB) {
         Some(id) => id,
         None => return 0,
     };
@@ -561,15 +560,15 @@ pub unsafe fn clif_findmount(sd: *mut MapSessionData) -> i32 {
 
     if (*sd).player.combat.state != 0 { return 0; }
 
-    let can_mount = if map_is_loaded((*sd).bl.m) {
-        (*get_map_ptr((*sd).bl.m)).can_mount
+    let can_mount = if map_is_loaded((*sd).m) {
+        (*get_map_ptr((*sd).m)).can_mount
     } else { 0 };
     if can_mount == 0 && (*sd).player.identity.gm_level == 0 {
         clif_sendminitext(sd, b"You cannot mount here.\0".as_ptr() as *const i8);
         return 0;
     }
 
-    sl_doscript_2(b"onMount\0".as_ptr() as *const i8, std::ptr::null(), &mut (*sd).bl as *mut BlockList, &mut (*mob).bl as *mut BlockList);
+    sl_doscript_2("onMount", None, (*sd).id, (*mob).id);
     0
 }
 
@@ -586,7 +585,7 @@ pub unsafe fn clif_isingroup(
     let groupid     = (*sd).groupid as usize;
 
     for x in 0..group_count {
-        if groups_get(groupid, x) == (*tsd).bl.id {
+        if groups_get(groupid, x) == (*tsd).id {
             return 1;
         }
     }
@@ -610,13 +609,13 @@ pub unsafe fn clif_canmove_sub_inner(
     if (*bl).bl_type as i32 == BL_PC {
         let tsd = bl as *mut MapSessionData;
         if !tsd.is_null() {
-            let show_ghosts = if map_is_loaded((*tsd).bl.m) {
-                (*get_map_ptr((*tsd).bl.m)).show_ghosts
+            let show_ghosts = if map_is_loaded((*tsd).m) {
+                (*get_map_ptr((*tsd).m)).show_ghosts
             } else { 0 };
 
             if (show_ghosts != 0
                 && (*tsd).player.combat.state == 1    // tsd is dead (ghost)
-                && (*tsd).bl.id != (*sd).bl.id        // not self
+                && (*tsd).id != (*sd).id        // not self
                 && (*sd).player.combat.state != 1     // sd is alive
                 && ((*sd).optFlags & OPT_FLAG_GHOSTS) == 0)
                 || ((*tsd).player.combat.state == -1)
@@ -638,7 +637,7 @@ pub unsafe fn clif_canmove_sub_inner(
         return 0;
     }
 
-    if (*bl).id != (*sd).bl.id {
+    if (*bl).id != (*sd).id {
         (*sd).canmove = 1;
     }
     0
@@ -659,34 +658,34 @@ pub unsafe fn clif_canmove(
 
     let (mut nx, mut ny) = (0i32, 0i32);
     match direct {
-        0 => { ny = (*sd).bl.y as i32 - 1; }
-        1 => { nx = (*sd).bl.x as i32 + 1; }
-        2 => { ny = (*sd).bl.y as i32 + 1; }
-        3 => { nx = (*sd).bl.x as i32 - 1; }
+        0 => { ny = (*sd).y as i32 - 1; }
+        1 => { nx = (*sd).x as i32 + 1; }
+        2 => { ny = (*sd).y as i32 + 1; }
+        3 => { nx = (*sd).x as i32 - 1; }
         _ => {}
     }
 
-    if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
-        let cell_ids = grid.ids_at_tile((*sd).bl.x, (*sd).bl.y);
+    if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+        let cell_ids = grid.ids_at_tile((*sd).x, (*sd).y);
         for id in cell_ids {
             if let Some(arc) = crate::game::map_server::map_id2mob_ref(id) {
                 let mut guard = arc.write();
-                clif_canmove_sub_inner(&mut guard.bl as *mut BlockList, sd);
+                clif_canmove_sub_inner(guard.bl_ptr_mut(), sd);
             } else if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
                 let mut guard = arc.write();
-                clif_canmove_sub_inner(&mut guard.bl as *mut BlockList, sd);
+                clif_canmove_sub_inner(guard.bl_ptr_mut(), sd);
             }
         }
         let cell_ids2 = grid.ids_at_tile(nx as u16, ny as u16);
         for id in cell_ids2 {
             if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
                 let mut guard = arc.write();
-                clif_canmove_sub_inner(&mut guard.bl as *mut BlockList, sd);
+                clif_canmove_sub_inner(guard.bl_ptr_mut(), sd);
             }
         }
     }
 
-    if clif_object_canmove((*sd).bl.m as i32, nx, ny, direct) != 0 {
+    if clif_object_canmove((*sd).m as i32, nx, ny, direct) != 0 {
         (*sd).canmove = 1;
     }
     (*sd).canmove
@@ -787,7 +786,7 @@ pub unsafe fn clif_pb_sub_inner(
 
     let offset = *len_ptr as usize;
 
-    wfifol_be((*sd).fd, offset + 8, (*tsd).bl.id);
+    wfifol_be((*sd).fd, offset + 8, (*tsd).id);
     wfifob((*sd).fd, offset + 12, path as u8);
     wfifol_be((*sd).fd, offset + 13, power_rating);
     wfifob((*sd).fd, offset + 17, (*tsd).player.appearance.armor_color as u8);
@@ -822,13 +821,13 @@ pub unsafe fn clif_sendpowerboard(sd: *mut MapSessionData) -> i32 {
     wfifob((*sd).fd, 5, 1);
 
     let len_ptr = len.as_mut_ptr();
-    if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
-        let slot = &*get_map_ptr((*sd).bl.m);
-        let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+    if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+        let slot = &*get_map_ptr((*sd).m);
+        let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
                 let mut guard = arc.write();
-                clif_pb_sub_inner(&mut guard.bl as *mut BlockList, sd, len_ptr);
+                clif_pb_sub_inner(guard.bl_ptr_mut(), sd, len_ptr);
             }
         }
     }

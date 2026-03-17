@@ -4,8 +4,7 @@ use std::sync::OnceLock;
 
 use crate::database::map_db::BLOCK_SIZE;
 use crate::game::map_server::{map_id2entity, GameEntity};
-use crate::game::mob::{BL_ITEM, BL_MOB, BL_NPC, MOB_DEAD};
-use crate::game::pc::{OPT_FLAG_STEALTH, PC_DIE};
+use crate::game::mob::{BL_ITEM, BL_MOB, BL_NPC};
 
 /// Single-threaded grid storage. Uses `UnsafeCell` to avoid `static mut`
 /// deprecation while keeping the same zero-overhead access pattern.
@@ -45,9 +44,9 @@ pub fn create_grid(m: usize, xs: u16, ys: u16) {
 /// is position-independent (matching the old linked list behavior).
 pub struct BlockGrid {
     cells: Vec<Vec<u32>>,
-    /// Maps entity ID → (cell_index, exact_x, exact_y) for position-independent removal
+    /// Maps entity ID → (cell_index, exact_x, exact_y, bl_type) for position-independent removal
     /// and exact-tile queries.
-    positions: HashMap<u32, (usize, u16, u16)>,
+    positions: HashMap<u32, (usize, u16, u16, u8)>,
     bxs: usize,
     bys: usize,
     pub user_count: i32,
@@ -84,21 +83,21 @@ impl BlockGrid {
         let idx = self.cell_index(x, y);
         if idx >= self.cells.len() { return; }
         self.cells[idx].push(id);
-        self.positions.insert(id, (idx, x, y));
+        self.positions.insert(id, (idx, x, y, bl_type));
         if bl_type == BL_PC { self.user_count += 1; }
     }
 
-    /// Remove entity from the grid using tracked position. Ignores x/y — uses
-    /// the positions map to find the actual cell (position-independent removal).
-    pub fn remove(&mut self, id: u32, _x: u16, _y: u16, bl_type: u8) -> bool {
-        if let Some((idx, _, _)) = self.positions.remove(&id) {
+    /// Remove entity from the grid using tracked position. All data (cell index,
+    /// coordinates, bl_type) is read from the cached `positions` map.
+    pub fn remove(&mut self, id: u32) -> bool {
+        if let Some((idx, _, _, stored_type)) = self.positions.remove(&id) {
             if idx < self.cells.len() {
                 let cell = &mut self.cells[idx];
                 if let Some(pos) = cell.iter().position(|&eid| eid == id) {
                     cell.swap_remove(pos);
                 }
             }
-            if bl_type == BL_PC { self.user_count -= 1; }
+            if stored_type == BL_PC { self.user_count -= 1; }
             true
         } else {
             false
@@ -109,25 +108,29 @@ impl BlockGrid {
     /// for removal (position-independent), not old_x/old_y.
     pub fn move_entity(&mut self, id: u32, _old_x: u16, _old_y: u16, new_x: u16, new_y: u16) {
         let new_idx = self.cell_index(new_x, new_y);
-        // Remove from actual current cell (tracked, not coordinate-based)
-        if let Some(&(old_idx, _, _)) = self.positions.get(&id) {
+        if let Some(&(old_idx, _, _, bl_type)) = self.positions.get(&id) {
             if old_idx == new_idx {
-                // Same cell — just update stored position, no cell change needed.
-                self.positions.insert(id, (old_idx, new_x, new_y));
+                self.positions.insert(id, (old_idx, new_x, new_y, bl_type));
                 return;
             }
+            // Remove from old cell
             if old_idx < self.cells.len() {
                 let cell = &mut self.cells[old_idx];
                 if let Some(pos) = cell.iter().position(|&eid| eid == id) {
                     cell.swap_remove(pos);
                 }
             }
+            // Add to new cell
+            if new_idx < self.cells.len() {
+                self.cells[new_idx].push(id);
+            }
+            self.positions.insert(id, (new_idx, new_x, new_y, bl_type));
         }
-        // Add to new cell
-        if new_idx < self.cells.len() {
-            self.cells[new_idx].push(id);
-            self.positions.insert(id, (new_idx, new_x, new_y));
-        }
+    }
+
+    /// Get the cached bl_type for an entity. Returns None if not in grid.
+    pub fn get_bl_type(&self, id: u32) -> Option<u8> {
+        self.positions.get(&id).map(|&(_, _, _, t)| t)
     }
 
     /// Collect all entity IDs in the rectangular tile region [x0..x1] x [y0..y1].
@@ -178,7 +181,7 @@ impl BlockGrid {
             .iter()
             .copied()
             .filter(|&id| {
-                if let Some(&(_, px, py)) = self.positions.get(&id) {
+                if let Some(&(_, px, py, _)) = self.positions.get(&id) {
                     px == x && py == y
                 } else {
                     false
@@ -246,54 +249,23 @@ pub fn ids_in_area(
 /// Re-export AreaType for callers migrating from block.rs.
 pub use crate::game::block::AreaType;
 
-/// Return the `BL_*` type constant for a `GameEntity`, or 0 if unknown.
-fn entity_bl_type(ent: &GameEntity) -> i32 {
-    match ent {
-        GameEntity::Player(_) => crate::game::mob::BL_PC,
-        GameEntity::Mob(_) => BL_MOB,
-        GameEntity::Npc(_) => BL_NPC,
-        GameEntity::Item(_) => BL_ITEM,
-    }
-}
-
-/// Return `true` if the entity is alive and visible.
-///
-/// - Mobs: `state != MOB_DEAD`.
-/// - PCs: not dead and not stealthed.
-/// - NPCs / Items: always alive.
-fn entity_is_alive(ent: &GameEntity) -> bool {
-    match ent {
-        GameEntity::Mob(arc) => {
-            // Use try_read to avoid deadlocking if already write-locked on this thread.
-            // If locked, conservatively assume alive.
-            match arc.try_read() {
-                Some(mob) => mob.state != MOB_DEAD,
-                None => true,
-            }
-        }
-        GameEntity::Player(arc) => {
-            match arc.try_read() {
-                Some(sd) => {
-                    let dead = sd.player.combat.state == PC_DIE as i8;
-                    let stealth = (sd.optFlags & OPT_FLAG_STEALTH) != 0;
-                    !dead && !stealth
-                }
-                None => true,
-            }
-        }
-        GameEntity::Npc(_) | GameEntity::Item(_) => true,
-    }
-}
-
 /// Filter entity IDs by `bl_type` bitmask, returning only those whose type
 /// matches the mask and that are alive (mobs not dead, PCs not dead/stealthed).
+///
+/// Uses grid-cached `bl_type` for type checking (avoids entity map lookups)
+/// and `is_alive_id` for alive checks.
 pub fn filter_by_type(ids: &[u32], bl_type_mask: i32) -> Vec<u32> {
     ids.iter()
         .copied()
         .filter(|&id| {
             if let Some(ent) = map_id2entity(id) {
-                let ty = entity_bl_type(&ent);
-                (bl_type_mask & ty) != 0 && entity_is_alive(&ent)
+                let ty = match &ent {
+                    GameEntity::Player(_) => crate::game::mob::BL_PC,
+                    GameEntity::Mob(_) => BL_MOB,
+                    GameEntity::Npc(_) => BL_NPC,
+                    GameEntity::Item(_) => BL_ITEM,
+                };
+                (bl_type_mask & ty) != 0 && crate::game::block::is_alive_id(id)
             } else {
                 false
             }
@@ -308,9 +280,8 @@ pub fn first_in_cell(m: usize, x: u16, y: u16, bl_type: i32) -> Option<u32> {
     let grid = get_grid(m)?;
     let ids = grid.ids_at_tile(x, y);
     ids.into_iter().find(|&id| {
-        if let Some(ent) = map_id2entity(id) {
-            let ty = entity_bl_type(&ent);
-            (bl_type & ty) != 0 && entity_is_alive(&ent)
+        if let Some(cached_type) = grid.get_bl_type(id) {
+            (bl_type & cached_type as i32) != 0 && crate::game::block::is_alive_id(id)
         } else {
             false
         }
@@ -345,12 +316,12 @@ mod tests {
         grid.add(100, 3, 3, 0x02);
         grid.add(200, 3, 3, 0x01);
 
-        assert!(grid.remove(100, 3, 3, 0x02));
+        assert!(grid.remove(100));
         let ids = grid.ids_in_cell(3, 3);
         assert_eq!(ids, vec![200]);
 
         // Remove non-existent returns false
-        assert!(!grid.remove(999, 3, 3, 0x02));
+        assert!(!grid.remove(999));
     }
 
     #[test]
@@ -401,7 +372,7 @@ mod tests {
         grid.add(2, 5, 5, 0x02); // BL_MOB
         assert_eq!(grid.user_count, 1); // unchanged
 
-        grid.remove(1, 5, 5, 0x01);
+        grid.remove(1);
         assert_eq!(grid.user_count, 0);
     }
 
@@ -428,7 +399,7 @@ mod tests {
     #[test]
     fn test_remove_nonexistent_no_panic() {
         let mut grid = BlockGrid::new(16, 16);
-        assert!(!grid.remove(999, 5, 5, 0x01));
+        assert!(!grid.remove(999));
     }
 
     #[test]

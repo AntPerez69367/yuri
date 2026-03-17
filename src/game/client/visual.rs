@@ -786,7 +786,7 @@ pub unsafe fn clif_sendweather(
         if map_ptr.is_null() {
             0
         } else {
-            (*map_ptr.add(sdr.bl.m as usize)).weather
+            (*map_ptr.add(sdr.m as usize)).weather
         }
     } else {
         0
@@ -848,10 +848,10 @@ pub unsafe fn clif_show_ghost(
     if map_ptr.is_null() {
         return 1;
     }
-    let map_slot = &*map_ptr.add(sdr.bl.m as usize);
+    let map_slot = &*map_ptr.add(sdr.m as usize);
 
     // If map shows ghosts, tsd is not a ghost (state != 1), or same entity → visible.
-    if map_slot.show_ghosts != 0 || tsdr.player.combat.state != 1 || sdr.bl.id == tsdr.bl.id {
+    if map_slot.show_ghosts != 0 || tsdr.player.combat.state != 1 || sdr.id == tsdr.id {
         return 1;
     }
 
@@ -1470,13 +1470,13 @@ pub unsafe fn clif_sendmob_side(mob: *mut crate::game::mob::MobSpawnData) -> i32
     buf[3] = 0x11;
     buf[4] = 0x03;
     // WBUFL(buf, 5) = SWAP32(mob->bl.id) — big-endian mob id.
-    let id_be = (mob.bl.id as u32).to_be_bytes();
+    let id_be = (mob.id as u32).to_be_bytes();
     buf[5..9].copy_from_slice(&id_be);
     // WBUFB(buf, 9) = mob->side — cast from i32 to u8.
     buf[9] = mob.side as u8;
 
     // clif_send(buf, 16, &mob->bl, AREA_WOS=5)
-    super::clif_send(buf.as_ptr(), 16, &mob.bl as *const _ as *mut _, 5)
+    super::clif_send(buf.as_ptr(), 16, mob.bl_ptr() as *mut _, 5)
 }
 
 // ─── clif_updatestate / broadcast_update_state ────────────────────────────────
@@ -1532,7 +1532,7 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
     wb(p, 0, 0xAA);
     wb(p, 3, 0x1D);
     // WFIFOL(src_sd->fd, 5) = SWAP32(sd->bl.id)  — big-endian
-    wl_be(p, 5, sd_r.bl.id as u32);
+    wl_be(p, 5, sd_r.id as u32);
 
     if sd_r.player.combat.state == 4 {
         // Disguised state: compact packet with name only.
@@ -1567,7 +1567,7 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
         // non-GMs see the raw state.
         let invis_cond = (sd_r.player.combat.state == 2
             || (sd_r.optFlags & OPT_FLAG_STEALTH) != 0)
-            && sd_r.bl.id != src_r.bl.id
+            && sd_r.id != src_r.id
             && (src_r.player.identity.gm_level != 0
                 || clif_isingroup_us(src_sd_mut, sd_mut) != 0
                 || (sd_r.gfx.dye == src_r.gfx.dye
@@ -1581,7 +1581,7 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
         }
 
         // Stealth-without-state override: show as "invisible" state 2.
-        // Note: clif_charlook_sub has || bl.id == src_sd.bl.id; C original did not — that port may have an extra clause.
+        // Note: clif_charlook_sub has || bl.id == src_sd.id; C original did not — that port may have an extra clause.
         if (sd_r.optFlags & OPT_FLAG_STEALTH) != 0
             && sd_r.player.combat.state == 0
             && src_r.player.identity.gm_level == 0
@@ -1857,9 +1857,9 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
         if !map_ptr.is_null() {
             let sd_r = &*sd;
             let src_r = &*src_sd;
-            let slot = &*map_ptr.add(sd_r.bl.m as usize);
+            let slot = &*map_ptr.add(sd_r.m as usize);
             if slot.show_ghosts != 0 && sd_r.player.combat.state == 1
-                && src_r.bl.id != sd_r.bl.id
+                && src_r.id != sd_r.id
             {
                 let src_fd = src_r.fd;
                 if src_r.player.combat.state != 1
@@ -1875,11 +1875,11 @@ unsafe fn write_state_packet(sd: *const MapSessionData, src_sd: *const MapSessio
                         wb(p2, 2, 0x06);
                         wb(p2, 3, 0x0E);
                         wb(p2, 4, 0x03);
-                        wl_be(p2, 5, sd_r.bl.id as u32);
+                        wl_be(p2, 5, sd_r.id as u32);
                         wfifoset(src_fd, encrypt(src_fd) as usize);
                     }
                 } else {
-                    clif_charspecific_us(src_r.bl.id as i32, sd_r.bl.id as i32);
+                    clif_charspecific_us(src_r.id as i32, sd_r.id as i32);
                 }
             }
         }
@@ -1895,9 +1895,9 @@ pub unsafe fn broadcast_update_state(src: *mut MapSessionData) {
     if src.is_null() {
         return;
     }
-    let m = (*src).bl.m as i32;
-    let x = (*src).bl.x as i32;
-    let y = (*src).bl.y as i32;
+    let m = (*src).m as i32;
+    let x = (*src).x as i32;
+    let y = (*src).y as i32;
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(m as usize) };
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
@@ -2432,10 +2432,7 @@ pub async unsafe fn clif_clickonplayer(sd: *mut MapSessionData, bl: *mut BlockLi
 
     // ── Lua onClick hook ──────────────────────────────────────────────────────
     {
-        use crate::game::scripting::doscript_blargs;
-        let onclick = b"onClick\0".as_ptr() as *const i8;
-        let args: [*mut BlockList; 2] = [&mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList];
-        doscript_blargs(onclick, std::ptr::null(), &args);
+        crate::game::scripting::doscript_blargs_id("onClick", None, &[(*sd).id, (*tsd).id]);
     }
 
     0

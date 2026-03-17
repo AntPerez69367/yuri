@@ -2,7 +2,7 @@
 
 
 use crate::database::map_db::{BlockList, WarpList, BLOCK_SIZE, MAX_MAPREG};
-use crate::game::block::map_delblock;
+use crate::game::block::map_delblock_id;
 use crate::database::map_db::get_map_ptr;
 use crate::session::{session_exists, session_get_data, session_get_eof, SessionId};
 use crate::game::block::{map_is_loaded, AreaType};
@@ -17,7 +17,7 @@ use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_
 use crate::game::map_parse::combat::{clif_sendaction, clif_sendanimation_inner, clif_sendanimation_xy_inner};
 use crate::game::client::clif_send;
 use crate::network::crypt::send_metalist;
-use crate::game::block::map_addblock;
+use crate::game::block::map_addblock_id;
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
@@ -31,7 +31,7 @@ pub unsafe fn sl_map_isloaded(m: i32) -> i32 {
 /// Extract `bl.m` from a `USER*` (= `MapSessionData*`) and call `map_readglobalreg`.
 /// before Rust knew the `MapSessionData` layout.
 pub unsafe fn map_readglobalreg_sd(sd: *mut MapSessionData, attrname: *const i8) -> i32 {
-    map_readglobalreg((*sd).bl.m as i32, attrname)
+    map_readglobalreg((*sd).m as i32, attrname)
 }
 
 /// Extract `bl.m` from a `USER*` (= `MapSessionData*`) and call `map_setglobalreg`.
@@ -40,7 +40,7 @@ pub unsafe fn map_readglobalreg_sd(sd: *mut MapSessionData, attrname: *const i8)
 /// the extracted `m` index to avoid non-Send futures. This function is kept for callers
 /// that already have an async context and a raw `attrname` pointer.
 pub async unsafe fn map_setglobalreg_sd(sd: *mut MapSessionData, attrname: *const i8, val: i32) -> i32 {
-    let m = (*sd).bl.m as i32;
+    let m = (*sd).m as i32;
     map_setglobalreg(m, attrname, val).await
 }
 
@@ -77,7 +77,7 @@ pub async unsafe fn sl_g_setweather(region: u8, indoor: u8, weather: u8) {
                 if !session_exists(sid) { continue; }
                 let tsd = session_get_data(sid);
                 if tsd.is_null() || session_get_eof(sid) != 0 { continue; }
-                if (*tsd).bl.m == x { clif_sendweather(tsd); }
+                if (*tsd).m == x { clif_sendweather(tsd); }
             }
         }
     }
@@ -112,7 +112,7 @@ pub async unsafe fn sl_g_setweatherm(m: i32, weather: u8) {
         if !session_exists(sid) { continue; }
         let tsd = session_get_data(sid);
         if tsd.is_null() || session_get_eof(sid) != 0 { continue; }
-        if (*tsd).bl.m == m as u16 { clif_sendweather(tsd); }
+        if (*tsd).m == m as u16 { clif_sendweather(tsd); }
     }
 }
 
@@ -128,7 +128,7 @@ pub unsafe fn sl_g_getusers(out_ptrs: *mut *mut std::ffi::c_void, max_count: i32
         if session_get_eof(sid) != 0 { continue; }
         let tsd = session_get_data(sid);
         if tsd.is_null() { continue; }
-        *out_ptrs.add(count as usize) = &mut (*tsd).bl as *mut _ as *mut std::ffi::c_void;
+        *out_ptrs.add(count as usize) = (*tsd).as_bl_mut() as *mut _ as *mut std::ffi::c_void;
         count += 1;
     }
     count
@@ -197,7 +197,7 @@ pub unsafe fn sl_fl_delete(bl_ptr: *mut std::ffi::c_void) {
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
     if (*bl).bl_type as i32 == BL_PC { return; }
-    map_delblock(bl);
+    map_delblock_id((*bl).id, (*bl).m);
     if (*bl).id > 0 { clif_lookgone(bl); }
     map_deliddb((*bl).id);
 }
@@ -207,7 +207,7 @@ pub unsafe fn sl_fl_delete(bl_ptr: *mut std::ffi::c_void) {
 pub unsafe fn sl_g_deliddb(bl_ptr: *mut std::ffi::c_void) {
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
-    map_delblock(bl);
+    map_delblock_id((*bl).id, (*bl).m);
     map_deliddb((*bl).id);
 }
 
@@ -238,7 +238,7 @@ pub unsafe fn sl_g_delete_bl(bl_ptr: *mut std::ffi::c_void) {
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
     if (*bl).bl_type as i32 == BL_PC { return; }
-    map_delblock(bl);
+    map_delblock_id((*bl).id, (*bl).m);
     if (*bl).id > 0 {
         clif_lookgone(bl);
     }
@@ -384,7 +384,7 @@ pub unsafe fn sl_g_sendanimation(bl_ptr: *mut std::ffi::c_void, anim: i32, times
         for id in ids {
             if let Some(arc) = map_id2sd_pc(id) {
                 let pc = &*arc.read();
-                clif_sendanimation_inner(&pc.bl, anim, bl, times);
+                clif_sendanimation_inner(pc.as_bl(), anim, bl, times);
             }
         }
     }
@@ -410,7 +410,7 @@ pub unsafe fn sl_g_sendanimxy(
         for id in ids {
             if let Some(arc) = map_id2sd_pc(id) {
                 let pc = &*arc.read();
-                clif_sendanimation_xy_inner(&pc.bl, anim, times, x, y);
+                clif_sendanimation_xy_inner(pc.as_bl(), anim, times, x, y);
             }
         }
     }
@@ -433,7 +433,7 @@ pub unsafe fn sl_g_repeatanimation(bl_ptr: *mut std::ffi::c_void, anim: i32, dur
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(pc_arc) = map_id2sd_pc(id) {
-                clif_sendanimation_inner(&pc_arc.read().bl, anim, bl, wire_dur);
+                clif_sendanimation_inner(pc_arc.read().as_bl(), anim, bl, wire_dur);
             }
         }
     }
@@ -452,13 +452,13 @@ pub unsafe fn sl_g_selfanimation(
     if bl_ptr.is_null() { return; }
     let bl = bl_ptr as *mut BlockList;
     let Some(arc) = map_id2sd_pc(target_id as u32) else { return; };
-    let (m, tx, ty) = { let sd = arc.read(); (sd.bl.m as i32, sd.bl.x as i32, sd.bl.y as i32) };
+    let (m, tx, ty) = { let sd = arc.read(); (sd.m as i32, sd.x as i32, sd.y as i32) };
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let cell_ids = grid.ids_at_tile(tx as u16, ty as u16);
         for id in cell_ids {
             if let Some(arc) = map_id2sd_pc(id) {
                 let pc = &*arc.read();
-                clif_sendanimation_inner(&pc.bl, anim, bl, times);
+                clif_sendanimation_inner(pc.as_bl(), anim, bl, times);
             }
         }
     }
@@ -477,13 +477,13 @@ pub unsafe fn sl_g_selfanimationxy(
     times: i32,
 ) {
     let Some(arc) = map_id2sd_pc(target_id as u32) else { return; };
-    let (m, sx, sy) = { let sd = arc.read(); (sd.bl.m as i32, sd.bl.x as i32, sd.bl.y as i32) };
+    let (m, sx, sy) = { let sd = arc.read(); (sd.m as i32, sd.x as i32, sd.y as i32) };
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let cell_ids = grid.ids_at_tile(sx as u16, sy as u16);
         for id in cell_ids {
             if let Some(arc) = map_id2sd_pc(id) {
                 let pc = &*arc.read();
-                clif_sendanimation_xy_inner(&pc.bl, anim, times, x, y);
+                clif_sendanimation_xy_inner(pc.as_bl(), anim, times, x, y);
             }
         }
     }
@@ -503,7 +503,7 @@ pub unsafe fn sl_g_talk(bl_ptr: *mut std::ffi::c_void, talk_type: i32, msg: *con
         for id in ids {
             if let Some(arc) = map_id2sd_pc(id) {
                 let pc = &*arc.read();
-                clif_speak_inner(&raw const pc.bl, msg, bl, talk_type);
+                clif_speak_inner(pc.bl_ptr(), msg, bl, talk_type);
             }
         }
     }
@@ -637,16 +637,14 @@ pub unsafe fn sl_g_addnpc(
     }
 
     // Fill BlockList header.
-    (*raw).bl.bl_type     = BL_NPC as u8;
-    (*raw).bl.subtype     = subtype as u8;
-    (*raw).bl.m           = m as u16;
-    (*raw).bl.x           = x as u16;
-    (*raw).bl.y           = y as u16;
-    (*raw).bl.graphic_id  = 0;
-    (*raw).bl.graphic_color = 0;
-    (*raw).bl.id          = npc_get_new_npctempid();
-    (*raw).bl.next        = std::ptr::null_mut();
-    (*raw).bl.prev        = std::ptr::null_mut();
+    (*raw).bl_type     = BL_NPC as u8;
+    (*raw).subtype     = subtype as u8;
+    (*raw).m           = m as u16;
+    (*raw).x           = x as u16;
+    (*raw).y           = y as u16;
+    (*raw).graphic_id  = 0;
+    (*raw).graphic_color = 0;
+    (*raw).id          = npc_get_new_npctempid();
 
     // NpcData-specific fields.
     (*raw).actiontime = timer as u32;
@@ -656,18 +654,18 @@ pub unsafe fn sl_g_addnpc(
 
     // Insert into NPC_MAP first — this moves the data into Arc<RwLock>,
     // freeing the original allocation. `raw` is dangling after this.
-    let id = (*raw).bl.id;
+    let id = (*raw).id;
     map_addiddb_npc(id, Box::from_raw(raw));
     // Get the live pointer from the Arc<RwLock>.
     let raw = crate::game::map_server::map_id2npc_ref(id)
         .expect("npc just inserted").data_ptr();
-    map_addblock(&mut (*raw).bl);
+    map_addblock_id((*raw).id, (*raw).bl_type, (*raw).m, (*raw).x, (*raw).y);
 
     // Fire on_spawn Lua event: npc.on_spawn(nd).
-    crate::game::scripting::doscript_blargs(
-        (*raw).name.as_ptr(),
-        c"on_spawn".as_ptr(),
-        &[&mut (*raw).bl as *mut BlockList],
+    crate::game::scripting::doscript_blargs_id(
+        crate::game::scripting::carray_to_str(&(*raw).name),
+        Some("on_spawn"),
+        &[(*raw).id],
     );
 }
 
@@ -834,7 +832,7 @@ pub unsafe fn sl_g_setmap(
         for id in ids {
             if let Some(arc) = map_id2sd_pc(id) {
                 let pc = &mut *arc.write();
-                crate::game::scripting::sl_updatepeople(&raw mut pc.bl as *mut std::ffi::c_void, std::ptr::null_mut());
+                crate::game::scripting::sl_updatepeople(pc.bl_ptr_mut() as *mut std::ffi::c_void, std::ptr::null_mut());
             }
         }
     }

@@ -11,11 +11,11 @@ use crate::common::player::legends::MAX_LEGENDS;
 
 // ─── Read: block_list embedded fields ────────────────────────────────────────
 
-pub fn sl_pc_bl_id(sd: &mut MapSessionData) -> i32   { sd.bl.id as i32 }
-pub fn sl_pc_bl_m(sd: &mut MapSessionData) -> i32    { sd.bl.m as i32 }
-pub fn sl_pc_bl_x(sd: &mut MapSessionData) -> i32    { sd.bl.x as i32 }
-pub fn sl_pc_bl_y(sd: &mut MapSessionData) -> i32    { sd.bl.y as i32 }
-pub fn sl_pc_bl_type(sd: &mut MapSessionData) -> i32 { sd.bl.bl_type as i32 }
+pub fn sl_pc_bl_id(sd: &mut MapSessionData) -> i32   { sd.id as i32 }
+pub fn sl_pc_bl_m(sd: &mut MapSessionData) -> i32    { sd.m as i32 }
+pub fn sl_pc_bl_x(sd: &mut MapSessionData) -> i32    { sd.x as i32 }
+pub fn sl_pc_bl_y(sd: &mut MapSessionData) -> i32    { sd.y as i32 }
+pub fn sl_pc_bl_type(sd: &mut MapSessionData) -> i32 { sd.bl_type as i32 }
 
 // ─── Read: player fields ─────────────────────────────────────────────────────
 
@@ -740,7 +740,7 @@ pub unsafe fn sl_pc_warp(sd: &mut MapSessionData, m: i32, x: i32, y: i32) {
 }
 
 pub unsafe fn sl_pc_refresh(sd: &mut MapSessionData) {
-    pc_setpos(sd, sd.bl.m as i32, sd.bl.x as i32, sd.bl.y as i32);
+    pc_setpos(sd, sd.m as i32, sd.x as i32, sd.y as i32);
     clif_refreshnoclick(sd);
 }
 
@@ -963,7 +963,7 @@ pub fn sl_pc_flushallkills(sd: &mut MapSessionData) {
 pub unsafe fn sl_pc_addthreat(sd: &mut MapSessionData, mob_id: u32, amount: u32) {
     let mob = map_id2mob_acc(mob_id);
     if mob.is_null() { return; }
-    let uid = sd.bl.id;
+    let uid = sd.id;
     (*mob).lastaction = libc::time(std::ptr::null_mut()) as i32;
     for x in 0..MAX_THREATCOUNT {
         if (*mob).threat[x].user == uid { (*mob).threat[x].amount += amount; return; }
@@ -974,7 +974,7 @@ pub unsafe fn sl_pc_addthreat(sd: &mut MapSessionData, mob_id: u32, amount: u32)
 pub unsafe fn sl_pc_setthreat(sd: &mut MapSessionData, mob_id: u32, amount: u32) {
     let mob = map_id2mob_acc(mob_id);
     if mob.is_null() { return; }
-    let uid = sd.bl.id;
+    let uid = sd.id;
     (*mob).lastaction = libc::time(std::ptr::null_mut()) as i32;
     for x in 0..MAX_THREATCOUNT {
         if (*mob).threat[x].user == uid { (*mob).threat[x].amount = amount; return; }
@@ -2097,16 +2097,15 @@ pub unsafe fn sl_pc_expireitem(sd: &mut MapSessionData) {
 /// Heal sd by `amount`; triggers `on_healed` Lua hook if attacker is set.
 ///
 pub unsafe fn sl_pc_addhealth2(sd: &mut MapSessionData, amount: i32, _type: i32) {
-    let bl_ptr = map_id2bl_acc(sd.attacker) as *mut crate::database::map_db::BlockList;
-    if !bl_ptr.is_null() && amount > 0 {
-        crate::game::scripting::doscript_blargs(
-            c"player_combat".as_ptr(), c"on_healed".as_ptr(),
-            &[&mut sd.bl as *mut _ as *mut _, bl_ptr as *mut _],
+    if sd.attacker != 0 && amount > 0 {
+        crate::game::scripting::doscript_blargs_id(
+            "player_combat", Some("on_healed"),
+            &[sd.id, sd.attacker],
         );
     } else if amount > 0 {
-        crate::game::scripting::doscript_blargs(
-            c"player_combat".as_ptr(), c"on_healed".as_ptr(),
-            &[&mut sd.bl as *mut _ as *mut _],
+        crate::game::scripting::doscript_blargs_id(
+            "player_combat", Some("on_healed"),
+            &[sd.id],
         );
     }
     clif_send_pc_healthscript(&mut *sd, -amount, 0);

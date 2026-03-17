@@ -44,22 +44,13 @@ unsafe fn sl_async_freeco(sd: *mut MapSessionData) {
     crate::game::scripting::sl_async_freeco(sd);
 }
 
-/// Dispatch a Lua event with a single block_list argument.
-#[allow(dead_code)]
-unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
-    crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
+/// Dispatch a Lua event with a single entity ID argument.
+fn sl_doscript_simple(root: &str, method: Option<&str>, id: u32) -> i32 {
+    crate::game::scripting::doscript_blargs_id(root, method, &[id])
 }
 
-/// Dispatch a Lua event with two block_list arguments.
-#[allow(dead_code)]
-unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
-    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
-}
-
-/// Coroutine dispatch with two block_list arguments (for yielding handlers like onSayClick).
-#[allow(dead_code)]
-unsafe fn sl_doscript_coro_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
-    crate::game::scripting::doscript_coro(root, method, &[bl1 as *mut _, bl2 as *mut _])
+fn sl_doscript_coro_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
+    crate::game::scripting::doscript_coro_id(root, method, &[id1, id2])
 }
 
 
@@ -214,7 +205,7 @@ pub unsafe fn clif_broadcast(msg: *const i8, m: i32) -> i32 {
                     let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
                     for id in ids {
                         if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_broadcast_sub_inner(&raw const pc_arc.read().bl, msg);
+                            clif_broadcast_sub_inner(pc_arc.read().bl_ptr(), msg);
                         }
                     }
                 }
@@ -226,7 +217,7 @@ pub unsafe fn clif_broadcast(msg: *const i8, m: i32) -> i32 {
             let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_broadcast_sub_inner(&raw const pc_arc.read().bl, msg);
+                    clif_broadcast_sub_inner(pc_arc.read().bl_ptr(), msg);
                 }
             }
         }
@@ -247,7 +238,7 @@ pub unsafe fn clif_gmbroadcast(msg: *const i8, m: i32) -> i32 {
                     let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
                     for id in ids {
                         if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_gmbroadcast_sub_inner(&raw const pc_arc.read().bl, msg);
+                            clif_gmbroadcast_sub_inner(pc_arc.read().bl_ptr(), msg);
                         }
                     }
                 }
@@ -259,7 +250,7 @@ pub unsafe fn clif_gmbroadcast(msg: *const i8, m: i32) -> i32 {
             let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_gmbroadcast_sub_inner(&raw const pc_arc.read().bl, msg);
+                    clif_gmbroadcast_sub_inner(pc_arc.read().bl_ptr(), msg);
                 }
             }
         }
@@ -280,7 +271,7 @@ pub unsafe fn clif_broadcasttogm(msg: *const i8, m: i32) -> i32 {
                     let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
                     for id in ids {
                         if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_broadcasttogm_sub_inner(&raw const pc_arc.read().bl, msg);
+                            clif_broadcasttogm_sub_inner(pc_arc.read().bl_ptr(), msg);
                         }
                     }
                 }
@@ -292,7 +283,7 @@ pub unsafe fn clif_broadcasttogm(msg: *const i8, m: i32) -> i32 {
             let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_broadcasttogm_sub_inner(&raw const pc_arc.read().bl, msg);
+                    clif_broadcasttogm_sub_inner(pc_arc.read().bl_ptr(), msg);
                 }
             }
         }
@@ -359,7 +350,7 @@ pub unsafe fn clif_parseemotion(sd: *mut MapSessionData) -> i32 {
     use super::packet::rfifob;
     if (*sd).player.combat.state == 0 {
         clif_sendaction(
-            &mut (*sd).bl,
+            (*sd).as_bl_mut(),
             rfifob((*sd).fd, 5) as i32 + 11,
             0x4E,
             0,
@@ -451,7 +442,7 @@ pub unsafe fn clif_sendwisp(
     combined.extend_from_slice(&buf2);
     combined.extend_from_slice(std::slice::from_raw_parts(msg as *const u8, msglen));
 
-    if (*raw_map_ptr().add((*sd).bl.m as usize)).cantalk == 1 && (*sd).player.identity.gm_level == 0 {
+    if (*raw_map_ptr().add((*sd).m as usize)).cantalk == 1 && (*sd).player.identity.gm_level == 0 {
         clif_sendminitext(sd, c"Your voice is carried away.".as_ptr());
         return 0;
     }
@@ -679,7 +670,7 @@ pub unsafe fn clif_sendgroupmessage(
         return 0;
     }
 
-    if (*raw_map_ptr().add((*sd).bl.m as usize)).cantalk == 1 && (*sd).player.identity.gm_level == 0 {
+    if (*raw_map_ptr().add((*sd).m as usize)).cantalk == 1 && (*sd).player.identity.gm_level == 0 {
         clif_sendminitext(sd, c"Your voice is swept away by a strange wind.".as_ptr());
         return 0;
     }
@@ -720,7 +711,7 @@ pub unsafe fn clif_sendsubpathmessage(
         return 0;
     }
 
-    if (*raw_map_ptr().add((*sd).bl.m as usize)).cantalk == 1 && (*sd).player.identity.gm_level == 0 {
+    if (*raw_map_ptr().add((*sd).m as usize)).cantalk == 1 && (*sd).player.identity.gm_level == 0 {
         clif_sendminitext(sd, c"Your voice is swept away by a strange wind.".as_ptr());
         return 0;
     }
@@ -761,7 +752,7 @@ pub unsafe fn clif_sendclanmessage(
         return 0;
     }
 
-    if (*raw_map_ptr().add((*sd).bl.m as usize)).cantalk == 1 && (*sd).player.identity.gm_level == 0 {
+    if (*raw_map_ptr().add((*sd).m as usize)).cantalk == 1 && (*sd).player.identity.gm_level == 0 {
         clif_sendminitext(sd, c"Your voice is swept away by a strange wind.".as_ptr());
         return 0;
     }
@@ -802,7 +793,7 @@ pub unsafe fn clif_sendnovicemessage(
         return 0;
     }
 
-    if (*raw_map_ptr().add((*sd).bl.m as usize)).cantalk == 1 && (*sd).player.identity.gm_level == 0 {
+    if (*raw_map_ptr().add((*sd).m as usize)).cantalk == 1 && (*sd).player.identity.gm_level == 0 {
         clif_sendminitext(sd, c"Your voice is swept away by a strange wind.".as_ptr());
         return 0;
     }
@@ -857,7 +848,7 @@ pub unsafe fn clif_parsewisp(sd: *mut MapSessionData) -> i32 {
         return 0;
     }
 
-    if (*raw_map_ptr().add((*sd).bl.m as usize)).cantalk == 1 && (*sd).player.identity.gm_level == 0 {
+    if (*raw_map_ptr().add((*sd).m as usize)).cantalk == 1 && (*sd).player.identity.gm_level == 0 {
         clif_sendminitext(sd, c"Your voice is swept away by a strange wind.".as_ptr());
         return 0;
     }
@@ -1013,11 +1004,12 @@ pub unsafe fn clif_sendsay(
 
     for i in 0..MAX_SPELLS {
         if (&(*sd).player.spells.skills)[i] > 0 {
-            let yname = (*magic_db::search((&(*sd).player.spells.skills)[i] as i32)).yname.as_ptr();
-            sl_doscript_simple(yname, c"on_say".as_ptr(), &raw mut (*sd).bl);
+            let spell = magic_db::search((&(*sd).player.spells.skills)[i] as i32);
+            let yname = crate::game::scripting::carray_to_str(&(*spell).yname);
+            sl_doscript_simple(yname, Some("on_say"), (*sd).id);
         }
     }
-    sl_doscript_simple(c"onSay".as_ptr(), std::ptr::null(), &raw mut (*sd).bl);
+    sl_doscript_simple("onSay", None, (*sd).id);
     0
 }
 
@@ -1033,7 +1025,7 @@ pub unsafe fn clif_sendscriptsay(
 ) -> i32 {
     let namelen = (&(*sd).player.identity.name).len();
 
-    if (*raw_map_ptr().add((*sd).bl.m as usize)).cantalk == 1 && (*sd).player.identity.gm_level == 0 {
+    if (*raw_map_ptr().add((*sd).m as usize)).cantalk == 1 && (*sd).player.identity.gm_level == 0 {
         clif_sendminitext(sd, c"Your voice is swept away by a strange wind.".as_ptr());
         return 0;
     }
@@ -1083,7 +1075,7 @@ pub unsafe fn clif_sendscriptsay(
         buf[12 + pname.len()] = b' ';
         buf[13 + pname.len()..13 + pname.len() + msglen as usize].copy_from_slice(msg_bytes);
 
-        clif_send(buf.as_ptr(), buf_size as i32, &raw mut (*sd).bl, SAMEAREA);
+        clif_send(buf.as_ptr(), buf_size as i32, (*sd).bl_ptr_mut(), SAMEAREA);
     } else {
         if !session_exists((*sd).fd) {
             return 0;
@@ -1106,7 +1098,7 @@ pub unsafe fn clif_sendscriptsay(
         buf[13 + namelen..13 + namelen + msglen as usize].copy_from_slice(msg_bytes);
 
         let send_target = if say_type == 1 { SAMEMAP } else { SAMEAREA };
-        clif_send(buf.as_ptr(), buf_size as i32, &raw mut (*sd).bl, send_target);
+        clif_send(buf.as_ptr(), buf_size as i32, (*sd).bl_ptr_mut(), send_target);
     }
 
     // Copy msg to speech
@@ -1115,9 +1107,9 @@ pub unsafe fn clif_sendscriptsay(
     dst[..src.len()].copy_from_slice(src);
     dst[src.len()] = 0;
 
-    let m = (*sd).bl.m as i32;
-    let bx = (*sd).bl.x as i32;
-    let by = (*sd).bl.y as i32;
+    let m = (*sd).m as i32;
+    let bx = (*sd).x as i32;
+    let by = (*sd).y as i32;
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let slot = &*raw_map_ptr().add(m as usize);
         let area = if say_type == 1 { AreaType::SameMap } else { AreaType::Area };
@@ -1125,15 +1117,15 @@ pub unsafe fn clif_sendscriptsay(
         for id in ids {
             if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(id) {
                 if say_type == 1 {
-                    clif_sendnpcyell_inner(&raw mut npc_arc.write().bl, msg, sd);
+                    clif_sendnpcyell_inner(npc_arc.write().bl_ptr_mut(), msg, sd);
                 } else {
-                    clif_sendnpcsay_inner(&raw mut npc_arc.write().bl, msg, sd);
+                    clif_sendnpcsay_inner(npc_arc.write().bl_ptr_mut(), msg, sd);
                 }
             } else if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(id) {
                 if say_type == 1 {
-                    clif_sendmobyell_inner(&raw mut mob_arc.write().bl, msg, sd);
+                    clif_sendmobyell_inner(mob_arc.write().bl_ptr_mut(), msg, sd);
                 } else {
-                    clif_sendmobsay_inner(&raw mut mob_arc.write().bl, msg, sd);
+                    clif_sendmobsay_inner(mob_arc.write().bl_ptr_mut(), msg, sd);
                 }
             }
         }
@@ -1153,10 +1145,10 @@ pub unsafe fn clif_sendnpcsay_inner(bl: *mut BlockList, _msg: *const i8, sd_arg:
     let nd = bl as *mut NpcData;
     if nd.is_null() { return 0; }
 
-    if clif_distance(&*bl, &(*sd_arg).bl) <= 10 {
+    if clif_distance(&*bl, (*sd_arg).as_bl()) <= 10 {
         (*sd_arg).last_click = (*bl).id;
         sl_async_freeco(sd_arg);
-        sl_doscript_coro_2((*nd).name.as_ptr() as *const i8, c"onSayClick".as_ptr(), &raw mut (*sd_arg).bl, bl);
+        sl_doscript_coro_2(crate::game::scripting::carray_to_str(&(*nd).name), Some("onSayClick"), (*sd_arg).id, (*nd).id);
     }
     0
 }
@@ -1181,10 +1173,10 @@ pub unsafe fn clif_sendnpcyell_inner(bl: *mut BlockList, _msg: *const i8, sd_arg
     let nd = bl as *mut NpcData;
     if nd.is_null() { return 0; }
 
-    if clif_distance(&*bl, &(*sd_arg).bl) <= 20 {
+    if clif_distance(&*bl, (*sd_arg).as_bl()) <= 20 {
         (*sd_arg).last_click = (*bl).id;
         sl_async_freeco(sd_arg);
-        sl_doscript_coro_2((*nd).name.as_ptr() as *const i8, c"onSayClick".as_ptr(), &raw mut (*sd_arg).bl, bl);
+        sl_doscript_coro_2(crate::game::scripting::carray_to_str(&(*nd).name), Some("onSayClick"), (*sd_arg).id, (*nd).id);
     }
     0
 }
@@ -1285,11 +1277,12 @@ pub unsafe fn clif_parsesay(sd: *mut MapSessionData) -> i32 {
 
     for i in 0..MAX_SPELLS {
         if (&(*sd).player.spells.skills)[i] > 0 {
-            let yname = (*magic_db::search((&(*sd).player.spells.skills)[i] as i32)).yname.as_ptr();
-            sl_doscript_simple(yname, c"on_say".as_ptr(), &raw mut (*sd).bl);
+            let spell = magic_db::search((&(*sd).player.spells.skills)[i] as i32);
+            let yname = crate::game::scripting::carray_to_str(&(*spell).yname);
+            sl_doscript_simple(yname, Some("on_say"), (*sd).id);
         }
     }
-    sl_doscript_simple(c"onSay".as_ptr(), std::ptr::null(), &raw mut (*sd).bl);
+    sl_doscript_simple("onSay", None, (*sd).id);
     0
 }
 

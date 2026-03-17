@@ -932,7 +932,7 @@ impl UserData for PcObject {
                 mlua::Value::UserData(ud) => {
                     if let Ok(mob) = ud.borrow::<MobObject>() {
                         match crate::game::map_server::map_id2mob_ref(mob.id) {
-                            Some(arc) => arc.read().bl.id as i32,
+                            Some(arc) => arc.read().id as i32,
                             None => return Ok(()),
                         }
                     } else if let Ok(pc) = ud.borrow::<PcObject>() {
@@ -1685,7 +1685,9 @@ impl UserData for PcObject {
             let sd = this.sd_ptr();
             if sd.is_null() { return Ok(()); }
             let npc_ptr = if let Ok(npc) = npc_bl.borrow::<crate::game::scripting::types::npc::NpcObject>() {
-                npc.ptr
+                crate::game::map_server::map_id2npc_ref(npc.id)
+                    .map(|arc| arc.data_ptr() as *mut std::ffi::c_void)
+                    .unwrap_or(std::ptr::null_mut())
             } else {
                 std::ptr::null_mut()
             };
@@ -1702,6 +1704,10 @@ fn extract_bl_ptr(ud: &mlua::AnyUserData) -> *mut std::ffi::c_void {
             .map(|arc| arc.data_ptr() as *mut std::ffi::c_void)
             .unwrap_or(std::ptr::null_mut());
     }
-    if let Ok(npc) = ud.borrow::<crate::game::scripting::types::npc::NpcObject>() { return npc.ptr; }
+    if let Ok(npc) = ud.borrow::<crate::game::scripting::types::npc::NpcObject>() {
+        return crate::game::map_server::map_id2npc_ref(npc.id)
+            .map(|arc| arc.data_ptr() as *mut std::ffi::c_void)
+            .unwrap_or(std::ptr::null_mut());
+    }
     std::ptr::null_mut()
 }

@@ -114,14 +114,14 @@ pub fn map_clritem() {
 /// `id` must be a valid floor item ID currently registered in `ITEM_MAP`.
 /// Must be called on the game thread (single-threaded game loop).
 pub unsafe fn map_delitem(id: u32) {
-    use crate::game::block::map_delblock;
+    use crate::game::block::map_delblock_id;
 
-    // Clone the Arc (releases item_map Mutex), then read-lock for the pointer.
+    // Clone the Arc (releases item_map Mutex), then read-lock for the bl.m.
     let Some(arc) = map_id2fl_ref(id) else { return };
-    let bl = &arc.read().bl as *const BlockList as *mut BlockList;
+    let m = arc.read().m;
 
-    // Unlink from block grid.  Safe: Arc clone keeps the data alive.
-    map_delblock(bl);
+    // Unlink from block grid.
+    map_delblock_id(id, m);
 
     // Remove from ITEM_MAP — drops one Arc reference.
     item_map().remove(&id);
@@ -145,8 +145,6 @@ pub unsafe fn map_delitem(id: u32) {
 /// - Caller must not use `bl` after this call — ownership transfers to `ITEM_MAP`.
 /// - Must be called on the game thread (single-threaded game loop).
 pub unsafe fn map_additem(bl: *mut BlockList) {
-    use crate::game::block::map_addblock;
-
     let mut slots = object_slots();
 
     // Find first free slot.
@@ -172,17 +170,15 @@ pub unsafe fn map_additem(bl: *mut BlockList) {
     let id = (i as u32).wrapping_add(crate::game::mob::FLOORITEM_START_NUM);
     (*bl).id      = id;
     (*bl).bl_type = crate::game::mob::BL_ITEM as u8;
-    (*bl).prev    = std::ptr::null_mut();
-    (*bl).next    = std::ptr::null_mut();
     // Take ownership of the Box<FloorItemData> into ITEM_MAP.
     // SAFETY: bl was produced by Box::into_raw — Box::from_raw re-establishes ownership.
     let item_box = Box::from_raw(bl as *mut crate::game::scripting::types::floor::FloorItemData);
     map_addiddb_item(id, item_box);
     // After map_addiddb_item, the data lives inside Arc<RwLock<FloorItemData>>.
-    // Clone the Arc (releases item_map Mutex), then read-lock for block pointer.
+    // Read the Arc to get coordinates for the grid insert.
     let arc_clone = map_id2fl_ref(id).expect("just inserted");
-    let bl_ptr = &arc_clone.read().bl as *const BlockList as *mut BlockList;
-    map_addblock(bl_ptr);
+    let fi = arc_clone.read();
+    crate::game::block::map_addblock_id(fi.id, fi.bl_type, fi.m, fi.x, fi.y);
 }
 
 /// Set the IP address and port for a map slot.
@@ -276,29 +272,56 @@ pub fn map_id2bl_ref(id: u32) -> *mut crate::database::map_db::BlockList {
     if id < MOB_START_NUM {
         if let Some(arc) = map_id2sd_pc(id) {
             if let Some(guard) = arc.try_read() {
-                return &guard.bl as *const BlockList as *mut BlockList;
+                return guard.bl_ptr() as *mut BlockList;
             }
         }
     } else if id >= NPC_START_NUM {
         if let Some(arc) = map_id2npc_ref(id) {
             if let Some(guard) = arc.try_read() {
-                return &guard.bl as *const BlockList as *mut BlockList;
+                return guard.bl_ptr() as *mut BlockList;
             }
         }
     } else if id >= FLOORITEM_START_NUM {
         if let Some(arc) = map_id2fl_ref(id) {
             if let Some(guard) = arc.try_read() {
-                return &guard.bl as *const BlockList as *mut BlockList;
+                return guard.bl_ptr() as *mut BlockList;
             }
         }
     } else {
         if let Some(arc) = map_id2mob_ref(id) {
             if let Some(guard) = arc.try_read() {
-                return &guard.bl as *const BlockList as *mut BlockList;
+                return guard.bl_ptr() as *mut BlockList;
             }
         }
     }
     std::ptr::null_mut()
+}
+
+/// Return (m, x, y, bl_type) for any entity ID, using typed lookups.
+pub fn entity_position(id: u32) -> Option<(u16, u16, u16, u8)> {
+    use crate::game::mob::{MOB_START_NUM, FLOORITEM_START_NUM, NPC_START_NUM};
+    if id < MOB_START_NUM {
+        if let Some(arc) = map_id2sd_pc(id) {
+            let sd = arc.read();
+            return Some((sd.m, sd.x, sd.y, sd.bl_type));
+        }
+    } else if id >= NPC_START_NUM {
+        if let Some(arc) = map_id2npc_ref(id) {
+            let nd = arc.read();
+            return Some((nd.m, nd.x, nd.y, nd.bl_type));
+        }
+    } else if id >= FLOORITEM_START_NUM {
+        if let Some(arc) = map_id2fl_ref(id) {
+            let fi = arc.read();
+            return Some((fi.m, fi.x, fi.y, fi.bl_type));
+        }
+    } else {
+        if let Some(arc) = map_id2mob_ref(id) {
+            let mob = arc.read();
+            return Some((mob.m, mob.x, mob.y, mob.bl_type));
+        }
+    }
+    None
 }
 
 /// Convert `Box<T>` into `Arc<RwLock<T>>` without stack-allocating T.
@@ -418,10 +441,10 @@ impl GameEntity {
     /// The write lock is held for the duration of `f` and released on return.
     pub fn with_bl_mut<R, F: FnOnce(&mut crate::database::map_db::BlockList) -> R>(&self, f: F) -> R {
         match self {
-            Self::Player(a) => f(&mut a.write().bl),
-            Self::Mob(a) => f(&mut a.write().bl),
-            Self::Npc(a) => f(&mut a.write().bl),
-            Self::Item(a) => f(&mut a.write().bl),
+            Self::Player(a) => f(a.write().as_bl_mut()),
+            Self::Mob(a) => f(a.write().as_bl_mut()),
+            Self::Npc(a) => f(a.write().as_bl_mut()),
+            Self::Item(a) => f(a.write().as_bl_mut()),
         }
     }
 
@@ -431,10 +454,10 @@ impl GameEntity {
     /// the single-threaded game loop assumption (no concurrent writer).
     pub fn bl_ptr(&self) -> *mut crate::database::map_db::BlockList {
         match self {
-            Self::Player(a) => &a.read().bl as *const BlockList as *mut BlockList,
-            Self::Mob(a) => &a.read().bl as *const BlockList as *mut BlockList,
-            Self::Npc(a) => &a.read().bl as *const BlockList as *mut BlockList,
-            Self::Item(a) => &a.read().bl as *const BlockList as *mut BlockList,
+            Self::Player(a) => a.read().bl_ptr() as *mut BlockList,
+            Self::Mob(a) => a.read().bl_ptr() as *mut BlockList,
+            Self::Npc(a) => a.read().bl_ptr() as *mut BlockList,
+            Self::Item(a) => a.read().bl_ptr() as *mut BlockList,
         }
     }
 }
@@ -562,27 +585,22 @@ pub unsafe fn map_cronjob() {
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    if t % 60    == 0 { cron(b"cronJobMin\0");    }
-    if t % 300   == 0 { cron(b"cronJob5Min\0");   }
-    if t % 1800  == 0 { cron(b"cronJob30Min\0");  }
-    if t % 3600  == 0 { cron(b"cronJobHour\0");   }
-    if t % 86400 == 0 { cron(b"cronJobDay\0");    }
-    cron(b"cronJobSec\0");
+    if t % 60    == 0 { cron("cronJobMin");    }
+    if t % 300   == 0 { cron("cronJob5Min");   }
+    if t % 1800  == 0 { cron("cronJob30Min");  }
+    if t % 3600  == 0 { cron("cronJobHour");   }
+    if t % 86400 == 0 { cron("cronJobDay");    }
+    cron("cronJobSec");
 }
 
-/// Dispatch a Lua event with a single block_list argument.
-#[allow(dead_code)]
-unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
-    crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
+/// Dispatch a Lua event with a single entity ID argument.
+fn sl_doscript_simple(root: &str, method: Option<&str>, id: u32) -> i32 {
+    crate::game::scripting::doscript_blargs_id(root, method, &[id])
 }
 
 #[inline]
-unsafe fn cron(name: &[u8]) {
-    crate::game::scripting::doscript_blargs(
-        name.as_ptr() as *const i8,
-        std::ptr::null(),
-        &[],
-    );
+fn cron(name: &str) {
+    crate::game::scripting::doscript_blargs_id(name, None, &[]);
 }
 
 // ---------------------------------------------------------------------------
@@ -708,9 +726,9 @@ pub async unsafe fn map_addmob(
     end:     i32,
     replace: u32,
 ) -> i32 {
-    let m     = (*sd).bl.m  as i32;
-    let x     = (*sd).bl.x  as i32;
-    let y     = (*sd).bl.y  as i32;
+    let m     = (*sd).m  as i32;
+    let x     = (*sd).x  as i32;
+    let y     = (*sd).y  as i32;
     let sid   = crate::config::config().server_id;
 
     let sql = format!(
@@ -863,8 +881,8 @@ pub unsafe fn boards_showposts(
         (*sd).board = board;
         let bd = &*board_db::search(board);
         if bd.script != 0 {
-            let yname = bd.yname.as_ptr();
-            sl_doscript_simple(yname, b"check\0".as_ptr() as *const i8, std::ptr::addr_of_mut!((*sd).bl));
+            let yname = crate::game::scripting::carray_to_str(&bd.yname);
+            sl_doscript_simple(yname, Some("check"), (*sd).id);
         } else {
             (*sd).board_canwrite = 1;
         }
@@ -959,8 +977,8 @@ pub unsafe fn boards_readpost(
         (*sd).board = board;
         let bd = &*board_db::search(board);
         if bd.script != 0 {
-            let yname = bd.yname.as_ptr();
-            sl_doscript_simple(yname, b"check\0".as_ptr() as *const i8, std::ptr::addr_of_mut!((*sd).bl));
+            let yname = crate::game::scripting::carray_to_str(&bd.yname);
+            sl_doscript_simple(yname, Some("check"), (*sd).id);
         } else {
             (*sd).board_canwrite = 1;
         }
@@ -1371,7 +1389,7 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
             messagelen.min((*sd).mail.len()),
         );
         (*sd).luaexec = 0;
-        sl_doscript_simple(b"canRunLuaMail\0".as_ptr() as *const i8, std::ptr::null(), std::ptr::addr_of_mut!((*sd).bl));
+        sl_doscript_simple("canRunLuaMail", None, (*sd).id);
         if (*sd).player.identity.gm_level == 99 || (*sd).luaexec != 0 {
             nmail_luascript(sd, tolen as i32, topiclen as i32, messagelen as i32).await;
             nmail_sendmessage(
@@ -2818,8 +2836,8 @@ pub unsafe fn map_weather(_id: i32, _n: i32) -> i32 {
     let ct = cur_time.load(Ordering::Relaxed);
     if ot != ct {
         old_time.store(ct, Ordering::Relaxed);
-        crate::game::scripting::doscript_blargs(
-            c"mapWeather".as_ptr(), std::ptr::null(), &[],
+        crate::game::scripting::doscript_blargs_id(
+            "mapWeather", None, &[],
         );
     }
     0
@@ -2869,8 +2887,8 @@ pub async unsafe fn map_lastdeath_mob(
         let last_death = (*p).last_death;
         let startx     = (*p).startx as i32;
         let starty     = (*p).starty as i32;
-        let map_id     = (*p).bl.m  as i32;
-        let mob_id     = (*p).bl.id as i32;
+        let map_id     = (*p).m  as i32;
+        let mob_id     = (*p).id as i32;
         let sid        = crate::config::config().server_id;
         (last_death, startx, starty, map_id, mob_id, sid)
     }; // p ref dropped here
@@ -3049,7 +3067,7 @@ pub unsafe fn map_reload() -> i32 {
                 let ids = crate::game::block_grid::ids_in_area(grid, 0, 0, crate::game::block::AreaType::SameMap, slot.xs as i32, slot.ys as i32);
                 for id in ids {
                     if let Some(arc) = map_id2sd_pc(id) {
-                        let bl_ptr = &mut arc.write().bl as *mut BlockList as *mut std::ffi::c_void;
+                        let bl_ptr = arc.write().as_bl_mut() as *mut BlockList as *mut std::ffi::c_void;
                         crate::game::scripting::sl_updatepeople_impl(
                             bl_ptr,
                             std::ptr::null_mut(),

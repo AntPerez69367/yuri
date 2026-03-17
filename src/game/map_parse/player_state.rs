@@ -239,7 +239,7 @@ pub unsafe fn clif_sendmapinfo(sd: *mut MapSessionData) -> i32 {
         return 0;
     }
     let fd = (*sd).fd;
-    let m  = (*sd).bl.m as usize;
+    let m  = (*sd).m as usize;
 
     // Safety: map[] is initialised by map_init before any player can reach
     // Accessing map[sd->bl.m]:
@@ -259,7 +259,7 @@ pub unsafe fn clif_sendmapinfo(sd: *mut MapSessionData) -> i32 {
     wfifob(fd, 0, 0xAA);
     wfifob(fd, 3, 0x15);
     // sd->bl.m  (big-endian u16) at [5..6]
-    wfifow(fd, 5, ((*sd).bl.m as u16).swap_bytes());
+    wfifow(fd, 5, ((*sd).m as u16).swap_bytes());
     // xs, ys
     wfifow(fd, 7, md.xs.swap_bytes());
     wfifow(fd, 9, md.ys.swap_bytes());
@@ -322,10 +322,10 @@ pub unsafe fn clif_sendxy(sd: *mut MapSessionData) -> i32 {
         return 0;
     }
     let fd = (*sd).fd;
-    let m  = (*sd).bl.m as usize;
+    let m  = (*sd).m as usize;
     let md = &*raw_map_ptr().add(m);
-    let x  = (*sd).bl.x as i32;
-    let y  = (*sd).bl.y as i32;
+    let x  = (*sd).x as i32;
+    let y  = (*sd).y as i32;
 
     wfifohead(fd, 14);
     wfifob(fd, 0, 0xAA);
@@ -382,10 +382,10 @@ pub unsafe fn clif_sendxynoclick(sd: *mut MapSessionData) -> i32 {
         return 0;
     }
     let fd = (*sd).fd;
-    let m  = (*sd).bl.m as usize;
+    let m  = (*sd).m as usize;
     let md = &*raw_map_ptr().add(m);
-    let x  = (*sd).bl.x as i32;
-    let y  = (*sd).bl.y as i32;
+    let x  = (*sd).x as i32;
+    let y  = (*sd).y as i32;
 
     wfifohead(fd, 14);
     wfifob(fd, 0, 0xAA);
@@ -432,10 +432,10 @@ pub unsafe fn clif_sendxychange(sd: *mut MapSessionData, dx: i32, dy: i32) -> i3
         return 0;
     }
     let fd  = (*sd).fd;
-    let m   = (*sd).bl.m as usize;
+    let m   = (*sd).m as usize;
     let md  = &*raw_map_ptr().add(m);
-    let bx  = (*sd).bl.x as i32;
-    let by  = (*sd).bl.y as i32;
+    let bx  = (*sd).x as i32;
+    let by  = (*sd).y as i32;
 
     wfifohead(fd, 14);
     wfifob(fd, 0, 0xAA);
@@ -903,19 +903,19 @@ pub fn clif_mystaytus_by_addr(sd_usize: usize) -> ClIfMystaytus {
 /// player.
 ///
 pub unsafe fn clif_getchararea(sd: *mut MapSessionData) -> i32 {
-    let m = (*sd).bl.m as i32;
-    let x = (*sd).bl.x as i32;
-    let y = (*sd).bl.y as i32;
+    let m = (*sd).m as i32;
+    let x = (*sd).x as i32;
+    let y = (*sd).y as i32;
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_charlook_inner(&raw const pc_arc.read().bl, LOOK_GET, sd as *const MapSessionData);
+                clif_charlook_inner(pc_arc.read().bl_ptr(), LOOK_GET, sd as *const MapSessionData);
             } else if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(id) {
-                clif_cnpclook_inner(&raw const npc_arc.read().bl, LOOK_GET, sd as *const BlockList);
+                clif_cnpclook_inner(npc_arc.read().bl_ptr(), LOOK_GET, sd as *const BlockList);
             } else if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(id) {
-                clif_cmoblook_inner(&raw const mob_arc.read().bl, LOOK_GET, sd as *const BlockList);
+                clif_cmoblook_inner(mob_arc.read().bl_ptr(), LOOK_GET, sd as *const BlockList);
             }
         }
     }
@@ -935,9 +935,9 @@ pub unsafe fn clif_refresh(sd: *mut MapSessionData) -> i32 {
     clif_sendmapinfo(sd);
     clif_sendxy(sd);
     clif_mob_look_start(sd);
-    if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
-        let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).bl.m as usize);
-        let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
+    if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).m as usize);
+        let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
         for id in ids {
             let bl_ptr = crate::game::map_server::map_id2bl_ref(id);
             if !bl_ptr.is_null() {
@@ -969,7 +969,7 @@ pub unsafe fn clif_refresh(sd: *mut MapSessionData) -> i32 {
     wfifoset(fd, 5 + 3);
 
     // Enforce canGroup map restriction.
-    let m = (*sd).bl.m as usize;
+    let m = (*sd).m as usize;
     let can_group = (*raw_map_ptr().add(m)).can_group;
     if can_group == 0 {
         let sf = (*sd).player.appearance.setting_flags as u32;
@@ -1006,7 +1006,7 @@ pub unsafe fn clif_sendminimap(sd: *mut MapSessionData) -> i32 {
     wfifob(fd, 2, 0x06);
     wfifob(fd, 3, 0x70);
     // C writes SWAP16(sd->bl.m) into a u8 slot — captures only the low byte of BE form.
-    wfifob(fd, 4, ((*sd).bl.m as u16).swap_bytes() as u8);
+    wfifob(fd, 4, ((*sd).m as u16).swap_bytes() as u8);
     wfifob(fd, 5, 0x00);
     wfifoset(fd, encrypt(fd) as usize);
     0

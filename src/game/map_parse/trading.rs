@@ -12,7 +12,6 @@
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
 
-use crate::database::map_db::BlockList;
 use crate::session::{session_exists, session_set_eof};
 use crate::game::pc::{
     MapSessionData,
@@ -46,16 +45,13 @@ use crate::game::pc::{
 use crate::database::item_db;
 use crate::database::class_db::name as classdb_name;
 
-/// Dispatch a Lua event with two block_list arguments.
-#[allow(dead_code)]
-unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
-    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
+/// Dispatch a Lua event with two entity ID arguments.
+fn sl_doscript_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
+    crate::game::scripting::doscript_blargs_id(root, method, &[id1, id2])
 }
 
-/// Coroutine dispatch with two block_list arguments.
-#[allow(dead_code)]
-unsafe fn sl_doscript_coro_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
-    crate::game::scripting::doscript_coro(root, method, &[bl1 as *mut _, bl2 as *mut _])
+fn sl_doscript_coro_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
+    crate::game::scripting::doscript_coro_id(root, method, &[id1, id2])
 }
 
 
@@ -139,9 +135,7 @@ pub unsafe fn clif_exchange_finalize(
     if sd.is_null() || tsd.is_null() { return 0; }
 
     {
-        let script = b"characterLog\0".as_ptr() as *const i8;
-        let func   = b"exchangeLogWrite\0".as_ptr() as *const i8;
-        sl_doscript_2(script, func, &mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList);
+        sl_doscript_2("characterLog", Some("exchangeLogWrite"), (*sd).id, (*tsd).id);
     }
 
     // Transfer sd's items to tsd
@@ -205,7 +199,7 @@ pub unsafe fn clif_startexchange(
 ) -> i32 {
     if sd.is_null() { return 0; }
 
-    if target == (*sd).bl.id {
+    if target == (*sd).id {
         let msg = b"You move your items from one hand to another, but quickly get bored.\0".as_ptr() as *const i8;
         clif_sendminitext(sd, msg);
         return 0;
@@ -218,7 +212,7 @@ pub unsafe fn clif_startexchange(
     let tsd = &mut *_tsd_guard as *mut MapSessionData;
 
     (*sd).exchange.target  = target;
-    (*tsd).exchange.target = (*sd).bl.id;
+    (*tsd).exchange.target = (*sd).id;
 
     if (*tsd).player.appearance.setting_flags as u32 & FLAG_EXCHANGE != 0 {
         let mut buff = [0i8; 256];
@@ -243,7 +237,7 @@ pub unsafe fn clif_startexchange(
         wfifob((*sd).fd, 5, 0x00);
         // WFIFOL(sd->fd, 6) = SWAP32(tsd->bl.id)
         let p = wfifop((*sd).fd, 6) as *mut u32;
-        if !p.is_null() { p.write_unaligned((*tsd).bl.id.to_be()); }
+        if !p.is_null() { p.write_unaligned((*tsd).id.to_be()); }
         let mut len: usize = 4;
         let buf_len = libc::strlen(buff.as_ptr());
         wfifob((*sd).fd, len + 6, buf_len as u8);
@@ -281,7 +275,7 @@ pub unsafe fn clif_startexchange(
         wfifob((*tsd).fd, 5, 0x00);
         // WFIFOL(tsd->fd, 6) = SWAP32(sd->bl.id)
         let p3 = wfifop((*tsd).fd, 6) as *mut u32;
-        if !p3.is_null() { p3.write_unaligned((*sd).bl.id.to_be()); }
+        if !p3.is_null() { p3.write_unaligned((*sd).id.to_be()); }
         let mut len: usize = 4;
         let buf_len = libc::strlen(buff.as_ptr());
         wfifob((*tsd).fd, len + 6, buf_len as u8);
@@ -738,7 +732,7 @@ pub unsafe fn clif_handgold(sd: *mut MapSessionData) -> i32 {
     // Compute adjacent cell based on facing direction
     let (x, y) = side_cell(&*sd);
 
-    let bl = block_grid::first_in_cell((*sd).bl.m as usize, x as u16, y as u16, BL_ALL)
+    let bl = block_grid::first_in_cell((*sd).m as usize, x as u16, y as u16, BL_ALL)
         .and_then(|id| { let p = crate::game::map_server::map_id2bl_ref(id); if p.is_null() { None } else { Some(p) } });
 
     (*sd).exchange.gold = gold;
@@ -779,7 +773,7 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
 
     (*sd).invslot = slot as u8;
 
-    let bl = match block_grid::first_in_cell((*sd).bl.m as usize, x as u16, y as u16, BL_ALL)
+    let bl = match block_grid::first_in_cell((*sd).m as usize, x as u16, y as u16, BL_ALL)
         .and_then(|id| { let p = crate::game::map_server::map_id2bl_ref(id); if p.is_null() { None } else { Some(p) } }) {
         Some(p) => p,
         None => return 0,
@@ -845,24 +839,14 @@ pub unsafe fn clif_handitem(sd: *mut MapSessionData) -> i32 {
         let mut nd_guard = nd_arc.write();
         let nd = &mut *nd_guard as *mut crate::game::npc::NpcData;
 
-        // Cast to a minimal NPC view to read receiveItem
-        #[repr(C)]
-        struct NpcMinimal {
-            bl:          BlockList,
-            name:        [i8; 24],
-            receive_item: i32,
-        }
-        let nd_min = nd as *mut NpcMinimal;
-
         let inv_id = (&(*sd).player.inventory.inventory)[slot].id;
         let inv_item = item_db::search(inv_id);
         if inv_item.exchangeable != 0 || inv_item.droppable != 0 {
             return 0;
         }
 
-        if (*nd_min).receive_item == 1 {
-            let func = b"handItem\0".as_ptr() as *const i8;
-            sl_doscript_coro_2((*nd_min).name.as_ptr(), func, &mut (*sd).bl as *mut BlockList, &mut (*nd_min).bl as *mut BlockList);
+        if (*nd).receive_item == 1 {
+            sl_doscript_coro_2(crate::game::scripting::carray_to_str(&(*nd).name), Some("handItem"), (*sd).id, (*nd).id);
         } else {
             let item_name = item_db::search(inv_id).name.as_ptr();
             let mut msg = [0i8; 128];
@@ -923,7 +907,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
             };
             let _tsd_guard = tsd_arc.read();
             let tsd = &*_tsd_guard;
-            if (*sd).bl.m != tsd.bl.m || tsd.bl.bl_type as i32 != BL_PC {
+            if (*sd).m != tsd.m || tsd.bl_type as i32 != BL_PC {
                 return 0;
             }
             if (*sd).player.identity.gm_level != 0 || (tsd.optFlags & OPT_FLAG_STEALTH) == 0 {
@@ -1031,7 +1015,7 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
                 if let Some(ref arc) = tsd_arc {
                     let mut guard = arc.write();
                     let tsd = &mut *guard as *mut MapSessionData;
-                    if (*tsd).exchange.target == (*sd).bl.id {
+                    if (*tsd).exchange.target == (*sd).id {
                         clif_exchange_message(tsd, msg, 4, 0);
                         clif_exchange_close(tsd);
                         session_set_eof((*sd).fd, 10);
@@ -1069,11 +1053,11 @@ pub unsafe fn clif_parse_exchange(sd: *mut MapSessionData) -> i32 {
 /// Matches the repeated side==0..3 pattern in clif_handgold / clif_handitem.
 unsafe fn side_cell(sd: &MapSessionData) -> (i32, i32) {
     match sd.player.combat.side {
-        0 => (sd.bl.x as i32,     sd.bl.y as i32 - 1),
-        1 => (sd.bl.x as i32 + 1, sd.bl.y as i32),
-        2 => (sd.bl.x as i32,     sd.bl.y as i32 + 1),
-        3 => (sd.bl.x as i32 - 1, sd.bl.y as i32),
-        _ => (sd.bl.x as i32,     sd.bl.y as i32),
+        0 => (sd.x as i32,     sd.y as i32 - 1),
+        1 => (sd.x as i32 + 1, sd.y as i32),
+        2 => (sd.x as i32,     sd.y as i32 + 1),
+        3 => (sd.x as i32 - 1, sd.y as i32),
+        _ => (sd.x as i32,     sd.y as i32),
     }
 }
 

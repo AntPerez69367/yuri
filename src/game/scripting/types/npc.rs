@@ -14,11 +14,8 @@ use crate::game::scripting::types::registry::{GameRegObject, MapRegObject, NpcRe
 use crate::game::scripting::types::shared;
 use crate::common::player::inventory::MAX_EQUIP;
 
-pub struct NpcObject { pub ptr: *mut std::ffi::c_void }
-// SAFETY: NpcObject is used exclusively within a single-threaded Lua runtime.
-// All Lua closures that touch `ptr` are invoked on one thread; no concurrent
-// access to the underlying NpcData is possible.
-unsafe impl Send for NpcObject {}
+pub struct NpcObject { pub id: u32 }
+// u32 is Send — no unsafe impl needed.
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -27,7 +24,7 @@ unsafe impl Send for NpcObject {}
 unsafe fn npc_map(nd: *const NpcData) -> *mut MapData {
     if nd.is_null() { return std::ptr::null_mut(); }
     if (nd as usize) % std::mem::align_of::<NpcData>() != 0 { return std::ptr::null_mut(); }
-    get_map_ptr((*nd).bl.m)
+    get_map_ptr((*nd).m)
 }
 
 unsafe fn cstr_to_string(p: *const i8) -> String {
@@ -51,39 +48,36 @@ impl UserData for NpcObject {
 
         // ── __index ─────────────────────────────────────────────────────────
         methods.add_meta_method(MetaMethod::Index, |lua, this, key: String| {
-            let nd = this.ptr as *mut NpcData;
-            if nd.is_null() { return Ok(mlua::Value::Nil); }
+            let entity_id = this.id;
 
-            // Named methods — return Lua functions capturing the raw pointer.
-            // npc:move() desugars to npc.move(npc); the closure ignores `npc`
-            // since it already captured `ptr`.
+            // Named methods — return Lua functions capturing the entity ID.
             match key.as_str() {
                 "move" => {
-                    let ptr = this.ptr;
+                    let id = entity_id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            Ok(unsafe { npc_move(ptr as *mut NpcData) })
+                            let Some(arc) = crate::game::map_server::map_id2npc_ref(id) else { return Ok(0); };
+                            Ok(unsafe { npc_move(arc.data_ptr()) })
                         }
                     )?));
                 }
                 "warp" => {
-                    let ptr = this.ptr;
+                    let id = entity_id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, m, x, y): (mlua::Value, i32, i32, i32)| {
-                            unsafe { npc_warp(ptr as *mut NpcData, m, x, y); }
+                            let Some(arc) = crate::game::map_server::map_id2npc_ref(id) else { return Ok(()); };
+                            unsafe { npc_warp(arc.data_ptr(), m, x, y); }
                             Ok(())
                         }
                     )?));
                 }
                 "getEquippedItem" => {
-                    let ptr = this.ptr;
+                    let id = entity_id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |lua, (_, num): (mlua::Value, usize)| -> mlua::Result<mlua::Value> {
                             if num >= MAX_EQUIP { return Ok(mlua::Value::Nil); }
-                            if ptr.is_null() || (ptr as usize) % std::mem::align_of::<NpcData>() != 0 {
-                                return Ok(mlua::Value::Nil);
-                            }
-                            let item = unsafe { &(*(ptr as *const NpcData)).equip[num] };
+                            let Some(arc) = crate::game::map_server::map_id2npc_ref(id) else { return Ok(mlua::Value::Nil); };
+                            let item = unsafe { &(*arc.data_ptr()).equip[num] };
                             if item.id == 0 { return Ok(mlua::Value::Nil); }
                             let t = lua.create_table()?;
                             t.raw_set(1, item.id)?;
@@ -92,41 +86,55 @@ impl UserData for NpcObject {
                         }
                     )?));
                 }
-                // Registry sub-objects — constructed lazily from the NPC pointer.
-                "registry"     => return lua.pack(NpcRegObject { ptr: this.ptr }),
-                "mapRegistry"  => return lua.pack(MapRegObject { ptr: this.ptr }),
+                // Registry sub-objects — constructed lazily from the NPC ID.
+                "registry"     => {
+                    let ptr = crate::game::map_server::map_id2npc_ref(entity_id)
+                        .map(|a| a.data_ptr() as *mut std::ffi::c_void)
+                        .unwrap_or(std::ptr::null_mut());
+                    return lua.pack(NpcRegObject { ptr });
+                }
+                "mapRegistry"  => {
+                    let ptr = crate::game::map_server::map_id2npc_ref(entity_id)
+                        .map(|a| a.data_ptr() as *mut std::ffi::c_void)
+                        .unwrap_or(std::ptr::null_mut());
+                    return lua.pack(MapRegObject { ptr });
+                }
                 "gameRegistry" => return lua.pack(GameRegObject { ptr: std::ptr::null_mut() }),
 
                 // sendSide() — send a side-update packet to nearby players.
                 "sendSide" => {
-                    let ptr = this.ptr;
+                    let id = entity_id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            unsafe { sl_g_sendside(ptr); }
+                            let Some(arc) = crate::game::map_server::map_id2npc_ref(id) else { return Ok(()); };
+                            unsafe { sl_g_sendside(arc.data_ptr() as *mut std::ffi::c_void); }
                             Ok(())
                         }
                     )?));
                 }
                 // sendAnimationXY(anim, x, y, times) — broadcast animation at (x,y).
                 "sendAnimationXY" => {
-                    let ptr = this.ptr;
+                    let id = entity_id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, args: mlua::MultiValue| {
+                            let Some(arc) = crate::game::map_server::map_id2npc_ref(id) else { return Ok(()); };
                             let a: Vec<mlua::Value> = args.into_iter().collect();
                             let anim  = a.get(1).map(val_to_int).unwrap_or(0);
                             let x     = a.get(2).map(val_to_int).unwrap_or(0);
                             let y     = a.get(3).map(val_to_int).unwrap_or(0);
                             let times = a.get(4).map(val_to_int).unwrap_or(0);
-                            unsafe { sl_g_sendanimxy(ptr, anim, x, y, times); }
+                            unsafe { sl_g_sendanimxy(arc.data_ptr() as *mut std::ffi::c_void, anim, x, y, times); }
                             Ok(())
                         }
                     )?));
                 }
                 // talk(type, msg) — speak in the surrounding area.
                 "talk" => {
-                    let ptr = this.ptr;
+                    let id = entity_id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, args: mlua::MultiValue| {
+                            let Some(arc) = crate::game::map_server::map_id2npc_ref(id) else { return Ok(()); };
+                            let ptr = arc.data_ptr() as *mut std::ffi::c_void;
                             let a: Vec<mlua::Value> = args.into_iter().collect();
                             let talk_type = a.get(1).map(val_to_int).unwrap_or(0);
                             let msg = match a.get(2) {
@@ -139,8 +147,7 @@ impl UserData for NpcObject {
                                 Ok(cs) => unsafe { sl_g_talk(ptr, talk_type, cs.as_ptr()); },
                                 Err(e) => tracing::debug!(
                                     "[scripting] NpcObject::talk: msg contains embedded null \
-                                     (ptr={:?}, talk_type={}, err={})",
-                                    ptr, talk_type, e
+                                     (id={id}, talk_type={talk_type}, err={e})"
                                 ),
                             }
                             Ok(())
@@ -153,76 +160,54 @@ impl UserData for NpcObject {
                 "getObjectsInCell" | "getAliveObjectsInCell" | "getObjectsInCellWithTraps" =>
                     return shared::make_cell_query_fn(lua, key.as_str()),
                 "getObjectsInArea" | "getAliveObjectsInArea"
-                | "getObjectsInSameMap" | "getAliveObjectsInSameMap" =>
-                    return shared::make_area_query_fn(lua, key.as_str(), this.ptr),
+                | "getObjectsInSameMap" | "getAliveObjectsInSameMap" => {
+                    let ptr = crate::game::map_server::map_id2npc_ref(entity_id)
+                        .map(|a| a.data_ptr() as *mut std::ffi::c_void)
+                        .unwrap_or(std::ptr::null_mut());
+                    return shared::make_area_query_fn(lua, key.as_str(), ptr);
+                }
                 "getObjectsInMap" =>
                     return shared::make_map_query_fn(lua),
-                "sendAnimation" => {
-                    let ptr = this.ptr;
-                    return shared::make_sendanimation_fn(lua, ptr);
-                }
-                "playSound" => {
-                    let ptr = this.ptr;
-                    return shared::make_playsound_fn(lua, ptr);
-                }
-                "sendAction" => {
-                    let ptr = this.ptr;
-                    return shared::make_sendaction_fn(lua, ptr);
-                }
-                "msg" => {
-                    let ptr = this.ptr;
-                    return shared::make_msg_fn(lua, ptr);
-                }
-                "dropItem" => {
-                    let ptr = this.ptr;
-                    return shared::make_dropitem_fn(lua, ptr);
-                }
-                "dropItemXY" => {
-                    let ptr = this.ptr;
-                    return shared::make_dropitemxy_fn(lua, ptr);
-                }
-                "objectCanMove" => {
-                    let ptr = this.ptr;
-                    return shared::make_objectcanmove_fn(lua, ptr);
-                }
-                "objectCanMoveFrom" => {
-                    let ptr = this.ptr;
-                    return shared::make_objectcanmovefrom_fn(lua, ptr);
-                }
-                "repeatAnimation" => {
-                    let ptr = this.ptr;
-                    return shared::make_repeatanimation_fn(lua, ptr);
-                }
-                "selfAnimation" => {
-                    let ptr = this.ptr;
-                    return shared::make_selfanimation_fn(lua, ptr);
-                }
-                "selfAnimationXY" => {
-                    let ptr = this.ptr;
-                    return shared::make_selfanimationxy_fn(lua, ptr);
-                }
-                "sendParcel" => {
-                    let ptr = this.ptr;
-                    return shared::make_sendparcel_fn(lua, ptr);
-                }
-                "throw" => {
-                    let ptr = this.ptr;
-                    return shared::make_throwblock_fn(lua, ptr);
+                "sendAnimation" | "playSound" | "sendAction" | "msg"
+                | "dropItem" | "dropItemXY" | "objectCanMove" | "objectCanMoveFrom"
+                | "repeatAnimation" | "selfAnimation" | "selfAnimationXY"
+                | "sendParcel" | "throw" => {
+                    let ptr = crate::game::map_server::map_id2npc_ref(entity_id)
+                        .map(|a| a.data_ptr() as *mut std::ffi::c_void)
+                        .unwrap_or(std::ptr::null_mut());
+                    return match key.as_str() {
+                        "sendAnimation" => shared::make_sendanimation_fn(lua, ptr),
+                        "playSound" => shared::make_playsound_fn(lua, ptr),
+                        "sendAction" => shared::make_sendaction_fn(lua, ptr),
+                        "msg" => shared::make_msg_fn(lua, ptr),
+                        "dropItem" => shared::make_dropitem_fn(lua, ptr),
+                        "dropItemXY" => shared::make_dropitemxy_fn(lua, ptr),
+                        "objectCanMove" => shared::make_objectcanmove_fn(lua, ptr),
+                        "objectCanMoveFrom" => shared::make_objectcanmovefrom_fn(lua, ptr),
+                        "repeatAnimation" => shared::make_repeatanimation_fn(lua, ptr),
+                        "selfAnimation" => shared::make_selfanimation_fn(lua, ptr),
+                        "selfAnimationXY" => shared::make_selfanimationxy_fn(lua, ptr),
+                        "sendParcel" => shared::make_sendparcel_fn(lua, ptr),
+                        "throw" => shared::make_throwblock_fn(lua, ptr),
+                        _ => unreachable!(),
+                    };
                 }
                 "delFromIDDB" => {
-                    let ptr = this.ptr;
+                    let id = entity_id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            unsafe { sl_g_deliddb(ptr); }
+                            let Some(arc) = crate::game::map_server::map_id2npc_ref(id) else { return Ok(()); };
+                            unsafe { sl_g_deliddb(arc.data_ptr() as *mut std::ffi::c_void); }
                             Ok(())
                         }
                     )?));
                 }
                 "addPermanentSpawn" => {
-                    let ptr = this.ptr;
+                    let id = entity_id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            unsafe { sl_g_addpermanentspawn(ptr); }
+                            let Some(arc) = crate::game::map_server::map_id2npc_ref(id) else { return Ok(()); };
+                            unsafe { sl_g_addpermanentspawn(arc.data_ptr() as *mut std::ffi::c_void); }
                             Ok(())
                         }
                     )?));
@@ -246,14 +231,11 @@ impl UserData for NpcObject {
                     )?));
                 }
                 // spawn(mob_name_or_id, x, y, amount [,m [,owner]])
-                // Spawns `amount` mobs at (x,y) on map m (or NPC's own map if m=0).
-                // Returns a Lua table of MobObject userdata.
                 "spawn" => {
-                    let ptr = this.ptr;
+                    let id = entity_id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |lua, args: mlua::MultiValue| -> mlua::Result<mlua::Value> {
                             let args: Vec<mlua::Value> = args.into_iter().collect();
-                            // args[0]=self, [1]=mob, [2]=x, [3]=y, [4]=amount, [5]=m, [6]=owner
                             let mob_id: u32 = match args.get(1) {
                                 Some(mlua::Value::String(s)) => {
                                     let name_str = s.to_str().map_err(mlua::Error::external)?;
@@ -274,11 +256,10 @@ impl UserData for NpcObject {
                             let owner  = vi(6) as u32;
                             let mut m  = vi(5);
                             if m == 0 {
-                                let align = std::mem::align_of::<NpcData>();
-                                if ptr.is_null() || ptr as usize % align != 0 {
+                                let Some(arc) = crate::game::map_server::map_id2npc_ref(id) else {
                                     return Ok(mlua::Value::Table(lua.create_table()?));
-                                }
-                                m = unsafe { (*(ptr as *const NpcData)).bl.m as i32 };
+                                };
+                                m = unsafe { (*arc.data_ptr()).m as i32 };
                             }
                             let tbl = lua.create_table()?;
                             if amount <= 0 { return Ok(mlua::Value::Table(tbl)); }
@@ -286,7 +267,6 @@ impl UserData for NpcObject {
                                 mobspawn_onetime(mob_id, m, x, y, amount, 0, 0, 0, owner)
                             };
                             if spawned.is_empty() { return Ok(mlua::Value::Table(tbl)); }
-                            // Collect IDs before any fallible Lua operations.
                             for (i, spawn_id) in spawned.into_iter().enumerate() {
                                 tbl.set(i + 1, lua.create_userdata(MobObject { id: spawn_id })?)?;
                             }
@@ -295,9 +275,7 @@ impl UserData for NpcObject {
                     )?));
                 }
 
-                // addNPC(name, m, x, y, subtype [,timer, duration, owner, movetime, yname])
-
-                // Does not dereference self.ptr — works with the sentinel core NPC.
+                // addNPC — does not dereference self — works with the sentinel core NPC.
                 "addNPC" => {
                     return Ok(mlua::Value::Function(lua.create_function(
                         |_, args: mlua::MultiValue| {
@@ -335,13 +313,12 @@ impl UserData for NpcObject {
             }
 
             // ── Field getters ─────────────────────────────────────────────
-            // Guard against sentinel / misaligned pointers (e.g. core = NPC(4294967295)).
-            // 0xFFFFFFFF is not 8-byte aligned so NpcData would fault on deref.
-            if (nd as usize) % std::mem::align_of::<NpcData>() != 0 {
+            // Sentinel ID (e.g. core = NPC(4294967295)) — no actual NPC data.
+            let Some(arc) = crate::game::map_server::map_id2npc_ref(entity_id) else {
                 return Ok(mlua::Value::Nil);
-            }
-            let nd = unsafe { &*nd };
-            let bl = &nd.bl;
+            };
+            let nd = unsafe { &*arc.data_ptr() };
+            let bl = nd.as_bl();
 
             macro_rules! int  { ($e:expr) => { Ok(mlua::Value::Integer($e as i64)) }; }
             macro_rules! str_ { ($e:expr) => {
@@ -421,12 +398,10 @@ impl UserData for NpcObject {
 
         // ── __newindex ───────────────────────────────────────────────────────
         methods.add_meta_method(MetaMethod::NewIndex, |_, this, (key, val): (String, mlua::Value)| {
-            let nd = this.ptr as *mut NpcData;
-            if nd.is_null() { return Ok(()); }
-            if (nd as usize) % std::mem::align_of::<NpcData>() != 0 { return Ok(()); }
-            let nd = unsafe { &mut *nd };
+            let Some(arc) = crate::game::map_server::map_id2npc_ref(this.id) else { return Ok(()); };
+            let nd = unsafe { &mut *arc.data_ptr() };
             let mp = unsafe { npc_map(nd as *const NpcData) };
-            let bl = &mut nd.bl;
+            let bl = nd.as_bl_mut();
 
             macro_rules! map_set { ($field:ident) => {
                 if !mp.is_null() { unsafe { (*mp).$field = val_to_int(&val) as _; } }

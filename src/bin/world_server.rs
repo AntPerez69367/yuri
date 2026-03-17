@@ -152,8 +152,7 @@ async fn main() -> Result<()> {
                 }
                 make_listen_port(map_port as i32);
 
-                let startup = CString::new("startup").unwrap();
-                yuri::game::scripting::doscript_blargs(startup.as_ptr(), std::ptr::null(), &[]);
+                yuri::game::scripting::doscript_blargs_id("startup", None, &[]);
 
                 set_termfunc(Some(map_do_term));
             }

@@ -1164,6 +1164,6 @@ pub async unsafe fn clif_parseranking(sd: *mut MapSessionData, fd: SessionId) ->
 pub unsafe fn canusepowerboards(sd: *mut MapSessionData) -> i32 {
     if (*sd).player.identity.gm_level != 0 { return 1; }
     if pc_readglobalreg(sd, c"carnagehost".as_ptr()) == 0 { return 0; }
-    if (*sd).bl.m >= 2001 && (*sd).bl.m <= 2099 { return 1; }
+    if (*sd).m >= 2001 && (*sd).m <= 2099 { return 1; }
     0
 }

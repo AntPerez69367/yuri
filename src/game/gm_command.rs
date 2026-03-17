@@ -2,7 +2,6 @@
 use std::ffi::CString;
 use std::sync::atomic::{AtomicI32, AtomicI8, Ordering};
 
-use crate::database::map_db::BlockList;
 use crate::game::mob::{MobSpawnData, MOB_DEAD};
 use crate::game::pc::{MapSessionData, PC_DIE, SFLAG_FULLSTATS, SFLAG_HPMP};
 
@@ -400,18 +399,18 @@ fn command_spell(sd: &mut MapSessionData, line: &str) -> i32 {
     if let Some((spell, sound)) = parse_two_ints(line) {
         SPELLGFX.store(spell, Ordering::Relaxed);
         SOUNDFX.store(sound, Ordering::Relaxed);
-        unsafe { clif_playsound(&mut sd.bl, sound); }
+        unsafe { clif_playsound(sd.as_bl_mut(), sound); }
     }
-    let sd_bl = &mut sd.bl as *mut BlockList;
+    let sd_bl = sd.bl_ptr_mut();
     let anim = SPELLGFX.load(Ordering::Relaxed);
     let times = SOUNDFX.load(Ordering::Relaxed);
-    if let Some(grid) = block_grid::get_grid(sd.bl.m as usize) {
-        let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(sd.bl.m as usize) };
-        let ids = block_grid::ids_in_area(grid, sd.bl.x as i32, sd.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+    if let Some(grid) = block_grid::get_grid(sd.m as usize) {
+        let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(sd.m as usize) };
+        let ids = block_grid::ids_in_area(grid, sd.x as i32, sd.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
                 let pc = arc.read();
-                clif_sendanimation_inner(&pc.bl, anim, sd_bl, times);
+                clif_sendanimation_inner(pc.as_bl(), anim, sd_bl, times);
             }
         }
     }
@@ -523,14 +522,9 @@ fn command_magicreload(sd: &mut MapSessionData, _line: &str) -> i32 {
 
 fn command_lua(sd: &mut MapSessionData, line: &str) -> i32 {
     sd.luaexec = 0;
-    unsafe {
-        let bl_ptr = &mut sd.bl as *mut BlockList;
-        crate::game::scripting::doscript_blargs(
-            c"canRunLuaTalk".as_ptr() as *const i8,
-            std::ptr::null(),
-            &[bl_ptr],
-        );
-    }
+    crate::game::scripting::doscript_blargs_id(
+        "canRunLuaTalk", None, &[sd.id],
+    );
     if sd.luaexec != 0 {
         if let Ok(cs) = CString::new(line) {
             unsafe { sl_exec(as_ptr(sd), cs.as_ptr() as *mut i8); }
@@ -573,7 +567,7 @@ fn command_reloadspawn(sd: &mut MapSessionData, _line: &str) -> i32 {
 fn command_pvp(sd: &mut MapSessionData, line: &str) -> i32 {
     let pvp = match parse_int(line) { Some(v) => v, None => return -1 };
     unsafe {
-        let mp = crate::database::map_db::get_map_ptr(sd.bl.m);
+        let mp = crate::database::map_db::get_map_ptr(sd.m);
         if !mp.is_null() { (*mp).pvp = pvp as u8; }
     }
     send_minitext(sd, &format!("PvP set to: {}", pvp));
@@ -582,7 +576,7 @@ fn command_pvp(sd: &mut MapSessionData, line: &str) -> i32 {
 
 fn command_spellwork(sd: &mut MapSessionData, _line: &str) -> i32 {
     unsafe {
-        let mp = crate::database::map_db::get_map_ptr(sd.bl.m);
+        let mp = crate::database::map_db::get_map_ptr(sd.m);
         if !mp.is_null() { (*mp).spell ^= 1; }
     }
     0
@@ -606,7 +600,7 @@ fn command_luafix(_sd: &mut MapSessionData, _line: &str) -> i32 {
 }
 
 fn command_respawn(sd: &mut MapSessionData, _line: &str) -> i32 {
-    if let Some(grid) = block_grid::get_grid(sd.bl.m as usize) {
+    if let Some(grid) = block_grid::get_grid(sd.m as usize) {
         let all_ids: Vec<u32> = grid.all_ids().collect();
         for id in all_ids {
             if let Some(arc) = crate::game::map_server::map_id2mob_ref(id) {
@@ -675,7 +669,7 @@ fn command_stealth(sd: &mut MapSessionData, _line: &str) -> i32 {
         unsafe { clif_refresh(as_ptr(sd)); }
         send_minitext(sd, "Stealth :OFF");
     } else {
-        unsafe { clif_lookgone(&sd.bl); }
+        unsafe { clif_lookgone(sd.as_bl()); }
         sd.optFlags ^= OPT_STEALTH;
         unsafe { clif_refresh(as_ptr(sd)); }
         send_minitext(sd, "Stealth :ON");
@@ -871,12 +865,12 @@ fn command_gfxtoggle(sd: &mut MapSessionData, _line: &str) -> i32 {
 fn command_weather(sd: &mut MapSessionData, line: &str) -> i32 {
     let weather = parse_int(line).unwrap_or(5);
     unsafe {
-        let mp = crate::database::map_db::get_map_ptr(sd.bl.m);
+        let mp = crate::database::map_db::get_map_ptr(sd.m);
         if !mp.is_null() { (*mp).weather = weather as u8; }
     }
-    let m = sd.bl.m;
+    let m = sd.m;
     crate::game::map_server::for_each_player(|tsd| {
-        if tsd.bl.m == m {
+        if tsd.m == m {
             unsafe { clif_sendweather(tsd as *mut MapSessionData); }
         }
     });
@@ -886,13 +880,13 @@ fn command_weather(sd: &mut MapSessionData, line: &str) -> i32 {
 fn command_light(sd: &mut MapSessionData, line: &str) -> i32 {
     let light = parse_int(line).unwrap_or(232);
     unsafe {
-        let mp = crate::database::map_db::get_map_ptr(sd.bl.m);
+        let mp = crate::database::map_db::get_map_ptr(sd.m);
         if !mp.is_null() { (*mp).light = light as u8; }
     }
-    let m = sd.bl.m;
+    let m = sd.m;
     crate::game::map_server::for_each_player(|tsd| {
-        if tsd.bl.m == m {
-            unsafe { pc_warp(tsd as *mut MapSessionData, tsd.bl.m as i32, tsd.bl.x as i32, tsd.bl.y as i32); }
+        if tsd.m == m {
+            unsafe { pc_warp(tsd as *mut MapSessionData, tsd.m as i32, tsd.x as i32, tsd.y as i32); }
         }
     });
     0
@@ -996,11 +990,11 @@ fn command_job(sd: &mut MapSessionData, line: &str) -> i32 {
 
 fn command_music(sd: &mut MapSessionData, line: &str) -> i32 {
     if let Some(music) = parse_int(line) { MUSICFX.store(music, Ordering::Relaxed); }
-    let oldm = sd.bl.m as i32;
-    let oldx = sd.bl.x as i32;
-    let oldy = sd.bl.y as i32;
+    let oldm = sd.m as i32;
+    let oldx = sd.x as i32;
+    let oldy = sd.y as i32;
     unsafe {
-        let mp = crate::database::map_db::get_map_ptr(sd.bl.m);
+        let mp = crate::database::map_db::get_map_ptr(sd.m);
         if !mp.is_null() { (*mp).bgm = MUSICFX.load(Ordering::Relaxed) as u16; }
         pc_warp(as_ptr(sd), 10002, 0, 0);
         pc_warp(as_ptr(sd), oldm, oldx, oldy);
@@ -1010,11 +1004,11 @@ fn command_music(sd: &mut MapSessionData, line: &str) -> i32 {
 
 fn command_musicn(sd: &mut MapSessionData, _line: &str) -> i32 {
     MUSICFX.fetch_add(1, Ordering::Relaxed);
-    let oldm = sd.bl.m as i32;
-    let oldx = sd.bl.x as i32;
-    let oldy = sd.bl.y as i32;
+    let oldm = sd.m as i32;
+    let oldx = sd.x as i32;
+    let oldy = sd.y as i32;
     unsafe {
-        let mp = crate::database::map_db::get_map_ptr(sd.bl.m);
+        let mp = crate::database::map_db::get_map_ptr(sd.m);
         if !mp.is_null() { (*mp).bgm = MUSICFX.load(Ordering::Relaxed) as u16; }
         pc_warp(as_ptr(sd), 10002, 0, 0);
         pc_warp(as_ptr(sd), oldm, oldx, oldy);
@@ -1024,11 +1018,11 @@ fn command_musicn(sd: &mut MapSessionData, _line: &str) -> i32 {
 
 fn command_musicp(sd: &mut MapSessionData, _line: &str) -> i32 {
     MUSICFX.fetch_sub(1, Ordering::Relaxed);
-    let oldm = sd.bl.m as i32;
-    let oldx = sd.bl.x as i32;
-    let oldy = sd.bl.y as i32;
+    let oldm = sd.m as i32;
+    let oldx = sd.x as i32;
+    let oldy = sd.y as i32;
     unsafe {
-        let mp = crate::database::map_db::get_map_ptr(sd.bl.m);
+        let mp = crate::database::map_db::get_map_ptr(sd.m);
         if !mp.is_null() { (*mp).bgm = MUSICFX.load(Ordering::Relaxed) as u16; }
         pc_warp(as_ptr(sd), 10002, 0, 0);
         pc_warp(as_ptr(sd), oldm, oldx, oldy);
@@ -1043,21 +1037,21 @@ fn command_musicq(sd: &mut MapSessionData, _line: &str) -> i32 {
 
 fn command_sound(sd: &mut MapSessionData, line: &str) -> i32 {
     if let Some(sound) = parse_int(line) { SOUNDFX.store(sound, Ordering::Relaxed); }
-    unsafe { clif_playsound(&mut sd.bl, SOUNDFX.load(Ordering::Relaxed)); }
+    unsafe { clif_playsound(sd.as_bl_mut(), SOUNDFX.load(Ordering::Relaxed)); }
     0
 }
 
 fn command_nsound(sd: &mut MapSessionData, _line: &str) -> i32 {
     let s = (SOUNDFX.fetch_add(1, Ordering::Relaxed) + 1).min(125);
     SOUNDFX.store(s, Ordering::Relaxed);
-    unsafe { clif_playsound(&mut sd.bl, s); }
+    unsafe { clif_playsound(sd.as_bl_mut(), s); }
     0
 }
 
 fn command_psound(sd: &mut MapSessionData, _line: &str) -> i32 {
     let s = (SOUNDFX.fetch_sub(1, Ordering::Relaxed) - 1).max(0);
     SOUNDFX.store(s, Ordering::Relaxed);
-    unsafe { clif_playsound(&mut sd.bl, s); }
+    unsafe { clif_playsound(sd.as_bl_mut(), s); }
     0
 }
 
@@ -1069,16 +1063,16 @@ fn command_soundq(sd: &mut MapSessionData, _line: &str) -> i32 {
 fn command_nspell(sd: &mut MapSessionData, _line: &str) -> i32 {
     let g = (SPELLGFX.fetch_add(1, Ordering::Relaxed) + 1).min(427);
     SPELLGFX.store(g, Ordering::Relaxed);
-    let sd_bl = &mut sd.bl as *mut BlockList;
+    let sd_bl = sd.bl_ptr_mut();
     let anim = g;
     let times = SOUNDFX.load(Ordering::Relaxed);
-    if let Some(grid) = block_grid::get_grid(sd.bl.m as usize) {
-        let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(sd.bl.m as usize) };
-        let ids = block_grid::ids_in_area(grid, sd.bl.x as i32, sd.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+    if let Some(grid) = block_grid::get_grid(sd.m as usize) {
+        let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(sd.m as usize) };
+        let ids = block_grid::ids_in_area(grid, sd.x as i32, sd.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
                 let pc = arc.read();
-                clif_sendanimation_inner(&pc.bl, anim, sd_bl, times);
+                clif_sendanimation_inner(pc.as_bl(), anim, sd_bl, times);
             }
         }
     }
@@ -1088,16 +1082,16 @@ fn command_nspell(sd: &mut MapSessionData, _line: &str) -> i32 {
 fn command_pspell(sd: &mut MapSessionData, _line: &str) -> i32 {
     let g = (SPELLGFX.fetch_sub(1, Ordering::Relaxed) - 1).max(0);
     SPELLGFX.store(g, Ordering::Relaxed);
-    let sd_bl = &mut sd.bl as *mut BlockList;
+    let sd_bl = sd.bl_ptr_mut();
     let anim = g;
     let times = SOUNDFX.load(Ordering::Relaxed);
-    if let Some(grid) = block_grid::get_grid(sd.bl.m as usize) {
-        let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(sd.bl.m as usize) };
-        let ids = block_grid::ids_in_area(grid, sd.bl.x as i32, sd.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+    if let Some(grid) = block_grid::get_grid(sd.m as usize) {
+        let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(sd.m as usize) };
+        let ids = block_grid::ids_in_area(grid, sd.x as i32, sd.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
                 let pc = arc.read();
-                clif_sendanimation_inner(&pc.bl, anim, sd_bl, times);
+                clif_sendanimation_inner(pc.as_bl(), anim, sd_bl, times);
             }
         }
     }

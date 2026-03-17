@@ -77,11 +77,16 @@ pub struct PcBodItems {
 
 /// MapSessionData — player session state. `#[repr(C)]` is retained during migration
 /// for `Box::new_zeroed` safety (all-zeros valid for numeric fields). Field order must
-/// keep `bl: BlockList` first (cast to `*mut BlockList` for grid operations).
 #[repr(C)]
 pub struct MapSessionData {
-    // Intrusive block-list header (must be first — cast to *mut BlockList for grid operations).
-    pub bl:                BlockList,
+    pub id:            u32,
+    pub graphic_id:    u32,
+    pub graphic_color: u32,
+    pub m:             u16,
+    pub x:             u16,
+    pub y:             u16,
+    pub bl_type:       u8,
+    pub subtype:       u8,
     pub fd:                SessionId,
 
     // Domain-typed player persistence data (replaces MmoCharStatus).
@@ -334,13 +339,14 @@ pub struct MapSessionData {
 // Sync is required because Arc<RwLock<MapSessionData>> needs T: Send + Sync.
 unsafe impl Send for MapSessionData {}
 unsafe impl Sync for MapSessionData {}
+crate::impl_as_blocklist!(MapSessionData);
 
 #[cfg(test)]
 mod layout_tests {
     use super::*;
     // MmoCharStatus removed — struct is now ~165KB (was ~3.3MB with the legacy status field).
     // Update this constant when PlayerData sub-structs grow or new fields are added.
-    const EXPECTED_SIZE: usize = 164816;
+    const EXPECTED_SIZE: usize = 164784;
     #[test]
     fn map_session_data_size() {
         assert_eq!(std::mem::size_of::<MapSessionData>(), EXPECTED_SIZE);
@@ -574,14 +580,14 @@ use crate::game::map_parse::visual::clif_object_look_sub2_inner;
 
 // ─── Lua dispatch helpers ─────────────────────────────────────────────────────
 
-/// Dispatch a Lua event with a single block_list argument.
-unsafe fn sl_doscript_simple_pc(root: *const i8, method: *const i8, bl: *mut BlockList) -> i32 {
-    crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
+/// Dispatch a Lua event with a single entity-ID argument.
+fn sl_doscript_simple_pc(root: &str, method: Option<&str>, id: u32) -> i32 {
+    crate::game::scripting::doscript_blargs_id(root, method, &[id])
 }
 
-/// Dispatch a Lua event with two block_list arguments.
-unsafe fn sl_doscript_2_pc(root: *const i8, method: *const i8, bl1: *mut BlockList, bl2: *mut BlockList) -> i32 {
-    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
+/// Dispatch a Lua event with two entity-ID arguments.
+fn sl_doscript_2_pc(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
+    crate::game::scripting::doscript_blargs_id(root, method, &[id1, id2])
 }
 
 // ─── Timer functions ─────────────────────────────────────────────────────────
@@ -627,19 +633,19 @@ pub unsafe fn pc_afktimer(id: i32, _none: i32) -> i32 {
 
     if (*sd).afk == 1 && (*sd).player.combat.state == 0 {
         (*sd).totalafktime += 10;
-        clif_sendaction(&mut (*sd).bl, 0x10, 0x4E, 0);
+        clif_sendaction((*sd).as_bl_mut(), 0x10, 0x4E, 0);
         return 0;
     }
 
     if (*sd).afk == 1 && (*sd).player.combat.state == 3 {
         (*sd).totalafktime += 10;
-        let sd_bl = &mut (*sd).bl as *mut BlockList;
-        if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
-            let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
-            let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        let sd_bl = (*sd).bl_ptr_mut();
+        if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+            let slot = &*crate::database::map_db::get_map_ptr((*sd).m as u16);
+            let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_sendanimation_inner(&tsd_arc.read().bl, 324, sd_bl, 0);
+                    clif_sendanimation_inner(tsd_arc.read().as_bl(), 324, sd_bl, 0);
                 }
             }
         }
@@ -654,16 +660,16 @@ pub unsafe fn pc_afktimer(id: i32, _none: i32) -> i32 {
     if (*sd).afktime >= 30 {
         if (*sd).player.combat.state == 0 {
             (*sd).totalafktime += 300;
-            clif_sendaction(&mut (*sd).bl, 0x10, 0x4E, 0);
+            clif_sendaction((*sd).as_bl_mut(), 0x10, 0x4E, 0);
         } else if (*sd).player.combat.state == 3 {
             (*sd).totalafktime += 300;
-            let sd_bl = &mut (*sd).bl as *mut BlockList;
-            if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
-                let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
-                let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+            let sd_bl = (*sd).bl_ptr_mut();
+            if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+                let slot = &*crate::database::map_db::get_map_ptr((*sd).m as u16);
+                let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
                 for id in ids {
                     if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                        clif_sendanimation_inner(&tsd_arc.read().bl, 324, sd_bl, 0);
+                        clif_sendanimation_inner(tsd_arc.read().as_bl(), 324, sd_bl, 0);
                     }
                 }
             }
@@ -678,39 +684,39 @@ pub unsafe fn pc_afktimer(id: i32, _none: i32) -> i32 {
 pub unsafe fn pc_starttimer(sd: *mut MapSessionData) -> i32 {
     (*sd).timer = timer_insert(1000, 1000,
         Some(pc_timer as unsafe fn(i32, i32) -> i32),
-        (*sd).bl.id as i32, 0);
+        (*sd).id as i32, 0);
     (*sd).pongtimer = timer_insert(30000, 30000,
         Some(pc_sendpong as unsafe fn(i32, i32) -> i32),
-        (*sd).bl.id as i32, 0);
+        (*sd).id as i32, 0);
     (*sd).savetimer = timer_insert(60000, 60000,
         Some(pc_savetimer as unsafe fn(i32, i32) -> i32),
-        (*sd).bl.id as i32, 0);
+        (*sd).id as i32, 0);
     if (*sd).player.identity.gm_level < 50 {
         (*sd).afktimer = timer_insert(10000, 10000,
             Some(pc_afktimer as unsafe fn(i32, i32) -> i32),
-            (*sd).bl.id as i32, 0);
+            (*sd).id as i32, 0);
     }
     (*sd).duratimer = timer_insert(1000, 1000,
         Some(bl_duratimer as unsafe fn(i32, i32) -> i32),
-        (*sd).bl.id as i32, 0);
+        (*sd).id as i32, 0);
     (*sd).secondduratimer = timer_insert(250, 250,
         Some(bl_secondduratimer as unsafe fn(i32, i32) -> i32),
-        (*sd).bl.id as i32, 0);
+        (*sd).id as i32, 0);
     (*sd).thirdduratimer = timer_insert(500, 500,
         Some(bl_thirdduratimer as unsafe fn(i32, i32) -> i32),
-        (*sd).bl.id as i32, 0);
+        (*sd).id as i32, 0);
     (*sd).fourthduratimer = timer_insert(1500, 1500,
         Some(bl_fourthduratimer as unsafe fn(i32, i32) -> i32),
-        (*sd).bl.id as i32, 0);
+        (*sd).id as i32, 0);
     (*sd).fifthduratimer = timer_insert(3000, 3000,
         Some(bl_fifthduratimer as unsafe fn(i32, i32) -> i32),
-        (*sd).bl.id as i32, 0);
+        (*sd).id as i32, 0);
     (*sd).scripttimer = timer_insert(500, 500,
         Some(pc_scripttimer as unsafe fn(i32, i32) -> i32),
-        (*sd).bl.id as i32, 0);
+        (*sd).id as i32, 0);
     (*sd).castusetimer = timer_insert(250, 250,
         Some(pc_castusetimer as unsafe fn(i32, i32) -> i32),
-        (*sd).bl.id as i32, 0);
+        (*sd).id as i32, 0);
     0
 }
 
@@ -740,14 +746,14 @@ pub unsafe fn bl_duratimer(id: i32, _none: i32) -> i32 {
     // while_passive: each learned spell fires once per second
     for x in 0..52usize {
         if (&(*sd).player.spells.skills)[x] > 0 {
-            sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname.as_ptr(), c"while_passive".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname), Some("while_passive"), (*sd).id);
         }
     }
 
     // while_equipped: each worn item fires once per second
     for x in 0..14usize {
         if (&(*sd).player.inventory.equip)[x].id > 0 {
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.equip)[x].id).yname.as_ptr(), c"while_equipped".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.equip)[x].id).yname), Some("while_equipped"), (*sd).id);
         }
     }
 
@@ -773,10 +779,10 @@ pub unsafe fn bl_duratimer(id: i32, _none: i32) -> i32 {
                         0
                     };
                     if health > 0 || (*tbl).bl_type as i32 == BL_PC {
-                        sl_doscript_2_pc(magic_db::search(mid).yname.as_ptr(), c"while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
+                        sl_doscript_2_pc(crate::game::scripting::carray_to_str(&magic_db::search(mid).yname), Some("while_cast"), (*sd).id, (*tbl).id);
                     }
                 } else {
-                    sl_doscript_simple_pc(magic_db::search(mid).yname.as_ptr(), c"while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search(mid).yname), Some("while_cast"), (*sd).id);
                 }
 
                 if (&(*sd).player.spells.dura_aether)[x].duration <= 0 {
@@ -790,13 +796,13 @@ pub unsafe fn bl_duratimer(id: i32, _none: i32) -> i32 {
                     (&mut (*sd).player.spells.dura_aether)[x].caster_id = 0;
                     {
                         let anim = (&(*sd).player.spells.dura_aether)[x].animation as i32;
-                        let sd_bl = &mut (*sd).bl as *mut BlockList;
-                        if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
-                            let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
-                            let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+                        let sd_bl = (*sd).bl_ptr_mut();
+                        if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+                            let slot = &*crate::database::map_db::get_map_ptr((*sd).m as u16);
+                            let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
                             for id in ids {
                                 if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                                    clif_sendanimation_inner(&tsd_arc.read().bl, anim, sd_bl, -1);
+                                    clif_sendanimation_inner(tsd_arc.read().as_bl(), anim, sd_bl, -1);
                                 }
                             }
                         }
@@ -808,9 +814,9 @@ pub unsafe fn bl_duratimer(id: i32, _none: i32) -> i32 {
                     }
 
                     if !tbl.is_null() {
-                        sl_doscript_2_pc(magic_db::search(mid).yname.as_ptr(), c"uncast".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
+                        sl_doscript_2_pc(crate::game::scripting::carray_to_str(&magic_db::search(mid).yname), Some("uncast"), (*sd).id, (*tbl).id);
                     } else {
-                        sl_doscript_simple_pc(magic_db::search(mid).yname.as_ptr(), c"uncast".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                        sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search(mid).yname), Some("uncast"), (*sd).id);
                     }
                 }
             }
@@ -843,13 +849,13 @@ pub unsafe fn bl_secondduratimer(id: i32, _none: i32) -> i32 {
 
     for x in 0..52usize {
         if (&(*sd).player.spells.skills)[x] > 0 {
-            sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname.as_ptr(), c"while_passive_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname), Some("while_passive_250"), (*sd).id);
         }
     }
 
     for x in 0..14usize {
         if (&(*sd).player.inventory.equip)[x].id > 0 {
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.equip)[x].id).yname.as_ptr(), c"while_equipped_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.equip)[x].id).yname), Some("while_equipped_250"), (*sd).id);
         }
     }
 
@@ -870,10 +876,10 @@ pub unsafe fn bl_secondduratimer(id: i32, _none: i32) -> i32 {
                         0
                     };
                     if health > 0 || (*tbl).bl_type as i32 == BL_PC {
-                        sl_doscript_2_pc(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"while_cast_250".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
+                        sl_doscript_2_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("while_cast_250"), (*sd).id, (*tbl).id);
                     }
                 } else {
-                    sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"while_cast_250".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("while_cast_250"), (*sd).id);
                 }
             }
         }
@@ -891,13 +897,13 @@ pub unsafe fn bl_thirdduratimer(id: i32, _none: i32) -> i32 {
 
     for x in 0..52usize {
         if (&(*sd).player.spells.skills)[x] > 0 {
-            sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname.as_ptr(), c"while_passive_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname), Some("while_passive_500"), (*sd).id);
         }
     }
 
     for x in 0..14usize {
         if (&(*sd).player.inventory.equip)[x].id > 0 {
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.equip)[x].id).yname.as_ptr(), c"while_equipped_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.equip)[x].id).yname), Some("while_equipped_500"), (*sd).id);
         }
     }
 
@@ -918,10 +924,10 @@ pub unsafe fn bl_thirdduratimer(id: i32, _none: i32) -> i32 {
                         0
                     };
                     if health > 0 || (*tbl).bl_type as i32 == BL_PC {
-                        sl_doscript_2_pc(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"while_cast_500".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
+                        sl_doscript_2_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("while_cast_500"), (*sd).id, (*tbl).id);
                     }
                 } else {
-                    sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"while_cast_500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("while_cast_500"), (*sd).id);
                 }
             }
         }
@@ -939,13 +945,13 @@ pub unsafe fn bl_fourthduratimer(id: i32, _none: i32) -> i32 {
 
     for x in 0..52usize {
         if (&(*sd).player.spells.skills)[x] > 0 {
-            sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname.as_ptr(), c"while_passive_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname), Some("while_passive_1500"), (*sd).id);
         }
     }
 
     for x in 0..14usize {
         if (&(*sd).player.inventory.equip)[x].id > 0 {
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.equip)[x].id).yname.as_ptr(), c"while_equipped_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.equip)[x].id).yname), Some("while_equipped_1500"), (*sd).id);
         }
     }
 
@@ -966,10 +972,10 @@ pub unsafe fn bl_fourthduratimer(id: i32, _none: i32) -> i32 {
                         0
                     };
                     if health > 0 || (*tbl).bl_type as i32 == BL_PC {
-                        sl_doscript_2_pc(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"while_cast_1500".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
+                        sl_doscript_2_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("while_cast_1500"), (*sd).id, (*tbl).id);
                     }
                 } else {
-                    sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"while_cast_1500".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("while_cast_1500"), (*sd).id);
                 }
             }
         }
@@ -987,13 +993,13 @@ pub unsafe fn bl_fifthduratimer(id: i32, _none: i32) -> i32 {
 
     for x in 0..52usize {
         if (&(*sd).player.spells.skills)[x] > 0 {
-            sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname.as_ptr(), c"while_passive_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname), Some("while_passive_3000"), (*sd).id);
         }
     }
 
     for x in 0..14usize {
         if (&(*sd).player.inventory.equip)[x].id > 0 {
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.equip)[x].id).yname.as_ptr(), c"while_equipped_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.equip)[x].id).yname), Some("while_equipped_3000"), (*sd).id);
         }
     }
 
@@ -1014,10 +1020,10 @@ pub unsafe fn bl_fifthduratimer(id: i32, _none: i32) -> i32 {
                         0
                     };
                     if health > 0 || (*tbl).bl_type as i32 == BL_PC {
-                        sl_doscript_2_pc(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"while_cast_3000".as_ptr(), &mut (*sd).bl as *mut BlockList, tbl);
+                        sl_doscript_2_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("while_cast_3000"), (*sd).id, (*tbl).id);
                     }
                 } else {
-                    sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"while_cast_3000".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("while_cast_3000"), (*sd).id);
                 }
             }
         }
@@ -1119,7 +1125,7 @@ pub unsafe fn pc_scripttimer(id: i32, _none: i32) -> i32 {
                 if base + x >= grp.len() { break; }
                 let tsd = map_id2sd_pc(grp[base + x]);
                 if tsd.is_null() { continue; }
-                if (*tsd).bl.m == (*sd).bl.m {
+                if (*tsd).m == (*sd).m {
                     clif_send_groupbars(&mut *sd, &mut *tsd);
                     clif_grouphealth_update(sd);
                 }
@@ -1128,13 +1134,13 @@ pub unsafe fn pc_scripttimer(id: i32, _none: i32) -> i32 {
     }
 
     if (*sd).mobbars != 0 {
-        if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
-            let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
-            let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+            let slot = &*crate::database::map_db::get_map_ptr((*sd).m as u16);
+            let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(id) {
                     let mob = mob_arc.read();
-                    clif_send_mobbars_inner(&mob.bl, &*sd);
+                    clif_send_mobbars_inner(mob.as_bl(), &*sd);
                 }
             }
         }
@@ -1152,10 +1158,10 @@ pub unsafe fn pc_scripttimer(id: i32, _none: i32) -> i32 {
     (*sd).deathflag = 0;
     (*sd).scripttick += 1;
 
-    sl_doscript_simple_pc(c"pc_timer".as_ptr(), c"tick".as_ptr(), &mut (*sd).bl as *mut BlockList);
+    sl_doscript_simple_pc("pc_timer", Some("tick"), (*sd).id);
 
     if (*sd).player.appearance.setting_flags & FLAG_ADVICE as u16 != 0 {
-        sl_doscript_simple_pc(c"pc_timer".as_ptr(), c"advice".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc("pc_timer", Some("advice"), (*sd).id);
     }
 
     0
@@ -1186,7 +1192,7 @@ pub unsafe fn pc_disptimertick(id: i32, _none: i32) -> i32 {
     }
 
     if (*sd).disptimertick == 0 {
-        sl_doscript_simple_pc(c"pc_timer".as_ptr(), c"display_timer".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc("pc_timer", Some("display_timer"), (*sd).id);
         timer_remove((*sd).disptimer as i32);
         (*sd).disptimertype = 0;
         (*sd).disptimer = 0;
@@ -1299,7 +1305,7 @@ pub unsafe fn pc_checklevel(sd: *mut MapSessionData) -> i32 {
     for x in (*sd).player.progression.level as i32..99 {
         let lvlxp = classdb_level(path, x);
         if (*sd).player.progression.exp >= lvlxp {
-            sl_doscript_simple_pc(c"onLevel".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc("onLevel", None, (*sd).id);
         }
     }
 
@@ -1321,14 +1327,14 @@ pub unsafe fn pc_givexp(
     let mut stack: i32 = 0;
 
     // stack check — count non-GM PCs at the exact same tile
-    let sx = (*sd).bl.x;
-    let sy = (*sd).bl.y;
-    if let Some(grid) = crate::game::block_grid::get_grid((*sd).bl.m as usize) {
+    let sx = (*sd).x;
+    let sy = (*sd).y;
+    if let Some(grid) = crate::game::block_grid::get_grid((*sd).m as usize) {
         for id in grid.ids_at_tile(sx, sy) {
             if stack >= 32768 { break; }
             if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
                 let tsd = tsd_arc.read();
-                if tsd.bl.x == sx && tsd.bl.y == sy && tsd.player.identity.gm_level == 0 {
+                if tsd.x == sx && tsd.y == sy && tsd.player.identity.gm_level == 0 {
                     stack += 1;
                 }
             }
@@ -1478,7 +1484,7 @@ pub unsafe fn pc_calcstat(sd: *mut MapSessionData) -> i32 {
         if (*sd).player.identity.gm_level == 0 {
             if (*sd).speed < 40 { (*sd).speed = 40; }
         }
-        sl_doscript_simple_pc(c"remount".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc("remount", None, (*sd).id);
     } else {
         (*sd).speed = 90;
     }
@@ -1491,10 +1497,10 @@ pub unsafe fn pc_calcstat(sd: *mut MapSessionData) -> i32 {
             if p.id > 0 && p.duration > 0 {
                 let tsd = map_id2sd_pc(p.caster_id);
                 if !tsd.is_null() {
-                    sl_doscript_2_pc(magic_db::search(p.id as i32).yname.as_ptr(), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList);
+                    sl_doscript_2_pc(crate::game::scripting::carray_to_str(&magic_db::search(p.id as i32).yname), Some("recast"), (*sd).id, (*tsd).id);
                 } else {
                     // sl_doscript_simple(magicdb_yname(p->id), "recast", &sd->bl)
-                    sl_doscript_simple_pc(magic_db::search(p.id as i32).yname.as_ptr(), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search(p.id as i32).yname), Some("recast"), (*sd).id);
                 }
             }
         }
@@ -1502,14 +1508,14 @@ pub unsafe fn pc_calcstat(sd: *mut MapSessionData) -> i32 {
         // Passive skills
         for x in 0..52usize {
             if (&(*sd).player.spells.skills)[x] > 0 {
-                sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname.as_ptr(), c"passive".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname), Some("passive"), (*sd).id);
             }
         }
 
         // Re-equip scripts
         for x in 0..14usize {
             if (&(*sd).player.inventory.equip)[x].id > 0 {
-                sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.equip)[x].id).yname.as_ptr(), c"re_equip".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.equip)[x].id).yname), Some("re_equip"), (*sd).id);
             }
         }
     }
@@ -1567,8 +1573,8 @@ pub unsafe fn pc_calcstat(sd: *mut MapSessionData) -> i32 {
     if (*sd).attack_speed < 3 { (*sd).attack_speed = 3; }
 
     // Global map health/magic overrides
-    let max_health = map_readglobalreg((*sd).bl.m as i32, c"maxHealth".as_ptr());
-    let max_magic  = map_readglobalreg((*sd).bl.m as i32, c"maxMagic".as_ptr());
+    let max_health = map_readglobalreg((*sd).m as i32, c"maxHealth".as_ptr());
+    let max_magic  = map_readglobalreg((*sd).m as i32, c"maxMagic".as_ptr());
     if max_health > 0 { (*sd).max_hp = max_health as u32; }
     if max_magic  > 0 { (*sd).max_mp = max_magic  as u32; }
 
@@ -2081,9 +2087,9 @@ unsafe fn pc_dropitemfull_inner(sd: *mut MapSessionData, fl2: *const Item) -> i3
 
     let mut fl = Box::new(mem::zeroed::<FloorItemData>());
 
-    (*fl).bl.m = (*sd).bl.m;
-    (*fl).bl.x = (*sd).bl.x;
-    (*fl).bl.y = (*sd).bl.y;
+    (*fl).m = (*sd).m;
+    (*fl).x = (*sd).x;
+    (*fl).y = (*sd).y;
     // Copy the item into fl->data (BoundItem and Item share the same layout)
     libc::memcpy(
         &mut (*fl).data as *mut _ as *mut libc::c_void,
@@ -2096,12 +2102,12 @@ unsafe fn pc_dropitemfull_inner(sd: *mut MapSessionData, fl2: *const Item) -> i3
 
     // Only attempt stacking if item is at full durability.
     if (*fl).data.dura == item_db::search((*fl).data.id as u32).dura {
-        if let Some(grid) = block_grid::get_grid((*fl).bl.m as usize) {
-            let cell_ids = grid.ids_at_tile((*fl).bl.x, (*fl).bl.y);
+        if let Some(grid) = block_grid::get_grid((*fl).m as usize) {
+            let cell_ids = grid.ids_at_tile((*fl).x, (*fl).y);
             for id in cell_ids {
                 if let Some(fl_arc) = crate::game::map_server::map_id2fl_ref(id) {
                     let mut fl_existing = fl_arc.write();
-                    pc_addtocurrent2_inner(&mut fl_existing.bl as *mut BlockList, def.as_mut_ptr(), fl.as_mut() as *mut FloorItemData);
+                    pc_addtocurrent2_inner(fl_existing.bl_ptr_mut(), def.as_mut_ptr(), fl.as_mut() as *mut FloorItemData);
                 }
             }
         }
@@ -2109,14 +2115,14 @@ unsafe fn pc_dropitemfull_inner(sd: *mut MapSessionData, fl2: *const Item) -> i3
 
     if def[0] == 0 {
         let fl_raw = Box::into_raw(fl);
-        map_additem(&mut (*fl_raw).bl);
-        let fl_bl = &(*fl_raw).bl as *const BlockList;
-        if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
-            let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
-            let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        map_additem((*fl_raw).as_bl_mut());
+        let fl_bl = (*fl_raw).bl_ptr();
+        if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+            let slot = &*crate::database::map_db::get_map_ptr((*sd).m as u16);
+            let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_object_look_sub2_inner(&tsd_arc.read().bl as *const BlockList, LOOK_SEND, fl_bl);
+                    clif_object_look_sub2_inner(tsd_arc.read().bl_ptr(), LOOK_SEND, fl_bl);
                 }
             }
         }
@@ -2214,8 +2220,8 @@ pub unsafe fn pc_addtocurrent_inner(
         } else {
             (*fl).data.amount += 1;
         }
-        sl_doscript_2_pc(c"characterLog".as_ptr(), c"dropWrite".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*fl).bl as *mut BlockList);
-        *def = (*fl).bl.id as i32;
+        sl_doscript_2_pc("characterLog", Some("dropWrite"), (*sd).id, (*fl).id);
+        *def = (*fl).id as i32;
     }
     0
 }
@@ -2505,9 +2511,9 @@ pub unsafe fn pc_dropitemmap(
 
     let mut fl = Box::new(unsafe { std::mem::zeroed::<FloorItemData>() });
 
-    (*fl).bl.m = (*sd).bl.m;
-    (*fl).bl.x = (*sd).bl.x;
-    (*fl).bl.y = (*sd).bl.y;
+    (*fl).m = (*sd).m;
+    (*fl).x = (*sd).x;
+    (*fl).y = (*sd).y;
     libc::memcpy(
         &mut (*fl).data as *mut _ as *mut libc::c_void,
         &(&(*sd).player.inventory.inventory)[id_u] as *const Item as *const libc::c_void,
@@ -2517,12 +2523,12 @@ pub unsafe fn pc_dropitemmap(
 
     // Attempt to stack onto an existing floor item at full durability.
     if (*fl).data.dura == item_db::search((*fl).data.id as u32).dura {
-        if let Some(grid) = block_grid::get_grid((*fl).bl.m as usize) {
-            let cell_ids = grid.ids_at_tile((*fl).bl.x, (*fl).bl.y);
+        if let Some(grid) = block_grid::get_grid((*fl).m as usize) {
+            let cell_ids = grid.ids_at_tile((*fl).x, (*fl).y);
             for cell_id in cell_ids {
                 if let Some(fl_arc) = crate::game::map_server::map_id2fl_ref(cell_id) {
                     let mut fl_existing = fl_arc.write();
-                    pc_addtocurrent_inner(&mut fl_existing.bl as *mut BlockList, def.as_mut_ptr(), id, type_, sd);
+                    pc_addtocurrent_inner(fl_existing.bl_ptr_mut(), def.as_mut_ptr(), id, type_, sd);
                 }
             }
         }
@@ -2546,15 +2552,15 @@ pub unsafe fn pc_dropitemmap(
 
     if def[0] == 0 {
         let fl_raw = Box::into_raw(fl);
-        map_additem(&mut (*fl_raw).bl);
-        sl_doscript_2_pc(c"characterLog".as_ptr(), c"dropWrite".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*fl_raw).bl as *mut BlockList);
-        let fl_bl = &(*fl_raw).bl as *const BlockList;
-        if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
-            let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
-            let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        map_additem((*fl_raw).as_bl_mut());
+        sl_doscript_2_pc("characterLog", Some("dropWrite"), (*sd).id, (*fl_raw).id);
+        let fl_bl = (*fl_raw).bl_ptr();
+        if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+            let slot = &*crate::database::map_db::get_map_ptr((*sd).m as u16);
+            let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_object_look_sub2_inner(&tsd_arc.read().bl as *const BlockList, LOOK_SEND, fl_bl);
+                    clif_object_look_sub2_inner(tsd_arc.read().bl_ptr(), LOOK_SEND, fl_bl);
                 }
             }
         }
@@ -2679,7 +2685,7 @@ pub unsafe fn pc_useitem(
                 .wrapping_add(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).time as i32 as u32);
     }
 
-    let map_ptr = crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
+    let map_ptr = crate::database::map_db::get_map_ptr((*sd).m as u16);
 
     macro_rules! can_use {
         () => {
@@ -2712,8 +2718,8 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
-            sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
+            sl_doscript_simple_pc("use", None, (*sd).id);
             pc_delitem(sd, id, 1, 2);
         }
         t if t == ITM_USE => {
@@ -2723,8 +2729,8 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
-            sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
+            sl_doscript_simple_pc("use", None, (*sd).id);
             pc_delitem(sd, id, 1, 6);
         }
         t if t == ITM_USESPC => {
@@ -2734,8 +2740,8 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
-            sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
+            sl_doscript_simple_pc("use", None, (*sd).id);
             // No auto-delete for USESPC — script decides.
         }
         t if t == ITM_BAG => {
@@ -2745,8 +2751,8 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
-            sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
+            sl_doscript_simple_pc("use", None, (*sd).id);
         }
         t if t == ITM_MAP => {
             if !can_use!() {
@@ -2755,8 +2761,8 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
-            sl_doscript_simple_pc(c"maps".as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
+            sl_doscript_simple_pc("maps", Some("use"), (*sd).id);
         }
         t if t == ITM_QUIVER => {
             if !can_use!() {
@@ -2773,8 +2779,8 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
-            sl_doscript_simple_pc(c"onMountItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
+            sl_doscript_simple_pc("onMountItem", None, (*sd).id);
         }
         t if t == ITM_FACE => {
             if !can_use!() {
@@ -2783,8 +2789,8 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
-            sl_doscript_simple_pc(c"useFace".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
+            sl_doscript_simple_pc("useFace", None, (*sd).id);
         }
         t if t == ITM_SET => {
             if !can_use!() {
@@ -2793,8 +2799,8 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
-            sl_doscript_simple_pc(c"useSetItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
+            sl_doscript_simple_pc("useSetItem", None, (*sd).id);
         }
         t if t == ITM_SKIN => {
             if !can_use!() {
@@ -2803,8 +2809,8 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
-            sl_doscript_simple_pc(c"useSkinItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
+            sl_doscript_simple_pc("useSkinItem", None, (*sd).id);
         }
         t if t == ITM_HAIR_DYE => {
             if !can_use!() {
@@ -2813,8 +2819,8 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
-            sl_doscript_simple_pc(c"useHairDye".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
+            sl_doscript_simple_pc("useHairDye", None, (*sd).id);
         }
         t if t == ITM_FACEACCTWO => {
             if !can_use!() {
@@ -2823,8 +2829,8 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
-            sl_doscript_simple_pc(c"useBeardItem".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
+            sl_doscript_simple_pc("useBeardItem", None, (*sd).id);
         }
         t if t == ITM_SMOKE => {
             if !can_smoke!() {
@@ -2833,8 +2839,8 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
-            sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
+            sl_doscript_simple_pc("use", None, (*sd).id);
             (&mut (*sd).player.inventory.inventory)[id_u].dura -= 1;
             if (&(*sd).player.inventory.inventory)[id_u].dura == 0 {
                 pc_delitem(sd, id, 1, 3);
@@ -2859,8 +2865,8 @@ pub unsafe fn pc_useitem(
             }
             (*sd).invslot = id as u8;
             sl_async_freeco(sd);
-            sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"use".as_ptr(), &mut (*sd).bl as *mut BlockList);
-            sl_doscript_simple_pc(c"use".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
+            sl_doscript_simple_pc("use", None, (*sd).id);
         }
         _ => {}
     }
@@ -2876,7 +2882,7 @@ pub unsafe fn pc_runfloor_sub(sd: *mut MapSessionData) -> i32 {
     use crate::game::npc::NpcData;
     if sd.is_null() { return 0; }
 
-    let npc_id = match block_grid::first_in_cell((*sd).bl.m as usize, (*sd).bl.x, (*sd).bl.y, BL_NPC) {
+    let npc_id = match block_grid::first_in_cell((*sd).m as usize, (*sd).x, (*sd).y, BL_NPC) {
         Some(id) => id,
         None => return 0,
     };
@@ -2886,11 +2892,11 @@ pub unsafe fn pc_runfloor_sub(sd: *mut MapSessionData) -> i32 {
     };
     let nd = &mut *nd_arc.write() as *mut NpcData;
 
-    if (*nd).bl.subtype != FLOOR && (*nd).bl.subtype != 2 { return 0; }
+    if (*nd).subtype != FLOOR && (*nd).subtype != 2 { return 0; }
 
-    if (*nd).bl.subtype == 2 {
+    if (*nd).subtype == 2 {
         sl_async_freeco(sd);
-        sl_doscript_2_pc((*nd).name.as_ptr(), c"click".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*nd).bl as *mut BlockList);
+        sl_doscript_2_pc(crate::game::scripting::carray_to_str(&(*nd).name), Some("click"), (*sd).id, (*nd).id);
     }
     0
 }
@@ -3023,7 +3029,7 @@ pub unsafe fn pc_canequipstats(
 /// slot `id`.
 ///
 /// Validates state, ownership, equip eligibility, and stat requirements before
-/// firing the `onEquip` Lua event via `sl_doscript_blargs`.  The actual slot
+/// firing the `onEquip` Lua event via `sl_doscript_simple_pc`.  The actual slot
 /// assignment happens in `pc_equipscript` which runs from within the Lua hook.
 pub unsafe fn pc_equipitem(
     sd: *mut MapSessionData,
@@ -3052,7 +3058,7 @@ pub unsafe fn pc_equipitem(
 
     // Ownership check.
     if (&(*sd).player.inventory.inventory)[id_u].owner != 0
-        && (&(*sd).player.inventory.inventory)[id_u].owner != (*sd).bl.id
+        && (&(*sd).player.inventory.inventory)[id_u].owner != (*sd).id
     {
         clif_sendminitext(sd, c"This does not belong to you.".as_ptr());
         return 0;
@@ -3084,8 +3090,8 @@ pub unsafe fn pc_equipitem(
     (*sd).invslot = id as u8;
 
     // Fire the Lua equip hooks.
-    sl_doscript_simple_pc(c"onEquip".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
-    sl_doscript_simple_pc(item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname.as_ptr(), c"onEquip".as_ptr(), &mut (*sd).bl as *mut BlockList);
+    sl_doscript_simple_pc("onEquip", None, (*sd).id);
+    sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("onEquip"), (*sd).id);
 
     0
 }
@@ -3148,11 +3154,11 @@ pub unsafe fn pc_equipscript(sd: *mut MapSessionData) -> i32 {
     if (&(*sd).player.inventory.equip)[ret as usize].id != 0 {
         // A different item is already in this slot — trigger its unequip hook
         // instead of equipping immediately.
-        (*sd).target   = (*sd).bl.id as i32;
-        (*sd).attacker = (*sd).bl.id;
+        (*sd).target   = (*sd).id as i32;
+        (*sd).attacker = (*sd).id;
         (*sd).takeoffid = ret as i8;
-        sl_doscript_simple_pc(c"onUnequip".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
-        sl_doscript_simple_pc(item_db::search((*sd).equipid).yname.as_ptr(), c"equip".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc("onUnequip", None, (*sd).id);
+        sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((*sd).equipid).yname), Some("equip"), (*sd).id);
         (*sd).equipid = 0;
         return 0;
     }
@@ -3166,7 +3172,7 @@ pub unsafe fn pc_equipscript(sd: *mut MapSessionData) -> i32 {
     );
 
     pc_delitem(sd, invslot as i32, 1, 6);
-    sl_doscript_simple_pc(item_db::search((*sd).equipid).yname.as_ptr(), c"equip".as_ptr(), &mut (*sd).bl as *mut BlockList);
+    sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search((*sd).equipid).yname), Some("equip"), (*sd).id);
     (*sd).equipid = 0;
 
     // If a two-handed weapon was equipped, reset enchantment.
@@ -3202,7 +3208,7 @@ pub unsafe fn pc_unequip(
     if (&(*sd).player.inventory.equip)[type_ as usize].id == 0 { return 1; }
 
     (*sd).takeoffid = type_ as i8;
-    sl_doscript_simple_pc(c"onUnequip".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+    sl_doscript_simple_pc("onUnequip", None, (*sd).id);
     0
 }
 
@@ -3260,8 +3266,8 @@ pub unsafe fn pc_unequipscript(sd: *mut MapSessionData) -> i32 {
             0,
             std::mem::size_of::<crate::common::types::Item>(),
         );
-        (*sd).target   = (*sd).bl.id as i32;
-        (*sd).attacker = (*sd).bl.id;
+        (*sd).target   = (*sd).id as i32;
+        (*sd).attacker = (*sd).id;
     }
 
     // If a two-handed weapon was unequipped, reset enchantment.
@@ -3273,7 +3279,7 @@ pub unsafe fn pc_unequipscript(sd: *mut MapSessionData) -> i32 {
     }
 
     // Fire the item's unequip Lua hook.
-    sl_doscript_simple_pc(item_db::search(takeoff).yname.as_ptr(), c"unequip".as_ptr(), &mut (*sd).bl as *mut BlockList);
+    sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&item_db::search(takeoff).yname), Some("unequip"), (*sd).id);
 
     (*sd).takeoffid = -1i8;
     pc_calcstat(sd);
@@ -3307,8 +3313,8 @@ pub unsafe fn pc_getitemscript(
         // It's gold — credit the amount and remove from map.
         (*sd).player.inventory.money += (*fl).data.amount as u32;
         clif_sendstatus(sd, SFLAG_XPMONEY);
-        clif_lookgone_pc(&(*fl).bl as *const BlockList);
-        map_delitem((*fl).bl.id);
+        clif_lookgone_pc((*fl).bl_ptr());
+        map_delitem((*fl).id);
 
         return 0;
     }
@@ -3347,8 +3353,8 @@ pub unsafe fn pc_getitemscript(
     }
 
     if (*fl).data.amount <= 0 {
-        clif_lookgone_pc(&(*fl).bl as *const BlockList);
-        map_delitem((*fl).bl.id);
+        clif_lookgone_pc((*fl).bl_ptr());
+        map_delitem((*fl).id);
     }
 
     if add {
@@ -3378,11 +3384,11 @@ pub unsafe fn pc_setpos(
     y: i32,
 ) -> i32 {
     use crate::game::mob::{MOB_START_NUM, BL_PC};
-    if (*sd).bl.id >= MOB_START_NUM { return 0; }
-    (*sd).bl.m  = m as u16;
-    (*sd).bl.x  = x as u16;
-    (*sd).bl.y  = y as u16;
-    (*sd).bl.bl_type = BL_PC as u8;
+    if (*sd).id >= MOB_START_NUM { return 0; }
+    (*sd).m  = m as u16;
+    (*sd).x  = x as u16;
+    (*sd).y  = y as u16;
+    (*sd).bl_type = BL_PC as u8;
     0
 }
 
@@ -3415,7 +3421,7 @@ pub async unsafe fn pc_warp(
 
     if sd.is_null() { return 0; }
 
-    let oldmap = (*sd).bl.m as i32;
+    let oldmap = (*sd).m as i32;
 
     if m < 0 { m = 0; }
     if m >= MAX_MAP_PER_SERVER { m = MAX_MAP_PER_SERVER - 1; }
@@ -3463,20 +3469,20 @@ pub async unsafe fn pc_warp(
 
     // Fire map-leave hooks when changing maps.
     if m != oldmap {
-        sl_doscript_simple_pc(c"mapLeave".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc("mapLeave", None, (*sd).id);
         if can_mount == 0 {
-            sl_doscript_simple_pc(c"onDismount".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc("onDismount", None, (*sd).id);
         }
     }
 
     // Fire passive_before_warp for each known spell.
     for i in 0..MAX_SPELLS {
-        sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.skills)[i] as i32).yname.as_ptr(), c"passive_before_warp".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.skills)[i] as i32).yname), Some("passive_before_warp"), (*sd).id);
     }
 
     // Fire before_warp_while_cast for each active aether timer.
     for i in 0..MAX_MAGIC_TIMERS {
-        sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.dura_aether)[i].id as i32).yname.as_ptr(), c"before_warp_while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[i].id as i32).yname), Some("before_warp_while_cast"), (*sd).id);
     }
 
     // Perform the actual move.
@@ -3488,17 +3494,17 @@ pub async unsafe fn pc_warp(
 
     // Fire map-enter hooks when changing maps.
     if m != oldmap {
-        sl_doscript_simple_pc(c"mapEnter".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc("mapEnter", None, (*sd).id);
     }
 
     // Fire passive_on_warp for each known spell.
     for i in 0..MAX_SPELLS {
-        sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.skills)[i] as i32).yname.as_ptr(), c"passive_on_warp".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.skills)[i] as i32).yname), Some("passive_on_warp"), (*sd).id);
     }
 
     // Fire on_warp_while_cast for each active aether timer.
     for i in 0..MAX_MAGIC_TIMERS {
-        sl_doscript_simple_pc(magic_db::search((&(*sd).player.spells.dura_aether)[i].id as i32).yname.as_ptr(), c"on_warp_while_cast".as_ptr(), &mut (*sd).bl as *mut BlockList);
+        sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[i].id as i32).yname), Some("on_warp_while_cast"), (*sd).id);
     }
 
     0
@@ -3537,11 +3543,11 @@ pub unsafe fn pc_magic_startup(sd: *mut MapSessionData) -> i32 {
                 if !tsd.is_null() {
                     (*sd).target   = p.caster_id as i32;
                     (*sd).attacker = p.caster_id;
-                    sl_doscript_2_pc(magic_db::search(p.id as i32).yname.as_ptr(), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList, &mut (*tsd).bl as *mut BlockList);
+                    sl_doscript_2_pc(crate::game::scripting::carray_to_str(&magic_db::search(p.id as i32).yname), Some("recast"), (*sd).id, (*tsd).id);
                 } else {
                     (*sd).target   = (*sd).player.identity.id as i32;
                     (*sd).attacker = (*sd).player.identity.id;
-                    sl_doscript_simple_pc(magic_db::search(p.id as i32).yname.as_ptr(), c"recast".as_ptr(), &mut (*sd).bl as *mut BlockList);
+                    sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search(p.id as i32).yname), Some("recast"), (*sd).id);
                 }
             }
 
@@ -3572,7 +3578,7 @@ pub unsafe fn pc_reload_aether(sd: *mut MapSessionData) -> i32 {
 /// The actual stat/state changes are handled by `pc_diescript`; this function
 /// just fires the hook so scripts can respond immediately.
 pub unsafe fn pc_die(sd: *mut MapSessionData) -> i32 {
-    sl_doscript_simple_pc(c"onDeathPlayer".as_ptr(), std::ptr::null(), &mut (*sd).bl as *mut BlockList);
+    sl_doscript_simple_pc("onDeathPlayer", None, (*sd).id);
     0
 }
 
@@ -3623,13 +3629,13 @@ pub unsafe fn pc_diescript(sd: *mut MapSessionData) -> i32 {
 
         {
             let anim = (&(*sd).player.spells.dura_aether)[i].animation as i32;
-            let sd_bl = &mut (*sd).bl as *mut BlockList;
-            if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
-                let slot = &*crate::database::map_db::get_map_ptr((*sd).bl.m as u16);
-                let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+            let sd_bl = (*sd).bl_ptr_mut();
+            if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+                let slot = &*crate::database::map_db::get_map_ptr((*sd).m as u16);
+                let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
                 for id in ids {
                     if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                        clif_sendanimation_inner(&tsd_arc.read().bl, anim, sd_bl, -1);
+                        clif_sendanimation_inner(tsd_arc.read().as_bl(), anim, sd_bl, -1);
                     }
                 }
             }
@@ -3641,16 +3647,16 @@ pub unsafe fn pc_diescript(sd: *mut MapSessionData) -> i32 {
         }
 
         // Fire uncast hook.
-        let caster_bl = if (&(*sd).player.spells.dura_aether)[i].caster_id != (*sd).bl.id {
+        let caster_bl = if (&(*sd).player.spells.dura_aether)[i].caster_id != (*sd).id {
             map_id2bl_pc((&(*sd).player.spells.dura_aether)[i].caster_id)
         } else {
             std::ptr::null_mut()
         };
 
         if !caster_bl.is_null() {
-            sl_doscript_2_pc(magic_db::search(id as i32).yname.as_ptr(), c"uncast".as_ptr(), &mut (*sd).bl as *mut BlockList, caster_bl);
+            sl_doscript_2_pc(crate::game::scripting::carray_to_str(&magic_db::search(id as i32).yname), Some("uncast"), (*sd).id, (*caster_bl).id);
         } else {
-            sl_doscript_simple_pc(magic_db::search(id as i32).yname.as_ptr(), c"uncast".as_ptr(), &mut (*sd).bl as *mut BlockList);
+            sl_doscript_simple_pc(crate::game::scripting::carray_to_str(&magic_db::search(id as i32).yname), Some("uncast"), (*sd).id);
         }
     }
 
@@ -3663,7 +3669,7 @@ pub unsafe fn pc_diescript(sd: *mut MapSessionData) -> i32 {
             if let Some(tmob_arc) = crate::game::map_server::map_id2mob_ref(x) {
                 let mut tmob = tmob_arc.write();
                 for i in 0..MAX_THREATCOUNT {
-                    if tmob.threat[i].user == (*sd).bl.id {
+                    if tmob.threat[i].user == (*sd).id {
                         tmob.threat[i].user   = 0;
                         tmob.threat[i].amount = 0;
                     }
@@ -3682,7 +3688,7 @@ pub unsafe fn pc_diescript(sd: *mut MapSessionData) -> i32 {
             if let Some(tmob_arc) = crate::game::map_server::map_id2mob_ref(x) {
                 let mut tmob = tmob_arc.write();
                 for i in 0..MAX_THREATCOUNT {
-                    if tmob.threat[i].user == (*sd).bl.id {
+                    if tmob.threat[i].user == (*sd).id {
                         tmob.threat[i].user   = 0;
                         tmob.threat[i].amount = 0;
                     }
@@ -3723,7 +3729,7 @@ pub unsafe fn pc_res(sd: *mut MapSessionData) -> i32 {
     (*sd).player.combat.state = PC_ALIVE as i8;
     (*sd).player.combat.hp    = 100;
     clif_sendstatus(sd, SFLAG_HPMP);
-    pc_warp_sync(sd, (*sd).bl.m as i32, (*sd).bl.x as i32, (*sd).bl.y as i32);
+    pc_warp_sync(sd, (*sd).m as i32, (*sd).x as i32, (*sd).y as i32);
     0
 }
 

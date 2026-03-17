@@ -55,29 +55,12 @@ fn map_id2bl(id: u32) -> *mut BlockList {
     map_id2bl_ref(id)
 }
 
-/// Dispatch a Lua event with a single block_list argument.
-#[allow(dead_code)]
-unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
-    crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
+fn sl_doscript_coro(root: &str, method: Option<&str>, id: u32) -> i32 {
+    crate::game::scripting::doscript_coro_id(root, method, &[id])
 }
 
-/// Dispatch a Lua event with two block_list arguments.
-#[allow(dead_code)]
-unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
-    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
-}
-
-/// Coroutine dispatch: wraps the first BL_PC arg and runs in a Lua coroutine.
-/// Use for NPC click/dialog/menu interactions that may yield.
-#[allow(dead_code)]
-unsafe fn sl_doscript_coro(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
-    crate::game::scripting::doscript_coro(root, method, &[bl as *mut _])
-}
-
-/// Coroutine dispatch with two block_list arguments.
-#[allow(dead_code)]
-unsafe fn sl_doscript_coro_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
-    crate::game::scripting::doscript_coro(root, method, &[bl1 as *mut _, bl2 as *mut _])
+fn sl_doscript_coro_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
+    crate::game::scripting::doscript_coro_id(root, method, &[id1, id2])
 }
 
 
@@ -992,15 +975,15 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
         if !tsd.is_null() {
             let tsd_ref = &*tsd;
             // CheckProximity: same map, within 21 tiles
-            if (*bl).m == sd_ref.bl.m
-                && (sd_ref.bl.x as i32 - tsd_ref.bl.x as i32).abs() <= 21
-                && (sd_ref.bl.y as i32 - tsd_ref.bl.y as i32).abs() <= 21
+            if (*bl).m == sd_ref.m
+                && (sd_ref.x as i32 - tsd_ref.x as i32).abs() <= 21
+                && (sd_ref.y as i32 - tsd_ref.y as i32).abs() <= 21
             {
                 if sd_ref.player.identity.gm_level != 0
                     || (tsd_ref.optFlags & 64 == 0      // !optFlag_noclick
                         && tsd_ref.optFlags & 32 == 0)  // !optFlag_stealth
                 {
-                    sl_doscript_coro(b"onClick\0".as_ptr() as *const i8, std::ptr::null(), &sd_ref.bl as *const _ as *mut BlockList);
+                    sl_doscript_coro("onClick", None, sd_ref.id);
                 }
             }
         }
@@ -1012,9 +995,9 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
 
         // F1 NPC: map id 0 always accessible; otherwise check proximity
         let same_map_or_f1 = (*bl).m == 0
-            || ((*bl).m == sd_ref.bl.m
-                && (sd_ref.bl.x as i32 - (*bl).x as i32).abs() <= radius
-                && (sd_ref.bl.y as i32 - (*bl).y as i32).abs() <= radius);
+            || ((*bl).m == sd_ref.m
+                && (sd_ref.x as i32 - (*bl).x as i32).abs() <= radius
+                && (sd_ref.y as i32 - (*bl).y as i32).abs() <= radius);
 
         if same_map_or_f1 {
             (*sd).last_click = (*bl).id;
@@ -1030,7 +1013,7 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
                 }
             }
 
-            sl_doscript_coro_2((*nd).name.as_ptr() as *const i8, b"click\0".as_ptr() as *const i8, &sd_ref.bl as *const _ as *mut BlockList, bl);
+            sl_doscript_coro_2(crate::game::scripting::carray_to_str(&(*nd).name), Some("click"), sd_ref.id, (*nd).id);
         }
     } else if bl_type == BL_MOB {
         // cast block_list* → MobSpawnData* (bl is always first field)
@@ -1042,15 +1025,15 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
         }
 
         // proximity check: same map, within radius tiles
-        if (*bl).m == sd_ref.bl.m
-            && (sd_ref.bl.x as i32 - (*bl).x as i32).abs() <= radius
-            && (sd_ref.bl.y as i32 - (*bl).y as i32).abs() <= radius
+        if (*bl).m == sd_ref.m
+            && (sd_ref.x as i32 - (*bl).x as i32).abs() <= radius
+            && (sd_ref.y as i32 - (*bl).y as i32).abs() <= radius
         {
             (*sd).last_click = (*bl).id;
             sl_async_freeco(sd);
-            sl_doscript_coro_2(b"onLook\0".as_ptr() as *const i8, std::ptr::null(), &sd_ref.bl as *const _ as *mut BlockList, bl);
+            sl_doscript_coro_2("onLook", None, sd_ref.id, (*bl).id);
             if !(*mob).data.is_null() {
-                sl_doscript_coro_2((*(*mob).data).yname.as_ptr() as *const i8, b"click\0".as_ptr() as *const i8, &sd_ref.bl as *const _ as *mut BlockList, bl);
+                sl_doscript_coro_2(crate::game::scripting::carray_to_str(&(*(*mob).data).yname), Some("click"), sd_ref.id, (*bl).id);
             }
         }
     }

@@ -225,7 +225,7 @@ pub unsafe fn clif_send(
                 if sd.is_null() {
                     continue;
                 }
-                if (*sd).bl.m != (*bl).m {
+                if (*sd).m != (*bl).m {
                     continue;
                 }
                 if !tsd.is_null()
@@ -244,7 +244,7 @@ pub unsafe fn clif_send(
                 if sd.is_null() {
                     continue;
                 }
-                if (*sd).bl.m != (*bl).m {
+                if (*sd).m != (*bl).m {
                     continue;
                 }
                 // Skip sending to `bl` itself when it is a player.
@@ -338,7 +338,7 @@ pub unsafe fn clif_sendtogm(
                 if sd.is_null() {
                     continue;
                 }
-                if (*sd).bl.m != (*bl).m {
+                if (*sd).m != (*bl).m {
                     continue;
                 }
                 send_to_fd(i_fd, buf, len);
@@ -355,7 +355,7 @@ pub unsafe fn clif_sendtogm(
                 if sd.is_null() {
                     continue;
                 }
-                if (*sd).bl.m != (*bl).m {
+                if (*sd).m != (*bl).m {
                     continue;
                 }
                 if !src_sd.is_null() && sd == src_sd {
@@ -492,12 +492,12 @@ unsafe fn should_send_to(
         // ── Ghost filter ──────────────────────────────────────────────────────
         // If the map shows ghosts and the source is a ghost (state==1), only
         // send to other ghosts or to players that opted into ghost visibility.
-        let m_idx = (*tsd).bl.m as usize;
+        let m_idx = (*tsd).m as usize;
         if !raw_map_ptr().is_null() && m_idx < MAP_SLOTS {
             let map_slot = &*raw_map_ptr().add(m_idx);
             if map_slot.show_ghosts != 0
                 && (*tsd).player.combat.state == 1
-                && (*tsd).bl.id != (*sd).bl.id
+                && (*tsd).id != (*sd).id
                 && (*sd).player.combat.state != 1
                 && ((*sd).optFlags & OPT_FLAG_GHOSTS) == 0
             {
@@ -516,7 +516,7 @@ unsafe fn should_send_to(
     // ── WOS (without self) filter ─────────────────────────────────────────────
     match send_type {
         AREA_WOS | SAMEAREA_WOS => {
-            if src_bl == &mut (*sd).bl as *mut BlockList {
+            if src_bl == (*sd).bl_ptr_mut() {
                 return false;
             }
         }
@@ -570,7 +570,7 @@ unsafe fn send_to_area(
     for id in ids {
         let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) else { continue; };
         let sd = &mut *sd_arc.write() as *mut MapSessionData;
-        let bl = &raw mut (*sd).bl;
+        let bl = (*sd).bl_ptr_mut();
         if !should_send_to(sd, src_bl, send_type, buf as *const u8, len) {
             continue;
         }
@@ -825,17 +825,17 @@ pub async fn clif_parse(fd: SessionId) -> i32 {
                 { let _t = sl_pc_time(sd_pc); sl_pc_set_time(sd_pc, _t + 1); }
                 let attacked_val = sl_pc_attacked(sd_pc);
                 let spd_val = sl_pc_attack_speed(sd_pc);
-                tracing::debug!("[attack] id={} attacked={} spd={}", sd_pc.bl.id, attacked_val, spd_val);
+                tracing::debug!("[attack] id={} attacked={} spd={}", sd_pc.id, attacked_val, spd_val);
                 if attacked_val != 1 && spd_val > 0 {
                     sl_pc_set_attacked(sd_pc, 1);
                     let delay = ((spd_val * 1000) / 60) as u32;
-                    tracing::debug!("[attack] id={} delay={}ms — entering clif_parseattack", sd_pc.bl.id, delay);
+                    tracing::debug!("[attack] id={} delay={}ms — entering clif_parseattack", sd_pc.id, delay);
                     timer_insert(
-                        delay, delay, Some(pc_atkspeed), sd_pc.bl.id as i32, 0,
+                        delay, delay, Some(pc_atkspeed), sd_pc.id as i32, 0,
                     );
                     clif_parseattack(sd);
                 } else {
-                    tracing::warn!("[attack] id={} BLOCKED: attacked={} spd={}", sd_pc.bl.id, attacked_val, spd_val);
+                    tracing::warn!("[attack] id={} BLOCKED: attacked={} spd={}", sd_pc.id, attacked_val, spd_val);
                 }
             }
             0x17 => {

@@ -51,11 +51,19 @@ pub const BL_NPC: i32 = 0x04;
 /// aligned (20382 % 4 == 2).
 #[repr(C)]
 pub struct NpcData {
-    pub bl:            BlockList,
+    pub id:            u32,
+    pub prev_x:        u16,
+    pub prev_y:        u16,
+    pub graphic_id:    u32,
+    pub graphic_color: u32,
+    pub m:             u16,
+    pub x:             u16,
+    pub y:             u16,
+    pub bl_type:       u8,
+    pub subtype:       u8,
     pub equip:         [Item; MAX_EQUIP],
     pub registry:      [GlobalReg; MAX_GLOBALNPCREG],
     pub gfx:           GfxViewer,
-    pub id:            u32,
     pub actiontime:    u32,
     pub owner:         u32,
     pub duration:      u32,
@@ -99,6 +107,11 @@ pub struct NpcData {
     pub returning:     u8,
     // 3 bytes trailing padding added automatically by repr(C) to align struct to 8 bytes
 }
+// SAFETY: NpcData contains raw pointers (next/prev) that are legacy block-list links.
+// All access is gated behind unsafe blocks; no Rust code aliases these pointers.
+unsafe impl Send for NpcData {}
+unsafe impl Sync for NpcData {}
+crate::impl_as_blocklist!(NpcData);
 
 // NPC ID counters — match C globals npc_id and npctemp_id.
 // #[export_name] exports as "npc_id" so map_server.c can read it directly
@@ -109,7 +122,7 @@ pub static NPC_ID: AtomicU32 = AtomicU32::new(NPC_START_NUM);
 pub static NPCTEMP_ID: AtomicU32 = AtomicU32::new(NPCT_START_NUM);
 
 use crate::game::map_server::map_canmove;
-use crate::game::block::{map_addblock, map_delblock, map_moveblock};
+use crate::game::block::{map_addblock_id, map_delblock_id, map_moveblock_id};
 use crate::game::map_parse::visual::clif_lookgone;
 use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from};
 
@@ -125,14 +138,14 @@ use crate::game::map_parse::visual::{
 };
 use crate::game::map_parse::movement::clif_npc_move_inner;
 
-/// Dispatch a Lua event with a single block_list argument.
-unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut BlockList) -> i32 {
-    crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
+/// Dispatch a Lua event with a single entity ID argument.
+fn sl_doscript_simple(root: &str, method: Option<&str>, id: u32) -> i32 {
+    crate::game::scripting::doscript_blargs_id(root, method, &[id])
 }
 
-/// Dispatch a Lua event with two block_list arguments.
-unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut BlockList, bl2: *mut BlockList) -> i32 {
-    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
+/// Dispatch a Lua event with two entity ID arguments.
+fn sl_doscript_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
+    crate::game::scripting::doscript_blargs_id(root, method, &[id1, id2])
 }
 
 /// Enum value for `AREA`:
@@ -308,16 +321,16 @@ pub unsafe fn npc_setglobalreg(nd: *mut NpcData, reg: *const i8, val: i32) -> i3
 pub unsafe fn npc_warp(nd: *mut NpcData, m: i32, x: i32, y: i32) -> i32 {
     if nd.is_null() { return 0; }
     let nd = &mut *nd;
-    if nd.bl.id < NPC_START_NUM { return 0; }
+    if nd.id < NPC_START_NUM { return 0; }
 
-    map_delblock(&raw mut nd.bl);
-    clif_lookgone(&raw const nd.bl);
-    nd.bl.m = m as u16;
-    nd.bl.x = x as u16;
-    nd.bl.y = y as u16;
-    nd.bl.bl_type = BL_NPC as u8;
+    map_delblock_id(nd.id, nd.m);
+    clif_lookgone(nd.bl_ptr());
+    nd.m = m as u16;
+    nd.x = x as u16;
+    nd.y = y as u16;
+    nd.bl_type = BL_NPC as u8;
 
-    if map_addblock(&raw mut nd.bl) != 0 {
+    if map_addblock_id(nd.id, nd.bl_type, nd.m, nd.x, nd.y) != 0 {
         tracing::error!("Error warping npcchar.");
     }
 
@@ -329,14 +342,14 @@ pub unsafe fn npc_warp(nd: *mut NpcData, m: i32, x: i32, y: i32) -> i32 {
             for id in ids {
                 if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
                     let pc = &*arc.read();
-                    clif_cnpclook_inner(&raw const pc.bl, LOOK_SEND, nd_bl);
+                    clif_cnpclook_inner(pc.bl_ptr(), LOOK_SEND, nd_bl);
                 }
             }
         } else {
             for id in ids {
                 if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
                     let pc = &*arc.read();
-                    clif_object_look_sub2_inner(&raw const pc.bl, LOOK_SEND, nd_bl);
+                    clif_object_look_sub2_inner(pc.bl_ptr(), LOOK_SEND, nd_bl);
                 }
             }
         }
@@ -352,7 +365,7 @@ pub unsafe fn npc_warp(nd: *mut NpcData, m: i32, x: i32, y: i32) -> i32 {
 /// event when the timer reaches `nd.actiontime`.
 ///
 /// If `nd.owner` is non-zero the owning player's `block_list` is passed as the
-/// second argument to `sl_doscript_blargs`; otherwise only the NPC's own
+/// second argument to `sl_doscript_2`; otherwise only the NPC's own
 /// `block_list` is passed.
 ///
 ///
@@ -366,15 +379,14 @@ pub unsafe fn npc_action(nd: *mut NpcData) -> i32 {
 
     nd.time = nd.time.wrapping_add(100);
 
-    let tsd_arc = if nd.owner != 0 { crate::game::map_server::map_id2sd_pc(nd.owner) } else { None };
-    let tsd_bl: Option<*mut BlockList> = tsd_arc.as_ref().map(|arc| &mut arc.write().bl as *mut BlockList);
+    let name = crate::game::scripting::carray_to_str(&nd.name);
 
     if nd.time >= nd.actiontime {
         nd.time = 0;
-        if let Some(tsd_bl) = tsd_bl {
-            sl_doscript_2(nd.name.as_ptr(), b"action\0".as_ptr() as *const i8, &raw mut nd.bl, tsd_bl);
+        if nd.owner != 0 {
+            sl_doscript_2(name, Some("action"), nd.id, nd.owner);
         } else {
-            sl_doscript_simple(nd.name.as_ptr(), b"action\0".as_ptr() as *const i8, &raw mut nd.bl);
+            sl_doscript_simple(name, Some("action"), nd.id);
         }
     }
     0
@@ -393,15 +405,14 @@ pub unsafe fn npc_movetime(nd: *mut NpcData) -> i32 {
 
     nd.movetimer = nd.movetimer.wrapping_add(100);
 
-    let tsd_arc = if nd.owner != 0 { crate::game::map_server::map_id2sd_pc(nd.owner) } else { None };
-    let tsd_bl: Option<*mut BlockList> = tsd_arc.as_ref().map(|arc| &mut arc.write().bl as *mut BlockList);
+    let name = crate::game::scripting::carray_to_str(&nd.name);
 
     if nd.movetimer >= nd.movetime {
         nd.movetimer = 0;
-        if let Some(tsd_bl) = tsd_bl {
-            sl_doscript_2(nd.name.as_ptr(), b"move\0".as_ptr() as *const i8, &raw mut nd.bl, tsd_bl);
+        if nd.owner != 0 {
+            sl_doscript_2(name, Some("move"), nd.id, nd.owner);
         } else {
-            sl_doscript_simple(nd.name.as_ptr(), b"move\0".as_ptr() as *const i8, &raw mut nd.bl);
+            sl_doscript_simple(name, Some("move"), nd.id);
         }
     }
     0
@@ -420,15 +431,14 @@ pub unsafe fn npc_duration(nd: *mut NpcData) -> i32 {
 
     nd.duratime = nd.duratime.wrapping_add(100);
 
-    let tsd_arc = if nd.owner != 0 { crate::game::map_server::map_id2sd_pc(nd.owner) } else { None };
-    let tsd_bl: Option<*mut BlockList> = tsd_arc.as_ref().map(|arc| &mut arc.write().bl as *mut BlockList);
+    let name = crate::game::scripting::carray_to_str(&nd.name);
 
     if nd.duratime >= nd.duration {
         nd.duratime = 0;
-        if let Some(tsd_bl) = tsd_bl {
-            sl_doscript_2(nd.name.as_ptr(), b"endAction\0".as_ptr() as *const i8, &raw mut nd.bl, tsd_bl);
+        if nd.owner != 0 {
+            sl_doscript_2(name, Some("endAction"), nd.id, nd.owner);
         } else {
-            sl_doscript_simple(nd.name.as_ptr(), b"endAction\0".as_ptr() as *const i8, &raw mut nd.bl);
+            sl_doscript_simple(name, Some("endAction"), nd.id);
         }
     }
     0
@@ -687,7 +697,7 @@ pub async unsafe fn npc_init_async() -> i32 {
                 is_new_alloc = true;
             } else {
                 // Reload: unlink from block grid for re-add below; stay in NPC_MAP.
-                map_delblock(&raw mut (*nd).bl);
+                map_delblock_id((*nd).id, (*nd).m);
             }
         } else if nd.is_null() {
             // New NPC — allocate
@@ -695,7 +705,7 @@ pub async unsafe fn npc_init_async() -> i32 {
             is_new_alloc = true;
         } else {
             // Reload: unlink from block grid for re-add below; stay in NPC_MAP.
-            map_delblock(&raw mut (*nd).bl);
+            map_delblock_id((*nd).id, (*nd).m);
         }
 
         // Copy name strings (C uses memcpy with sizeof(name) = 45 into nd->name[64])
@@ -703,10 +713,10 @@ pub async unsafe fn npc_init_async() -> i32 {
         copy_str_to_array(&row.npc_description, &mut (*nd).npc_name);
 
         // Set block_list fields
-        (*nd).bl.bl_type = BL_NPC as u8;
-        (*nd).bl.subtype = row.npc_type as u8;
-        (*nd).bl.graphic_id = row.npc_look;
-        (*nd).bl.graphic_color = row.npc_look_color;
+        (*nd).bl_type = BL_NPC as u8;
+        (*nd).subtype = row.npc_type as u8;
+        (*nd).graphic_id = row.npc_look;
+        (*nd).graphic_color = row.npc_look_color;
 
         // Call npc_warp only if position changed (or if newly allocated — bl fields are 0)
         let m   = row.npc_map_id;
@@ -739,15 +749,15 @@ pub async unsafe fn npc_init_async() -> i32 {
         (*nd).receive_item = row.npc_can_receive as i8;
 
         // ID assignment: if bl.id < NPC_START_NUM, this is a new/fresh NPC
-        if (*nd).bl.id < NPC_START_NUM {
-            (*nd).bl.m = m as u16;
-            (*nd).bl.x = xc as u16;
-            (*nd).bl.y = yc as u16;
+        if (*nd).id < NPC_START_NUM {
+            (*nd).m = m as u16;
+            (*nd).x = xc as u16;
+            (*nd).y = yc as u16;
 
             if row.npc_is_f1npc == 1 {
-                (*nd).bl.id = F1_NPC;
+                (*nd).id = F1_NPC;
             } else if row.row_npc_id >= 2 {
-                (*nd).bl.id = NPC_START_NUM + row.row_npc_id - 2;
+                (*nd).id = NPC_START_NUM + row.row_npc_id - 2;
                 NPC_ID.store(NPC_START_NUM + row.row_npc_id - 2, Ordering::Relaxed);
             } else {
                 tracing::error!("[npc] row_npc_id={} < 2, cannot compute NPC ID", row.row_npc_id);
@@ -757,7 +767,7 @@ pub async unsafe fn npc_init_async() -> i32 {
         // New NPCs: transfer Box ownership to NPC_MAP first — this moves data
         // into Arc<RwLock>, freeing the original allocation.
         if is_new_alloc {
-            let id = (*nd).bl.id;
+            let id = (*nd).id;
             crate::game::map_server::map_addiddb_npc(id, Box::from_raw(nd));
             // nd is dangling after this; get the live pointer from the Arc.
             nd = crate::game::map_server::map_id2npc_ref(id)
@@ -765,8 +775,8 @@ pub async unsafe fn npc_init_async() -> i32 {
         }
 
         // Add to block grid only if subtype < 3 (using live pointer)
-        if (*nd).bl.subtype < 3 {
-            map_addblock(&raw mut (*nd).bl);
+        if (*nd).subtype < 3 {
+            map_addblock_id((*nd).id, (*nd).bl_type, (*nd).m, (*nd).x, (*nd).y);
         }
     }
 
@@ -908,7 +918,7 @@ pub unsafe fn npc_move_sub_inner(bl: *mut BlockList, nd: *mut NpcData) -> i32 {
         }
         x if x == BL_PC as u8 => {
             // Dead / invisible / GM players do not block movement.
-            if npc_helper_pc_is_skip(bl, &raw mut (*nd).bl as *mut BlockList) != 0 { return 0; }
+            if npc_helper_pc_is_skip(bl, (*nd).bl_ptr_mut() as *mut BlockList) != 0 { return 0; }
         }
         _ => {
             // Unknown type — do not block.
@@ -939,9 +949,9 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> i32 {
     if nd.is_null() { return 0; }
     let nd = &mut *nd;
 
-    let m = nd.bl.m as i32;
-    let backx = nd.bl.x as i32;
-    let backy = nd.bl.y as i32;
+    let m = nd.m as i32;
+    let backx = nd.x as i32;
+    let backy = nd.y as i32;
     let mut dx = backx;
     let mut dy = backy;
     let direction = nd.side as i32;
@@ -951,7 +961,7 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> i32 {
     let mut y1: i32 = 0;
     let mut nothingnew: i32 = 0;
 
-    let md = crate::database::map_db::get_map_ptr(nd.bl.m);
+    let md = crate::database::map_db::get_map_ptr(nd.m);
     if md.is_null() { return 0; }
     let map_xs = (*md).xs as i32;
     let map_ys = (*md).ys as i32;
@@ -1024,7 +1034,7 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> i32 {
     if dy >= map_ys { dy = map_ys - 1; }
 
     // Check warp at destination block
-    let mut war = crate::database::map_db::map_get_warp(nd.bl.m, dx as u16, dy as u16);
+    let mut war = crate::database::map_db::map_get_warp(nd.m, dx as u16, dy as u16);
     while !war.is_null() {
         if (*war).x == dx && (*war).y == dy { return 0; }
         war = (*war).next;
@@ -1068,36 +1078,40 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> i32 {
     if dy < 0 { dy = backy; }
 
     if dx != backx || dy != backy {
-        nd.bl.bx = backx as u32;
-        nd.bl.by = backy as u32;
-        map_moveblock(&raw mut nd.bl, dx, dy);
+        nd.prev_x = backx as u16;
+        nd.prev_y = backy as u16;
+        let old_x = nd.x;
+        let old_y = nd.y;
+        map_moveblock_id(nd.id, nd.m, old_x, old_y, dx as u16, dy as u16);
+        nd.x = dx as u16;
+        nd.y = dy as u16;
 
         if nothingnew == 0 {
-            let nm = nd.bl.m as i32;
+            let nm = nd.m as i32;
             if let Some(grid) = block_grid::get_grid(nm as usize) {
                 let rect_ids = grid.ids_in_rect(x0, y0, x0 + x1 - 1, y0 + y1 - 1);
                 if nd.npctype == 1 {
                     let nd_bl = nd as *const NpcData as *const BlockList;
                     for &id in &rect_ids {
                         if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_cnpclook_inner(&raw const pc_arc.read().bl, LOOK_SEND, nd_bl);
+                            clif_cnpclook_inner(pc_arc.read().bl_ptr(), LOOK_SEND, nd_bl);
                         }
                     }
                 } else {
-                    let nd_bl = &raw mut nd.bl;
+                    let nd_bl = nd.bl_ptr_mut();
                     for &id in &rect_ids {
                         if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_mob_look_start_func_inner(&raw mut arc.write().bl);
+                            clif_mob_look_start_func_inner(arc.write().bl_ptr_mut());
                         }
                     }
                     for &id in &rect_ids {
                         if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_object_look_sub_inner(&raw mut arc.write().bl, LOOK_SEND, nd_bl);
+                            clif_object_look_sub_inner(arc.write().bl_ptr_mut(), LOOK_SEND, nd_bl);
                         }
                     }
                     for &id in &rect_ids {
                         if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_mob_look_close_func_inner(&raw mut arc.write().bl);
+                            clif_mob_look_close_func_inner(arc.write().bl_ptr_mut());
                         }
                     }
                 }
@@ -1107,10 +1121,10 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> i32 {
         let nd_ptr = nd as *mut NpcData;
         if let Some(grid) = block_grid::get_grid(m as usize) {
             let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
-            let ids = block_grid::ids_in_area(grid, nd.bl.x as i32, nd.bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+            let ids = block_grid::ids_in_area(grid, nd.x as i32, nd.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_npc_move_inner(&raw const arc.read().bl, nd_ptr);
+                    clif_npc_move_inner(arc.read().bl_ptr(), nd_ptr);
                 }
             }
         }
@@ -1127,27 +1141,25 @@ mod tests {
     fn npc_data_size() {
         assert_eq!(
             std::mem::size_of::<NpcData>(),
-            20416,
-            "NpcData size mismatch — check struct npc_data in map_server.h"
+            20388,
+            "NpcData size mismatch — BlockList eliminated, next/prev/bx/by removed"
         );
     }
 
     #[test]
     fn npc_data_offsets() {
-        assert_eq!(std::mem::offset_of!(NpcData, equip),     48);
-        assert_eq!(std::mem::offset_of!(NpcData, registry),  13248);
-        assert_eq!(std::mem::offset_of!(NpcData, gfx),       20048);
-        assert_eq!(std::mem::offset_of!(NpcData, id),        20120);
-        assert_eq!(std::mem::offset_of!(NpcData, name),      20180);
-        assert_eq!(std::mem::offset_of!(NpcData, movetimer), 20384);
-        assert_eq!(std::mem::offset_of!(NpcData, sex),       20392);
+        assert_eq!(std::mem::offset_of!(NpcData, equip),     24);
+        assert_eq!(std::mem::offset_of!(NpcData, registry),  13224);
+        assert_eq!(std::mem::offset_of!(NpcData, gfx),       20024);
+        assert_eq!(std::mem::offset_of!(NpcData, id),        0);
+        assert_eq!(std::mem::offset_of!(NpcData, name),      20152);
+        assert_eq!(std::mem::offset_of!(NpcData, movetimer), 20356);
+        assert_eq!(std::mem::offset_of!(NpcData, sex),       20364);
     }
 
     #[test]
     fn npc_data_canmove_offset() {
-        // canmove is the 3rd of 10 i8 fields starting at offset 20372
-        // state=20372, side=20373, canmove=20374
-        assert_eq!(std::mem::offset_of!(NpcData, canmove), 20374);
+        assert_eq!(std::mem::offset_of!(NpcData, canmove), 20346);
     }
 
     #[test]

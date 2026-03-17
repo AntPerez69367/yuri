@@ -75,16 +75,12 @@ use crate::game::map_parse::visual::clif_object_look_sub2_inner;
 
 // ─── Lua dispatch helpers ─────────────────────────────────────────────────────
 
-/// Dispatch a Lua event with a single block_list argument.
-#[allow(dead_code)]
-unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut BlockList) -> i32 {
-    crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
+fn sl_doscript_simple(root: &str, method: Option<&str>, id: u32) -> i32 {
+    crate::game::scripting::doscript_blargs_id(root, method, &[id])
 }
 
-/// Dispatch a Lua event with two block_list arguments.
-#[allow(dead_code)]
-unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut BlockList, bl2: *mut BlockList) -> i32 {
-    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
+fn sl_doscript_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
+    crate::game::scripting::doscript_blargs_id(root, method, &[id1, id2])
 }
 
 // ─── libc helpers ─────────────────────────────────────────────────────────────
@@ -141,7 +137,7 @@ pub unsafe fn clif_checkinvbod(sd: *mut MapSessionData) -> i32 {
                 );
                 clif_sendstatus(sd, SFLAG_FULLSTATS | SFLAG_HPMP);
                 clif_sendmsg(sd, 5, buf.as_ptr());
-                sl_doscript_simple(b"characterLog\0".as_ptr().cast(), b"invRestore\0".as_ptr().cast(), &raw mut (*sd).bl);
+                sl_doscript_simple("characterLog", Some("invRestore"), (*sd).id);
                 return 0;
             }
 
@@ -159,11 +155,11 @@ pub unsafe fn clif_checkinvbod(sd: *mut MapSessionData) -> i32 {
                 b"Your %s was destroyed!\0".as_ptr().cast(),
                 item.name.as_ptr(),
             );
-            sl_doscript_simple(b"characterLog\0".as_ptr().cast(), b"invBreak\0".as_ptr().cast(), &raw mut (*sd).bl);
+            sl_doscript_simple("characterLog", Some("invBreak"), (*sd).id);
 
             (*sd).breakid = id;
-            sl_doscript_simple(b"onBreak\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl);
-            sl_doscript_simple(item.yname.as_ptr(), b"on_break\0".as_ptr().cast(), &raw mut (*sd).bl);
+            sl_doscript_simple("onBreak", None, (*sd).id);
+            sl_doscript_simple(crate::game::scripting::carray_to_str(&item.yname), Some("on_break"), (*sd).id);
 
             pc_delitem(sd, x as i32, 1, 9);
             clif_sendmsg(sd, 5, buf.as_ptr());
@@ -172,7 +168,7 @@ pub unsafe fn clif_checkinvbod(sd: *mut MapSessionData) -> i32 {
         broadcast_update_state(sd);
     }
 
-    sl_doscript_simple(b"characterLog\0".as_ptr().cast(), b"bodLog\0".as_ptr().cast(), &raw mut (*sd).bl);
+    sl_doscript_simple("characterLog", Some("bodLog"), (*sd).id);
     (*sd).boditems.bod_count = 0;
 
     0
@@ -566,11 +562,11 @@ pub unsafe fn clif_parsegetitem(sd: *mut MapSessionData) -> i32 {
 
     if (*sd).player.combat.state == 2 {
         (*sd).player.combat.state = 0;
-        sl_doscript_simple(b"invis_rogue\0".as_ptr().cast(), b"uncast\0".as_ptr().cast(), &raw mut (*sd).bl);
+        sl_doscript_simple("invis_rogue", Some("uncast"), (*sd).id);
         broadcast_update_state(sd);
     }
 
-    clif_sendaction(&mut (*sd).bl, 4, 40, 0);
+    clif_sendaction((*sd).as_bl_mut(), 4, 40, 0);
 
     (*sd).pickuptype = rfifob((*sd).fd, 5);
 
@@ -578,11 +574,11 @@ pub unsafe fn clif_parsegetitem(sd: *mut MapSessionData) -> i32 {
         if (&(*sd).player.spells.dura_aether)[x].id > 0
             && (&(*sd).player.spells.dura_aether)[x].duration > 0
         {
-            sl_doscript_simple(magic_db::yname_ptr((&(*sd).player.spells.dura_aether)[x].id as i32), b"on_pickup_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl);
+            sl_doscript_simple(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("on_pickup_while_cast"), (*sd).id);
         }
     }
 
-    sl_doscript_simple(b"onPickUp\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl);
+    sl_doscript_simple("onPickUp", None, (*sd).id);
 
     0
 }
@@ -722,12 +718,12 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
 
     let mut amount = amounts;
 
-    clif_sendaction(&mut (*sd).bl, 5, 20, 0);
+    clif_sendaction((*sd).as_bl_mut(), 5, 20, 0);
 
     let mut fl = Box::new(unsafe { std::mem::zeroed::<FloorItemData>() });
-    (*fl).bl.m = (*sd).bl.m;
-    (*fl).bl.x = (*sd).bl.x;
-    (*fl).bl.y = (*sd).bl.y;
+    (*fl).m = (*sd).m;
+    (*fl).x = (*sd).x;
+    (*fl).y = (*sd).y;
 
     if (*sd).player.inventory.money < amount {
         amount = (*sd).player.inventory.money;
@@ -746,13 +742,13 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
 
     (*sd).fakeDrop = 0;
 
-    sl_doscript_2(b"on_drop_gold\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl, &raw mut (*fl).bl);
+    sl_doscript_2("on_drop_gold", None, (*sd).id, (*fl).id);
 
     for x in 0..MAX_MAGIC_TIMERS {
         if (&(*sd).player.spells.dura_aether)[x].id > 0
             && (&(*sd).player.spells.dura_aether)[x].duration > 0
         {
-            sl_doscript_2(magic_db::yname_ptr((&(*sd).player.spells.dura_aether)[x].id as i32), b"on_drop_gold_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
+            sl_doscript_2(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("on_drop_gold_while_cast"), (*sd).id, (*fl).id);
         }
     }
 
@@ -760,7 +756,7 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
         if (&(*sd).player.spells.dura_aether)[x].id > 0
             && (&(*sd).player.spells.dura_aether)[x].aether > 0
         {
-            sl_doscript_2(magic_db::yname_ptr((&(*sd).player.spells.dura_aether)[x].id as i32), b"on_drop_gold_while_aether\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl).bl);
+            sl_doscript_2(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("on_drop_gold_while_aether"), (*sd).id, (*fl).id);
         }
     }
 
@@ -775,26 +771,26 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
     clif_sendminitext(sd, mini.as_ptr());
 
     let mut def = [0i32; 1];
-    if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
-        let cell_ids = grid.ids_at_tile((*sd).bl.x, (*sd).bl.y);
+    if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+        let cell_ids = grid.ids_at_tile((*sd).x, (*sd).y);
         for id in cell_ids {
             if let Some(fl_arc) = crate::game::map_server::map_id2fl_ref(id) { let fl = &mut *fl_arc.write();
-                clif_addtocurrent_inner(&raw mut fl.bl, def.as_mut_ptr(), amount, std::ptr::null_mut());
+                clif_addtocurrent_inner(fl.bl_ptr_mut(), def.as_mut_ptr(), amount, std::ptr::null_mut());
             }
         }
     }
 
     if def[0] == 0 {
         let fl_raw = Box::into_raw(fl);
-        map_additem(&raw mut (*fl_raw).bl);
+        map_additem((*fl_raw).bl_ptr_mut());
 
-        sl_doscript_2(b"after_drop_gold\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl, &raw mut (*fl_raw).bl);
+        sl_doscript_2("after_drop_gold", None, (*sd).id, (*fl_raw).id);
 
         for x in 0..MAX_MAGIC_TIMERS {
             if (&(*sd).player.spells.dura_aether)[x].id > 0
                 && (&(*sd).player.spells.dura_aether)[x].duration > 0
             {
-                sl_doscript_2(magic_db::yname_ptr((&(*sd).player.spells.dura_aether)[x].id as i32), b"after_drop_gold_while_cast\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl_raw).bl);
+                sl_doscript_2(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("after_drop_gold_while_cast"), (*sd).id, (*fl_raw).id);
             }
         }
 
@@ -802,19 +798,19 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
             if (&(*sd).player.spells.dura_aether)[x].id > 0
                 && (&(*sd).player.spells.dura_aether)[x].aether > 0
             {
-                sl_doscript_2(magic_db::yname_ptr((&(*sd).player.spells.dura_aether)[x].id as i32), b"after_drop_gold_while_aether\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl_raw).bl);
+                sl_doscript_2(crate::game::scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("after_drop_gold_while_aether"), (*sd).id, (*fl_raw).id);
             }
         }
 
-        sl_doscript_2(b"characterLog\0".as_ptr().cast(), b"dropWrite\0".as_ptr().cast(), &raw mut (*sd).bl, &raw mut (*fl_raw).bl);
+        sl_doscript_2("characterLog", Some("dropWrite"), (*sd).id, (*fl_raw).id);
 
-        let fl_bl = &raw const (*fl_raw).bl;
-        if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
-            let slot = &*raw_map_ptr().add((*sd).bl.m as usize);
-            let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        let fl_bl = (*fl_raw).bl_ptr();
+        if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+            let slot = &*raw_map_ptr().add((*sd).m as usize);
+            let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_object_look_sub2_inner(&raw const pc_arc.read().bl, LOOK_SEND, fl_bl);
+                    clif_object_look_sub2_inner(pc_arc.read().bl_ptr(), LOOK_SEND, fl_bl);
                 }
             }
         }
@@ -833,7 +829,7 @@ pub unsafe fn clif_dropgold(sd: *mut MapSessionData, amounts: u32) -> i32 {
 ///
 pub unsafe fn clif_open_sub(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
-    sl_doscript_simple(b"onOpen\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl);
+    sl_doscript_simple("onOpen", None, (*sd).id);
     0
 }
 
@@ -900,9 +896,9 @@ pub unsafe fn clif_throwitem_sub(
     }
 
     let mut fl = Box::new(unsafe { std::mem::zeroed::<FloorItemData>() });
-    (*fl).bl.m = (*sd).bl.m;
-    (*fl).bl.x = x as u16;
-    (*fl).bl.y = y as u16;
+    (*fl).m = (*sd).m;
+    (*fl).x = x as u16;
+    (*fl).y = y as u16;
 
     // memcpy(&fl->data, &sd->status.inventory[id], sizeof(struct item))
     std::ptr::copy_nonoverlapping(
@@ -915,7 +911,7 @@ pub unsafe fn clif_throwitem_sub(
     (*sd).throwx = x as u16;
     (*sd).throwy = y as u16;
 
-    sl_doscript_2(b"onThrow\0".as_ptr().cast(), std::ptr::null(), &raw mut (*sd).bl, &raw mut (*fl).bl);
+    sl_doscript_2("onThrow", None, (*sd).id, (*fl).id);
 
     // fl is dropped here — it was a temporary used only to pass data to the script.
     drop(fl);
@@ -933,9 +929,9 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
     let item_type = 0i32;
 
     let mut fl = Box::new(unsafe { std::mem::zeroed::<FloorItemData>() });
-    (*fl).bl.m = (*sd).bl.m;
-    (*fl).bl.x = x as u16;
-    (*fl).bl.y = y as u16;
+    (*fl).m = (*sd).m;
+    (*fl).x = x as u16;
+    (*fl).y = y as u16;
 
     std::ptr::copy_nonoverlapping(
         &(&(*sd).player.inventory.inventory)[id] as *const _ as *const u8,
@@ -946,11 +942,11 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
     let mut def = [0i32; 1];
 
     if (*fl).data.dura == item_db::search((*fl).data.id).dura {
-        if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
+        if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
             let cell_ids = grid.ids_at_tile(x as u16, y as u16);
             for cid in cell_ids {
                 if let Some(fl_ref_arc) = crate::game::map_server::map_id2fl_ref(cid) { let fl_ref = &mut *fl_ref_arc.write();
-                    pc_addtocurrent_inner(&raw mut fl_ref.bl, def.as_mut_ptr(), id as i32, item_type, sd);
+                    pc_addtocurrent_inner(fl_ref.bl_ptr_mut(), def.as_mut_ptr(), id as i32, item_type, sd);
                 }
             }
         }
@@ -972,7 +968,7 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
         clif_sendadditem(sd, id as i32);
     }
 
-    if (*sd).bl.x as i32 != x {
+    if (*sd).x as i32 != x {
         let mut sndbuf = [0u8; 48];
         sndbuf[0] = 0xAA;
         let len_be = 0x1Bu16.to_be_bytes();
@@ -980,7 +976,7 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
         sndbuf[2] = len_be[1];
         sndbuf[3] = 0x16;
         sndbuf[4] = 0x03;
-        let id_be = ((*sd).bl.id).to_be_bytes();
+        let id_be = ((*sd).id).to_be_bytes();
         sndbuf[5] = id_be[0]; sndbuf[6] = id_be[1];
         sndbuf[7] = id_be[2]; sndbuf[8] = id_be[3];
 
@@ -1000,14 +996,14 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
         let fl_id_be = if def[0] != 0 {
             (def[0] as u32).to_be_bytes()
         } else {
-            ((*fl).bl.id).to_be_bytes()
+            ((*fl).id).to_be_bytes()
         };
         sndbuf[12] = fl_id_be[0]; sndbuf[13] = fl_id_be[1];
         sndbuf[14] = fl_id_be[2]; sndbuf[15] = fl_id_be[3];
 
-        let sx_be = (*sd).bl.x.to_be_bytes();
+        let sx_be = (*sd).x.to_be_bytes();
         sndbuf[16] = sx_be[0]; sndbuf[17] = sx_be[1];
-        let sy_be = (*sd).bl.y.to_be_bytes();
+        let sy_be = (*sd).y.to_be_bytes();
         sndbuf[18] = sy_be[0]; sndbuf[19] = sy_be[1];
         let dx_be = (x as u16).to_be_bytes();
         sndbuf[20] = dx_be[0]; sndbuf[21] = dx_be[1];
@@ -1017,21 +1013,21 @@ pub unsafe fn clif_throwitem_script(sd: *mut MapSessionData) -> i32 {
         sndbuf[28] = 0x02;
         sndbuf[29] = 0x00;
 
-        clif_send(sndbuf.as_ptr(), 48, &raw mut (*sd).bl, SAMEAREA);
+        clif_send(sndbuf.as_ptr(), 48, (*sd).bl_ptr_mut(), SAMEAREA);
     } else {
-        clif_sendaction(&mut (*sd).bl, 2, 30, 0);
+        clif_sendaction((*sd).as_bl_mut(), 2, 30, 0);
     }
 
     if def[0] == 0 {
         let fl_raw = Box::into_raw(fl);
-        map_additem(&raw mut (*fl_raw).bl);
-        let fl_bl = &raw const (*fl_raw).bl;
-        if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
-            let slot = &*raw_map_ptr().add((*sd).bl.m as usize);
-            let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        map_additem((*fl_raw).bl_ptr_mut());
+        let fl_bl = (*fl_raw).bl_ptr();
+        if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+            let slot = &*raw_map_ptr().add((*sd).m as usize);
+            let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_object_look_sub2_inner(&raw const pc_arc.read().bl, LOOK_SEND, fl_bl);
+                    clif_object_look_sub2_inner(pc_arc.read().bl_ptr(), LOOK_SEND, fl_bl);
                 }
             }
         }
@@ -1119,8 +1115,8 @@ pub unsafe fn clif_parsethrow(sd: *mut MapSessionData) -> i32 {
     }
 
     let max = 8i32;
-    let mut newx: i32 = (*sd).bl.x as i32;
-    let mut newy: i32 = (*sd).bl.y as i32;
+    let mut newx: i32 = (*sd).x as i32;
+    let mut newy: i32 = (*sd).y as i32;
     let mut xmod: i32 = 0;
     let mut ymod: i32 = 0;
     let mut found = [0i32; 1];
@@ -1133,12 +1129,12 @@ pub unsafe fn clif_parsethrow(sd: *mut MapSessionData) -> i32 {
         _ => {}
     }
 
-    let m = (*sd).bl.m as i32;
+    let m = (*sd).m as i32;
     let map_data = &*raw_map_ptr().add(m as usize);
 
     'search: for i in 0..max {
-        let mut x1: i32 = (*sd).bl.x as i32 + (i * xmod) + xmod;
-        let mut y1: i32 = (*sd).bl.y as i32 + (i * ymod) + ymod;
+        let mut x1: i32 = (*sd).x as i32 + (i * xmod) + xmod;
+        let mut y1: i32 = (*sd).y as i32 + (i * ymod) + ymod;
         if x1 < 0 { x1 = 0; }
         if y1 < 0 { y1 = 0; }
         if x1 >= map_data.xs as i32 { x1 = map_data.xs as i32 - 1; }

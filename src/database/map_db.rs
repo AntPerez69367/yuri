@@ -42,6 +42,40 @@ unsafe impl Send for BlockList {}
 // SAFETY: same as Send — no interior mutability, no aliasing through Rust references.
 unsafe impl Sync for BlockList {}
 
+/// Macro to add BlockList-compatible pointer methods to an entity struct.
+/// All entity structs (MapSessionData, MobSpawnData, NpcData, FloorItemData) are `#[repr(C)]`
+/// and start with the same field sequence as BlockList (next, prev, id, bx, by, ...).
+/// This allows safe pointer casting to `*const BlockList` / `*mut BlockList`.
+#[macro_export]
+macro_rules! impl_as_blocklist {
+    ($T:ty) => {
+        impl $T {
+            /// Borrow as `&BlockList` (read-only).
+            #[inline(always)]
+            pub fn as_bl(&self) -> &BlockList {
+                // SAFETY: #[repr(C)] struct with BlockList-compatible header at offset 0.
+                unsafe { &*(self as *const Self as *const BlockList) }
+            }
+            /// Borrow as `&mut BlockList` (mutable).
+            #[inline(always)]
+            pub fn as_bl_mut(&mut self) -> &mut BlockList {
+                // SAFETY: #[repr(C)] struct with BlockList-compatible header at offset 0.
+                unsafe { &mut *(self as *mut Self as *mut BlockList) }
+            }
+            /// Raw const pointer as `*const BlockList`.
+            #[inline(always)]
+            pub fn bl_ptr(&self) -> *const BlockList {
+                self as *const Self as *const BlockList
+            }
+            /// Raw mut pointer as `*mut BlockList`.
+            #[inline(always)]
+            pub fn bl_ptr_mut(&mut self) -> *mut BlockList {
+                self as *mut Self as *mut BlockList
+            }
+        }
+    };
+}
+
 /// Warp portal entry for map-to-map teleportation. 40 bytes on 64-bit.
 #[repr(C)]
 pub struct WarpList {

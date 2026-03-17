@@ -1,9 +1,6 @@
-use std::sync::Arc;
-use std::sync::atomic::{AtomicPtr, Ordering};
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
-use crate::database::map_db::{BlockList, MapData};
-use crate::database::map_db::get_map_ptr;
+use crate::database::map_db::{BlockList, MapData, get_map_ptr};
 use crate::game::scripting::types::item::{
     BoundItem, fixed_str, item_data_getattr, write_str_field,
 };
@@ -13,46 +10,39 @@ const MAX_GROUP_MEMBERS: usize = 256;
 
 #[repr(C)]
 pub struct FloorItemData {
-    pub bl:         BlockList,
+    pub id:            u32,
+    pub graphic_id:    u32,
+    pub graphic_color: u32,
+    pub m:             u16,
+    pub x:             u16,
+    pub y:             u16,
+    pub bl_type:       u8,
+    pub subtype:       u8,
     pub data:       BoundItem,
     pub lastamount: u32,
     pub timer:      u32,
     pub looters:    [u32; MAX_GROUP_MEMBERS],
 }
+// SAFETY: FloorItemData contains raw pointers (next/prev) that are legacy block-list links.
+// All access is gated behind unsafe blocks; no Rust code aliases these pointers.
+unsafe impl Send for FloorItemData {}
+unsafe impl Sync for FloorItemData {}
+crate::impl_as_blocklist!(FloorItemData);
 
-/// # Safety invariants (upheld by the caller / game engine)
-/// 1. **No concurrent mutation**: the game server is single-threaded; Lua scripts
-///    execute on that thread only, so the `FloorItemData` pointed to is never
-///    mutated concurrently from another thread.
-/// 2. **No freeing while Lua holds the object**: the C engine never calls
-///    `sl_fl_delete` on a `FloorItemData` that is currently referenced by a live
-///    Lua script, _unless_ the script itself called the `delete` method.
-/// 3. **Invalidation on explicit delete**: when the Lua script calls `delete()`,
-///    the inner `AtomicPtr` is swapped to null before `sl_fl_delete` is invoked,
-///    so any subsequent access through this object or through closures that were
-///    created from it (`getTrapSpotters`, `addTrapSpotters`) will observe a null
-///    pointer and return a safe nil / no-op result.
-///
-/// `Arc<AtomicPtr<std::ffi::c_void>>` is unconditionally `Send + Sync`; no `unsafe impl
-/// Send` is required.
+/// Lua userdata for floor items. Stores entity ID; lookups via `map_id2fl_ref`.
+/// After `delete()`, the entity is removed from the map, so subsequent lookups
+/// return `None` and all field accesses return nil.
 pub struct FloorListObject {
-    /// Shared handle to the underlying `FloorItemData` pointer.
-    /// Becomes null after `delete()` has been called.
-    pub ptr: Arc<AtomicPtr<std::ffi::c_void>>,
+    pub id: u32,
 }
-
-impl FloorListObject {
-    pub fn new(ptr: *mut std::ffi::c_void) -> Self {
-        Self { ptr: Arc::new(AtomicPtr::new(ptr)) }
-    }
-}
+// u32 is Send — no unsafe impl needed.
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 unsafe fn fl_map(fl: *const FloorItemData) -> *mut MapData {
-    get_map_ptr((*fl).bl.m)
+    get_map_ptr((*fl).m)
 }
 
 fn val_to_int(v: &mlua::Value) -> i32 {
@@ -79,11 +69,13 @@ impl UserData for FloorListObject {
 
         // ── __index ─────────────────────────────────────────────────────────
         methods.add_meta_method(MetaMethod::Index, |lua, this, key: String| {
-            let raw = this.ptr.load(Ordering::Relaxed);
-            if raw.is_null() { return Ok(mlua::Value::Nil); }
-            let fl = raw as *mut FloorItemData;
-            let fl_ref = unsafe { &*fl };
-            let bl = &fl_ref.bl;
+            let entity_id = this.id;
+            let Some(arc) = crate::game::map_server::map_id2fl_ref(entity_id) else {
+                return Ok(mlua::Value::Nil);
+            };
+            let fl = unsafe { &*arc.data_ptr() };
+            let fl_ref = fl;
+            let bl = fl_ref.as_bl();
 
             macro_rules! int  { ($e:expr) => { Ok(mlua::Value::Integer($e as i64)) }; }
             macro_rules! cstr { ($arr:expr) => {{
@@ -98,17 +90,18 @@ impl UserData for FloorListObject {
 
             // Named method — getTrapSpotters
             if key == "getTrapSpotters" {
-                let shared = Arc::clone(&this.ptr);
+                let id = entity_id;
                 return Ok(mlua::Value::Function(lua.create_function(
                     move |lua, _: mlua::MultiValue| {
-                        let raw = shared.load(Ordering::Relaxed);
-                        if raw.is_null() { return lua.create_table().map(mlua::Value::Table); }
-                        let fl = unsafe { &*(raw as *const FloorItemData) };
+                        let Some(arc) = crate::game::map_server::map_id2fl_ref(id) else {
+                            return lua.create_table().map(mlua::Value::Table);
+                        };
+                        let fl = unsafe { &*arc.data_ptr() };
                         let tbl = lua.create_table()?;
                         let mut idx = 1;
-                        for &id in fl.data.traps_table.iter() {
-                            if id != 0 {
-                                tbl.raw_set(idx, id)?;
+                        for &tid in fl.data.traps_table.iter() {
+                            if tid != 0 {
+                                tbl.raw_set(idx, tid)?;
                                 idx += 1;
                             }
                         }
@@ -117,12 +110,11 @@ impl UserData for FloorListObject {
                 )?));
             }
             if key == "addTrapSpotters" {
-                let shared = Arc::clone(&this.ptr);
+                let id = entity_id;
                 return Ok(mlua::Value::Function(lua.create_function(
                     move |_, playerid: u32| {
-                        let raw = shared.load(Ordering::Relaxed);
-                        if raw.is_null() { return Ok(()); }
-                        let fl = unsafe { &mut *(raw as *mut FloorItemData) };
+                        let Some(arc) = crate::game::map_server::map_id2fl_ref(id) else { return Ok(()); };
+                        let fl = unsafe { &mut *arc.data_ptr() };
                         for slot in fl.data.traps_table.iter_mut() {
                             if *slot == 0 {
                                 *slot = playerid;
@@ -212,12 +204,12 @@ impl UserData for FloorListObject {
                     Ok(mlua::Value::Table(tbl))
                 }
                 "delete" => {
-                    let shared = Arc::clone(&this.ptr);
+                    let id = entity_id;
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
-                            let raw = shared.swap(std::ptr::null_mut(), Ordering::Relaxed);
-                            if !raw.is_null() {
-                                unsafe { crate::game::scripting::map_globals::sl_fl_delete(raw); }
+                            if let Some(arc) = crate::game::map_server::map_id2fl_ref(id) {
+                                let ptr = arc.data_ptr() as *mut std::ffi::c_void;
+                                unsafe { crate::game::scripting::map_globals::sl_fl_delete(ptr); }
                             }
                             Ok(())
                         }
@@ -232,9 +224,8 @@ impl UserData for FloorListObject {
 
         // ── __newindex ───────────────────────────────────────────────────────
         methods.add_meta_method(MetaMethod::NewIndex, |_, this, (key, val): (String, mlua::Value)| {
-            let raw = this.ptr.load(Ordering::Relaxed);
-            if raw.is_null() { return Ok(()); }
-            let fl = unsafe { &mut *(raw as *mut FloorItemData) };
+            let Some(arc) = crate::game::map_server::map_id2fl_ref(this.id) else { return Ok(()); };
+            let fl = unsafe { &mut *arc.data_ptr() };
             let mp = unsafe { fl_map(fl as *const FloorItemData) };
 
             macro_rules! map_set { ($field:ident) => {

@@ -16,8 +16,8 @@ use std::ffi::CStr;
 
 use crate::database::get_pool;
 use crate::database::map_db::BlockList;
-use crate::game::block::map_delblock;
-use crate::game::scripting::sl_resumemenu;
+// map_delblock removed — now using map_delblock_id directly
+use crate::game::scripting::{sl_resumemenu, carray_to_str};
 use crate::game::map_parse::packet::{rfifob, rfifop, wfifohead, wfifop, wfifoset};
 use crate::game::map_server::{
     boards_delete, boards_post, boards_readpost, boards_showposts, hasCoref,
@@ -55,16 +55,14 @@ use crate::game::block::AreaType;
 use crate::game::block_grid;
 use crate::game::map_parse::visual::clif_object_look_sub_inner;
 
-/// Dispatch a Lua event with a single block_list argument.
-#[allow(dead_code)]
-unsafe fn sl_doscript_simple(root: *const i8, method: *const i8, bl: *mut crate::database::map_db::BlockList) -> i32 {
-    crate::game::scripting::doscript_blargs(root, method, &[bl as *mut _])
+/// Dispatch a Lua event with a single entity ID argument.
+fn sl_doscript_simple(root: &str, method: Option<&str>, id: u32) -> i32 {
+    crate::game::scripting::doscript_blargs_id(root, method, &[id])
 }
 
-/// Dispatch a Lua event with two block_list arguments.
-#[allow(dead_code)]
-unsafe fn sl_doscript_2(root: *const i8, method: *const i8, bl1: *mut crate::database::map_db::BlockList, bl2: *mut crate::database::map_db::BlockList) -> i32 {
-    crate::game::scripting::doscript_blargs(root, method, &[bl1 as *mut _, bl2 as *mut _])
+/// Dispatch a Lua event with two entity ID arguments.
+fn sl_doscript_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
+    crate::game::scripting::doscript_blargs_id(root, method, &[id1, id2])
 }
 
 
@@ -106,8 +104,8 @@ unsafe fn rlong_be(fd: SessionId, pos: usize) -> u32 {
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
 pub unsafe fn clif_quit(sd: *mut MapSessionData) -> i32 {
-    map_delblock(&raw mut (*sd).bl);
-    clif_lookgone(&raw const (*sd).bl);
+    crate::game::block::map_delblock_id((*sd).id, (*sd).m);
+    clif_lookgone((*sd).bl_ptr());
     0
 }
 
@@ -137,7 +135,7 @@ pub async unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
         let tsd = map_id2sd_pc((*sd).exchange.target)
             .map(|arc| &mut *arc.write() as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
         clif_exchange_close(sd);
-        if !tsd.is_null() && (*tsd).exchange.target == (*sd).bl.id {
+        if !tsd.is_null() && (*tsd).exchange.target == (*sd).id {
             clif_exchange_message(tsd, c"Exchange cancelled.".as_ptr(), 4, 0);
             clif_exchange_close(tsd);
         }
@@ -147,7 +145,7 @@ pub async unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
     sl_async_freeco(sd);
     clif_leavegroup(sd);
     clif_stoptimers(sd);
-    sl_doscript_simple(c"logout".as_ptr(), std::ptr::null::<i8>(), &raw mut (*sd).bl);
+    sl_doscript_simple("logout", None, (*sd).id);
     sl_intif_savequit(sd);
 
     // Capture fields before map_deliddb drops the Box.
@@ -155,7 +153,7 @@ pub async unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
     let name = (*sd).player.identity.name.clone();
 
     clif_quit(sd);
-    map_deliddb((*sd).bl.id);
+    map_deliddb((*sd).id);
 
     if let Err(e) = sqlx::query("UPDATE `Character` SET `ChaOnline` = '0' WHERE `ChaId` = ?")
         .bind(id)
@@ -220,9 +218,9 @@ pub unsafe fn clif_handle_powerboards(sd: *mut MapSessionData) -> i32 {
     }
 
     if !tsd.is_null() {
-        sl_doscript_2(c"powerBoard".as_ptr(), std::ptr::null::<i8>(), &raw mut (*sd).bl, &raw mut (*tsd).bl);
+        sl_doscript_2("powerBoard", None, (*sd).id, (*tsd).id);
     } else {
-        sl_doscript_2(c"powerBoard".as_ptr(), std::ptr::null::<i8>(), &raw mut (*sd).bl, std::ptr::null_mut::<BlockList>());
+        sl_doscript_2("powerBoard", None, (*sd).id, 0);
     }
     0
 }
@@ -281,7 +279,7 @@ pub async unsafe fn clif_handle_boards(sd: *mut MapSessionData) -> i32 {
         8 => {
             // C fallthrough: case 8 runs the Lua write script, then falls into case 9.
             let board = rword_be((*sd).fd, 6) as i32;
-            sl_doscript_simple(board_db::yname_ptr(board), c"write".as_ptr(), &raw mut (*sd).bl);
+            sl_doscript_simple(carray_to_str(&(*board_db::search(board)).yname), Some("write"), (*sd).id);
             (*sd).bcount = 0;
             boards_showposts(sd, 0);
         }
@@ -313,8 +311,8 @@ pub unsafe fn clif_handle_obstruction(sd: *mut MapSessionData) -> i32 {
         _ => {}
     }
 
-    (*sd).bl.x = nx as u16;
-    (*sd).bl.y = ny as u16;
+    (*sd).x = nx as u16;
+    (*sd).y = ny as u16;
     clif_sendxy(sd);
     0
 }
@@ -337,8 +335,8 @@ pub unsafe fn clif_postitem(sd: *mut MapSessionData) -> i32 {
     use crate::game::map_parse::dialogs::clif_input;
     let slot = rbyte((*sd).fd, 5) as i32 - 1;
     let (mut x, mut y) = (0i32, 0i32);
-    let bx = (*sd).bl.x as i32;
-    let by = (*sd).bl.y as i32;
+    let bx = (*sd).x as i32;
+    let by = (*sd).y as i32;
     match (*sd).player.combat.side {
         0 => { x = bx;     y = by - 1; }
         1 => { x = bx + 1; y = by;     }
@@ -347,7 +345,7 @@ pub unsafe fn clif_postitem(sd: *mut MapSessionData) -> i32 {
         _ => {}
     }
     if x < 0 || y < 0 { return 0; }
-    let obj = read_obj((*sd).bl.m as i32, x as i32, y as i32) as i32;
+    let obj = read_obj((*sd).m as i32, x as i32, y as i32) as i32;
     if obj == 1619 || obj == 1620 {
         if (&(*sd).player.inventory.inventory)[slot as usize].amount > 1 {
             clif_input(sd, (*sd).last_click as i32, c"How many would you like to post?".as_ptr(), c"".as_ptr());
@@ -522,7 +520,7 @@ pub unsafe fn clif_runfloor_sub_inner(bl: *mut crate::database::map_db::BlockLis
     if (*bl).subtype as i32 != FLOOR as i32 { return 0; }
     let nd = bl as *mut NpcData;
     sl_async_freeco(sd);
-    sl_doscript_2((*nd).name.as_ptr(), c"click2".as_ptr(), &raw mut (*sd).bl, &raw mut (*nd).bl);
+    sl_doscript_2(carray_to_str(&(*nd).name), Some("click2"), (*sd).id, (*nd).id);
     0
 }
 
@@ -538,7 +536,7 @@ pub unsafe fn clif_addtokillreg(sd: *mut MapSessionData, mob: i32) -> i32 {
         let member_id = grp[(*sd).groupid as usize * MAX_GROUP_MEMBERS + x];
         let tsd = map_id2sd_pc(member_id).map(|arc| &mut *arc.write() as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
         if tsd.is_null() { continue; }
-        if (*tsd).bl.m == (*sd).bl.m {
+        if (*tsd).m == (*sd).m {
             addtokillreg(tsd, mob);
         }
     }
@@ -571,18 +569,18 @@ pub unsafe fn clif_parsedropitem(sd: *mut MapSessionData) -> i32 {
             return 0;
         }
     }
-    clif_sendaction(&mut (*sd).bl, 5, 20, 0);
+    clif_sendaction((*sd).as_bl_mut(), 5, 20, 0);
     (*sd).invslot = id as u8;
     let drop_item = item_db::search((&(*sd).player.inventory.inventory)[id as usize].id as u32);
-    sl_doscript_simple(drop_item.yname.as_ptr(), c"on_drop".as_ptr(), &raw mut (*sd).bl);
+    sl_doscript_simple(carray_to_str(&drop_item.yname), Some("on_drop"), (*sd).id);
     for x in 0..MAX_MAGIC_TIMERS {
         if (&(*sd).player.spells.dura_aether)[x].id > 0 && (&(*sd).player.spells.dura_aether)[x].duration > 0 {
-            sl_doscript_simple(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"on_drop_while_cast".as_ptr(), &raw mut (*sd).bl);
+            sl_doscript_simple(carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("on_drop_while_cast"), (*sd).id);
         }
     }
     for x in 0..MAX_MAGIC_TIMERS {
         if (&(*sd).player.spells.dura_aether)[x].id > 0 && (&(*sd).player.spells.dura_aether)[x].aether > 0 {
-            sl_doscript_simple(magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname.as_ptr(), c"on_drop_while_aether".as_ptr(), &raw mut (*sd).bl);
+            sl_doscript_simple(carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("on_drop_while_aether"), (*sd).id);
         }
     }
     if (*sd).fakeDrop != 0 { return 0; }
@@ -893,7 +891,7 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
                     1 => { clif_sendminitext(sd, c"Spirits can't do that.".as_ptr()); }
                     2 => { clif_sendminitext(sd, c"Good try, but there is nothing here that you can ride.".as_ptr()); }
                     3 => {
-                        sl_doscript_simple(c"onDismount".as_ptr(), std::ptr::null(), &raw mut (*sd).bl);
+                        sl_doscript_simple("onDismount", None, (*sd).id);
                     }
                     4 => { clif_sendminitext(sd, c"You cannot do that while transformed.".as_ptr()); }
                     _ => {}
@@ -957,9 +955,9 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
             clif_sendstatus(sd, 0);
         }
         0x07 => {
-            let oldm = (*sd).bl.m as i32;
-            let oldx = (*sd).bl.x as i32;
-            let oldy = (*sd).bl.y as i32;
+            let oldm = (*sd).m as i32;
+            let oldx = (*sd).x as i32;
+            let oldy = (*sd).y as i32;
             (*sd).player.appearance.setting_flags ^= FLAG_REALM as u16;
             clif_quit(sd);
             clif_sendmapinfo(sd);
@@ -967,9 +965,9 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
             clif_sendmapinfo(sd);
             clif_spawn(sd);
             clif_mob_look_start(sd);
-            if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
-                let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).bl.m as usize);
-                let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
+            if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+                let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).m as usize);
+                let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
                 for id in ids {
                     let bl_ptr = crate::game::map_server::map_id2bl_ref(id);
                     if !bl_ptr.is_null() {
@@ -1063,7 +1061,6 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
 // table, and dispatches `itemCreation(pc)` script.
 pub unsafe fn createdb_start(sd: *mut MapSessionData) -> i32 {
     use crate::game::scripting::sl_state;
-    use crate::database::map_db::BlockList;
 
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
@@ -1112,9 +1109,8 @@ pub unsafe fn createdb_start(sd: *mut MapSessionData) -> i32 {
 
     sl_async_freeco(sd);
 
-    let bl_ptr = &mut (*sd).bl as *mut BlockList;
-    crate::game::scripting::doscript_blargs(
-        c"itemCreation".as_ptr(), std::ptr::null(), &[bl_ptr],
+    crate::game::scripting::doscript_blargs_id(
+        "itemCreation", None, &[(*sd).id],
     );
     0
 }

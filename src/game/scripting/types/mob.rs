@@ -37,7 +37,7 @@ fn map_id2bl_mob(id: u32) -> *mut BlockList {
 // ---------------------------------------------------------------------------
 
 unsafe fn mob_map(mob: *const MobSpawnData) -> *mut MapData {
-    get_map_ptr((*mob).bl.m)
+    get_map_ptr((*mob).m)
 }
 
 fn val_to_int(v: &mlua::Value) -> i32 {
@@ -76,7 +76,7 @@ impl UserData for MobObject {
                 None => return Ok(mlua::Value::Nil),
             };
             let mob = unsafe { &mut *arc.data_ptr() };
-            let bl = &mob.bl;
+            let bl = mob.as_bl();
             let mob_id = this.id;
 
             macro_rules! int {
@@ -403,9 +403,7 @@ impl UserData for MobObject {
                                 None => return Ok(false),
                             };
                             let mob = unsafe { &mut *arc.data_ptr() };
-                            let cs =
-                                CString::new(script.as_bytes()).map_err(mlua::Error::external)?;
-                            Ok(unsafe { sl_mob_callbase(mob as *mut MobSpawnData, cs.as_ptr()) } != 0)
+                            Ok(unsafe { sl_mob_callbase(mob as *mut MobSpawnData, &script) } != 0)
                         },
                     )?))
                 }
@@ -778,7 +776,7 @@ impl UserData for MobObject {
                             let mut m  = vi(5);
                             if m == 0 {
                                 if let Some(arc) = crate::game::map_server::map_id2mob_ref(spawner_mob_id) {
-                                    m = arc.read().bl.m as i32;
+                                    m = arc.read().m as i32;
                                 }
                             }
                             let tbl = lua.create_table()?;

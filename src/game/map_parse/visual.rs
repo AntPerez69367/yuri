@@ -39,7 +39,7 @@ const BL_ITEM_U8: u8 = BL_ITEM as u8;
 
 
 use crate::game::client::clif_send;
-use crate::game::block::map_addblock;
+// map_addblock removed — now using map_addblock_id directly
 use crate::game::map_parse::groups::clif_isingroup;
 use crate::game::map_parse::movement::clif_sendchararea;
 use crate::database::item_db;
@@ -217,7 +217,7 @@ pub unsafe fn clif_object_look_sub_inner(bl: *mut BlockList, look_type: i32, arg
         }
         t if t == BL_NPC_U8 => {
             let nd = b as *mut NpcData;
-            if (*b).subtype != 0 || (*nd).bl.subtype != 0 || (*nd).npctype == 1 { return 0; }
+            if (*b).subtype != 0 || (*nd).subtype != 0 || (*nd).npctype == 1 { return 0; }
 
             wfifob((*sd).fd, len + 11, 12);
             wfifow((*sd).fd, len + 16, (32768u16.wrapping_add((*b).graphic_id as u16)).swap_bytes());
@@ -334,7 +334,7 @@ pub unsafe fn clif_object_look_sub2_inner(bl: *const BlockList, look_type: i32, 
         }
         t if t == BL_NPC_U8 => {
             let nd = b as *const NpcData;
-            if (*b).subtype != 0 || (*nd).bl.subtype != 0 || (*nd).npctype == 1 { return 0; }
+            if (*b).subtype != 0 || (*nd).subtype != 0 || (*nd).npctype == 1 { return 0; }
 
             wfifob((*sd).fd, 11, 12);
             wfifow((*sd).fd, 16, (32768u16.wrapping_add((*b).graphic_id as u16)).swap_bytes());
@@ -422,7 +422,7 @@ pub unsafe fn clif_object_look_specific(sd: *mut MapSessionData, id: u32) -> i32
         }
         t if t == BL_NPC_U8 => {
             let nd = b as *mut NpcData;
-            if (*b).subtype != 0 || (*nd).bl.subtype != 0 || (*nd).npctype == 1 { return 0; }
+            if (*b).subtype != 0 || (*nd).subtype != 0 || (*nd).npctype == 1 { return 0; }
 
             wfifob((*sd).fd, 11, 12);
             wfifow((*sd).fd, 16, (32768u16.wrapping_add((*b).graphic_id as u16)).swap_bytes());
@@ -530,7 +530,7 @@ pub unsafe fn clif_cnpclook_inner(bl: *const BlockList, look_type: i32, arg: *co
         (arg as *const NpcData, bl as *const MapSessionData)
     };
 
-    if (*nd).bl.m != (*sd).bl.m || (*nd).npctype != 1 {
+    if (*nd).m != (*sd).m || (*nd).npctype != 1 {
         return 0;
     }
 
@@ -541,10 +541,10 @@ pub unsafe fn clif_cnpclook_inner(bl: *const BlockList, look_type: i32, arg: *co
     wfifohead((*sd).fd, 512);
     wfifob((*sd).fd, 0, 0xAA);
     wfifob((*sd).fd, 3, 0x33);
-    wfifow((*sd).fd, 5, ((*nd).bl.x as u16).swap_bytes());
-    wfifow((*sd).fd, 7, ((*nd).bl.y as u16).swap_bytes());
+    wfifow((*sd).fd, 5, ((*nd).x as u16).swap_bytes());
+    wfifow((*sd).fd, 7, ((*nd).y as u16).swap_bytes());
     wfifob((*sd).fd, 9, (*nd).side as u8);
-    wfifol((*sd).fd, 10, (*nd).bl.id.swap_bytes());
+    wfifol((*sd).fd, 10, (*nd).id.swap_bytes());
 
     if ((*nd).state as u8) < 4 {
         wfifow((*sd).fd, 14, (*nd).sex.swap_bytes());
@@ -562,10 +562,10 @@ pub unsafe fn clif_cnpclook_inner(bl: *const BlockList, look_type: i32, arg: *co
     wfifob((*sd).fd, 19, 80);
 
     if (*nd).state == 3 {
-        wfifow((*sd).fd, 17, ((*nd).bl.graphic_id as u16).swap_bytes());
+        wfifow((*sd).fd, 17, ((*nd).graphic_id as u16).swap_bytes());
     } else if (*nd).state == 4 {
-        wfifow((*sd).fd, 17, ((*nd).bl.graphic_id as u16).wrapping_add(32768).swap_bytes());
-        wfifob((*sd).fd, 19, (*nd).bl.graphic_color as u8);
+        wfifow((*sd).fd, 17, ((*nd).graphic_id as u16).wrapping_add(32768).swap_bytes());
+        wfifob((*sd).fd, 19, (*nd).graphic_color as u8);
     } else {
         wfifow((*sd).fd, 17, 0);
     }
@@ -792,7 +792,7 @@ pub unsafe fn clif_cmoblook_inner(bl: *const BlockList, look_type: i32, arg: *co
         (arg as *const MobSpawnData, bl as *const MapSessionData)
     };
 
-    if (*mob).bl.m != (*sd).bl.m || (*(*mob).data).mobtype != 1 || (*mob).state == 1 {
+    if (*mob).m != (*sd).m || (*(*mob).data).mobtype != 1 || (*mob).state == 1 {
         return 0;
     }
 
@@ -803,10 +803,10 @@ pub unsafe fn clif_cmoblook_inner(bl: *const BlockList, look_type: i32, arg: *co
     wfifohead((*sd).fd, 512);
     wfifob((*sd).fd, 0, 0xAA);
     wfifob((*sd).fd, 3, 0x33);
-    wfifow((*sd).fd, 5, ((*mob).bl.x as u16).swap_bytes());
-    wfifow((*sd).fd, 7, ((*mob).bl.y as u16).swap_bytes());
+    wfifow((*sd).fd, 5, ((*mob).x as u16).swap_bytes());
+    wfifow((*sd).fd, 7, ((*mob).y as u16).swap_bytes());
     wfifob((*sd).fd, 9, (*mob).side as u8);
-    wfifol((*sd).fd, 10, (*mob).bl.id.swap_bytes());
+    wfifol((*sd).fd, 10, (*mob).id.swap_bytes());
 
     if (*mob).charstate < 4 {
         wfifow((*sd).fd, 14, (*(*mob).data).sex.swap_bytes());
@@ -1057,7 +1057,7 @@ pub unsafe fn clif_charlook_inner(bl: *const BlockList, look_type: i32, arg: *co
         (arg as *const MapSessionData as *mut MapSessionData, bl as *const MapSessionData as *mut MapSessionData)
     };
 
-    if (*sd).bl.m != (*src_sd).bl.m { return 0; }
+    if (*sd).m != (*src_sd).m { return 0; }
 
     if ((*sd).optFlags & OPT_FLAG_STEALTH) != 0
         && (*src_sd).player.identity.gm_level == 0
@@ -1068,11 +1068,11 @@ pub unsafe fn clif_charlook_inner(bl: *const BlockList, look_type: i32, arg: *co
 
     // Ghost visibility check (mirrors C: `if (map[sd->bl.m].show_ghosts && ...)`)
     {
-        let slot = crate::database::map_db::get_map_ptr((*sd).bl.m);
+        let slot = crate::database::map_db::get_map_ptr((*sd).m);
         if !slot.is_null()
             && (*slot).show_ghosts != 0
             && (*sd).player.combat.state == 1
-            && (*sd).bl.id != (*src_sd).bl.id
+            && (*sd).id != (*src_sd).id
         {
             if (*src_sd).player.combat.state != 1
                 && ((*src_sd).optFlags & crate::game::pc::OPT_FLAG_GHOSTS) == 0
@@ -1089,8 +1089,8 @@ pub unsafe fn clif_charlook_inner(bl: *const BlockList, look_type: i32, arg: *co
     wfifohead((*src_sd).fd, 512);
     wfifob((*src_sd).fd, 0, 0xAA);
     wfifob((*src_sd).fd, 3, 0x33);
-    wfifow((*src_sd).fd, 5, ((*sd).bl.x as u16).swap_bytes());
-    wfifow((*src_sd).fd, 7, ((*sd).bl.y as u16).swap_bytes());
+    wfifow((*src_sd).fd, 5, ((*sd).x as u16).swap_bytes());
+    wfifow((*src_sd).fd, 7, ((*sd).y as u16).swap_bytes());
     wfifob((*src_sd).fd, 9, (*sd).player.combat.side as u8);
     wfifol((*src_sd).fd, 10, (*sd).player.identity.id.swap_bytes());
 
@@ -1103,7 +1103,7 @@ pub unsafe fn clif_charlook_inner(bl: *const BlockList, look_type: i32, arg: *co
 
     // Invisibility / stealth state
     let invis_cond = ((*sd).player.combat.state == 2 || ((*sd).optFlags & OPT_FLAG_STEALTH) != 0)
-        && (*sd).bl.id != (*src_sd).bl.id
+        && (*sd).id != (*src_sd).id
         && ((*src_sd).player.identity.gm_level != 0
             || clif_isingroup(src_sd, sd) != 0
             || ((*sd).gfx.dye == (*src_sd).gfx.dye
@@ -1118,7 +1118,7 @@ pub unsafe fn clif_charlook_inner(bl: *const BlockList, look_type: i32, arg: *co
 
     if ((*sd).optFlags & OPT_FLAG_STEALTH) != 0
         && (*sd).player.combat.state == 0
-        && ((*src_sd).player.identity.gm_level == 0 || (*sd).bl.id == (*src_sd).bl.id)
+        && ((*src_sd).player.identity.gm_level == 0 || (*sd).id == (*src_sd).id)
     {
         wfifob((*src_sd).fd, 16, 2);
     }
@@ -1331,7 +1331,7 @@ pub unsafe fn clif_charlook_inner(bl: *const BlockList, look_type: i32, arg: *co
 
     let mut exist: i32 = -1;
     for x in 0..20usize {
-        if (*src_sd).pvp[x][0] == (*sd).bl.id {
+        if (*src_sd).pvp[x][0] == (*sd).id {
             exist = x as i32;
             break;
         }
@@ -1440,7 +1440,7 @@ pub unsafe fn clif_charlook_inner(bl: *const BlockList, look_type: i32, arg: *co
 ///
 /// Thin wrapper — mirrors `clif_spawn` (~line 4075).
 pub unsafe fn clif_spawn(sd: *mut MapSessionData) -> i32 {
-    if map_addblock(&mut (*sd).bl) != 0 {
+    if crate::game::block::map_addblock_id((*sd).id, (*sd).bl_type, (*sd).m, (*sd).x, (*sd).y) != 0 {
         // printf("Error Spawn\n") — silently ignore in Rust
     }
     clif_sendchararea(sd);

@@ -100,9 +100,7 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
     }
 
     // Set up the block-list header.
-    (*sd).bl.id   = (*sd).player.identity.id;
-    (*sd).bl.prev = ptr::null_mut();
-    (*sd).bl.next = ptr::null_mut();
+    (*sd).id   = (*sd).player.identity.id;
 
     // Visual / display defaults.
     (*sd).disguise       = (*sd).player.appearance.disguise;
@@ -191,9 +189,9 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
 
     tracing::info!("[map] [login] fd={} step=mob_look_start", fd);
     clif_mob_look_start(sd);
-    if let Some(grid) = block_grid::get_grid((*sd).bl.m as usize) {
-        let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).bl.m as usize);
-        let ids = block_grid::ids_in_area(grid, (*sd).bl.x as i32, (*sd).bl.y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
+    if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+        let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).m as usize);
+        let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
         for id in ids {
             let bl_ptr = crate::game::map_server::map_id2bl_ref(id);
             if !bl_ptr.is_null() {
@@ -212,7 +210,7 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
     pc_magic_startup(sd);
 
     tracing::info!("[map] [login] fd={} step=addiddb", fd);
-    let sd_id = (*sd).bl.id;
+    let sd_id = (*sd).id;
     crate::game::map_server::map_addiddb_player(sd_id, sd_box);
     let sd: *mut crate::game::pc::MapSessionData =
         crate::game::map_server::map_id2sd_pc(sd_id)
@@ -231,11 +229,10 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
         let addr = format!("{}.{}.{}.{}", raw_ip & 0xff, (raw_ip >> 8) & 0xff,
             (raw_ip >> 16) & 0xff, (raw_ip >> 24) & 0xff);
         println!("[map] [login] name={} addr={}", name_str, addr);
-        let bl_ptr = ptr::addr_of_mut!((*sd).bl);
-        crate::game::scripting::doscript_blargs(
-            b"login\0".as_ptr() as *const i8,
-            std::ptr::null(),
-            &[bl_ptr],
+        crate::game::scripting::doscript_blargs_id(
+            "login",
+            None,
+            &[(*sd).id],
         );
     }
 
@@ -264,9 +261,9 @@ pub mod intif_save_impl {
         if sd.is_null() { return -1; }
 
         // Sync runtime shadow fields into player before save.
-        (*sd).player.identity.last_pos.m = (*sd).bl.m;
-        (*sd).player.identity.last_pos.x = (*sd).bl.x;
-        (*sd).player.identity.last_pos.y = (*sd).bl.y;
+        (*sd).player.identity.last_pos.m = (*sd).m;
+        (*sd).player.identity.last_pos.x = (*sd).x;
+        (*sd).player.identity.last_pos.y = (*sd).y;
         (*sd).player.appearance.disguise       = (*sd).disguise;
         (*sd).player.appearance.disguise_color = (*sd).disguise_color;
 
@@ -285,15 +282,15 @@ pub mod intif_save_impl {
 
         if !map_is_loaded((*sd).player.identity.dest_pos.m as i32) {
             if (*sd).player.identity.dest_pos.m == 0 {
-                (*sd).player.identity.dest_pos.m = (*sd).bl.m;
-                (*sd).player.identity.dest_pos.x = (*sd).bl.x;
-                (*sd).player.identity.dest_pos.y = (*sd).bl.y;
+                (*sd).player.identity.dest_pos.m = (*sd).m;
+                (*sd).player.identity.dest_pos.x = (*sd).x;
+                (*sd).player.identity.dest_pos.y = (*sd).y;
             }
             (*sd).player.identity.last_pos = (*sd).player.identity.dest_pos;
         } else {
-            (*sd).player.identity.last_pos.m = (*sd).bl.m;
-            (*sd).player.identity.last_pos.x = (*sd).bl.x;
-            (*sd).player.identity.last_pos.y = (*sd).bl.y;
+            (*sd).player.identity.last_pos.m = (*sd).m;
+            (*sd).player.identity.last_pos.x = (*sd).x;
+            (*sd).player.identity.last_pos.y = (*sd).y;
         }
 
         (*sd).player.appearance.disguise       = (*sd).disguise;

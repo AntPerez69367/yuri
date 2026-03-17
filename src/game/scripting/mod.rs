@@ -110,12 +110,12 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     let g = lua.globals();
     g.set("PC", lua.create_function(|_, v: mlua::Value| {
         let ptr = lua_val_to_ptr(v) as *const crate::game::pc::MapSessionData;
-        let id = if ptr.is_null() { 0u32 } else { unsafe { (*ptr).bl.id } };
+        let id = if ptr.is_null() { 0u32 } else { unsafe { (*ptr).id } };
         Ok(PcObject { id })
     })?)?;
     g.set("MOB", lua.create_function(|_, v: mlua::Value| {
         let ptr = lua_val_to_ptr(v) as *const crate::game::mob::MobSpawnData;
-        let id = if ptr.is_null() { 0u32 } else { unsafe { (*ptr).bl.id } };
+        let id = if ptr.is_null() { 0u32 } else { unsafe { (*ptr).id } };
         Ok(MobObject { id })
     })?)?;
     // NPC(id) — looks up the NPC by ID.
@@ -123,24 +123,28 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
     // to a real pointer; storing the raw integer as a pointer would cause a
     // misaligned-pointer panic when Rust later tries to dereference it.
     g.set("NPC", lua.create_function(|lua, v: mlua::Value| -> mlua::Result<mlua::Value> {
-        let ptr = match v {
+        let npc_id: Option<u32> = match v {
             mlua::Value::Integer(i) if i >= 0 && i <= u32::MAX as i64 => {
-                crate::game::map_server::map_id2bl_ref(i as u32)
+                let id = i as u32;
+                if crate::game::map_server::map_id2npc_ref(id).is_some() { Some(id) } else { None }
             }
             mlua::Value::Number(f) if f.is_finite() && f >= 0.0 && f <= u32::MAX as f64 => {
-                crate::game::map_server::map_id2bl_ref(f as u32)
+                let id = f as u32;
+                if crate::game::map_server::map_id2npc_ref(id).is_some() { Some(id) } else { None }
             }
             mlua::Value::String(ref s) => {
                 let cs = CString::new(s.as_bytes().to_vec()).map_err(mlua::Error::external)?;
-                unsafe { crate::game::map_server::map_name2npc(cs.as_ptr()) as *mut BlockList }
+                let ptr = unsafe { crate::game::map_server::map_name2npc(cs.as_ptr()) };
+                if ptr.is_null() { None } else {
+                    Some(unsafe { (*(ptr as *const crate::game::npc::NpcData)).id })
+                }
             }
-            _ => std::ptr::null_mut(),
+            _ => None,
         };
-        if ptr.is_null() { return Ok(mlua::Value::Nil); }
-        if unsafe { (*ptr).bl_type as i32 } != BL_NPC {
-            return Ok(mlua::Value::Nil);
+        match npc_id {
+            Some(id) => Ok(mlua::Value::UserData(lua.create_userdata(NpcObject { id })?)),
+            None => Ok(mlua::Value::Nil),
         }
-        Ok(mlua::Value::UserData(lua.create_userdata(NpcObject { ptr: ptr as *mut std::ffi::c_void })?))
     })?)?;
 
     // Player — callable namespace table for PC scripts.
@@ -152,17 +156,17 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
         let bl_id = match v {
             mlua::Value::Integer(id) => {
                 if id < 0 || id > u32::MAX as i64 { return Ok(mlua::Value::Nil); }
-                crate::game::map_server::map_id2sd_pc(id as u32).map(|arc| arc.read().bl.id)
+                crate::game::map_server::map_id2sd_pc(id as u32).map(|arc| arc.read().id)
             }
             mlua::Value::Number(f) => {
                 if !f.is_finite() || f < 0.0 || f > u32::MAX as f64 { return Ok(mlua::Value::Nil); }
-                crate::game::map_server::map_id2sd_pc(f as u32).map(|arc| arc.read().bl.id)
+                crate::game::map_server::map_id2sd_pc(f as u32).map(|arc| arc.read().id)
             }
             mlua::Value::String(ref s) => {
                 let cs = CString::new(s.as_bytes().to_vec()).map_err(mlua::Error::external)?;
                 let ptr = unsafe { crate::game::map_server::map_name2sd(cs.as_ptr()) };
                 if ptr.is_null() { None }
-                else { Some(unsafe { (*ptr).bl.id }) }
+                else { Some(unsafe { (*ptr).id }) }
             }
             _ => None,
         };
@@ -248,9 +252,8 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
         Ok(mlua::Value::UserData(lua.create_userdata(RecipeObject { ptr })?))
     })?)?;
     let fl_ctor = lua.create_function(|lua, id: u32| -> mlua::Result<mlua::Value> {
-        let ptr = unsafe { crate::game::map_server::map_id2fl(id) };
-        if ptr.is_null() { return Ok(mlua::Value::Nil); }
-        Ok(mlua::Value::UserData(lua.create_userdata(FloorListObject::new(ptr))?))
+        if crate::game::map_server::map_id2fl_ref(id).is_none() { return Ok(mlua::Value::Nil); }
+        Ok(mlua::Value::UserData(lua.create_userdata(FloorListObject { id })?))
     })?;
     g.set("FL",        fl_ctor.clone())?;
     g.set("FloorItem", fl_ctor)?;
@@ -336,8 +339,8 @@ pub(crate) unsafe fn bl_to_lua(lua: &Lua, bl: *mut std::ffi::c_void) -> mlua::Re
     match bl_type {
         BL_PC   => lua.pack(PcObject  { id: bl_ref.id }),
         BL_MOB  => lua.pack(MobObject { id: bl_ref.id }),
-        BL_NPC  => lua.pack(NpcObject { ptr: bl }),
-        BL_ITEM => lua.pack(FloorListObject::new(bl)),
+        BL_NPC  => lua.pack(NpcObject { id: bl_ref.id }),
+        BL_ITEM => lua.pack(FloorListObject { id: bl_ref.id }),
         other => {
             tracing::warn!("[scripting] bl_to_lua: unhandled bl_type={other:#04x}, returning nil");
             Ok(mlua::Value::Nil)
@@ -348,101 +351,128 @@ pub(crate) unsafe fn bl_to_lua(lua: &Lua, bl: *mut std::ffi::c_void) -> mlua::Re
 /// Safe dispatch: look up entity by id and wrap in appropriate Lua userdata.
 /// Returns Nil if the entity no longer exists (killed, picked up, etc.).
 pub fn entity_to_lua(lua: &mlua::Lua, id: u32) -> mlua::Result<mlua::Value> {
-    use crate::game::map_server::GameEntity;
-    match crate::game::map_server::map_id2entity(id) {
-        Some(GameEntity::Player(arc)) => lua.pack(PcObject  { id: arc.read().bl.id }),
-        Some(GameEntity::Mob(arc))   => lua.pack(MobObject { id: arc.read().bl.id }),
-        Some(GameEntity::Npc(arc)) => lua.pack(
-            NpcObject { ptr: &*arc.write() as *const _ as *mut std::ffi::c_void }
-        ),
-        Some(GameEntity::Item(arc)) => lua.pack(
-            FloorListObject::new(&*arc.write() as *const _ as *mut std::ffi::c_void)
-        ),
-        None => Ok(mlua::Value::Nil),
+    id_to_lua(lua, id)
+}
+
+/// Convert an entity ID to the appropriate Lua userdata value.
+/// Uses ID ranges to determine the entity type — no map lookup needed.
+pub fn id_to_lua(lua: &mlua::Lua, id: u32) -> mlua::Result<mlua::Value> {
+    use crate::game::mob::{MOB_START_NUM, FLOORITEM_START_NUM, NPC_START_NUM};
+
+    if id == 0 { return Ok(mlua::Value::Nil); }
+    if id < MOB_START_NUM {
+        if crate::game::map_server::map_id2sd_pc(id).is_some() {
+            return lua.pack(PcObject { id });
+        }
+    } else if id >= NPC_START_NUM {
+        if crate::game::map_server::map_id2npc_ref(id).is_some() {
+            return lua.pack(NpcObject { id });
+        }
+    } else if id >= FLOORITEM_START_NUM {
+        if crate::game::map_server::map_id2fl_ref(id).is_some() {
+            return lua.pack(FloorListObject { id });
+        }
+    } else {
+        if crate::game::map_server::map_id2mob_ref(id).is_some() {
+            return lua.pack(MobObject { id });
+        }
+    }
+    Ok(mlua::Value::Nil)
+}
+
+/// Safe Lua dispatch: resolve `root` (and optionally `root.method`) from globals,
+/// then call the function with the given arguments.
+fn call_lua_str(root: &str, method: Option<&str>, args: mlua::MultiValue) -> bool {
+    let lua = unsafe { sl_state() };
+
+    match method {
+        None => {
+            let func: mlua::Function = match lua.globals().get(root) { Ok(f) => f, Err(_) => return false };
+            if let Err(e) = func.call::<mlua::MultiValue>(args) {
+                tracing::warn!("[scripting] {root}: {e}");
+            }
+            true
+        }
+        Some(method_s) => {
+            let tbl: mlua::Table = match lua.globals().get(root) { Ok(t) => t, Err(_) => return false };
+            let func: mlua::Function = match tbl.get(method_s) { Ok(f) => f, Err(_) => return false };
+            if let Err(e) = func.call::<mlua::MultiValue>(args) {
+                tracing::warn!("[scripting] {root}.{method_s}: {e}");
+            }
+            true
+        }
     }
 }
 
+/// Legacy C-string wrapper — delegates to `call_lua_str`.
 unsafe fn call_lua(
     root: *const i8,
     method: *const i8,
     args: mlua::MultiValue,
 ) -> bool {
     if root.is_null() { return false; }
-    let lua = sl_state();
     let root_s = match CStr::from_ptr(root).to_str() { Ok(s) => s, Err(_) => return false };
-
-    if method.is_null() {
-        // Direct function call: sl_doscript_blargs("startup", NULL, 0) → startup()
-        let func: mlua::Function = match lua.globals().get(root_s) { Ok(f) => f, Err(_) => return false };
-        if let Err(e) = func.call::<mlua::MultiValue>(args) {
-            tracing::warn!("[scripting] {root_s}: {e}");
-        }
-        return true;
-    }
-
-    let method_s = match CStr::from_ptr(method).to_str() { Ok(s) => s, Err(_) => return false };
-    let tbl: mlua::Table  = match lua.globals().get(root_s)  { Ok(t) => t, Err(_) => return false };
-    let func: mlua::Function = match tbl.get(method_s)       { Ok(f) => f, Err(_) => return false };
-
-    if let Err(e) = func.call::<mlua::MultiValue>(args) {
-        tracing::warn!("[scripting] {root_s}.{method_s}: {e}");
-    }
-    true
+    let method_s = if method.is_null() {
+        None
+    } else {
+        match CStr::from_ptr(method).to_str() { Ok(s) => Some(s), Err(_) => return false }
+    };
+    call_lua_str(root_s, method_s, args)
 }
 
-/// Dispatch a Lua script call with block_list pointer arguments (slice API).
+/// Convert a fixed `[i8]` C-style string array to `&str`.
+/// Finds the first null byte and decodes as UTF-8, returning `""` on invalid data.
+#[inline]
+pub fn carray_to_str(arr: &[i8]) -> &str {
+    let bytes = unsafe { &*(arr as *const [i8] as *const [u8]) };
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    std::str::from_utf8(&bytes[..end]).unwrap_or("")
+}
+
+/// ID-based Lua script dispatch — safe replacement for doscript_blargs.
 ///
-/// Each pointer in `args` may be null (mapped to Lua nil) or a valid `*mut BlockList`.
-///
-/// # Safety
-/// Every non-null pointer in `args` must be a valid `*mut BlockList` for the
-/// duration of this call.  Null pointers are accepted and mapped to Lua nil.
-pub unsafe fn doscript_blargs(
-    root: *const i8,
-    method: *const i8,
-    args: &[*mut BlockList],
+/// Converts entity IDs to Lua userdata via `id_to_lua` (0 → Nil),
+/// then dispatches to `call_lua_str`.
+pub fn doscript_blargs_id(
+    root: &str,
+    method: Option<&str>,
+    entity_ids: &[u32],
 ) -> i32 {
-    if args.is_empty() {
-        return call_lua(root, method, mlua::MultiValue::new()) as i32;
+    if entity_ids.is_empty() {
+        return call_lua_str(root, method, mlua::MultiValue::new()) as i32;
     }
-    let lua = sl_state();
+    let lua = unsafe { sl_state() };
     let mut mv = mlua::MultiValue::new();
-    for &bl in args {
-        let val = if bl.is_null() {
+    for &id in entity_ids {
+        let val = if id == 0 {
             mlua::Value::Nil
         } else {
-            bl_to_lua(lua, bl as *mut std::ffi::c_void).unwrap_or(mlua::Value::Nil)
+            id_to_lua(lua, id).unwrap_or(mlua::Value::Nil)
         };
         mv.push_back(val);
     }
-    call_lua(root, method, mv) as i32
+    call_lua_str(root, method, mv) as i32
 }
 
-/// Coroutine dispatch for NPC interactions.
+/// ID-based coroutine dispatch — safe replacement for doscript_coro.
 ///
-/// Creates a Lua coroutine thread, wraps the first BL_PC argument through
-/// `_wrap_player()` so yielding methods (dialog, menu, input, etc.) work,
-/// and resumes the thread.  If the script yields (waiting for client
-/// response), the thread is stored in `thread_registry` keyed by the
-/// player's `MapSessionData` pointer.
-///
-/// # Safety
-/// Same requirements as `doscript_blargs`.
-pub unsafe fn doscript_coro(
-    root: *const i8,
-    method: *const i8,
-    args: &[*mut BlockList],
+/// Creates a Lua coroutine thread, wraps the first PC argument through
+/// `_wrap_player()` for yielding method support, and resumes the thread.
+pub fn doscript_coro_id(
+    root: &str,
+    method: Option<&str>,
+    entity_ids: &[u32],
 ) -> i32 {
-    if root.is_null() { return 0; }
-    let lua = sl_state();
-    let root_s = match CStr::from_ptr(root).to_str() { Ok(s) => s, Err(_) => return 0 };
+    use crate::game::mob::MOB_START_NUM;
 
-    let func = if method.is_null() {
-        match lua.globals().get::<mlua::Function>(root_s) { Ok(f) => f, Err(_) => return 0 }
-    } else {
-        let method_s = match CStr::from_ptr(method).to_str() { Ok(s) => s, Err(_) => return 0 };
-        let tbl: mlua::Table = match lua.globals().get(root_s) { Ok(t) => t, Err(_) => return 0 };
-        match tbl.get::<mlua::Function>(method_s) { Ok(f) => f, Err(_) => return 0 }
+    let lua = unsafe { sl_state() };
+
+    let func = match method {
+        None => match lua.globals().get::<mlua::Function>(root) { Ok(f) => f, Err(_) => return 0 },
+        Some(m) => {
+            let tbl: mlua::Table = match lua.globals().get(root) { Ok(t) => t, Err(_) => return 0 };
+            match tbl.get::<mlua::Function>(m) { Ok(f) => f, Err(_) => return 0 }
+        }
     };
 
     let thread = match lua.create_thread(func) {
@@ -450,30 +480,25 @@ pub unsafe fn doscript_coro(
         Err(e) => { tracing::warn!("[scripting] create_thread failed: {e}"); return 0; }
     };
 
-    // Build args, wrapping the first BL_PC argument through _wrap_player.
     let wrap_fn: Option<mlua::Function> = lua.globals().get("_wrap_player").ok();
     let mut mv = mlua::MultiValue::new();
     let mut user_key: Option<usize> = None;
-    for (i, &bl) in args.iter().enumerate() {
-        let val = if bl.is_null() {
+    for (i, &id) in entity_ids.iter().enumerate() {
+        let val = if id == 0 {
             mlua::Value::Nil
-        } else {
-            let bl_ref = &*(bl as *const BlockList);
-            // Wrap the first player arg through _wrap_player for yielding method support.
-            if i == 0 && bl_ref.bl_type as i32 == BL_PC {
-                // Derive the user key (MapSessionData pointer) for thread registry.
-                if let Some(arc) = crate::game::map_server::map_id2sd_pc(bl_ref.id) {
-                    user_key = Some(&*arc.read() as *const crate::game::pc::MapSessionData as usize);
-                }
-                let pc_val = bl_to_lua(lua, bl as *mut std::ffi::c_void).unwrap_or(mlua::Value::Nil);
-                if let Some(ref wf) = wrap_fn {
-                    wf.call::<mlua::Value>(pc_val).unwrap_or(mlua::Value::Nil)
-                } else {
-                    pc_val
-                }
-            } else {
-                bl_to_lua(lua, bl as *mut std::ffi::c_void).unwrap_or(mlua::Value::Nil)
+        } else if i == 0 && id < MOB_START_NUM {
+            // First arg is a PC — wrap through _wrap_player for yielding support.
+            if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
+                user_key = Some(&*arc.read() as *const crate::game::pc::MapSessionData as usize);
             }
+            let pc_val = id_to_lua(lua, id).unwrap_or(mlua::Value::Nil);
+            if let Some(ref wf) = wrap_fn {
+                wf.call::<mlua::Value>(pc_val).unwrap_or(mlua::Value::Nil)
+            } else {
+                pc_val
+            }
+        } else {
+            id_to_lua(lua, id).unwrap_or(mlua::Value::Nil)
         };
         mv.push_back(val);
     }
@@ -484,12 +509,12 @@ pub unsafe fn doscript_coro(
                 if let Some(uk) = user_key {
                     thread_registry::store(lua, uk, &thread);
                 } else {
-                    tracing::warn!("[scripting] {root_s}: thread yielded but no user_key to store it");
+                    tracing::warn!("[scripting] {root}: thread yielded but no user_key to store it");
                 }
             }
         }
         Err(e) => {
-            tracing::warn!("[scripting] {root_s}: {e}");
+            tracing::warn!("[scripting] {root}: {e}");
         }
     }
     1
@@ -523,23 +548,6 @@ pub unsafe fn doscript_strings(
         mv.push_back(val);
     }
     call_lua(root, method, mv) as i32
-}
-
-/// # Safety
-/// `args` must point to an array of at least `nargs` valid (or null) block-list
-/// pointers.  `nargs` must be non-negative and accurate; the caller owns the
-/// array for the duration of this call.
-pub unsafe fn sl_doscript_blargs_vec(
-    root: *const i8, method: *const i8,
-    nargs: i32, args: *const *mut std::ffi::c_void,
-) -> i32 {
-    debug_assert!(nargs >= 0, "sl_doscript_blargs_vec: nargs must be non-negative");
-    debug_assert!(nargs <= 64, "sl_doscript_blargs_vec: nargs={nargs} exceeds sanity limit");
-    if nargs <= 0 || args.is_null() {
-        return call_lua(root, method, mlua::MultiValue::new()) as i32;
-    }
-    let slice = std::slice::from_raw_parts(args as *const *mut BlockList, nargs as usize);
-    doscript_blargs(root, method, slice)
 }
 
 pub unsafe fn sl_doscript_strings_vec(

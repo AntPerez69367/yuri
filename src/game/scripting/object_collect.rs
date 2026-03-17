@@ -36,7 +36,7 @@ unsafe fn id_to_bl_typed(id: u32, bl_type: i32) -> Option<*mut BlockList> {
 #[inline]
 unsafe fn id_to_bl_typed_alive(id: u32, bl_type: i32) -> Option<*mut BlockList> {
     let bl = id_to_bl_typed(id, bl_type)?;
-    if crate::game::block::is_alive(bl) { Some(bl) } else { None }
+    if crate::game::block::is_alive_id(id) { Some(bl) } else { None }
 }
 
 // ─── Cell queries ─────────────────────────────────────────────────────────────
