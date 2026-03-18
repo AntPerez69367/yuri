@@ -32,6 +32,7 @@ use crate::game::map_parse::trading::{clif_exchange_close, clif_exchange_message
 use crate::game::map_parse::visual::{clif_lookgone_by_id, clif_object_look_specific};
 use crate::game::mob::{BL_PC, MAX_MAGIC_TIMERS};
 use crate::game::player::prelude::*;
+use crate::game::player::entity::PlayerEntity;
 use crate::config::Point;
 use crate::game::pc::{pc_stoptimer, MapSessionData};
 
@@ -100,61 +101,61 @@ unsafe fn rlong_be(fd: SessionId, pos: usize) -> u32 {
 
 // ─── Functions ───────────────────────────────────────────────────────────────
 
-/// Remove `sd` from the block grid and broadcast a look-gone packet to visible players.
-////
-/// # Safety
-/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_quit(sd: *mut MapSessionData) -> i32 {
-    crate::game::block::map_delblock_id((*sd).id, (*sd).m);
-    clif_lookgone_by_id((*sd).id);
+/// Remove `pe` from the block grid and broadcast a look-gone packet to visible players.
+pub fn clif_quit(pe: &PlayerEntity) -> i32 {
+    let (id, m) = { let r = pe.read(); (r.id, r.m) };
+    crate::game::block::map_delblock_id(id, m);
+    unsafe { clif_lookgone_by_id(id) };
     0
 }
 
-/// Remove all active duration and aether timers for `sd`.
-////
-/// # Safety
-/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_stoptimers(sd: *mut MapSessionData) -> i32 {
-    let sd = &mut *sd;
+/// Remove all active duration and aether timers for `pe`.
+pub fn clif_stoptimers(pe: &PlayerEntity) -> i32 {
     for x in 0..MAX_MAGIC_TIMERS {
-        if sd.player.spells.dura_aether[x].dura_timer != 0 {
-            timer_remove(sd.player.spells.dura_aether[x].dura_timer as i32);
+        let dura_timer = pe.read().player.spells.dura_aether[x].dura_timer;
+        if dura_timer != 0 {
+            timer_remove(dura_timer as i32);
         }
-        if sd.player.spells.dura_aether[x].aether_timer != 0 {
-            timer_remove(sd.player.spells.dura_aether[x].aether_timer as i32);
+        let aether_timer = pe.read().player.spells.dura_aether[x].aether_timer;
+        if aether_timer != 0 {
+            timer_remove(aether_timer as i32);
         }
     }
     0
 }
 
 /// Handle a clean disconnect: cancel exchange, run logout script, save, remove from world.
-////
-/// # Safety
-/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub async unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
-    if (*sd).exchange.target != 0 {
-        let tsd = map_id2sd_pc((*sd).exchange.target)
-            .map(|arc| &mut *arc.write() as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
-        clif_exchange_close(sd);
-        if !tsd.is_null() && (*tsd).exchange.target == (*sd).id {
-            clif_exchange_message(tsd, c"Exchange cancelled.".as_ptr(), 4, 0);
-            clif_exchange_close(tsd);
+pub async fn clif_handle_disconnect(pe: &PlayerEntity) -> i32 {
+    let exchange_target = pe.read().exchange.target;
+    if exchange_target != 0 {
+        let tpe = map_id2sd_pc(exchange_target);
+        unsafe { clif_exchange_close(pe) };
+        if let Some(ref tpe) = tpe {
+            let target_exchange_target = tpe.read().exchange.target;
+            if target_exchange_target == pe.id {
+                unsafe {
+                    clif_exchange_message(tpe, c"Exchange cancelled.".as_ptr(), 4, 0);
+                    clif_exchange_close(tpe);
+                }
+            }
         }
     }
 
-    pc_stoptimer(sd);
-    sl_async_freeco(sd);
-    clif_leavegroup(sd);
-    clif_stoptimers(sd);
-    sl_doscript_simple("logout", None, (*sd).id);
-    sl_intif_savequit(sd);
+    unsafe {
+        pc_stoptimer(pe.data_ptr()); // TODO(phase6c): migrate
+        sl_async_freeco(pe.data_ptr()); // TODO(phase6c): migrate
+        clif_leavegroup(pe);
+    }
+    clif_stoptimers(pe);
+    sl_doscript_simple("logout", None, pe.id);
+    sl_intif_savequit(pe);
 
     // Capture fields before map_deliddb drops the Box.
-    let id = (*sd).player.identity.id;
-    let name = (*sd).player.identity.name.clone();
+    let id = pe.read().player.identity.id;
+    let name = pe.read().player.identity.name.clone();
 
-    clif_quit(sd);
-    map_deliddb((*sd).id);
+    clif_quit(pe);
+    map_deliddb(pe.id);
 
     if let Err(e) = sqlx::query("UPDATE `Character` SET `ChaOnline` = '0' WHERE `ChaId` = ?")
         .bind(id)
@@ -169,58 +170,50 @@ pub async unsafe fn clif_handle_disconnect(sd: *mut MapSessionData) -> i32 {
 }
 
 /// Send any missing objects that the client requested by ID.
-////
-/// # Safety
-/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_handle_missingobject(sd: *mut MapSessionData) -> i32 {
-    let id = rlong_be((*sd).fd, 5);
+pub unsafe fn clif_handle_missingobject(pe: &PlayerEntity) -> i32 {
+    let id = rlong_be(pe.fd, 5);
+    let identity_id = pe.read().player.identity.id;
     if let Some((_pos, bl_type)) = entity_position(id) {
         if bl_type as i32 == BL_PC {
-            clif_charspecific((*sd).player.identity.id as i32, id as i32);
-            clif_charspecific(id as i32, (*sd).player.identity.id as i32);
+            clif_charspecific(identity_id as i32, id as i32);
+            clif_charspecific(id as i32, identity_id as i32);
         } else {
-            clif_object_look_specific(sd, id);
+            clif_object_look_specific(pe.data_ptr(), id);
         }
     }
     0
 }
 
 /// Dispatch a menu-input packet to the appropriate handler.
-////
-/// # Safety
-/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_handle_menuinput(sd: *mut MapSessionData) -> i32 {
-    if hasCoref(sd) == 0 {
+pub unsafe fn clif_handle_menuinput(pe: &PlayerEntity) -> i32 {
+    if hasCoref(pe.data_ptr()) == 0 { // TODO(phase6c): migrate hasCoref
         return 0;
     }
-    match rbyte((*sd).fd, 5) {
-        0 => sl_async_freeco(sd),
-        1 => { clif_parsemenu(sd); }
-        2 => { clif_parsebuy(sd); }
-        3 => { clif_parseinput(sd); }
-        4 => { clif_parsesell(sd); }
-        _ => sl_async_freeco(sd),
+    match rbyte(pe.fd, 5) {
+        0 => sl_async_freeco(pe.data_ptr()), // TODO(phase6c): migrate
+        1 => { clif_parsemenu(pe); }
+        2 => { clif_parsebuy(pe); }
+        3 => { clif_parseinput(pe); }
+        4 => { clif_parsesell(pe); }
+        _ => sl_async_freeco(pe.data_ptr()), // TODO(phase6c): migrate
     }
     0
 }
 
 /// Handle a powerboard interaction: route the powerBoard Lua script with optional target.
-////
-/// # Safety
-/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_handle_powerboards(sd: *mut MapSessionData) -> i32 {
-    let tsd = map_id2sd_pc(rlong_be((*sd).fd, 11))
-        .map(|arc| &mut *arc.write() as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
-    if !tsd.is_null() {
-        (*sd).pbColor = rbyte((*sd).fd, 15) as i32;
+pub unsafe fn clif_handle_powerboards(pe: &PlayerEntity) -> i32 {
+    let target_id = rlong_be(pe.fd, 11);
+    let tpe = map_id2sd_pc(target_id);
+    if tpe.is_some() {
+        pe.write().pbColor = rbyte(pe.fd, 15) as i32;
     } else {
-        (*sd).pbColor = 0;
+        pe.write().pbColor = 0;
     }
 
-    if !tsd.is_null() {
-        sl_doscript_2("powerBoard", None, (*sd).id, (*tsd).id);
+    if let Some(ref tpe) = tpe {
+        sl_doscript_2("powerBoard", None, pe.id, tpe.id);
     } else {
-        sl_doscript_2("powerBoard", None, (*sd).id, 0);
+        sl_doscript_2("powerBoard", None, pe.id, 0);
     }
     0
 }
@@ -228,64 +221,61 @@ pub unsafe fn clif_handle_powerboards(sd: *mut MapSessionData) -> i32 {
 /// Handle a boards/nmail packet: show boards, read/post/delete posts, send nmail.
 ////
 /// Note: case 8 intentionally falls through to case 9 (matching C behavior).
-///
-/// # Safety
-/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub async unsafe fn clif_handle_boards(sd: *mut MapSessionData) -> i32 {
-    match rbyte((*sd).fd, 5) {
+pub async unsafe fn clif_handle_boards(pe: &PlayerEntity) -> i32 {
+    match rbyte(pe.fd, 5) {
         1 => {
-            (*sd).bcount = 0;
-            (*sd).board_popup = 0;
-            clif_showboards(sd);
+            pe.write().bcount = 0;
+            pe.write().board_popup = 0;
+            clif_showboards(pe);
         }
         2 => {
-            if rbyte((*sd).fd, 8) == 127 {
-                (*sd).bcount = 0;
+            if rbyte(pe.fd, 8) == 127 {
+                pe.write().bcount = 0;
             }
-            boards_showposts(sd, rword_be((*sd).fd, 6) as i32);
+            boards_showposts(pe.data_ptr(), rword_be(pe.fd, 6) as i32); // TODO(phase6c): migrate
         }
         3 => {
-            boards_readpost(
-                sd,
-                rword_be((*sd).fd, 6) as i32,
-                rword_be((*sd).fd, 8) as i32,
+            boards_readpost( // TODO(phase6c): migrate
+                pe.data_ptr(),
+                rword_be(pe.fd, 6) as i32,
+                rword_be(pe.fd, 8) as i32,
             );
         }
         4 => {
-            boards_post(sd, rword_be((*sd).fd, 6) as i32);
+            boards_post(pe.data_ptr(), rword_be(pe.fd, 6) as i32); // TODO(phase6c): migrate
         }
         5 => {
-            boards_delete(sd, rword_be((*sd).fd, 6) as i32);
+            boards_delete(pe.data_ptr(), rword_be(pe.fd, 6) as i32); // TODO(phase6c): migrate
         }
         6 => {
-            if (*sd).player.progression.level >= 10 {
-                nmail_write(sd).await;
+            if pe.read().player.progression.level >= 10 {
+                nmail_write(pe.data_ptr()).await; // TODO(phase6c): migrate
             } else {
                 clif_sendminitext(
-                    sd,
+                    pe,
                     c"You must be at least level 10 to view/send nmail.".as_ptr(),
                 );
             }
         }
         7 => {
-            if (*sd).player.identity.gm_level != 0 {
-                let board = rword_be((*sd).fd, 6) as i32;
-                let post  = rword_be((*sd).fd, 8) as i32;
+            if pe.read().player.identity.gm_level != 0 {
+                let board = rword_be(pe.fd, 6) as i32;
+                let post  = rword_be(pe.fd, 8) as i32;
                 let color = map_getpostcolor(board, post).await ^ 1;
                 map_changepostcolor(board, post, color).await;
-                nmail_sendmessage(sd, c"Post updated.".as_ptr(), 6, 0);
+                nmail_sendmessage(pe.data_ptr(), c"Post updated.".as_ptr(), 6, 0); // TODO(phase6c): migrate
             }
         }
         8 => {
             // C fallthrough: case 8 runs the Lua write script, then falls into case 9.
-            let board = rword_be((*sd).fd, 6) as i32;
-            sl_doscript_simple(carray_to_str(&(*board_db::search(board)).yname), Some("write"), (*sd).id);
-            (*sd).bcount = 0;
-            boards_showposts(sd, 0);
+            let board = rword_be(pe.fd, 6) as i32;
+            sl_doscript_simple(carray_to_str(&(*board_db::search(board)).yname), Some("write"), pe.id);
+            pe.write().bcount = 0;
+            boards_showposts(pe.data_ptr(), 0); // TODO(phase6c): migrate
         }
         9 => {
-            (*sd).bcount = 0;
-            boards_showposts(sd, 0);
+            pe.write().bcount = 0;
+            boards_showposts(pe.data_ptr(), 0); // TODO(phase6c): migrate
         }
         _ => {}
     }
@@ -293,17 +283,14 @@ pub async unsafe fn clif_handle_boards(sd: *mut MapSessionData) -> i32 {
 }
 
 /// Correct the player's position after a movement obstruction, then resync the client.
-////
-/// # Safety
-/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_handle_obstruction(sd: *mut MapSessionData) -> i32 {
-    (*sd).canmove = 0;
-    let xold = rword_be((*sd).fd, 5) as i32;
-    let yold = rword_be((*sd).fd, 7) as i32;
+pub unsafe fn clif_handle_obstruction(pe: &PlayerEntity) -> i32 {
+    pe.write().canmove = 0;
+    let xold = rword_be(pe.fd, 5) as i32;
+    let yold = rword_be(pe.fd, 7) as i32;
     let mut nx = xold;
     let mut ny = yold;
 
-    match rbyte((*sd).fd, 9) {
+    match rbyte(pe.fd, 9) {
         0 => ny = yold - 1,
         1 => nx = xold + 1,
         2 => ny = yold + 1,
@@ -311,36 +298,31 @@ pub unsafe fn clif_handle_obstruction(sd: *mut MapSessionData) -> i32 {
         _ => {}
     }
 
-    (*sd).x = nx as u16;
-    (*sd).y = ny as u16;
-    if let Some(pc_arc) = map_id2sd_pc((*sd).id) {
-        pc_arc.set_position(Point { m: (*sd).m, x: (*sd).x, y: (*sd).y });
-    }
-    clif_sendxy(sd);
+    pe.write().x = nx as u16;
+    pe.write().y = ny as u16;
+    let (m, x, y) = { let r = pe.read(); (r.m, r.x, r.y) };
+    pe.set_position(Point { m, x, y });
+    clif_sendxy(pe);
     0
 }
 
 /// Resume a Lua NPC menu with the player's selection.
-////
-/// # Safety
-/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_parsemenu(sd: *mut MapSessionData) -> i32 {
-    let selection = rword_be((*sd).fd, 10) as u32;
-    sl_resumemenu(selection, sd);
+pub unsafe fn clif_parsemenu(pe: &PlayerEntity) -> i32 {
+    let selection = rword_be(pe.fd, 10) as u32;
+    sl_resumemenu(selection, pe.data_ptr()); // TODO(phase6c): migrate
     0
 }
 
 /// Post an item from inventory onto an adjacent board/prop when the client requests it.
-////
-/// # Safety
-/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_postitem(sd: *mut MapSessionData) -> i32 {
+pub unsafe fn clif_postitem(pe: &PlayerEntity) -> i32 {
     use crate::game::map_parse::dialogs::clif_input;
-    let slot = rbyte((*sd).fd, 5) as i32 - 1;
+    let slot = rbyte(pe.fd, 5) as i32 - 1;
     let (mut x, mut y) = (0i32, 0i32);
-    let bx = (*sd).x as i32;
-    let by = (*sd).y as i32;
-    match (*sd).player.combat.side {
+    let (bx, by, side, m, last_click) = {
+        let r = pe.read();
+        (r.x as i32, r.y as i32, r.player.combat.side, r.m, r.last_click)
+    };
+    match side {
         0 => { x = bx;     y = by - 1; }
         1 => { x = bx + 1; y = by;     }
         2 => { x = bx;     y = by + 1; }
@@ -348,30 +330,27 @@ pub unsafe fn clif_postitem(sd: *mut MapSessionData) -> i32 {
         _ => {}
     }
     if x < 0 || y < 0 { return 0; }
-    let obj = read_obj((*sd).m as i32, x as i32, y as i32) as i32;
+    let obj = read_obj(m as i32, x as i32, y as i32) as i32;
     if obj == 1619 || obj == 1620 {
-        if (&(*sd).player.inventory.inventory)[slot as usize].amount > 1 {
-            clif_input(sd, (*sd).last_click as i32, c"How many would you like to post?".as_ptr(), c"".as_ptr());
+        if pe.read().player.inventory.inventory[slot as usize].amount > 1 {
+            clif_input(pe, last_click as i32, c"How many would you like to post?".as_ptr(), c"".as_ptr());
         }
     }
-    (*sd).invslot = slot as u8;
+    pe.write().invslot = slot as u8;
     0
 }
 
 /// Swap two inventory slots from a client rearrange packet.
-////
-/// # Safety
-/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_parsechangepos(sd: *mut MapSessionData) -> i32 {
+pub unsafe fn clif_parsechangepos(pe: &PlayerEntity) -> i32 {
     use crate::game::map_parse::chat::clif_sendminitext;
-    if rbyte((*sd).fd, 5) == 0 {
+    if rbyte(pe.fd, 5) == 0 {
         pc_changeitem(
-            sd,
-            rbyte((*sd).fd, 6) as i32 - 1,
-            rbyte((*sd).fd, 7) as i32 - 1,
+            pe,
+            rbyte(pe.fd, 6) as i32 - 1,
+            rbyte(pe.fd, 7) as i32 - 1,
         );
     } else {
-        clif_sendminitext(sd, c"You are busy.".as_ptr());
+        clif_sendminitext(pe, c"You are busy.".as_ptr());
     }
     0
 }
@@ -379,13 +358,13 @@ pub unsafe fn clif_parsechangepos(sd: *mut MapSessionData) -> i32 {
 /// Save the player's friend list (20 slots) from a client update packet.
 ////
 /// # Safety
-/// `sd` must be valid. `friend_list` is a raw byte buffer of length `len`.
+/// `friend_list` is a raw byte buffer of length `len`.
 pub async unsafe fn clif_parsefriends(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     friend_list: *const i8,
     len: i32,
 ) -> i32 {
-    if sd.is_null() || friend_list.is_null() || len <= 0 { return 0; }
+    if friend_list.is_null() || len <= 0 { return 0; }
 
     // Parse up to 20 null-terminated names separated by 0x0C control bytes.
     let bytes = std::slice::from_raw_parts(friend_list as *const u8, len as usize);
@@ -406,7 +385,7 @@ pub async unsafe fn clif_parsefriends(
         i += 1;
     }
 
-    let id = (*sd).player.identity.id;
+    let id = pe.read().player.identity.id;
     let pool = get_pool();
     // Upsert: ensure row exists
     let exists: bool = sqlx::query_scalar(
@@ -494,12 +473,14 @@ pub unsafe fn clif_delay(milliseconds: i32) {
 
 /// Send a heartbeat packet (opcode 0x3B) to the player with id `id`.
 pub unsafe fn clif_sendheartbeat(id: i32, _none: i32) -> i32 {
-    let sd = map_id2sd_pc(id as u32).map(|arc| &mut *arc.write() as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
-    if sd.is_null() { return 1; }
-    if !session_exists((*sd).fd) {
+    let pe = match map_id2sd_pc(id as u32) {
+        Some(arc) => arc,
+        None => return 1,
+    };
+    if !session_exists(pe.fd) {
         return 0;
     }
-    let fd = (*sd).fd;
+    let fd = pe.fd;
     // Payload length = 7 (bytes [3..9]); total_size = 7 + 6 = 13
     wfifohead(fd, 13);
     let w = |off: usize| wfifop(fd, off);
@@ -516,79 +497,86 @@ pub unsafe fn clif_sendheartbeat(id: i32, _none: i32) -> i32 {
 }
 
 /// `foreach_in_cell` callback: run the floor NPC's "click2" script.
-pub unsafe fn clif_runfloor_sub_inner(entity_id: u32, sd: *mut MapSessionData) -> i32 {
+pub unsafe fn clif_runfloor_sub_inner(entity_id: u32, pe: &PlayerEntity) -> i32 {
     use crate::game::pc::FLOOR;
-    if sd.is_null() { return 0; }
     let Some(arc) = crate::game::map_server::map_id2npc_ref(entity_id) else { return 0; };
     let nd = &*arc.data_ptr();
     if nd.subtype as i32 != FLOOR as i32 { return 0; }
-    sl_async_freeco(sd);
-    sl_doscript_2(carray_to_str(&nd.name), Some("click2"), (*sd).id, nd.id);
+    sl_async_freeco(pe.data_ptr()); // TODO(phase6c): migrate
+    sl_doscript_2(carray_to_str(&nd.name), Some("click2"), pe.id, nd.id);
     0
 }
 
 /// Propagate a kill-registry entry to all group members on the same map.
-////
-/// # Safety
-/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_addtokillreg(sd: *mut MapSessionData, mob: i32) -> i32 {
+pub unsafe fn clif_addtokillreg(pe: &PlayerEntity, mob: i32) -> i32 {
     use crate::game::pc::groups;
     use crate::common::constants::world::MAX_GROUP_MEMBERS;
-    if sd.is_null() { return 0; }
     let grp = groups();
-    for x in 0..(*sd).group_count as usize {
-        let member_id = grp[(*sd).groupid as usize * MAX_GROUP_MEMBERS + x];
-        let tsd = map_id2sd_pc(member_id).map(|arc| &mut *arc.write() as *mut MapSessionData).unwrap_or(std::ptr::null_mut());
-        if tsd.is_null() { continue; }
-        if (*tsd).m == (*sd).m {
-            addtokillreg(tsd, mob);
+    let (group_count, groupid, pe_m) = {
+        let r = pe.read();
+        (r.group_count as usize, r.groupid as usize, r.m)
+    };
+    for x in 0..group_count {
+        let member_id = grp[groupid * MAX_GROUP_MEMBERS + x];
+        if let Some(tpe) = map_id2sd_pc(member_id) {
+            if tpe.read().m == pe_m {
+                addtokillreg(tpe.data_ptr(), mob); // TODO(phase6c): migrate addtokillreg
+            }
         }
     }
     0
 }
 
 /// Handle a client item-drop request.
-////
-/// # Safety
-/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_parsedropitem(sd: *mut MapSessionData) -> i32 {
-    if pc_readglobalreg(sd, c"goldbardupe".as_ptr()) != 0 { return 0; }
-    if (*sd).player.identity.gm_level == 0 {
-        if (*sd).player.combat.state == 3 {
-            clif_sendminitext(sd, c"You cannot do that while riding a mount.".as_ptr());
+pub unsafe fn clif_parsedropitem(pe: &PlayerEntity) -> i32 {
+    if pc_readglobalreg(pe.data_ptr(), c"goldbardupe".as_ptr()) != 0 { return 0; } // TODO(phase6c): migrate
+    let (gm_level, state) = { let r = pe.read(); (r.player.identity.gm_level, r.player.combat.state) };
+    if gm_level == 0 {
+        if state == 3 {
+            clif_sendminitext(pe, c"You cannot do that while riding a mount.".as_ptr());
             return 0;
         }
-        if (*sd).player.combat.state == 1 {
-            clif_sendminitext(sd, c"Spirits can't do that.".as_ptr());
-            return 0;
-        }
-    }
-    (*sd).fakeDrop = 0;
-    let id = rbyte((*sd).fd, 5) as i32 - 1;
-    let all = rbyte((*sd).fd, 6) as i32;
-    if id as usize >= (*sd).player.inventory.max_inv as usize { return 0; }
-    if (&(*sd).player.inventory.inventory)[id as usize].id != 0 {
-        if item_db::search((&(*sd).player.inventory.inventory)[id as usize].id as u32).droppable != 0 {
-            clif_sendminitext(sd, c"You can't drop this item.".as_ptr());
+        if state == 1 {
+            clif_sendminitext(pe, c"Spirits can't do that.".as_ptr());
             return 0;
         }
     }
-    clif_sendaction_pc(&mut *sd, 5, 20, 0);
-    (*sd).invslot = id as u8;
-    let drop_item = item_db::search((&(*sd).player.inventory.inventory)[id as usize].id as u32);
-    sl_doscript_simple(carray_to_str(&drop_item.yname), Some("on_drop"), (*sd).id);
+    pe.write().fakeDrop = 0;
+    let id = rbyte(pe.fd, 5) as i32 - 1;
+    let all = rbyte(pe.fd, 6) as i32;
+    if id as usize >= pe.read().player.inventory.max_inv as usize { return 0; }
+    {
+        let inv_id = pe.read().player.inventory.inventory[id as usize].id;
+        if inv_id != 0 {
+            if item_db::search(inv_id as u32).droppable != 0 {
+                clif_sendminitext(pe, c"You can't drop this item.".as_ptr());
+                return 0;
+            }
+        }
+    }
+    clif_sendaction_pc(&mut *pe.data_ptr(), 5, 20, 0); // TODO(phase6c): migrate clif_sendaction_pc
+    pe.write().invslot = id as u8;
+    let drop_item_name = {
+        let inv_id = pe.read().player.inventory.inventory[id as usize].id;
+        carray_to_str(&item_db::search(inv_id as u32).yname).to_owned()
+    };
+    sl_doscript_simple(&drop_item_name, Some("on_drop"), pe.id);
     for x in 0..MAX_MAGIC_TIMERS {
-        if (&(*sd).player.spells.dura_aether)[x].id > 0 && (&(*sd).player.spells.dura_aether)[x].duration > 0 {
-            sl_doscript_simple(carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("on_drop_while_cast"), (*sd).id);
+        let (spell_id, duration) = { let r = pe.read(); (r.player.spells.dura_aether[x].id, r.player.spells.dura_aether[x].duration) };
+        if spell_id > 0 && duration > 0 {
+            let spell_name = carray_to_str(&magic_db::search(spell_id as i32).yname).to_owned();
+            sl_doscript_simple(&spell_name, Some("on_drop_while_cast"), pe.id);
         }
     }
     for x in 0..MAX_MAGIC_TIMERS {
-        if (&(*sd).player.spells.dura_aether)[x].id > 0 && (&(*sd).player.spells.dura_aether)[x].aether > 0 {
-            sl_doscript_simple(carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[x].id as i32).yname), Some("on_drop_while_aether"), (*sd).id);
+        let (spell_id, aether) = { let r = pe.read(); (r.player.spells.dura_aether[x].id, r.player.spells.dura_aether[x].aether) };
+        if spell_id > 0 && aether > 0 {
+            let spell_name = carray_to_str(&magic_db::search(spell_id as i32).yname).to_owned();
+            sl_doscript_simple(&spell_name, Some("on_drop_while_aether"), pe.id);
         }
     }
-    if (*sd).fakeDrop != 0 { return 0; }
-    pc_dropitemmap(sd, id, all);
+    if pe.read().fakeDrop != 0 { return 0; }
+    pc_dropitemmap(pe, id, all);
     0
 }
 
@@ -731,13 +719,13 @@ pub async unsafe fn clif_accept2(
 
 /// Send a server-transfer packet to redirect the client to another map server.
 pub unsafe fn clif_transfer(
-    sd: *mut MapSessionData, serverid: i32,
+    pe: &PlayerEntity, serverid: i32,
     _m: i32, _x: i32, _y: i32,
 ) -> i32 {
-    if !session_exists((*sd).fd) {
+    if !session_exists(pe.fd) {
         return 0;
     }
-    let fd = (*sd).fd;
+    let fd = pe.fd;
     let dest_port: u16 = match serverid {
         0 => 2001,
         1 => 2002,
@@ -745,7 +733,8 @@ pub unsafe fn clif_transfer(
     };
     let xk = crate::config::config().xor_key.as_bytes();
     let xk_len = xk.len().min(9);
-    let name_bytes = (*sd).player.identity.name.as_bytes();
+    let name_string = pe.read().player.identity.name.clone();
+    let name_bytes = name_string.as_bytes();
     let name_len = name_bytes.len();
 
     use crate::network::crypt::encrypt;
@@ -777,12 +766,12 @@ pub unsafe fn clif_transfer(
 
 /// Send a test server-transfer packet (hardcoded IP 192.88.99.100, port 2001).
 pub unsafe fn clif_transfer_test(
-    sd: *mut MapSessionData, _m: i32, _x: i32, _y: i32,
+    pe: &PlayerEntity, _m: i32, _x: i32, _y: i32,
 ) -> i32 {
-    if !session_exists((*sd).fd) {
+    if !session_exists(pe.fd) {
         return 0;
     }
-    let fd = (*sd).fd;
+    let fd = pe.fd;
     // inet_addr("192.88.99.100") on LE x86 — bytes stored in network order
     // SWAP32 of that = host-order; WFIFOL writes LE → wire bytes are network-order
     let test_ip_net: u32 = u32::from_ne_bytes([192, 88, 99, 100]);
@@ -813,16 +802,16 @@ pub unsafe fn clif_transfer_test(
     0
 }
 
-/// Send the board questionnaire dialog to `sd`.
+/// Send the board questionnaire dialog to `pe`.
 pub unsafe fn clif_sendBoardQuestionaire(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     q: *const BoardQuestionaire,
     count: i32,
 ) -> i32 {
-    if !session_exists((*sd).fd) {
+    if !session_exists(pe.fd) {
         return 0;
     }
-    let fd = (*sd).fd;
+    let fd = pe.fd;
     use crate::network::crypt::encrypt;
     wfifohead(fd, 65535);
     let w = |off: usize| wfifop(fd, off);
@@ -860,7 +849,7 @@ pub unsafe fn clif_sendBoardQuestionaire(
 }
 
 /// Handle client setting-toggle request (whisper, group, shout, etc.).
-pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
+pub unsafe fn clif_changestatus(pe: &PlayerEntity, type_: i32) -> i32 {
     use crate::game::pc::{
         FLAG_WHISPER, FLAG_GROUP, FLAG_SHOUT, FLAG_ADVICE, FLAG_MAGIC,
         FLAG_WEATHER, FLAG_REALM, FLAG_EXCHANGE, FLAG_FASTMOVE, FLAG_SOUND,
@@ -876,178 +865,178 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
     use crate::game::client::handlers::clif_quit;
     use crate::game::pc::pc_setglobalreg;
 
-    let sflag = (*sd).player.appearance.setting_flags;
-
     match type_ {
         0x00 => {
-            if rbyte((*sd).fd, 7) == 1 {
-                match (*sd).player.combat.state {
+            if rbyte(pe.fd, 7) == 1 {
+                match pe.read().player.combat.state {
                     0 => {
-                        clif_findmount(sd);
-                        if (*sd).player.combat.state == 0 {
-                            clif_sendminitext(sd, c"Good try, but there is nothing here that you can ride.".as_ptr());
+                        clif_findmount(pe);
+                        if pe.read().player.combat.state == 0 {
+                            clif_sendminitext(pe, c"Good try, but there is nothing here that you can ride.".as_ptr());
                         }
                     }
-                    1 => { clif_sendminitext(sd, c"Spirits can't do that.".as_ptr()); }
-                    2 => { clif_sendminitext(sd, c"Good try, but there is nothing here that you can ride.".as_ptr()); }
+                    1 => { clif_sendminitext(pe, c"Spirits can't do that.".as_ptr()); }
+                    2 => { clif_sendminitext(pe, c"Good try, but there is nothing here that you can ride.".as_ptr()); }
                     3 => {
-                        sl_doscript_simple("onDismount", None, (*sd).id);
+                        sl_doscript_simple("onDismount", None, pe.id);
                     }
-                    4 => { clif_sendminitext(sd, c"You cannot do that while transformed.".as_ptr()); }
+                    4 => { clif_sendminitext(pe, c"You cannot do that while transformed.".as_ptr()); }
                     _ => {}
                 }
             }
         }
         0x01 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_WHISPER;
-            if (*sd).player.appearance.setting_flags & FLAG_WHISPER != 0 {
-                clif_sendminitext(sd, c"Listen to whisper:ON".as_ptr());
+            pe.write().player.appearance.setting_flags ^= FLAG_WHISPER;
+            if pe.read().player.appearance.setting_flags & FLAG_WHISPER != 0 {
+                clif_sendminitext(pe, c"Listen to whisper:ON".as_ptr());
             } else {
-                clif_sendminitext(sd, c"Listen to whisper:OFF".as_ptr());
+                clif_sendminitext(pe, c"Listen to whisper:OFF".as_ptr());
             }
-            clif_sendstatus(sd, 0);
+            clif_sendstatus(pe, 0);
         }
         0x02 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_GROUP;
-            if (*sd).player.appearance.setting_flags & FLAG_GROUP != 0 {
-                clif_sendminitext(sd, c"Join a group     :ON".as_ptr());
+            pe.write().player.appearance.setting_flags ^= FLAG_GROUP;
+            if pe.read().player.appearance.setting_flags & FLAG_GROUP != 0 {
+                clif_sendminitext(pe, c"Join a group     :ON".as_ptr());
             } else {
-                if (*sd).group_count > 0 { clif_leavegroup(sd); }
-                clif_sendminitext(sd, c"Join a group     :OFF".as_ptr());
+                if pe.read().group_count > 0 { clif_leavegroup(pe); }
+                clif_sendminitext(pe, c"Join a group     :OFF".as_ptr());
             }
-            clif_sendstatus(sd, 0);
+            clif_sendstatus(pe, 0);
         }
         0x03 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_SHOUT;
-            if (*sd).player.appearance.setting_flags & FLAG_SHOUT != 0 {
-                clif_sendminitext(sd, c"Listen to shout  :ON".as_ptr());
+            pe.write().player.appearance.setting_flags ^= FLAG_SHOUT;
+            if pe.read().player.appearance.setting_flags & FLAG_SHOUT != 0 {
+                clif_sendminitext(pe, c"Listen to shout  :ON".as_ptr());
             } else {
-                clif_sendminitext(sd, c"Listen to shout  :OFF".as_ptr());
+                clif_sendminitext(pe, c"Listen to shout  :OFF".as_ptr());
             }
-            clif_sendstatus(sd, 0);
+            clif_sendstatus(pe, 0);
         }
         0x04 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_ADVICE;
-            if (*sd).player.appearance.setting_flags & FLAG_ADVICE != 0 {
-                clif_sendminitext(sd, c"Listen to advice :ON".as_ptr());
+            pe.write().player.appearance.setting_flags ^= FLAG_ADVICE;
+            if pe.read().player.appearance.setting_flags & FLAG_ADVICE != 0 {
+                clif_sendminitext(pe, c"Listen to advice :ON".as_ptr());
             } else {
-                clif_sendminitext(sd, c"Listen to advice :OFF".as_ptr());
+                clif_sendminitext(pe, c"Listen to advice :OFF".as_ptr());
             }
-            clif_sendstatus(sd, 0);
+            clif_sendstatus(pe, 0);
         }
         0x05 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_MAGIC;
-            if (*sd).player.appearance.setting_flags & FLAG_MAGIC != 0 {
-                clif_sendminitext(sd, c"Believe in magic :ON".as_ptr());
+            pe.write().player.appearance.setting_flags ^= FLAG_MAGIC;
+            if pe.read().player.appearance.setting_flags & FLAG_MAGIC != 0 {
+                clif_sendminitext(pe, c"Believe in magic :ON".as_ptr());
             } else {
-                clif_sendminitext(sd, c"Believe in magic :OFF".as_ptr());
+                clif_sendminitext(pe, c"Believe in magic :OFF".as_ptr());
             }
-            clif_sendstatus(sd, 0);
+            clif_sendstatus(pe, 0);
         }
         0x06 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_WEATHER;
-            if (*sd).player.appearance.setting_flags & FLAG_WEATHER != 0 {
-                clif_sendminitext(sd, c"Weather change   :ON".as_ptr());
+            pe.write().player.appearance.setting_flags ^= FLAG_WEATHER;
+            if pe.read().player.appearance.setting_flags & FLAG_WEATHER != 0 {
+                clif_sendminitext(pe, c"Weather change   :ON".as_ptr());
             } else {
-                clif_sendminitext(sd, c"Weather change   :OFF".as_ptr());
+                clif_sendminitext(pe, c"Weather change   :OFF".as_ptr());
             }
-            crate::game::client::visual::clif_sendweather(sd);
-            clif_sendstatus(sd, 0);
+            crate::game::client::visual::clif_sendweather(pe);
+            clif_sendstatus(pe, 0);
         }
         0x07 => {
-            let oldm = (*sd).m as i32;
-            let oldx = (*sd).x as i32;
-            let oldy = (*sd).y as i32;
-            (*sd).player.appearance.setting_flags ^= FLAG_REALM;
-            clif_quit(sd);
-            clif_sendmapinfo(sd);
-            pc_setpos(sd, oldm, oldx, oldy);
-            clif_sendmapinfo(sd);
-            clif_spawn(sd);
-            clif_mob_look_start_func_inner((*sd).fd, &mut (*sd).net.look);
-            if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
-                let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).m as usize);
-                let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
-                for id in ids {
-                    clif_object_look_by_id((*sd).fd, &mut (*sd).net.look, (*sd).player.identity.id, id);
+            let (oldm, oldx, oldy) = { let r = pe.read(); (r.m as i32, r.x as i32, r.y as i32) };
+            pe.write().player.appearance.setting_flags ^= FLAG_REALM;
+            clif_quit(pe);
+            clif_sendmapinfo(pe);
+            pc_setpos(pe.data_ptr(), oldm, oldx, oldy); // TODO(phase6c): migrate pc_setpos
+            clif_sendmapinfo(pe);
+            clif_spawn(pe.data_ptr());
+            {
+                let mut net = pe.net.write();
+                clif_mob_look_start_func_inner(pe.fd, &mut net.look);
+                if let Some(grid) = block_grid::get_grid(pe.read().m as usize) {
+                    let m = pe.read().m;
+                    let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
+                    let (x, y, identity_id) = { let r = pe.read(); (r.x as i32, r.y as i32, r.player.identity.id) };
+                    let ids = block_grid::ids_in_area(grid, x, y, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
+                    for id in ids {
+                        clif_object_look_by_id(pe.fd, &mut net.look, identity_id, id);
+                    }
                 }
+                clif_mob_look_close_func_inner(pe.fd, &mut net.look);
             }
-            clif_mob_look_close_func_inner((*sd).fd, &mut (*sd).net.look);
-            crate::game::client::visual::clif_destroyold(sd);
-            clif_sendchararea(sd);
-            clif_getchararea(sd);
-            if (*sd).player.appearance.setting_flags & FLAG_REALM != 0 {
-                clif_sendminitext(sd, c"Realm-centered   :ON".as_ptr());
+            crate::game::client::visual::clif_destroyold(pe);
+            clif_sendchararea(pe);
+            clif_getchararea(pe);
+            if pe.read().player.appearance.setting_flags & FLAG_REALM != 0 {
+                clif_sendminitext(pe, c"Realm-centered   :ON".as_ptr());
             } else {
-                clif_sendminitext(sd, c"Realm-centered   :OFF".as_ptr());
+                clif_sendminitext(pe, c"Realm-centered   :OFF".as_ptr());
             }
-            clif_sendstatus(sd, 0);
+            clif_sendstatus(pe, 0);
         }
         0x08 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_EXCHANGE;
-            if (*sd).player.appearance.setting_flags & FLAG_EXCHANGE != 0 {
-                clif_sendminitext(sd, c"Exchange         :ON".as_ptr());
+            pe.write().player.appearance.setting_flags ^= FLAG_EXCHANGE;
+            if pe.read().player.appearance.setting_flags & FLAG_EXCHANGE != 0 {
+                clif_sendminitext(pe, c"Exchange         :ON".as_ptr());
             } else {
-                clif_sendminitext(sd, c"Exchange         :OFF".as_ptr());
+                clif_sendminitext(pe, c"Exchange         :OFF".as_ptr());
             }
-            clif_sendstatus(sd, 0);
+            clif_sendstatus(pe, 0);
         }
         0x09 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_FASTMOVE;
-            if (*sd).player.appearance.setting_flags & FLAG_FASTMOVE != 0 {
-                clif_sendminitext(sd, c"Fast Move        :ON".as_ptr());
+            pe.write().player.appearance.setting_flags ^= FLAG_FASTMOVE;
+            if pe.read().player.appearance.setting_flags & FLAG_FASTMOVE != 0 {
+                clif_sendminitext(pe, c"Fast Move        :ON".as_ptr());
             } else {
-                clif_sendminitext(sd, c"Fast Move        :OFF".as_ptr());
+                clif_sendminitext(pe, c"Fast Move        :OFF".as_ptr());
             }
-            clif_sendstatus(sd, 0);
+            clif_sendstatus(pe, 0);
         }
         10 => {
-            (*sd).player.social.clan_chat = ((*sd).player.social.clan_chat + 1) % 2;
-            if (*sd).player.social.clan_chat != 0 {
-                clif_sendminitext(sd, c"Clan whisper     :ON".as_ptr());
+            pe.write().player.social.clan_chat = (pe.read().player.social.clan_chat + 1) % 2;
+            if pe.read().player.social.clan_chat != 0 {
+                clif_sendminitext(pe, c"Clan whisper     :ON".as_ptr());
             } else {
-                clif_sendminitext(sd, c"Clan whisper     :OFF".as_ptr());
+                clif_sendminitext(pe, c"Clan whisper     :OFF".as_ptr());
             }
         }
         13 => {
-            if rbyte((*sd).fd, 4) == 3 { return 0; }
-            (*sd).player.appearance.setting_flags ^= FLAG_SOUND;
-            if (*sd).player.appearance.setting_flags & FLAG_SOUND != 0 {
-                clif_sendminitext(sd, c"Hear sounds      :ON".as_ptr());
+            if rbyte(pe.fd, 4) == 3 { return 0; }
+            pe.write().player.appearance.setting_flags ^= FLAG_SOUND;
+            if pe.read().player.appearance.setting_flags & FLAG_SOUND != 0 {
+                clif_sendminitext(pe, c"Hear sounds      :ON".as_ptr());
             } else {
-                clif_sendminitext(sd, c"Hear sounds      :OFF".as_ptr());
+                clif_sendminitext(pe, c"Hear sounds      :OFF".as_ptr());
             }
-            clif_sendstatus(sd, 0);
+            clif_sendstatus(pe, 0);
         }
         14 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_HELM;
-            if (*sd).player.appearance.setting_flags & FLAG_HELM != 0 {
-                clif_sendminitext(sd, c"Show Helmet      :ON".as_ptr());
-                pc_setglobalreg(sd, c"show_helmet".as_ptr(), 1);
+            pe.write().player.appearance.setting_flags ^= FLAG_HELM;
+            if pe.read().player.appearance.setting_flags & FLAG_HELM != 0 {
+                clif_sendminitext(pe, c"Show Helmet      :ON".as_ptr());
+                pc_setglobalreg(pe.data_ptr(), c"show_helmet".as_ptr(), 1); // TODO(phase6c): migrate
             } else {
-                clif_sendminitext(sd, c"Show Helmet      :OFF".as_ptr());
-                pc_setglobalreg(sd, c"show_helmet".as_ptr(), 0);
+                clif_sendminitext(pe, c"Show Helmet      :OFF".as_ptr());
+                pc_setglobalreg(pe.data_ptr(), c"show_helmet".as_ptr(), 0); // TODO(phase6c): migrate
             }
-            clif_sendstatus(sd, 0);
-            clif_sendchararea(sd);
-            clif_getchararea(sd);
+            clif_sendstatus(pe, 0);
+            clif_sendchararea(pe);
+            clif_getchararea(pe);
         }
         15 => {
-            (*sd).player.appearance.setting_flags ^= FLAG_NECKLACE;
-            if (*sd).player.appearance.setting_flags & FLAG_NECKLACE != 0 {
-                clif_sendminitext(sd, c"Show Necklace      :ON".as_ptr());
-                pc_setglobalreg(sd, c"show_necklace".as_ptr(), 1);
+            pe.write().player.appearance.setting_flags ^= FLAG_NECKLACE;
+            if pe.read().player.appearance.setting_flags & FLAG_NECKLACE != 0 {
+                clif_sendminitext(pe, c"Show Necklace      :ON".as_ptr());
+                pc_setglobalreg(pe.data_ptr(), c"show_necklace".as_ptr(), 1); // TODO(phase6c): migrate
             } else {
-                clif_sendminitext(sd, c"Show Necklace      :OFF".as_ptr());
-                pc_setglobalreg(sd, c"show_necklace".as_ptr(), 0);
+                clif_sendminitext(pe, c"Show Necklace      :OFF".as_ptr());
+                pc_setglobalreg(pe.data_ptr(), c"show_necklace".as_ptr(), 0); // TODO(phase6c): migrate
             }
-            clif_sendstatus(sd, 0);
-            clif_sendchararea(sd);
-            clif_getchararea(sd);
+            clif_sendstatus(pe, 0);
+            clif_sendchararea(pe);
+            clif_getchararea(pe);
         }
         _ => {}
     }
-    let _ = sflag; // suppress unused warning if no match uses it
     0
 }
 
@@ -1056,11 +1045,10 @@ pub unsafe fn clif_changestatus(sd: *mut MapSessionData, type_: i32) -> i32 {
 // Opcode 0x6B — item creation system.
 // Reads ingredient items from the session buffer, builds a Lua `creationItems`
 // table, and dispatches `itemCreation(pc)` script.
-pub unsafe fn createdb_start(sd: *mut MapSessionData) -> i32 {
+pub unsafe fn createdb_start(pe: &PlayerEntity) -> i32 {
     use crate::game::scripting::sl_state;
 
-    if sd.is_null() { return 0; }
-    let fd = (*sd).fd;
+    let fd = pe.fd;
 
     // RFIFOB(fd, 5) — number of ingredient slots in this packet.
     let item_c = rfifob(fd, 5) as usize;
@@ -1075,9 +1063,9 @@ pub unsafe fn createdb_start(sd: *mut MapSessionData) -> i32 {
         let raw = rfifob(fd, len) as usize;
         if raw == 0 { len += 1; continue; }
         let curitem = raw - 1;
-        let maxinv = (*sd).player.inventory.max_inv as usize;
+        let maxinv = pe.read().player.inventory.max_inv as usize;
         if curitem < maxinv {
-            items[x] = (&(*sd).player.inventory.inventory)[curitem].id;
+            items[x] = pe.read().player.inventory.inventory[curitem].id;
         }
         if item_db::search(items[x]).stack_amount > 1 {
             amounts[x] = rfifob(fd, len + 1) as u32;
@@ -1088,9 +1076,12 @@ pub unsafe fn createdb_start(sd: *mut MapSessionData) -> i32 {
         }
     }
 
-    (*sd).creation_works      = 0;
-    (*sd).creation_item       = 0;
-    (*sd).creation_itemamount = 0;
+    {
+        let mut w = pe.write();
+        w.creation_works      = 0;
+        w.creation_item       = 0;
+        w.creation_itemamount = 0;
+    }
 
     // Build creationItems Lua table: [id1, amt1, id2, amt2, ...]
     let lua = sl_state();
@@ -1104,10 +1095,10 @@ pub unsafe fn createdb_start(sd: *mut MapSessionData) -> i32 {
         Ok(())
     })();
 
-    sl_async_freeco(sd);
+    sl_async_freeco(pe.data_ptr()); // TODO(phase6c): migrate
 
     crate::game::scripting::doscript_blargs_id(
-        "itemCreation", None, &[(*sd).id],
+        "itemCreation", None, &[pe.id],
     );
     0
 }

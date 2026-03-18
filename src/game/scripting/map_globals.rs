@@ -74,9 +74,10 @@ pub async unsafe fn sl_g_setweather(region: u8, indoor: u8, weather: u8) {
             for i in 1..crate::session::get_fd_max() {
                 let sid = SessionId::from_raw(i);
                 if !session_exists(sid) { continue; }
-                let tsd = session_get_data(sid);
-                if tsd.is_null() || session_get_eof(sid) != 0 { continue; }
-                if (*tsd).m == x { clif_sendweather(tsd); }
+                if session_get_eof(sid) != 0 { continue; }
+                if let Some(tpe) = session_get_data(sid) {
+                    if tpe.read().m == x { clif_sendweather(&*tpe); }
+                }
             }
         }
     }
@@ -109,9 +110,10 @@ pub async unsafe fn sl_g_setweatherm(m: i32, weather: u8) {
     for i in 1..crate::session::get_fd_max() {
         let sid = SessionId::from_raw(i);
         if !session_exists(sid) { continue; }
-        let tsd = session_get_data(sid);
-        if tsd.is_null() || session_get_eof(sid) != 0 { continue; }
-        if (*tsd).m == m as u16 { clif_sendweather(tsd); }
+        if session_get_eof(sid) != 0 { continue; }
+        if let Some(tpe) = session_get_data(sid) {
+            if tpe.read().m == m as u16 { clif_sendweather(&*tpe); }
+        }
     }
 }
 
@@ -160,8 +162,7 @@ pub unsafe fn sl_g_getmaptitle(m: i32, buf: *mut i8, buflen: i32) -> i32 {
 pub unsafe fn sl_g_msg(_entity_id: u32, color: i32, msg: *const i8, target: i32) {
     if msg.is_null() || target == 0 { return; }
     if let Some(arc) = map_id2sd_pc(target as u32) {
-        let tsd = &mut *arc.write();
-        clif_sendmsg(tsd as *mut _, color, msg);
+        clif_sendmsg(&*arc, color, msg);
     }
 }
 
@@ -519,9 +520,9 @@ pub unsafe fn sl_g_sendmeta() {
         let sid = SessionId::from_raw(i);
         if !session_exists(sid) { continue; }
         if session_get_eof(sid) != 0 { continue; }
-        let tsd = session_get_data(sid);
-        if tsd.is_null() { continue; }
-        send_metalist(tsd);
+        if let Some(tpe) = session_get_data(sid) {
+            send_metalist(tpe.data_ptr()); // TODO(phase6c): migrate send_metalist to &PlayerEntity
+        }
     }
 }
 
@@ -826,10 +827,13 @@ pub unsafe fn sl_g_setmap(
         let ids = block_grid::ids_in_area(grid, 0, 0, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(arc) = map_id2sd_pc(id) {
-                let sd = &mut *arc.write();
-                let x = (sd.x as i32).max(VIEW_OX).min(slot.xs as i32 - (VIEW_W - VIEW_OX));
-                let y = (sd.y as i32).max(VIEW_OY).min(slot.ys as i32 - (VIEW_H - VIEW_OY));
-                crate::game::map_parse::movement::clif_sendmapdata(sd, sd.m as i32, x - VIEW_OX, y - VIEW_OY, VIEW_W, VIEW_H, 0);
+                let (px, py) = {
+                    let sd = arc.read();
+                    let x = (sd.x as i32).max(VIEW_OX).min(slot.xs as i32 - (VIEW_W - VIEW_OX));
+                    let y = (sd.y as i32).max(VIEW_OY).min(slot.ys as i32 - (VIEW_H - VIEW_OY));
+                    (x, y)
+                };
+                crate::game::map_parse::movement::clif_sendmapdata(&*arc, m, px - VIEW_OX, py - VIEW_OY, VIEW_W, VIEW_H, 0);
             }
         }
     }

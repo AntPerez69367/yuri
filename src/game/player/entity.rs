@@ -1,6 +1,7 @@
-#![allow(non_snake_case, dead_code, unused_variables)]
+#![allow(non_snake_case)]
 
-use std::sync::atomic::{AtomicU64};
+use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicI32, AtomicU64};
 use crate::common::traits::LegacyEntity;
 use crate::session::SessionId;
 use super::types::MapSessionData;
@@ -31,17 +32,20 @@ pub struct PcNetworkState {
 /// Level 1 fields are per-domain `RwLock`s. `legacy` holds everything not yet
 /// decomposed and shrinks over time as fields migrate to proper domains.
 pub struct PlayerEntity {
-    // Level -1: Identity (lockless, set once at connection)
     pub id: u32,
     pub fd: SessionId,
-    // Player position m: 0-15, x: 16-31, y:32-47, packed into a single atomic for lockless reads in hot code paths.
+    // Level -1: Identity (lockless, set once at connection)
+    pub name: String,
     pub pos_atomic: AtomicU64,
+    pub hp_atomic: AtomicI32,
+    pub mp_atomic: AtomicI32,
+    pub state_flags: AtomicU64,
 
     // Level 1: Decomposed domains
     pub net: parking_lot::RwLock<PcNetworkState>,
 
     // Level 1: Legacy bucket (shrinks as domains are extracted)
-    pub legacy: parking_lot::RwLock<MapSessionData>,
+    pub legacy: parking_lot::RwLock<Box<MapSessionData>>,
 }
 
 // SAFETY: PlayerEntity fields are only accessed from the single game thread.
@@ -50,34 +54,45 @@ unsafe impl Send for PlayerEntity {}
 unsafe impl Sync for PlayerEntity {}
 
 impl PlayerEntity {
-    /// Compatibility shim — delegates to legacy lock. Remove as callers migrate.
-    #[inline]
-    pub fn read(&self) -> parking_lot::RwLockReadGuard<'_, MapSessionData> {
-        self.legacy.read()
-    }
-    /// Compatibility shim — delegates to legacy lock. Remove as callers migrate.
-    #[inline]
-    pub fn write(&self) -> parking_lot::RwLockWriteGuard<'_, MapSessionData> {
-        self.legacy.write()
-    }
-    /// Compatibility shim — delegates to legacy lock. Remove as callers migrate.
-    #[inline]
-    pub fn try_read(&self) -> Option<parking_lot::RwLockReadGuard<'_, MapSessionData>> {
-        self.legacy.try_read()
-    }
 
-    /// Compatibility shim — raw pointer to legacy data. Remove as callers migrate.
+    pub fn new(id: u32, fd: SessionId, name: String, sd: Box<MapSessionData>) -> Box<Self> {
+          Box::new(Self {                                                                                       
+              id,
+              fd,                                                                                                       
+              name,
+              hp_atomic: AtomicI32::new(0),
+              mp_atomic: AtomicI32::new(0),
+              state_flags: AtomicU64::new(0),                                                                                                  
+              pos_atomic: AtomicU64::new(0),                                                                         
+              net:    parking_lot::RwLock::new(PcNetworkState { look: LookAccum::default() }),
+              legacy: parking_lot::RwLock::new(sd),                                      
+          })  
+        }
+
     #[inline]
-    pub fn data_ptr(&self) -> *mut MapSessionData {
-        self.legacy.data_ptr()
-    }
+    pub fn read(&self) -> impl Deref<Target = MapSessionData> + '_ {                                                   
+      parking_lot::RwLockReadGuard::map(self.legacy.read(), |b| b.as_ref())                                             
+  }      
+
+    #[inline]
+    pub fn write(&self) -> impl DerefMut<Target = MapSessionData> + '_ {                                                   
+      parking_lot::RwLockWriteGuard::map(self.legacy.write(), |b| b.as_mut())                                             
+  }      
+
+    #[inline]
+    #[deprecated(note = "Prefer domain-specific accessors, e.g. player.read().player for persistence data.")]
+    pub fn data_ptr(&self) -> *mut MapSessionData {                                                                    
+      unsafe { &mut **self.legacy.data_ptr() as *mut MapSessionData }                                                
+    } 
 }
 
 impl LegacyEntity for PlayerEntity {
-    type Data = MapSessionData;
+    type Data = Box<MapSessionData>;
+    #[inline]
     fn read_legacy(&self) -> parking_lot::RwLockReadGuard<'_, Self::Data> {
         self.legacy.read()
     }
+    #[inline]
     fn write_legacy(&self) -> parking_lot::RwLockWriteGuard<'_, Self::Data> {
         self.legacy.write()
     }

@@ -13,6 +13,7 @@ use crate::game::pc::{
 };
 use crate::common::types::Item;
 use crate::session::{SessionId, session_exists};
+use crate::game::player::entity::PlayerEntity;
 
 use super::packet::{
     encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow,
@@ -271,8 +272,8 @@ unsafe fn write_npc_gfx_look(fd: SessionId, nd: *const NpcData, base_off: usize)
 // ─── clif_closeit ─────────────────────────────────────────────────────────────
 
 /// Send a close-dialog packet to the client.  Mirrors `clif_closeit` in
-pub unsafe fn clif_closeit(sd: *mut MapSessionData) -> i32 {
-    let fd = (*sd).fd;
+pub unsafe fn clif_closeit(pe: &PlayerEntity) -> i32 {
+    let fd = pe.fd;
 
     if !session_exists(fd) {
         return 0;
@@ -296,7 +297,8 @@ pub unsafe fn clif_closeit(sd: *mut MapSessionData) -> i32 {
     std::ptr::copy_nonoverlapping(xor_bytes.as_ptr(), dst, xor_len);
     *dst.add(xor_len) = 0;
     let mut len = 11usize;
-    let name_ptr = (*sd).player.identity.name.as_ptr();
+    let name = pe.read().player.identity.name.clone();
+    let name_ptr = name.as_ptr();
     let name_len = cstrlen(name_ptr as *const i8);
     wfifob(fd, len + 11, name_len as u8);
     libc::strcpy(
@@ -315,8 +317,8 @@ pub unsafe fn clif_closeit(sd: *mut MapSessionData) -> i32 {
 // ─── clif_sendtowns ───────────────────────────────────────────────────────────
 
 /// Send town list dialog.
-pub unsafe fn clif_sendtowns(sd: *mut MapSessionData) -> i32 {
-    let fd = (*sd).fd;
+pub unsafe fn clif_sendtowns(pe: &PlayerEntity) -> i32 {
+    let fd = pe.fd;
 
     if !session_exists(fd) {
         return 0;
@@ -354,11 +356,11 @@ pub unsafe fn clif_sendtowns(sd: *mut MapSessionData) -> i32 {
 
 /// Send a countdown timer packet.  Mirrors `clif_send_timer` in
 pub unsafe fn clif_send_timer(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     timer_type: i8,
     length: u32,
 ) {
-    let fd = (*sd).fd;
+    let fd = pe.fd;
 
     if !session_exists(fd) {
         return;
@@ -376,33 +378,37 @@ pub unsafe fn clif_send_timer(
 // ─── clif_parsenpcdialog ──────────────────────────────────────────────────────
 
 /// Parse an NPC dialog response packet.  Mirrors `clif_parsenpcdialog` in
-pub unsafe fn clif_parsenpcdialog(sd: *mut MapSessionData) -> i32 {
-    let fd = (*sd).fd;
+pub unsafe fn clif_parsenpcdialog(pe: &PlayerEntity) -> i32 {
+    let fd = pe.fd;
     let npc_choice = rfifob(fd, 13) as u32;
 
     match rfifob(fd, 5) {
         0x01 => {
             // Dialog
-            sl_resumedialog(npc_choice, sd);
+            // TODO(phase6c): migrate sl_resumedialog
+            sl_resumedialog(npc_choice, pe.data_ptr());
         }
         0x02 => {
             // Special menu
             let npc_menu = rfifob(fd, 15) as i32;
-            sl_resumemenuseq(npc_choice, npc_menu, sd);
+            // TODO(phase6c): migrate sl_resumemenuseq
+            sl_resumemenuseq(npc_choice, npc_menu, pe.data_ptr());
         }
         0x04 => {
             // inputSeq returned input
             if rfifob(fd, 13) != 0x02 {
-                sl_async_freeco(sd);
+                // TODO(phase6c): migrate sl_async_freeco
+                sl_async_freeco(pe.data_ptr());
                 return 1;
             }
             let input_len = rfifob(fd, 15) as usize;
             let mut input = [0u8; 100];
             copy_rfifo_bytes(&mut input, rfifop(fd, 16), input_len);
+            // TODO(phase6c): migrate sl_resumeinputseq
             sl_resumeinputseq(
                 npc_choice,
                 input.as_mut_ptr() as *mut i8,
-                sd,
+                pe.data_ptr(),
             );
         }
         _ => {}
@@ -415,17 +421,17 @@ pub unsafe fn clif_parsenpcdialog(sd: *mut MapSessionData) -> i32 {
 
 /// Send NPC dialog text.
 pub unsafe fn clif_scriptmes(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     id: i32,
     msg: *const i8,
     previous: i32,
     next: i32,
 ) -> i32 {
-    let fd       = (*sd).fd;
-    let graphic_id = (*sd).npc_g;
-    let color    = (*sd).npc_gc;
+    let fd       = pe.fd;
+    let graphic_id = pe.read().npc_g;
+    let color    = pe.read().npc_gc;
     let nd       = map_id2npc_local(id as u32) as *mut NpcData;
-    let dialog_type = (*sd).dialogtype;
+    let dialog_type = pe.read().dialogtype;
 
     if !nd.is_null() {
         (*nd).lastaction = libc::time(std::ptr::null_mut()) as u32;
@@ -517,17 +523,17 @@ pub unsafe fn clif_scriptmes(
 /// Send NPC dialog menu.
 /// (Note: as of C source, this function appears not to be called anywhere.)
 pub unsafe fn clif_scriptmenu(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     id: i32,
     dialog: *mut i8,
     menu: *mut *mut i8,
     size: i32,
 ) -> i32 {
-    let fd      = (*sd).fd;
-    let graphic = (*sd).npc_g;
-    let color   = (*sd).npc_gc;
+    let fd      = pe.fd;
+    let graphic = pe.read().npc_g;
+    let color   = pe.read().npc_gc;
     let nd      = map_id2npc_local(id as u32) as *mut NpcData;
-    let dialog_type = (*sd).dialogtype;
+    let dialog_type = pe.read().dialogtype;
 
     if !nd.is_null() {
         (*nd).lastaction = libc::time(std::ptr::null_mut()) as u32;
@@ -646,7 +652,7 @@ pub unsafe fn clif_scriptmenu(
 
 /// Send sequential NPC menu dialog.  Mirrors `clif_scriptmenuseq` in
 pub unsafe fn clif_scriptmenuseq(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     id: i32,
     dialog: *const i8,
     menu: *mut *const i8,
@@ -654,11 +660,11 @@ pub unsafe fn clif_scriptmenuseq(
     previous: i32,
     next: i32,
 ) -> i32 {
-    let fd         = (*sd).fd;
-    let graphic_id = (*sd).npc_g;
-    let color      = (*sd).npc_gc;
+    let fd         = pe.fd;
+    let graphic_id = pe.read().npc_g;
+    let color      = pe.read().npc_gc;
     let nd         = map_id2npc_local(id as u32) as *mut NpcData;
-    let dialog_type = (*sd).dialogtype;
+    let dialog_type = pe.read().dialogtype;
 
     if !nd.is_null() {
         (*nd).lastaction = libc::time(std::ptr::null_mut()) as u32;
@@ -750,8 +756,8 @@ pub unsafe fn clif_scriptmenuseq(
         }
         2 => {
             // type==2: player gfx look
-            let sd_ref = &*sd;
-            let g = &sd_ref.gfx;
+            let sd_ref = pe.read();
+            let g = sd_ref.gfx;
             wfifob(fd, 11, 1);
             wfifow(fd, 12, swap16(sd_ref.player.identity.sex as u16));
             wfifob(fd, 14, sd_ref.player.combat.state as u8);
@@ -846,7 +852,7 @@ pub unsafe fn clif_scriptmenuseq(
 
 /// Send sequential NPC input dialog.  Mirrors `clif_inputseq` in
 pub unsafe fn clif_inputseq(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     id: i32,
     dialog: *const i8,
     dialog2: *const i8,
@@ -856,9 +862,9 @@ pub unsafe fn clif_inputseq(
     previous: i32,
     next: i32,
 ) -> i32 {
-    let fd         = (*sd).fd;
-    let graphic_id = (*sd).npc_g;
-    let color      = (*sd).npc_gc;
+    let fd         = pe.fd;
+    let graphic_id = pe.read().npc_g;
+    let color      = pe.read().npc_gc;
     let nd         = map_id2npc_local(id as u32) as *mut NpcData;
 
     if !nd.is_null() {
@@ -931,21 +937,21 @@ pub unsafe fn clif_inputseq(
 // ─── clif_handle_clickgetinfo ─────────────────────────────────────────────────
 
 /// Handle a click/getinfo request from the client.  Mirrors
-pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
-    let fd = (*sd).fd;
+pub async unsafe fn clif_handle_clickgetinfo(pe: &PlayerEntity) -> i32 {
+    let fd = pe.fd;
 
     let target_id = if rfifol(fd, 6) == 0 {
-        (*sd).last_click
+        pe.read().last_click
     } else {
         let raw_id = swap32(rfifol(fd, 6));
         if raw_id == 0xFFFFFFFE {
             // subpath chat toggle
-            if (*sd).player.social.subpath_chat == 0 {
-                (*sd).player.social.subpath_chat = 1;
-                clif_sendminitext(sd, b"Subpath Chat: ON\0".as_ptr() as *const i8);
+            if pe.read().player.social.subpath_chat == 0 {
+                pe.write().player.social.subpath_chat = 1;
+                clif_sendminitext(pe, b"Subpath Chat: ON\0".as_ptr() as *const i8);
             } else {
-                (*sd).player.social.subpath_chat = 0;
-                clif_sendminitext(sd, b"Subpath Chat: OFF\0".as_ptr() as *const i8);
+                pe.write().player.social.subpath_chat = 0;
+                clif_sendminitext(pe, b"Subpath Chat: OFF\0".as_ptr() as *const i8);
             }
             return 0;
         }
@@ -956,7 +962,6 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
         return 0;
     };
 
-    let sd_ref = &*sd;
     let bl_type = bl_type as i32;
 
     if bl_type == BL_PC {
@@ -964,19 +969,23 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
         if !tsd.is_null() {
             let tsd_ref = &*tsd;
             // CheckProximity: same map, within 21 tiles
-            if pos.m == sd_ref.m
-                && (sd_ref.x as i32 - tsd_ref.x as i32).abs() <= 21
-                && (sd_ref.y as i32 - tsd_ref.y as i32).abs() <= 21
+            let pe_m = pe.read().m;
+            let pe_x = pe.read().x;
+            let pe_y = pe.read().y;
+            let pe_gm_level = pe.read().player.identity.gm_level;
+            if pos.m == pe_m
+                && (pe_x as i32 - tsd_ref.x as i32).abs() <= 21
+                && (pe_y as i32 - tsd_ref.y as i32).abs() <= 21
             {
-                if sd_ref.player.identity.gm_level != 0
+                if pe_gm_level != 0
                     || (tsd_ref.optFlags & 64 == 0      // !optFlag_noclick
                         && tsd_ref.optFlags & 32 == 0)  // !optFlag_stealth
                 {
-                    sl_doscript_coro("onClick", None, sd_ref.id);
+                    sl_doscript_coro("onClick", None, pe.id);
                 }
             }
         }
-        clif_clickonplayer(sd, target_id).await;
+        clif_clickonplayer(pe, target_id).await;
     } else if bl_type == BL_NPC {
         let Some(arc) = crate::game::map_server::map_id2npc_ref(target_id) else { return 0; };
         let nd = &*arc.data_ptr();
@@ -984,26 +993,30 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
         if nd.subtype as i32 == crate::common::constants::entity::SUBTYPE_FLOOR as i32 { radius = 0; }
 
         // F1 NPC: map id 0 always accessible; otherwise check proximity
+        let pe_m = pe.read().m;
+        let pe_x = pe.read().x;
+        let pe_y = pe.read().y;
         let same_map_or_f1 = pos.m == 0
-            || (pos.m == sd_ref.m
-                && (sd_ref.x as i32 - pos.x as i32).abs() <= radius
-                && (sd_ref.y as i32 - pos.y as i32).abs() <= radius);
+            || (pos.m == pe_m
+                && (pe_x as i32 - pos.x as i32).abs() <= radius
+                && (pe_y as i32 - pos.y as i32).abs() <= radius);
 
         if same_map_or_f1 {
-            (*sd).last_click = target_id;
-            sl_async_freeco(sd);
+            pe.write().last_click = target_id;
+            // TODO(phase6c): migrate sl_async_freeco
+            sl_async_freeco(pe.data_ptr());
 
-            if (*sd).player.social.karma <= -3.0f32 {
+            if pe.read().player.social.karma <= -3.0f32 {
                 let nd_name = nd.name.as_ptr();
                 let is_f1npc = libc::strcmp(nd_name, b"f1npc\0".as_ptr() as *const i8) == 0;
                 let is_totem = libc::strcmp(nd_name, b"totem_npc\0".as_ptr() as *const i8) == 0;
                 if !is_f1npc && !is_totem {
-                    clif_scriptmes(sd, target_id as i32, b"Go away scum!\0".as_ptr() as *const i8, 0, 0);
+                    clif_scriptmes(pe, target_id as i32, b"Go away scum!\0".as_ptr() as *const i8, 0, 0);
                     return 0;
                 }
             }
 
-            sl_doscript_coro_2(crate::game::scripting::carray_to_str(&nd.name), Some("click"), sd_ref.id, nd.id);
+            sl_doscript_coro_2(crate::game::scripting::carray_to_str(&nd.name), Some("click"), pe.id, nd.id);
         }
     } else if bl_type == BL_MOB {
         let Some(arc) = crate::game::map_server::map_id2mob_ref(target_id) else { return 0; };
@@ -1014,15 +1027,19 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
         }
 
         // proximity check: same map, within radius tiles
-        if pos.m == sd_ref.m
-            && (sd_ref.x as i32 - pos.x as i32).abs() <= radius
-            && (sd_ref.y as i32 - pos.y as i32).abs() <= radius
+        let pe_m = pe.read().m;
+        let pe_x = pe.read().x;
+        let pe_y = pe.read().y;
+        if pos.m == pe_m
+            && (pe_x as i32 - pos.x as i32).abs() <= radius
+            && (pe_y as i32 - pos.y as i32).abs() <= radius
         {
-            (*sd).last_click = target_id;
-            sl_async_freeco(sd);
-            sl_doscript_coro_2("onLook", None, sd_ref.id, target_id);
+            pe.write().last_click = target_id;
+            // TODO(phase6c): migrate sl_async_freeco
+            sl_async_freeco(pe.data_ptr());
+            sl_doscript_coro_2("onLook", None, pe.id, target_id);
             if !mob.data.is_null() {
-                sl_doscript_coro_2(crate::game::scripting::carray_to_str(&(*mob.data).yname), Some("click"), sd_ref.id, target_id);
+                sl_doscript_coro_2(crate::game::scripting::carray_to_str(&(*mob.data).yname), Some("click"), pe.id, target_id);
             }
         }
     }
@@ -1034,16 +1051,16 @@ pub async unsafe fn clif_handle_clickgetinfo(sd: *mut MapSessionData) -> i32 {
 
 /// Send NPC buy dialog.
 pub unsafe fn clif_buydialog(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     id: u32,
     dialog: *const i8,
     item: *mut Item,
     price: *mut i32,
     count: i32,
 ) -> i32 {
-    let fd      = (*sd).fd;
-    let graphic = (*sd).npc_g;
-    let color   = (*sd).npc_gc;
+    let fd      = pe.fd;
+    let graphic = pe.read().npc_g;
+    let color   = pe.read().npc_gc;
 
     if !session_exists(fd) {
         // item points into caller's Vec — do not free here.
@@ -1269,8 +1286,8 @@ pub unsafe fn clif_buydialog(
 // ─── clif_parsebuy ────────────────────────────────────────────────────────────
 
 /// Parse a buy response packet.
-pub unsafe fn clif_parsebuy(sd: *mut MapSessionData) -> i32 {
-    let fd = (*sd).fd;
+pub unsafe fn clif_parsebuy(pe: &PlayerEntity) -> i32 {
+    let fd = pe.fd;
     let item_name_len = rfifob(fd, 12) as usize;
     let mut itemname = [0u8; 255];
     libc::memcpy(
@@ -1279,7 +1296,8 @@ pub unsafe fn clif_parsebuy(sd: *mut MapSessionData) -> i32 {
         item_name_len,
     );
     if itemname[0] != 0 {
-        sl_resumebuy(itemname.as_mut_ptr() as *mut i8, sd);
+        // TODO(phase6c): migrate sl_resumebuy
+        sl_resumebuy(itemname.as_mut_ptr() as *mut i8, pe.data_ptr());
     }
     0
 }
@@ -1288,15 +1306,15 @@ pub unsafe fn clif_parsebuy(sd: *mut MapSessionData) -> i32 {
 
 /// Send NPC sell dialog.
 pub unsafe fn clif_selldialog(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     id: u32,
     dialog: *const i8,
     item: *const i32,
     count: i32,
 ) -> i32 {
-    let fd      = (*sd).fd;
-    let graphic = (*sd).npc_g;
-    let color   = (*sd).npc_gc;
+    let fd      = pe.fd;
+    let graphic = pe.read().npc_g;
+    let color   = pe.read().npc_gc;
 
     if !session_exists(fd) {
         return 0;
@@ -1374,9 +1392,10 @@ pub unsafe fn clif_selldialog(
 // ─── clif_parsesell ───────────────────────────────────────────────────────────
 
 /// Parse a sell response packet.  Mirrors `clif_parsesell` in
-pub unsafe fn clif_parsesell(sd: *mut MapSessionData) -> i32 {
-    let fd = (*sd).fd;
-    sl_resumesell(rfifob(fd, 12) as u32, sd);
+pub unsafe fn clif_parsesell(pe: &PlayerEntity) -> i32 {
+    let fd = pe.fd;
+    // TODO(phase6c): migrate sl_resumesell
+    sl_resumesell(rfifob(fd, 12) as u32, pe.data_ptr());
     0
 }
 
@@ -1384,16 +1403,16 @@ pub unsafe fn clif_parsesell(sd: *mut MapSessionData) -> i32 {
 
 /// Send NPC input dialog.
 pub unsafe fn clif_input(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     id: i32,
     dialog: *const i8,
     item: *const i8,
 ) -> i32 {
-    let fd      = (*sd).fd;
-    let graphic = (*sd).npc_g;
-    let color   = (*sd).npc_gc;
+    let fd      = pe.fd;
+    let graphic = pe.read().npc_g;
+    let color   = pe.read().npc_gc;
     let nd      = map_id2npc_local(id as u32) as *mut NpcData;
-    let dialog_type = (*sd).dialogtype;
+    let dialog_type = pe.read().dialogtype;
 
     if !nd.is_null() {
         (*nd).lastaction = libc::time(std::ptr::null_mut()) as u32;
@@ -1507,8 +1526,8 @@ pub unsafe fn clif_input(
 // ─── clif_parseinput ─────────────────────────────────────────────────────────
 
 /// Parse an input response packet.  Mirrors `clif_parseinput` in
-pub unsafe fn clif_parseinput(sd: *mut MapSessionData) -> i32 {
-    let fd = (*sd).fd;
+pub unsafe fn clif_parseinput(pe: &PlayerEntity) -> i32 {
+    let fd = pe.fd;
     let mut output  = [0u8; 256];
     let mut output2 = [0u8; 256];
 
@@ -1526,10 +1545,11 @@ pub unsafe fn clif_parseinput(sd: *mut MapSessionData) -> i32 {
         inp_len,
     );
 
+    // TODO(phase6c): migrate sl_resumeinput
     sl_resumeinput(
         output.as_mut_ptr() as *mut i8,
         output2.as_mut_ptr() as *mut i8,
-        sd,
+        pe.data_ptr(),
     );
     0
 }

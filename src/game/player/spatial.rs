@@ -132,7 +132,9 @@ pub async unsafe fn pc_warp(
         (*sd).player.identity.dest_pos.x = x as u16;
         (*sd).player.identity.dest_pos.y = y as u16;
 
-        clif_transfer(sd, destsrv, m, x, y);
+        if let Some(pe) = map_server::map_id2sd_pc((*sd).id) {
+            clif_transfer(&pe, destsrv, m, x, y);
+        }
         return 0;
     }
 
@@ -172,11 +174,11 @@ pub async unsafe fn pc_warp(
     }
 
     // Perform the actual move.
-    clif_quit(sd);
+    if let Some(pe) = map_server::map_id2sd_pc((*sd).id) { clif_quit(&pe); }
     pc_setpos(sd, m, x, y);
-    clif_sendtime(sd);
+    if let Some(pe) = map_server::map_id2sd_pc((*sd).id) { clif_sendtime(&pe); }
     clif_spawn(sd);
-    clif_refresh(sd);
+    if let Some(pe) = map_server::map_id2sd_pc((*sd).id) { clif_refresh(&pe); }
 
     // Fire map-enter hooks when changing maps.
     if m != oldmap {
@@ -316,8 +318,10 @@ pub unsafe fn pc_diescript(sd: *mut MapSessionData) -> i32 {
     (*sd).backstab   = 0;
     (*sd).dmgshield  = 0.0_f32;
 
-    pc_calcstat(sd);
-    broadcast_update_state(sd);
+    if let Some(pe) = map_server::map_id2sd_pc((*sd).id) {
+        pc_calcstat(&pe);
+        broadcast_update_state(&pe);
+    }
 
     0
 }
@@ -340,7 +344,7 @@ pub unsafe fn pc_warp_sync(sd: *mut MapSessionData, m: i32, x: i32, y: i32) -> i
 pub unsafe fn pc_res(sd: *mut MapSessionData) -> i32 {
     (*sd).player.combat.state = PC_ALIVE as i8;
     (*sd).player.combat.hp    = 100;
-    clif_sendstatus(sd, SFLAG_HPMP);
+    if let Some(pe) = map_server::map_id2sd_pc((*sd).id) { clif_sendstatus(&pe, SFLAG_HPMP); }
     pc_warp_sync(sd, (*sd).m as i32, (*sd).x as i32, (*sd).y as i32);
     0
 }

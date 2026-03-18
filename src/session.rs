@@ -13,7 +13,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
+use crate::common::traits::LegacyEntity;
 use crate::game::pc::MapSessionData;
+use crate::game::player::PlayerEntity;
 
 /// Opaque session identifier. Wraps an internal `i32` counter that is
 /// **not** an OS file descriptor despite the historical `fd` naming.
@@ -313,9 +315,9 @@ pub struct Session {
     /// Last activity timestamp
     pub last_activity: Instant,
 
-    /// Non-owning pointer to this session's MapSessionData (owned by PLAYER_MAP).
+    /// Non-owning pointer to this session's PlayerEntity (owned by PLAYER_MAP).
     /// Only set for player connections; None for listener/inter-server sessions.
-    pub session_data: Option<*mut MapSessionData>,
+    pub session_data: Option<Arc<PlayerEntity>>,
 
     /// Callbacks
     pub callbacks: SessionCallbacks,
@@ -1287,9 +1289,9 @@ pub fn make_connection(ip: u32, port: i32) -> SessionId {
     fd
 }
 
-pub fn session_get_data(fd: SessionId) -> *mut MapSessionData {
-    with_session(fd, std::ptr::null_mut(), |session| {
-        session.session_data.unwrap_or(std::ptr::null_mut())
+pub fn session_get_data(fd: SessionId) -> Option<Arc<PlayerEntity>> {
+    with_session(fd, None, |session| {
+        session.session_data.clone()
     })
 }
 

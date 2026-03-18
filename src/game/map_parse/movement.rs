@@ -209,12 +209,11 @@ fn nex_crcc(buf: &[u16]) -> u16 {
 ///
 /// Packet: `WFIFOHEADER(fd, 0x51, 5)` + flag byte + two zero bytes = 8 bytes total.
 ///
-pub unsafe fn clif_blockmovement(sd: *mut MapSessionData, flag: i32) -> i32 {
-    if sd.is_null() { return 0; }
-    if !session_exists((*sd).fd) {
+pub unsafe fn clif_blockmovement(pe: &PlayerEntity, flag: i32) -> i32 {
+    if !session_exists(pe.fd) {
         return 0;
     }
-    let fd = (*sd).fd;
+    let fd = pe.fd;
     wfifohead(fd, 8);
     wfifoheader(fd, 0x51, 5);
     wfifob(fd, 5, flag as u8);
@@ -226,18 +225,23 @@ pub unsafe fn clif_blockmovement(sd: *mut MapSessionData, flag: i32) -> i32 {
 
 // ─── clif_sendchararea ────────────────────────────────────────────────────────
 
-/// Broadcast all nearby PCs to `sd` (LOOK_SEND direction).
+/// Broadcast all nearby PCs to `pe` (LOOK_SEND direction).
 ///
 /// Uses `AREA` (the full surrounding area, not just `SAMEAREA`).
 ///
-pub unsafe fn clif_sendchararea(sd: *mut MapSessionData) -> i32 {
-    if sd.is_null() { return 0; }
-    if let (Some(grid), Some(slot)) = (block_grid::get_grid((*sd).m as usize), map_data((*sd).m as usize)) {
-        let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+pub unsafe fn clif_sendchararea(pe: &PlayerEntity) -> i32 {
+    let (m, x, y) = {
+        let sd = pe.read();
+        (sd.m as usize, sd.x as i32, sd.y as i32)
+    };
+    if let (Some(grid), Some(slot)) = (block_grid::get_grid(m), map_data(m)) {
+        let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
+        let sd_guard = pe.read();
+        let sd_ref = &*sd_guard;
         for id in ids {
             if let Some(pc_arc) = map_id2sd_pc(id) {
                 let pc = pc_arc.read();
-                clif_charlook(&*sd, &*pc);
+                clif_charlook(sd_ref, &*pc);
             }
         }
     }
@@ -306,7 +310,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     // State / invis at [16]
     let can_see_invis = (*sd).id != (*src_sd).id
         && ((*src_sd).player.identity.gm_level != 0
-            || clif_isingroup(src_sd as *const MapSessionData as *mut MapSessionData, sd as *const MapSessionData as *mut MapSessionData) != 0
+            || clif_isingroup(src_arc.as_ref(), sd as *const MapSessionData as *mut MapSessionData) != 0
             || ((*sd).gfx.dye == (*src_sd).gfx.dye
                 && (*sd).gfx.dye != 0
                 && (*src_sd).gfx.dye != 0));
@@ -525,7 +529,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     if invis_or_stealth
         && (*sd).id != (*src_sd).id
         && ((*src_sd).player.identity.gm_level != 0
-            || clif_isingroup(src_sd as *const MapSessionData as *mut MapSessionData, sd as *const MapSessionData as *mut MapSessionData) != 0
+            || clif_isingroup(src_arc.as_ref(), sd as *const MapSessionData as *mut MapSessionData) != 0
             || ((*sd).gfx.dye == (*src_sd).gfx.dye
                 && (*sd).gfx.dye != 0
                 && (*src_sd).gfx.dye != 0))
@@ -547,7 +551,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         wfifob(src_fd, 56, 3);
     }
     // Same group → title color 2
-    if clif_isingroup(src_sd as *const MapSessionData as *mut MapSessionData, sd as *const MapSessionData as *mut MapSessionData) != 0 {
+    if clif_isingroup(src_arc.as_ref(), sd as *const MapSessionData as *mut MapSessionData) != 0 {
         wfifob(src_fd, 56, 2);
     }
 
@@ -637,16 +641,17 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
 /// sends walk packets, moves block, triggers area scans and scripted events,
 /// and checks warp tiles.
 ///
-pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
-    if sd.is_null() { return 0; }
-
-    let fd = (*sd).fd;
-    let m  = (*sd).m as i32;
+pub unsafe fn clif_parsewalk(pe: &PlayerEntity) -> i32 {
+    let fd = pe.fd;
+    let (m, sd_m, sd_x, sd_y, state, gm_level, player_id) = {
+        let sd = pe.read();
+        (sd.m as i32, sd.m, sd.x, sd.y, sd.player.combat.state, sd.player.identity.gm_level, sd.id)
+    };
     let Some(md) = map_data(m as usize) else { return 0; };
 
     // Dismount on non-mount maps
-    if md.can_mount == 0 && (*sd).player.combat.state == PC_MOUNTED && (*sd).player.identity.gm_level == 0 {
-        sl_doscript_simple("onDismount", None, (*sd).id);
+    if md.can_mount == 0 && state == PC_MOUNTED && gm_level == 0 {
+        sl_doscript_simple("onDismount", None, player_id);
     }
 
     let direction = rfifob(fd, 5);
@@ -670,22 +675,22 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
     }
 
     // Position mismatch: snap back
-    if dx != (*sd).x as i32 {
-        clif_blockmovement(sd, 0);
-        map_moveblock_id((*sd).id, (*sd).m, (*sd).x, (*sd).y, (*sd).x, (*sd).y);
-        clif_sendxy(sd);
-        clif_blockmovement(sd, 1);
+    if dx != sd_x as i32 {
+        clif_blockmovement(pe, 0);
+        map_moveblock_id(player_id, sd_m, sd_x, sd_y, sd_x, sd_y);
+        clif_sendxy(pe);
+        clif_blockmovement(pe, 1);
         return 0;
     }
-    if dy != (*sd).y as i32 {
-        clif_blockmovement(sd, 0);
-        map_moveblock_id((*sd).id, (*sd).m, (*sd).x, (*sd).y, (*sd).x, (*sd).y);
-        clif_sendxy(sd);
-        clif_blockmovement(sd, 1);
+    if dy != sd_y as i32 {
+        clif_blockmovement(pe, 0);
+        map_moveblock_id(player_id, sd_m, sd_x, sd_y, sd_x, sd_y);
+        clif_sendxy(pe);
+        clif_blockmovement(pe, 1);
         return 0;
     }
 
-    (*sd).canmove = 0;
+    pe.write().canmove = 0;
 
     // Apply direction
     match direction {
@@ -703,50 +708,60 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
     if dy >= md.ys as i32 { dy = md.ys as i32 - 1; }
 
     // Collision checks (GM bypasses)
-    if (*sd).player.identity.gm_level == 0 {
+    if gm_level == 0 {
         if let Some(grid) = block_grid::get_grid(m as usize) {
             let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
             for id in cell_ids {
-                clif_canmove_sub_inner(id, sd);
+                clif_canmove_sub_inner(id, pe);
             }
         }
-        if read_pass(m, dx, dy) != 0 { (*sd).canmove = 1; }
+        if read_pass(m, dx, dy) != 0 { pe.write().canmove = 1; }
     }
 
     // Status blocks movement
-    if ((*sd).canmove != 0 || (*sd).paralyzed != 0
-        || (*sd).sleep != 1.0f32 || (*sd).snare != 0)
-        && (*sd).player.identity.gm_level == 0
-    {
-        clif_blockmovement(sd, 0);
-        clif_sendxy(sd);
-        clif_blockmovement(sd, 1);
+    let (canmove, paralyzed, sleep, snare) = {
+        let sd = pe.read();
+        (sd.canmove, sd.paralyzed, sd.sleep, sd.snare)
+    };
+    if (canmove != 0 || paralyzed != 0 || sleep != 1.0f32 || snare != 0) && gm_level == 0 {
+        clif_blockmovement(pe, 0);
+        clif_sendxy(pe);
+        clif_blockmovement(pe, 1);
         return 0;
     }
 
     // Update viewport offsets
-    let vx = (*sd).viewx as i32;
-    let vy = (*sd).viewy as i32;
-    if direction == 0 && (dy <= vy || ((md.ys as i32 - 1 - dy) < 7 && vy > 7)) {
-        (*sd).viewy = (*sd).viewy.saturating_sub(1);
+    let (vx, vy, setting_flags, opt_flags) = {
+        let sd = pe.read();
+        (sd.viewx as i32, sd.viewy as i32, sd.player.appearance.setting_flags as u32, sd.optFlags)
+    };
+    {
+        let mut sd = pe.write();
+        if direction == 0 && (dy <= vy || ((md.ys as i32 - 1 - dy) < 7 && vy > 7)) {
+            sd.viewy = sd.viewy.saturating_sub(1);
+        }
+        if direction == 1 && ((dx < 8 && vx < 8) || 16 - (md.xs as i32 - 1 - dx) <= vx) {
+            sd.viewx = sd.viewx.wrapping_add(1);
+        }
+        if direction == 2 && ((dy < 7 && vy < 7) || 14 - (md.ys as i32 - 1 - dy) <= vy) {
+            sd.viewy = sd.viewy.wrapping_add(1);
+        }
+        if direction == 3 && (dx <= vx || ((md.xs as i32 - 1 - dx) < 8 && vx > 8)) {
+            sd.viewx = sd.viewx.saturating_sub(1);
+        }
+        if sd.viewx > 16 { sd.viewx = 16; }
+        if sd.viewy > 14 { sd.viewy = 14; }
     }
-    if direction == 1 && ((dx < 8 && vx < 8) || 16 - (md.xs as i32 - 1 - dx) <= vx) {
-        (*sd).viewx = (*sd).viewx.wrapping_add(1);
-    }
-    if direction == 2 && ((dy < 7 && vy < 7) || 14 - (md.ys as i32 - 1 - dy) <= vy) {
-        (*sd).viewy = (*sd).viewy.wrapping_add(1);
-    }
-    if direction == 3 && (dx <= vx || ((md.xs as i32 - 1 - dx) < 8 && vx > 8)) {
-        (*sd).viewx = (*sd).viewx.saturating_sub(1);
-    }
-    if (*sd).viewx > 16 { (*sd).viewx = 16; }
-    if (*sd).viewy > 14 { (*sd).viewy = 14; }
 
     // Send walk-ack to self (skipped in FASTMOVE mode)
-    if ((*sd).player.appearance.setting_flags as u32 & FLAG_FASTMOVE) == 0 {
+    if (setting_flags & FLAG_FASTMOVE) == 0 {
         if !session_exists(fd) {
             return 0;
         }
+        let (viewx, viewy) = {
+            let sd = pe.read();
+            (sd.viewx as u16, sd.viewy as u16)
+        };
         wfifohead(fd, 15);
         wfifob(fd, 0, 0xAA);
         wfifob(fd, 1, 0x00);
@@ -756,14 +771,14 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
         wfifob(fd, 5, direction);
         wfifow(fd, 6, (xold as u16).swap_bytes());
         wfifow(fd, 8, (yold as u16).swap_bytes());
-        wfifow(fd, 10, ((*sd).viewx as u16).swap_bytes());
-        wfifow(fd, 12, ((*sd).viewy as u16).swap_bytes());
+        wfifow(fd, 10, viewx.swap_bytes());
+        wfifow(fd, 12, viewy.swap_bytes());
         wfifob(fd, 14, 0x00);
         wfifoset(fd, encrypt(fd) as usize);
     }
 
     // No actual position change
-    if dx == (*sd).x as i32 && dy == (*sd).y as i32 { return 0; }
+    if dx == sd_x as i32 && dy == sd_y as i32 { return 0; }
 
     // Broadcast movement to area.
     let mut buf = [0u8; 32];
@@ -772,57 +787,59 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
     buf[2] = 0x0C;
     buf[3] = 0x0C;
     // [4] = 0 (C comments out this byte)
-    buf[5..9].copy_from_slice(&((*sd).player.identity.id as u32).swap_bytes().to_ne_bytes());
+    buf[5..9].copy_from_slice(&player_id.swap_bytes().to_ne_bytes());
     buf[9..11].copy_from_slice(&(xold as u16).swap_bytes().to_ne_bytes());
     buf[11..13].copy_from_slice(&(yold as u16).swap_bytes().to_ne_bytes());
     buf[13] = direction;
     buf[14] = 0x00;
 
-    if ((*sd).optFlags & OPT_FLAG_STEALTH) != 0 {
-        clif_sendtogm(buf.as_mut_ptr(), 32, (*sd).id, (*sd).m, (*sd).x, (*sd).y, BL_PC as u8, AREA_WOS);
+    if (opt_flags & OPT_FLAG_STEALTH) != 0 {
+        clif_sendtogm(buf.as_mut_ptr(), 32, player_id, sd_m, sd_x, sd_y, BL_PC as u8, AREA_WOS);
     } else {
-        clif_send(buf.as_ptr(), 32, (*sd).id, (*sd).m, (*sd).x, (*sd).y, BL_PC as u8, AREA_WOS);
+        clif_send(buf.as_ptr(), 32, player_id, sd_m, sd_x, sd_y, BL_PC as u8, AREA_WOS);
     }
 
     {
-        let old_x = (*sd).x;
-        let old_y = (*sd).y;
-        map_moveblock_id((*sd).id, (*sd).m, old_x, old_y, dx as u16, dy as u16);
-        (*sd).x = dx as u16;
-        (*sd).y = dy as u16;
-        if let Some(pc_arc) = map_id2sd_pc((*sd).id) {
-            pc_arc.set_position(Point { m: (*sd).m, x: (*sd).x, y: (*sd).y });
-        }
+        let mut sd = pe.write();
+        map_moveblock_id(player_id, sd.m, sd.x, sd.y, dx as u16, dy as u16);
+        sd.x = dx as u16;
+        sd.y = dy as u16;
     }
+    pe.set_position(Point { m: sd_m, x: dx as u16, y: dy as u16 });
 
     // If client sent viewport sub-packet, scan and send new tile strip
     if rfifob(fd, 3) == 6 {
-        clif_sendmapdata(sd, m, x0, y0, x1, y1, checksum);
+        clif_sendmapdata(pe, m, x0, y0, x1, y1, checksum);
         if let Some(grid) = block_grid::get_grid(m as usize) {
             let rect_ids = grid.ids_in_rect(x0, y0, x0 + (x1 - 1), y0 + (y1 - 1));
-            clif_mob_look_start_func_inner((*sd).fd, &mut (*sd).net.look);
-            for &id in &rect_ids {
-                clif_object_look_by_id((*sd).fd, &mut (*sd).net.look, (*sd).player.identity.id, id);
+            {
+                let mut net = pe.net.write();
+                clif_mob_look_start_func_inner(fd, &mut net.look);
+                for &id in &rect_ids {
+                    clif_object_look_by_id(fd, &mut net.look, player_id, id);
+                }
+                clif_mob_look_close_func_inner(fd, &mut net.look);
             }
-            clif_mob_look_close_func_inner((*sd).fd, &mut (*sd).net.look);
+            let sd_guard = pe.read();
+            let sd_ref = &*sd_guard;
             for &id in &rect_ids {
                 if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook(&*pc_arc.read(), &*sd);
+                    clif_charlook(&*pc_arc.read(), sd_ref);
                 }
             }
             for &id in &rect_ids {
                 if let Some(npc_arc) = map_id2npc_ref(id) {
-                    clif_cnpclook(&*npc_arc.read(), &*sd);
+                    clif_cnpclook(&*npc_arc.read(), sd_ref);
                 }
             }
             for &id in &rect_ids {
                 if let Some(mob_arc) = map_id2mob_ref(id) {
-                    clif_cmoblook(&*mob_arc.read(), &*sd);
+                    clif_cmoblook(&*mob_arc.read(), sd_ref);
                 }
             }
             for &id in &rect_ids {
                 if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook(&*sd, &*pc_arc.read());
+                    clif_charlook(sd_ref, &*pc_arc.read());
                 }
             }
         }
@@ -830,42 +847,48 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
 
     // Equipment walk scripts
     for i in 0..14usize {
-        if (&(*sd).player.inventory.equip)[i].id > 0 {
-            let equip_item = item_db::search((&(*sd).player.inventory.equip)[i].id);
+        let eq_id = pe.read().player.inventory.equip[i].id;
+        if eq_id > 0 {
+            let equip_item = item_db::search(eq_id);
             let yn = carray_to_str(&equip_item.yname);
             if !yn.is_empty() {
-                sl_doscript_simple(yn, Some("on_walk"), (*sd).id);
+                sl_doscript_simple(yn, Some("on_walk"), player_id);
             }
         }
     }
 
     // Skill passive walk scripts
     for i in 0..MAX_SPELLS {
-        if (&(*sd).player.spells.skills)[i] > 0 {
-            let magic = magic_db::search((&(*sd).player.spells.skills)[i] as i32);
+        let skill_id = pe.read().player.spells.skills[i];
+        if skill_id > 0 {
+            let magic = magic_db::search(skill_id as i32);
             let yn = carray_to_str(&magic.yname);
             if !yn.is_empty() {
-                sl_doscript_simple(yn, Some("on_walk_passive"), (*sd).id);
+                sl_doscript_simple(yn, Some("on_walk_passive"), player_id);
             }
         }
     }
 
     // Aether walk scripts
     for i in 0..MAX_MAGIC_TIMERS {
-        if (&(*sd).player.spells.dura_aether)[i].id > 0 && (&(*sd).player.spells.dura_aether)[i].duration > 0 {
-            let magic = magic_db::search((&(*sd).player.spells.dura_aether)[i].id as i32);
+        let (aether_id, aether_duration) = {
+            let sd = pe.read();
+            (sd.player.spells.dura_aether[i].id, sd.player.spells.dura_aether[i].duration)
+        };
+        if aether_id > 0 && aether_duration > 0 {
+            let magic = magic_db::search(aether_id as i32);
             let yn = carray_to_str(&magic.yname);
             if !yn.is_empty() {
-                sl_doscript_simple(yn, Some("on_walk_while_cast"), (*sd).id);
+                sl_doscript_simple(yn, Some("on_walk_while_cast"), player_id);
             }
         }
     }
 
-    sl_doscript_simple("onScriptedTile", None, (*sd).id);
-    pc_runfloor_sub(sd);
+    sl_doscript_simple("onScriptedTile", None, player_id);
+    pc_runfloor_sub(pe.data_ptr()); // TODO(phase6c): migrate
 
     // Warp check
-    do_warp_check(&mut *sd);
+    do_warp_check(pe);
     0
 }
 
@@ -877,52 +900,56 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
 /// viewport logic as `clif_parsewalk`, but sends `[4]=0x03` and computes
 /// the new-strip viewport coords internally.
 ///
-pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> i32 {
-    if sd.is_null() { return 0; }
+pub unsafe fn clif_noparsewalk(pe: &PlayerEntity, _speed: i8) -> i32 {
+    let fd = pe.fd;
+    let (m_val, sd_m, sd_x, sd_y, state, gm_level, player_id, side, viewx, viewy) = {
+        let sd = pe.read();
+        (sd.m as i32, sd.m, sd.x, sd.y, sd.player.combat.state,
+         sd.player.identity.gm_level, sd.id, sd.player.combat.side as i32,
+         sd.viewx as i32, sd.viewy as i32)
+    };
+    let Some(md) = map_data(m_val as usize) else { return 0; };
 
-    let m  = (*sd).m as i32;
-    let Some(md) = map_data(m as usize) else { return 0; };
-
-    let xold = (*sd).x as i32;
-    let yold = (*sd).y as i32;
+    let xold = sd_x as i32;
+    let yold = sd_y as i32;
     let mut dx = xold;
     let mut dy = yold;
 
     // Dismount on non-mount maps
-    if md.can_mount == 0 && (*sd).player.combat.state == PC_MOUNTED && (*sd).player.identity.gm_level == 0 {
-        sl_doscript_simple("onDismount", None, (*sd).id);
+    if md.can_mount == 0 && state == PC_MOUNTED && gm_level == 0 {
+        sl_doscript_simple("onDismount", None, player_id);
     }
 
-    let direction = (*sd).player.combat.side as i32;
+    let direction = side;
 
     // Compute destination and new viewport strip
     let (x0, y0, x1, y1): (i32, i32, i32, i32);
     match direction {
         0 => {
             dy -= 1;
-            x0 = (*sd).x as i32 - ((*sd).viewx as i32 + 1);
-            y0 = dy - ((*sd).viewy as i32 + 1);
+            x0 = sd_x as i32 - (viewx + 1);
+            y0 = dy - (viewy + 1);
             x1 = 19;
             y1 = 1;
         }
         1 => {
             dx += 1;
-            x0 = dx + (18 - ((*sd).viewx as i32 + 1));
-            y0 = (*sd).y as i32 - ((*sd).viewy as i32 + 1);
+            x0 = dx + (18 - (viewx + 1));
+            y0 = sd_y as i32 - (viewy + 1);
             x1 = 1;
             y1 = 17;
         }
         2 => {
             dy += 1;
-            x0 = (*sd).x as i32 - ((*sd).viewx as i32 + 1);
-            y0 = dy + (16 - ((*sd).viewy as i32 + 1));
+            x0 = sd_x as i32 - (viewx + 1);
+            y0 = dy + (16 - (viewy + 1));
             x1 = 19;
             y1 = 1;
         }
         3 => {
             dx -= 1;
-            x0 = dx - ((*sd).viewx as i32 + 1);
-            y0 = (*sd).y as i32 - ((*sd).viewy as i32 + 1);
+            x0 = dx - (viewx + 1);
+            y0 = sd_y as i32 - (viewy + 1);
             x1 = 1;
             y1 = 17;
         }
@@ -937,57 +964,64 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> i32 {
     if dy < 0 { dy = 0; }
     if dy >= md.ys as i32 { dy = md.ys as i32 - 1; }
 
-    (*sd).canmove = 0;
-    if (*sd).player.identity.gm_level == 0 {
-        if let Some(grid) = block_grid::get_grid(m as usize) {
+    pe.write().canmove = 0;
+    if gm_level == 0 {
+        if let Some(grid) = block_grid::get_grid(m_val as usize) {
             let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
             for id in cell_ids {
-                clif_canmove_sub_inner(id, sd);
+                clif_canmove_sub_inner(id, pe);
             }
         }
-        if read_pass(m, dx, dy) != 0 { (*sd).canmove = 1; }
+        if read_pass(m_val, dx, dy) != 0 { pe.write().canmove = 1; }
     }
 
-    if ((*sd).canmove != 0 || (*sd).paralyzed != 0 || (*sd).sleep != 1.0f32 || (*sd).snare != 0)
-        && (*sd).player.identity.gm_level == 0
-    {
-        clif_blockmovement(sd, 0);
-        clif_sendxy(sd);
-        clif_blockmovement(sd, 1);
+    let (canmove, paralyzed, sleep, snare) = {
+        let sd = pe.read();
+        (sd.canmove, sd.paralyzed, sd.sleep, sd.snare)
+    };
+    if (canmove != 0 || paralyzed != 0 || sleep != 1.0f32 || snare != 0) && gm_level == 0 {
+        clif_blockmovement(pe, 0);
+        clif_sendxy(pe);
+        clif_blockmovement(pe, 1);
         return 0;
     }
 
-    if dx == (*sd).x as i32 && dy == (*sd).y as i32 { return 0; }
+    if dx == sd_x as i32 && dy == sd_y as i32 { return 0; }
 
     // Viewport update
-    let vx = (*sd).viewx as i32;
-    let vy = (*sd).viewy as i32;
-    if direction == 0 && (dy <= vy || ((md.ys as i32 - 1 - dy) < 7 && vy > 7)) {
-        (*sd).viewy = (*sd).viewy.saturating_sub(1);
+    {
+        let mut sd = pe.write();
+        if direction == 0 && (dy <= viewy || ((md.ys as i32 - 1 - dy) < 7 && viewy > 7)) {
+            sd.viewy = sd.viewy.saturating_sub(1);
+        }
+        if direction == 1 && ((dx < 8 && viewx < 8) || 16 - (md.xs as i32 - 1 - dx) <= viewx) {
+            sd.viewx = sd.viewx.wrapping_add(1);
+        }
+        if direction == 2 && ((dy < 7 && viewy < 7) || 14 - (md.ys as i32 - 1 - dy) <= viewy) {
+            sd.viewy = sd.viewy.wrapping_add(1);
+        }
+        if direction == 3 && (dx <= viewx || ((md.xs as i32 - 1 - dx) < 8 && viewx > 8)) {
+            sd.viewx = sd.viewx.saturating_sub(1);
+        }
+        if sd.viewx > 16 { sd.viewx = 16; }
+        if sd.viewy > 14 { sd.viewy = 14; }
     }
-    if direction == 1 && ((dx < 8 && vx < 8) || 16 - (md.xs as i32 - 1 - dx) <= vx) {
-        (*sd).viewx = (*sd).viewx.wrapping_add(1);
-    }
-    if direction == 2 && ((dy < 7 && vy < 7) || 14 - (md.ys as i32 - 1 - dy) <= vy) {
-        (*sd).viewy = (*sd).viewy.wrapping_add(1);
-    }
-    if direction == 3 && (dx <= vx || ((md.xs as i32 - 1 - dx) < 8 && vx > 8)) {
-        (*sd).viewx = (*sd).viewx.saturating_sub(1);
-    }
-    if (*sd).viewx > 16 { (*sd).viewx = 16; }
-    if (*sd).viewy > 14 { (*sd).viewy = 14; }
 
     // Temporarily toggle off FASTMOVE (noparsewalk always sends the walk packet)
-    let had_fastmove = ((*sd).player.appearance.setting_flags as u32 & FLAG_FASTMOVE) != 0;
+    let had_fastmove = (pe.read().player.appearance.setting_flags as u32 & FLAG_FASTMOVE) != 0;
     if had_fastmove {
-        (*sd).player.appearance.setting_flags ^= FLAG_FASTMOVE;
-        clif_sendstatus(sd, 0);
+        pe.write().player.appearance.setting_flags ^= FLAG_FASTMOVE;
+        clif_sendstatus(pe, 0);
     }
 
-    let fd = (*sd).fd;
     if !session_exists(fd) {
         return 0;
     }
+
+    let (cur_viewx, cur_viewy) = {
+        let sd = pe.read();
+        (sd.viewx as u16, sd.viewy as u16)
+    };
 
     wfifohead(fd, 15);
     wfifob(fd, 0, 0xAA);
@@ -998,86 +1032,89 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> i32 {
     wfifob(fd, 5, direction as u8);
     wfifow(fd, 6, (xold as u16).swap_bytes());
     wfifow(fd, 8, (yold as u16).swap_bytes());
-    wfifow(fd, 10, ((*sd).viewx as u16).swap_bytes());
-    wfifow(fd, 12, ((*sd).viewy as u16).swap_bytes());
+    wfifow(fd, 10, cur_viewx.swap_bytes());
+    wfifow(fd, 12, cur_viewy.swap_bytes());
     wfifob(fd, 14, 0x00);
     wfifoset(fd, encrypt(fd) as usize);
 
     // Restore FASTMOVE
     if had_fastmove {
-        (*sd).player.appearance.setting_flags ^= FLAG_FASTMOVE;
-        clif_sendstatus(sd, 0);
+        pe.write().player.appearance.setting_flags ^= FLAG_FASTMOVE;
+        clif_sendstatus(pe, 0);
     }
 
     // Broadcast movement to area
+    let opt_flags = pe.read().optFlags;
     let mut buf = [0u8; 32];
     buf[0] = 0xAA;
     buf[1] = 0x00;
     buf[2] = 0x0C;
     buf[3] = 0x0C;
-    buf[5..9].copy_from_slice(&((*sd).player.identity.id as u32).swap_bytes().to_ne_bytes());
+    buf[5..9].copy_from_slice(&player_id.swap_bytes().to_ne_bytes());
     buf[9..11].copy_from_slice(&(xold as u16).swap_bytes().to_ne_bytes());
     buf[11..13].copy_from_slice(&(yold as u16).swap_bytes().to_ne_bytes());
     buf[13] = direction as u8;
     buf[14] = 0x00;
 
-    if ((*sd).optFlags & OPT_FLAG_STEALTH) != 0 {
-        clif_sendtogm(buf.as_mut_ptr(), 32, (*sd).id, (*sd).m, (*sd).x, (*sd).y, BL_PC as u8, AREA_WOS);
+    if (opt_flags & OPT_FLAG_STEALTH) != 0 {
+        clif_sendtogm(buf.as_mut_ptr(), 32, player_id, sd_m, sd_x, sd_y, BL_PC as u8, AREA_WOS);
     } else {
-        clif_send(buf.as_ptr(), 32, (*sd).id, (*sd).m, (*sd).x, (*sd).y, BL_PC as u8, AREA_WOS);
+        clif_send(buf.as_ptr(), 32, player_id, sd_m, sd_x, sd_y, BL_PC as u8, AREA_WOS);
     }
 
     {
-        let old_x = (*sd).x;
-        let old_y = (*sd).y;
-        map_moveblock_id((*sd).id, (*sd).m, old_x, old_y, dx as u16, dy as u16);
-        (*sd).x = dx as u16;
-        (*sd).y = dy as u16;
-        if let Some(pc_arc) = map_id2sd_pc((*sd).id) {
-            pc_arc.set_position(Point { m: (*sd).m, x: (*sd).x, y: (*sd).y });
-        }
+        let mut sd = pe.write();
+        map_moveblock_id(player_id, sd.m, sd.x, sd.y, dx as u16, dy as u16);
+        sd.x = dx as u16;
+        sd.y = dy as u16;
     }
+    pe.set_position(Point { m: sd_m, x: dx as u16, y: dy as u16 });
 
     // Send new viewport strip if in bounds
     if x0 >= 0 && y0 >= 0
         && x0 + (x1 - 1) < md.xs as i32
         && y0 + (y1 - 1) < md.ys as i32
     {
-        clif_sendmapdata(sd, m, x0, y0, x1, y1, 0);
-        if let Some(grid) = block_grid::get_grid(m as usize) {
+        clif_sendmapdata(pe, m_val, x0, y0, x1, y1, 0);
+        if let Some(grid) = block_grid::get_grid(m_val as usize) {
             let rect_ids = grid.ids_in_rect(x0, y0, x0 + (x1 - 1), y0 + (y1 - 1));
-            clif_mob_look_start_func_inner((*sd).fd, &mut (*sd).net.look);
-            for &id in &rect_ids {
-                clif_object_look_by_id((*sd).fd, &mut (*sd).net.look, (*sd).player.identity.id, id);
+            {
+                let mut net = pe.net.write();
+                clif_mob_look_start_func_inner(fd, &mut net.look);
+                for &id in &rect_ids {
+                    clif_object_look_by_id(fd, &mut net.look, player_id, id);
+                }
+                clif_mob_look_close_func_inner(fd, &mut net.look);
             }
-            clif_mob_look_close_func_inner((*sd).fd, &mut (*sd).net.look);
+            let sd_guard = pe.read();
+            let sd_ref = &*sd_guard;
             for &id in &rect_ids {
                 if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook(&*pc_arc.read(), &*sd);
+                    clif_charlook(&*pc_arc.read(), sd_ref);
                 }
             }
             for &id in &rect_ids {
                 if let Some(npc_arc) = map_id2npc_ref(id) {
-                    clif_cnpclook(&*npc_arc.read(), &*sd);
+                    clif_cnpclook(&*npc_arc.read(), sd_ref);
                 }
             }
             for &id in &rect_ids {
                 if let Some(mob_arc) = map_id2mob_ref(id) {
-                    clif_cmoblook(&*mob_arc.read(), &*sd);
+                    clif_cmoblook(&*mob_arc.read(), sd_ref);
                 }
             }
             for &id in &rect_ids {
                 if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook(&*sd, &*pc_arc.read());
+                    clif_charlook(sd_ref, &*pc_arc.read());
                 }
             }
         }
     }
 
-    sl_doscript_simple("onScriptedTile", None, (*sd).id);
-    pc_runfloor_sub(sd);
+    sl_doscript_simple("onScriptedTile", None, player_id);
+    pc_runfloor_sub(pe.data_ptr()); // TODO(phase6c): migrate
 
-    do_warp_check(&mut *sd);
+    do_warp_check(pe);
     1
 }
 
@@ -1088,25 +1125,29 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> i32 {
 /// Reads the timestamp at [9..12] (u32 BE → host), updates `msPing` and
 /// `LastPongStamp`.
 ///
-pub unsafe fn clif_parsewalkpong(sd: *mut MapSessionData) -> i32 {
-    if sd.is_null() { return 0; }
-    let fd = (*sd).fd;
+pub unsafe fn clif_parsewalkpong(pe: &PlayerEntity) -> i32 {
+    let fd = pe.fd;
 
     // [5..8] = HASH (unused); [9..12] = TS (u32 big-endian)
     let ts = rfifol(fd, 9).swap_bytes() as u64;
 
-    if (*sd).LastPingTick != 0 {
-        (*sd).msPing = (gettick() as u64).wrapping_sub((*sd).LastPingTick) as i32;
+    let (last_ping_tick, last_pong_stamp) = {
+        let sd = pe.read();
+        (sd.LastPingTick, sd.LastPongStamp)
+    };
+
+    if last_ping_tick != 0 {
+        pe.write().msPing = (gettick() as u64).wrapping_sub(last_ping_tick) as i32;
     }
 
-    if (*sd).LastPongStamp != 0 {
-        let difference = ts.wrapping_sub((*sd).LastPongStamp) as i32;
+    if last_pong_stamp != 0 {
+        let difference = ts.wrapping_sub(last_pong_stamp) as i32;
         if difference > 43000 {
             // Speedhack detection — C commented the enforcement out; replicate no-op
         }
     }
 
-    (*sd).LastPongStamp = ts;
+    pe.write().LastPongStamp = ts;
     0
 }
 
@@ -1117,11 +1158,10 @@ pub unsafe fn clif_parsewalkpong(sd: *mut MapSessionData) -> i32 {
 /// Sets `sd->loaded = 1`, reads viewport parameters, then delegates to
 /// `clif_sendmapdata`.
 ///
-pub unsafe fn clif_parsemap(sd: *mut MapSessionData) -> i32 {
-    if sd.is_null() { return 0; }
-    let fd = (*sd).fd;
+pub unsafe fn clif_parsemap(pe: &PlayerEntity) -> i32 {
+    let fd = pe.fd;
 
-    (*sd).loaded = 1;
+    pe.write().loaded = 1;
 
     let x0 = rfifow(fd, 5).swap_bytes() as i32;
     let y0 = rfifow(fd, 7).swap_bytes() as i32;
@@ -1134,8 +1174,9 @@ pub unsafe fn clif_parsemap(sd: *mut MapSessionData) -> i32 {
         checksum = 0;
     }
 
-    tracing::debug!("[map] [parsemap] fd={} m={} x0={} y0={} x1={} y1={} check={}", fd, (*sd).m, x0, y0, x1, y1, checksum);
-    clif_sendmapdata(sd, (*sd).m as i32, x0, y0, x1, y1, checksum);
+    let m = pe.read().m as i32;
+    tracing::debug!("[map] [parsemap] fd={} m={} x0={} y0={} x1={} y1={} check={}", fd, m, x0, y0, x1, y1, checksum);
+    clif_sendmapdata(pe, m, x0, y0, x1, y1, checksum);
     0
 }
 
@@ -1147,7 +1188,7 @@ pub unsafe fn clif_parsemap(sd: *mut MapSessionData) -> i32 {
 /// send if the client's cached checksum already matches.
 ///
 pub unsafe fn clif_sendmapdata(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     m: i32,
     mut x0: i32,
     mut y0: i32,
@@ -1155,17 +1196,16 @@ pub unsafe fn clif_sendmapdata(
     mut y1: i32,
     check: u16,
 ) -> i32 {
-    if sd.is_null() { return 0; }
-
-    if !session_exists((*sd).fd) {
+    if !session_exists(pe.fd) {
         return 0;
     }
 
-    let fd = (*sd).fd;
+    let fd = pe.fd;
+    let player_id = pe.id;
 
     // Blackout map: delegate to Lua
     if map_readglobalreg(m, c"blackout".as_ptr()) != 0 {
-        sl_doscript_simple("sendMapData", None, (*sd).id);
+        sl_doscript_simple("sendMapData", None, player_id);
         return 0;
     }
 
@@ -1312,12 +1352,14 @@ pub unsafe fn clif_sendside_npc(npc: &NpcData) -> i32 {
 /// Reads new side from RFIFO[5], broadcasts via `clif_sendside`, fires
 /// `onTurn` Lua event.
 ///
-pub unsafe fn clif_parseside(sd: *mut MapSessionData) -> i32 {
-    if sd.is_null() { return 0; }
-    let fd = (*sd).fd;
-    (*sd).player.combat.side = rfifob(fd, 5) as i8;
-    clif_sendside_pc(&*sd);
-    sl_doscript_simple("onTurn", None, (*sd).id);
+pub unsafe fn clif_parseside(pe: &PlayerEntity) -> i32 {
+    let fd = pe.fd;
+    pe.write().player.combat.side = rfifob(fd, 5) as i8;
+    {
+        let sd = pe.read();
+        clif_sendside_pc(&*sd);
+    }
+    sl_doscript_simple("onTurn", None, pe.id);
     0
 }
 
@@ -1328,7 +1370,9 @@ pub unsafe fn clif_parseside(sd: *mut MapSessionData) -> i32 {
 ///
 /// Shared by both `clif_parsewalk` and `clif_noparsewalk`.
 #[inline]
-unsafe fn do_warp_check(sd: &mut MapSessionData) {
+unsafe fn do_warp_check(pe: &crate::game::player::entity::PlayerEntity) {
+    let sd_ptr = pe.data_ptr();
+    let sd = &mut *sd_ptr;
     let fm = sd.m as i32;
     let Some(fmd) = map_data(fm as usize) else { return; };
 
@@ -1358,8 +1402,6 @@ unsafe fn do_warp_check(sd: &mut MapSessionData) {
 
     let Some(zmd) = map_data(zm as usize) else { return; };
 
-    let sd_ptr = sd as *mut MapSessionData;
-
     // Level / vita / mana / mark / path minimum requirements
     let below_min = (sd.player.progression.level as u32) < zmd.reqlvl
         || (sd.player.combat.max_hp < zmd.reqvita && sd.player.combat.max_mp < zmd.reqmana)
@@ -1382,9 +1424,9 @@ unsafe fn do_warp_check(sd: &mut MapSessionData) {
             } else {
                 c"A powerful force repels you."
             };
-            clif_sendminitext(sd_ptr, msg.as_ptr());
+            clif_sendminitext(pe, msg.as_ptr());
         } else {
-            clif_sendminitext(sd_ptr, maprejectmsg);
+            clif_sendminitext(pe, maprejectmsg);
         }
         return;
     }
@@ -1395,7 +1437,7 @@ unsafe fn do_warp_check(sd: &mut MapSessionData) {
 
     if above_max && sd.player.identity.gm_level == 0 {
         clif_pushback(sd);
-        clif_sendminitext(sd_ptr, c"A magical barrier prevents you from entering.".as_ptr());
+        clif_sendminitext(pe, c"A magical barrier prevents you from entering.".as_ptr());
         return;
     }
 
@@ -1461,8 +1503,9 @@ pub unsafe fn clif_pushback(sd: &mut MapSessionData) -> i32 {
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_parseviewchange(sd: *mut MapSessionData) -> i32 {
-    let fd = (*sd).fd;
+pub unsafe fn clif_parseviewchange(pe: &PlayerEntity) -> i32 {
+    let fd = pe.fd;
+    let player_id = pe.id;
     let direction = rfifob(fd, 5) as i32;
     let mut dx = rfifob(fd, 6) as i32;
     let mut dy = rfifob(fd, 7) as i32;
@@ -1477,8 +1520,8 @@ pub unsafe fn clif_parseviewchange(sd: *mut MapSessionData) -> i32 {
     let x1 = rfifob(fd, 12) as i32;
     let y1 = rfifob(fd, 13) as i32;
 
-    if (*sd).player.combat.state == 3 {
-        clif_sendminitext(sd, c"You cannot do that while riding a mount.".as_ptr());
+    if pe.read().player.combat.state == 3 {
+        clif_sendminitext(pe, c"You cannot do that while riding a mount.".as_ptr());
         return 0;
     }
 
@@ -1490,33 +1533,38 @@ pub unsafe fn clif_parseviewchange(sd: *mut MapSessionData) -> i32 {
         _ => {}
     }
 
-    clif_sendxychange(sd, dx, dy);
-    let m2 = (*sd).m as i32;
+    clif_sendxychange(pe, dx, dy);
+    let m2 = pe.read().m as i32;
     if let Some(grid) = block_grid::get_grid(m2 as usize) {
         let rect_ids = grid.ids_in_rect(x0, y0, x0 + (x1 - 1), y0 + (y1 - 1));
-        clif_mob_look_start_func_inner((*sd).fd, &mut (*sd).net.look);
-        for &id in &rect_ids {
-            clif_object_look_by_id((*sd).fd, &mut (*sd).net.look, (*sd).player.identity.id, id);
+        {
+            let mut net = pe.net.write();
+            clif_mob_look_start_func_inner(fd, &mut net.look);
+            for &id in &rect_ids {
+                clif_object_look_by_id(fd, &mut net.look, player_id, id);
+            }
+            clif_mob_look_close_func_inner(fd, &mut net.look);
         }
-        clif_mob_look_close_func_inner((*sd).fd, &mut (*sd).net.look);
+        let sd_guard = pe.read();
+        let sd_ref = &*sd_guard;
         for &id in &rect_ids {
             if let Some(pc_arc) = map_id2sd_pc(id) {
-                clif_charlook(&*pc_arc.read(), &*sd);
+                clif_charlook(&*pc_arc.read(), sd_ref);
             }
         }
         for &id in &rect_ids {
             if let Some(npc_arc) = map_id2npc_ref(id) {
-                clif_cnpclook(&*npc_arc.read(), &*sd);
+                clif_cnpclook(&*npc_arc.read(), sd_ref);
             }
         }
         for &id in &rect_ids {
             if let Some(mob_arc) = map_id2mob_ref(id) {
-                clif_cmoblook(&*mob_arc.read(), &*sd);
+                clif_cmoblook(&*mob_arc.read(), sd_ref);
             }
         }
         for &id in &rect_ids {
             if let Some(pc_arc) = map_id2sd_pc(id) {
-                clif_charlook(&*sd, &*pc_arc.read());
+                clif_charlook(sd_ref, &*pc_arc.read());
             }
         }
     }
@@ -1529,16 +1577,15 @@ pub unsafe fn clif_parseviewchange(sd: *mut MapSessionData) -> i32 {
 
 ///
 /// Fires the "onLook" Lua event when player looks at a cell.
-/// Args: `entity_id` = the object being looked at, `sd` = the looking player.
-pub unsafe fn clif_parselookat_sub_inner(entity_id: u32, sd: *mut MapSessionData) -> i32 {
-    if sd.is_null() { return 0; }
-    sl_doscript_2("onLook", None, (*sd).id, entity_id);
+/// Args: `entity_id` = the object being looked at, `pe` = the looking player.
+pub unsafe fn clif_parselookat_sub_inner(entity_id: u32, pe: &PlayerEntity) -> i32 {
+    sl_doscript_2("onLook", None, pe.id, entity_id);
     0
 }
 
 /// Dead code stub — body was removed in original C.
 pub unsafe fn clif_parselookat_scriptsub(
-    _sd: *mut MapSessionData,
+    _pe: &PlayerEntity,
 ) -> i32 {
     0
 }
@@ -1546,22 +1593,26 @@ pub unsafe fn clif_parselookat_scriptsub(
 /// Look at the cell directly ahead of the player (based on `side`).
 ///
 /// # Safety
-/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_parselookat_2(sd: *mut MapSessionData) -> i32 {
-    let mut dx = (*sd).x as i32;
-    let mut dy = (*sd).y as i32;
-    match (*sd).player.combat.side {
+/// `pe` must reference a valid, initialized [`PlayerEntity`].
+pub unsafe fn clif_parselookat_2(pe: &PlayerEntity) -> i32 {
+    let (x, y, side, m) = {
+        let sd = pe.read();
+        (sd.x as i32, sd.y as i32, sd.player.combat.side, sd.m as i32)
+    };
+    let player_id = pe.id;
+    let mut dx = x;
+    let mut dy = y;
+    match side {
         0 => dy -= 1,
         1 => dx += 1,
         2 => dy += 1,
         3 => dx -= 1,
         _ => {}
     }
-    let m = (*sd).m as i32;
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
         for id in cell_ids {
-            sl_doscript_2("onLook", None, (*sd).id, id);
+            sl_doscript_2("onLook", None, player_id, id);
         }
     }
     0
@@ -1570,9 +1621,10 @@ pub unsafe fn clif_parselookat_2(sd: *mut MapSessionData) -> i32 {
 /// Look at a specific map cell (coordinates from packet bytes 5–8).
 ///
 /// # Safety
-/// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_parselookat(sd: *mut MapSessionData) -> i32 {
-    let fd = (*sd).fd;
+/// `pe` must reference a valid, initialized [`PlayerEntity`].
+pub unsafe fn clif_parselookat(pe: &PlayerEntity) -> i32 {
+    let fd = pe.fd;
+    let player_id = pe.id;
     let x = u16::from_be_bytes([
         rfifob(fd, 5),
         rfifob(fd, 6),
@@ -1581,11 +1633,11 @@ pub unsafe fn clif_parselookat(sd: *mut MapSessionData) -> i32 {
         rfifob(fd, 7),
         rfifob(fd, 8),
     ]) as i32;
-    let m = (*sd).m as i32;
+    let m = pe.read().m as i32;
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let cell_ids = grid.ids_at_tile(x as u16, y as u16);
         for id in cell_ids {
-            sl_doscript_2("onLook", None, (*sd).id, id);
+            sl_doscript_2("onLook", None, player_id, id);
         }
     }
     0
@@ -1598,44 +1650,58 @@ pub unsafe fn clif_parselookat(sd: *mut MapSessionData) -> i32 {
 ///
 /// # Safety
 /// `sd` must be a valid, non-null pointer to an initialized [`MapSessionData`].
-pub unsafe fn clif_refreshnoclick(sd: *mut MapSessionData) -> i32 {
-    clif_sendmapinfo(sd);
-    clif_sendxynoclick(sd);
-    clif_mob_look_start_func_inner((*sd).fd, &mut (*sd).net.look);
-    if let (Some(grid), Some(slot)) = (block_grid::get_grid((*sd).m as usize), map_data((*sd).m as usize)) {
-        let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
-        for id in ids {
-            clif_object_look_by_id((*sd).fd, &mut (*sd).net.look, (*sd).player.identity.id, id);
+pub unsafe fn clif_refreshnoclick(pe: &PlayerEntity) -> i32 {
+    clif_sendmapinfo(pe);
+    clif_sendxynoclick(pe);
+    {
+        let (m, x, y, player_id) = {
+            let sd = pe.read();
+            (sd.m as usize, sd.x as i32, sd.y as i32, sd.player.identity.id)
+        };
+        let fd = pe.fd;
+        let mut net = pe.net.write();
+        clif_mob_look_start_func_inner(fd, &mut net.look);
+        if let (Some(grid), Some(slot)) = (block_grid::get_grid(m), map_data(m)) {
+            let ids = block_grid::ids_in_area(grid, x, y, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
+            for id in ids {
+                clif_object_look_by_id(fd, &mut net.look, player_id, id);
+            }
         }
+        clif_mob_look_close_func_inner(fd, &mut net.look);
     }
-    clif_mob_look_close_func_inner((*sd).fd, &mut (*sd).net.look);
-    clif_destroyold(sd);
-    clif_sendchararea(sd);
-    clif_getchararea(sd);
+    clif_destroyold(pe);
+    clif_sendchararea(pe);
+    clif_getchararea(pe);
 
-    if !session_exists((*sd).fd) {
+    if !session_exists(pe.fd) {
         return 0;
     }
 
+    let fd = pe.fd;
     // Send 0x22/0x03 packet: 5-byte payload + 3 index bytes = 8 committed
-    wfifohead((*sd).fd, 8);
-    let w = |off: usize| wfifop((*sd).fd, off);
+    wfifohead(fd, 8);
+    let w = |off: usize| wfifop(fd, off);
     *w(0) = 0xAA;
     *w(1) = 0x00;
     *w(2) = 0x02;  // payload length = 2
     *w(3) = 0x22;
     *w(4) = 0x03;
-    let mut buf = std::slice::from_raw_parts_mut(wfifop((*sd).fd, 0), 8);
+    let mut buf = std::slice::from_raw_parts_mut(wfifop(fd, 0), 8);
     let n = set_packet_indexes(&mut buf);  // appends 3 index bytes, updates [1-2]
-    wfifoset((*sd).fd, n);
+    wfifoset(fd, n);
 
-    let Some(md) = map_data((*sd).m as usize) else { return 0; };
+    let m = pe.read().m as usize;
+    let Some(md) = map_data(m) else { return 0; };
     if md.can_group == 0 {
-        (*sd).player.appearance.setting_flags ^= FLAG_GROUP;
-        if (*sd).player.appearance.setting_flags & FLAG_GROUP == 0 && (*sd).group_count > 0 {
-            clif_leavegroup(sd);
-            clif_sendstatus(sd, 0);
-            clif_sendminitext(sd, c"Join a group     :OFF".as_ptr());
+        pe.write().player.appearance.setting_flags ^= FLAG_GROUP;
+        let (sf, group_count) = {
+            let sd = pe.read();
+            (sd.player.appearance.setting_flags, sd.group_count)
+        };
+        if sf & FLAG_GROUP == 0 && group_count > 0 {
+            clif_leavegroup(pe);
+            clif_sendstatus(pe, 0);
+            clif_sendminitext(pe, c"Join a group     :OFF".as_ptr());
         }
     }
     0
@@ -1670,14 +1736,14 @@ pub unsafe fn clif_npc_move_inner(nd: *const NpcData) -> i32 {
 
 ///
 /// Send a mob-position packet to a player.
-/// `sd` is the viewing player, `mob` is the mob to render.
-pub unsafe fn clif_mob_move_inner(sd: *const MapSessionData, mob: *const MobSpawnData) -> i32 {
-    if sd.is_null() || mob.is_null() { return 0; }
+/// `pe` is the viewing player, `mob` is the mob to render.
+pub unsafe fn clif_mob_move_inner(pe: &PlayerEntity, mob: *const MobSpawnData) -> i32 {
+    if mob.is_null() { return 0; }
     if (*mob).state == MOB_DEAD { return 0; }
-    if !session_exists((*sd).fd) {
+    if !session_exists(pe.fd) {
         return 0;
     }
-    let fd = (*sd).fd;
+    let fd = pe.fd;
     wfifoheader(fd, 0x0C, 11);
     // WFIFOL(fd, 5) = SWAP32(mob->bl.id)
     let pw = |off: usize| wfifop(fd, off);

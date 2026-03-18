@@ -155,8 +155,8 @@ pub fn clif_pc_damage(sd: &mut MapSessionData, src: &mut MapSessionData) -> i32 
             clif_send_pc_health(src, damage, 255);
         }
 
-        unsafe {
-            clif_sendstatus(src as *mut MapSessionData, SFLAG_HPMP);
+        if let Some(src_arc) = map_id2sd_arc(src.id) {
+            unsafe { clif_sendstatus(&*src_arc, SFLAG_HPMP); }
         }
     }
 
@@ -299,7 +299,9 @@ pub fn clif_send_pc_healthscript(
     }
 
     if sd.group_count > 0 {
-        unsafe { clif_grouphealth_update(sd as *mut MapSessionData); }
+        if let Some(sd_arc) = map_id2sd_arc(sd.id) {
+            unsafe { clif_grouphealth_update(&*sd_arc); }
+        }
     }
 
     0
@@ -670,7 +672,12 @@ pub fn clif_send_mob_health_sub_inner(
     damage: i32,
 ) -> i32 {
     unsafe {
-        if clif_isingroup(sd_viewer as *mut MapSessionData, sd as *mut MapSessionData) == 0 {
+        let viewer_in_group = if let Some(viewer_arc) = map_id2sd_arc(sd_viewer.id) {
+            clif_isingroup(&*viewer_arc, sd as *mut MapSessionData) != 0
+        } else {
+            false
+        };
+        if !viewer_in_group {
             if sd.id != sd_viewer.id {
                 return 0;
             }
@@ -944,7 +951,10 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
                         addtokillreg(sd, mob.mobid as i32);
                     }
                 } else {
-                    clif_addtokillreg(sd, mob.mobid as i32);
+                    let sd_id = (*sd).id;
+                    if let Some(sd_arc) = map_id2sd_arc(sd_id) {
+                        clif_addtokillreg(&*sd_arc, mob.mobid as i32);
+                    }
                 }
 
                 sl_doscript_2("onGetExp", None, (*sd).id, mob.id);
@@ -1121,13 +1131,17 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
         let sb = s.as_bytes();
         let copy_len = sb.len().min(63);
         msg[..copy_len].copy_from_slice(&sb[..copy_len]);
-        unsafe { clif_sendminitext(sd as *mut MapSessionData, msg.as_ptr() as *const i8); }
+        if let Some(sd_arc) = map_id2sd_arc(sd.id) {
+            unsafe { clif_sendminitext(&*sd_arc, msg.as_ptr() as *const i8); }
+        }
         return 0;
     }
 
     if sd.silence > 0 && spell.mute as i32 <= sd.silence {
         sl_doscript_simple(carray_to_str(&spell.yname), Some("on_mute"), sd.id);
-        unsafe { clif_sendminitext(sd as *mut MapSessionData, b"You have been silenced.\0".as_ptr() as *const i8); }
+        if let Some(sd_arc) = map_id2sd_arc(sd.id) {
+            unsafe { clif_sendminitext(&*sd_arc, b"You have been silenced.\0".as_ptr() as *const i8); }
+        }
         return 0;
     }
 
@@ -1214,7 +1228,9 @@ pub fn clif_parsemagic(sd: &mut MapSessionData) -> i32 {
                 let fail_chance = (100.0f64 - (0.9f64.powi(prot) * 100.0f64) + 0.5f64) as i32;
                 let cast_test = rnd(100);
                 if cast_test < fail_chance {
-                    unsafe { clif_sendminitext(sd as *mut MapSessionData, b"The magic has been deflected.\0".as_ptr() as *const i8); }
+                    if let Some(sd_arc) = map_id2sd_arc(sd.id) {
+                        unsafe { clif_sendminitext(&*sd_arc, b"The magic has been deflected.\0".as_ptr() as *const i8); }
+                    }
                     return 0;
                 }
             }
@@ -1537,29 +1553,30 @@ pub fn clif_checkdura(sd: &mut MapSessionData, equip: i32) -> i32 {
 
     let mut msg_buf = [0i8; 255];
 
+    let sd_arc = map_id2sd_arc(sd.id);
     if percentage <= 0.5 && sd.player.inventory.equip[equip_idx].repair == 0 {
         unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "50"); }
-        unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
+        if let Some(ref arc) = sd_arc { unsafe { clif_sendmsg(&**arc, 5, msg_buf.as_ptr() as *const i8); } }
         sd.player.inventory.equip[equip_idx].repair = 1;
     }
     if percentage <= 0.25 && sd.player.inventory.equip[equip_idx].repair == 1 {
         unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "25"); }
-        unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
+        if let Some(ref arc) = sd_arc { unsafe { clif_sendmsg(&**arc, 5, msg_buf.as_ptr() as *const i8); } }
         sd.player.inventory.equip[equip_idx].repair = 2;
     }
     if percentage <= 0.1 && sd.player.inventory.equip[equip_idx].repair == 2 {
         unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "10"); }
-        unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
+        if let Some(ref arc) = sd_arc { unsafe { clif_sendmsg(&**arc, 5, msg_buf.as_ptr() as *const i8); } }
         sd.player.inventory.equip[equip_idx].repair = 3;
     }
     if percentage <= 0.05 && sd.player.inventory.equip[equip_idx].repair == 3 {
         unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "5"); }
-        unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
+        if let Some(ref arc) = sd_arc { unsafe { clif_sendmsg(&**arc, 5, msg_buf.as_ptr() as *const i8); } }
         sd.player.inventory.equip[equip_idx].repair = 4;
     }
     if percentage <= 0.01 && sd.player.inventory.equip[equip_idx].repair == 4 {
         unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "1"); }
-        unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
+        if let Some(ref arc) = sd_arc { unsafe { clif_sendmsg(&**arc, 5, msg_buf.as_ptr() as *const i8); } }
         sd.player.inventory.equip[equip_idx].repair = 5;
     }
 
@@ -1573,8 +1590,10 @@ pub fn clif_checkdura(sd: &mut MapSessionData, equip: i32) -> i32 {
             sd.player.inventory.equip[equip_idx].protected = sd.player.inventory.equip[equip_idx].protected.saturating_sub(1);
             sd.player.inventory.equip[equip_idx].dura = item.dura;
             unsafe { format_restore_msg(&mut msg_buf, item.name.as_ptr() as *mut i8); }
-            unsafe { clif_sendstatus(sd as *mut MapSessionData, SFLAG_FULLSTATS | SFLAG_HPMP); }
-            unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
+            if let Some(ref arc) = sd_arc {
+                unsafe { clif_sendstatus(&**arc, SFLAG_FULLSTATS | SFLAG_HPMP); }
+                unsafe { clif_sendmsg(&**arc, 5, msg_buf.as_ptr() as *const i8); }
+            }
             sl_doscript_simple("characterLog", Some("equipRestore"), sd.id);
             return 0;
         }
@@ -1600,12 +1619,14 @@ pub fn clif_checkdura(sd: &mut MapSessionData, equip: i32) -> i32 {
         sd.player.inventory.equip[equip_idx].repair          = 0;
         sd.player.inventory.equip[equip_idx].real_name[0]    = 0;
 
-        unsafe {
-            clif_unequipit(sd as *mut MapSessionData, clif_getequiptype(equip));
-            broadcast_update_state(sd as *mut MapSessionData);
-            pc_calcstat(sd as *mut MapSessionData);
-            clif_sendstatus(sd as *mut MapSessionData, SFLAG_FULLSTATS | SFLAG_HPMP);
-            clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8);
+        if let Some(ref arc) = sd_arc {
+            unsafe {
+                clif_unequipit(&**arc, clif_getequiptype(equip));
+                broadcast_update_state(&**arc);
+                pc_calcstat(&**arc);
+                clif_sendstatus(&**arc, SFLAG_FULLSTATS | SFLAG_HPMP);
+                clif_sendmsg(&**arc, 5, msg_buf.as_ptr() as *const i8);
+            }
         }
     }
 
@@ -1638,30 +1659,31 @@ pub fn clif_deductduraequip(sd: &mut MapSessionData) -> i32 {
         let percentage = cur_dura / max_dura;
 
         let mut msg_buf = [0i8; 255];
+        let sd_arc = map_id2sd_arc(sd.id);
 
         if percentage <= 0.5 && sd.player.inventory.equip[equip].repair == 0 {
             unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "50"); }
-            unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
+            if let Some(ref arc) = sd_arc { unsafe { clif_sendmsg(&**arc, 5, msg_buf.as_ptr() as *const i8); } }
             sd.player.inventory.equip[equip].repair = 1;
         }
         if percentage <= 0.25 && sd.player.inventory.equip[equip].repair == 1 {
             unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "25"); }
-            unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
+            if let Some(ref arc) = sd_arc { unsafe { clif_sendmsg(&**arc, 5, msg_buf.as_ptr() as *const i8); } }
             sd.player.inventory.equip[equip].repair = 2;
         }
         if percentage <= 0.1 && sd.player.inventory.equip[equip].repair == 2 {
             unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "10"); }
-            unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
+            if let Some(ref arc) = sd_arc { unsafe { clif_sendmsg(&**arc, 5, msg_buf.as_ptr() as *const i8); } }
             sd.player.inventory.equip[equip].repair = 3;
         }
         if percentage <= 0.05 && sd.player.inventory.equip[equip].repair == 3 {
             unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "5"); }
-            unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
+            if let Some(ref arc) = sd_arc { unsafe { clif_sendmsg(&**arc, 5, msg_buf.as_ptr() as *const i8); } }
             sd.player.inventory.equip[equip].repair = 4;
         }
         if percentage <= 0.01 && sd.player.inventory.equip[equip].repair == 4 {
             unsafe { format_dura_msg(&mut msg_buf, item.name.as_ptr() as *mut i8, "1"); }
-            unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
+            if let Some(ref arc) = sd_arc { unsafe { clif_sendmsg(&**arc, 5, msg_buf.as_ptr() as *const i8); } }
             sd.player.inventory.equip[equip].repair = 5;
         }
 
@@ -1675,8 +1697,10 @@ pub fn clif_deductduraequip(sd: &mut MapSessionData) -> i32 {
                 sd.player.inventory.equip[equip].protected = sd.player.inventory.equip[equip].protected.saturating_sub(1);
                 sd.player.inventory.equip[equip].dura = item.dura;
                 unsafe { format_restore_msg(&mut msg_buf, item.name.as_ptr() as *mut i8); }
-                unsafe { clif_sendstatus(sd as *mut MapSessionData, SFLAG_FULLSTATS | SFLAG_HPMP); }
-                unsafe { clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8); }
+                if let Some(ref arc) = sd_arc {
+                    unsafe { clif_sendstatus(&**arc, SFLAG_FULLSTATS | SFLAG_HPMP); }
+                    unsafe { clif_sendmsg(&**arc, 5, msg_buf.as_ptr() as *const i8); }
+                }
                 sl_doscript_simple("characterLog", Some("equipRestore"), sd.id);
                 continue;
             }
@@ -1709,12 +1733,14 @@ pub fn clif_deductduraequip(sd: &mut MapSessionData) -> i32 {
             sd.player.inventory.equip[equip].repair          = 0;
             sd.player.inventory.equip[equip].real_name[0]    = 0;
 
-            unsafe {
-                clif_unequipit(sd as *mut MapSessionData, clif_getequiptype(equip as i32));
-                broadcast_update_state(sd as *mut MapSessionData);
-                pc_calcstat(sd as *mut MapSessionData);
-                clif_sendstatus(sd as *mut MapSessionData, SFLAG_FULLSTATS | SFLAG_HPMP);
-                clif_sendmsg(sd as *mut MapSessionData, 5, msg_buf.as_ptr() as *const i8);
+            if let Some(ref arc) = sd_arc {
+                unsafe {
+                    clif_unequipit(&**arc, clif_getequiptype(equip as i32));
+                    broadcast_update_state(&**arc);
+                    pc_calcstat(&**arc);
+                    clif_sendstatus(&**arc, SFLAG_FULLSTATS | SFLAG_HPMP);
+                    clif_sendmsg(&**arc, 5, msg_buf.as_ptr() as *const i8);
+                }
             }
         }
     }

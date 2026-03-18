@@ -19,7 +19,8 @@ use crate::common::constants::entity::player::{
 use crate::config_globals::{XP_RATE, D_RATE};
 use crate::game::mob::{MOB_SPAWN_START, MOB_SPAWN_MAX, MOB_ONETIME_START, MOB_ONETIME_MAX};
 
-use crate::game::map_server::userlist;
+use crate::game::map_server::{userlist, map_id2sd_pc};
+use crate::game::pc::PlayerEntity;
 use crate::database::get_pool;
 
 // ── map functions ──────────────────────────────────────────────────────────────
@@ -79,6 +80,12 @@ fn as_ptr(sd: &mut MapSessionData) -> *mut MapSessionData {
     sd as *mut MapSessionData
 }
 
+/// Look up the `PlayerEntity` for a `MapSessionData` by ID.
+#[inline]
+fn pe_of(sd: &MapSessionData) -> Option<std::sync::Arc<PlayerEntity>> {
+    map_id2sd_pc(sd.id)
+}
+
 fn str_to_cname(s: &str) -> [i8; 32] {
     let mut buf = [0i8; 32];
     for (i, b) in s.bytes().take(31).enumerate() { buf[i] = b as i8; }
@@ -92,8 +99,10 @@ fn carray_to_str(arr: &[i8]) -> &str {
 }
 
 fn send_minitext(sd: &mut MapSessionData, msg: &str) {
-    if let Ok(cs) = CString::new(msg) {
-        unsafe { clif_sendminitext(as_ptr(sd), cs.as_ptr()); }
+    if let Some(pe) = pe_of(sd) {
+        if let Ok(cs) = CString::new(msg) {
+            unsafe { clif_sendminitext(&pe, cs.as_ptr()); }
+        }
     }
 }
 
@@ -277,7 +286,7 @@ fn command_item(sd: &mut MapSessionData, line: &str) -> i32 {
         it.dura = item_db::search(itemid).dura;
         it.amount = itemnum as i32;
         it.owner = 0;
-        pc_additem(as_ptr(sd), &mut it);
+        if let Some(pe) = pe_of(sd) { pc_additem(&pe, &mut it); }
     }
     0
 }
@@ -291,19 +300,21 @@ fn command_hair(sd: &mut MapSessionData, line: &str) -> i32 {
     let (hair, hair_color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.player.appearance.hair = hair as u16;
     sd.player.appearance.hair_color = hair_color as u16;
-    unsafe { clif_sendchararea(as_ptr(sd)); clif_getchararea(as_ptr(sd)); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_sendchararea(&pe); clif_getchararea(&pe); } }
     0
 }
 
 fn command_checkdupes(sd: &mut MapSessionData, _line: &str) -> i32 {
-    let sd_ptr = as_ptr(sd);
+    let reporter_id = sd.id;
     crate::game::map_server::for_each_player(|tsd| {
         let n = unsafe { pc_readglobalreg(tsd as *mut MapSessionData, c"goldbardupe".as_ptr() as *const i8) };
         if n != 0 {
             let name_str = tsd.player.identity.name.as_str();
             let msg = format!("{} gold bar {} times", name_str, n);
-            if let Ok(cs) = CString::new(msg) {
-                unsafe { clif_sendminitext(sd_ptr, cs.as_ptr()); }
+            if let Some(pe) = map_id2sd_pc(reporter_id) {
+                if let Ok(cs) = CString::new(msg) {
+                    unsafe { clif_sendminitext(&pe, cs.as_ptr()); }
+                }
             }
         }
     });
@@ -311,14 +322,16 @@ fn command_checkdupes(sd: &mut MapSessionData, _line: &str) -> i32 {
 }
 
 fn command_checkwpe(sd: &mut MapSessionData, _line: &str) -> i32 {
-    let sd_ptr = as_ptr(sd);
+    let reporter_id = sd.id;
     crate::game::map_server::for_each_player(|tsd| {
         let n = unsafe { pc_readglobalreg(tsd as *mut MapSessionData, c"WPEtimes".as_ptr() as *const i8) };
         if n != 0 {
             let name_str = tsd.player.identity.name.as_str();
             let msg = format!("{} WPE attempt {} times", name_str, n);
-            if let Ok(cs) = CString::new(msg) {
-                unsafe { clif_sendminitext(sd_ptr, cs.as_ptr()); }
+            if let Some(pe) = map_id2sd_pc(reporter_id) {
+                if let Ok(cs) = CString::new(msg) {
+                    unsafe { clif_sendminitext(&pe, cs.as_ptr()); }
+                }
             }
         }
     });
@@ -373,14 +386,14 @@ fn command_xprate(sd: &mut MapSessionData, line: &str) -> i32 {
 fn command_heal(sd: &mut MapSessionData, _line: &str) -> i32 {
     sd.player.combat.hp = sd.max_hp;
     sd.player.combat.mp = sd.max_mp;
-    unsafe { clif_sendstatus(as_ptr(sd), SFLAG_HPMP); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_sendstatus(&pe, SFLAG_HPMP); } }
     0
 }
 
 fn command_level(sd: &mut MapSessionData, line: &str) -> i32 {
     let level = match parse_int(line) { Some(v) => v, None => return -1 };
     sd.player.progression.level = level as u8;
-    unsafe { clif_sendstatus(as_ptr(sd), SFLAG_FULLSTATS); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_sendstatus(&pe, SFLAG_FULLSTATS); } }
     0
 }
 
@@ -426,11 +439,11 @@ fn command_disguise(sd: &mut MapSessionData, line: &str) -> i32 {
     let (d, e) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     let os = sd.player.combat.state;
     sd.player.combat.state = 0;
-    unsafe { broadcast_update_state(as_ptr(sd)); }
+    if let Some(pe) = pe_of(sd) { unsafe { broadcast_update_state(&pe); } }
     sd.player.combat.state = os;
     sd.disguise = d as u16;
     sd.disguise_color = e as u16;
-    unsafe { broadcast_update_state(as_ptr(sd)); }
+    if let Some(pe) = pe_of(sd) { unsafe { broadcast_update_state(&pe); } }
     0
 }
 
@@ -458,7 +471,7 @@ fn command_givespell(sd: &mut MapSessionData, line: &str) -> i32 {
 fn command_side(sd: &mut MapSessionData, line: &str) -> i32 {
     let side = match parse_int(line) { Some(v) => v, None => return -1 };
     sd.player.combat.side = side as i8;
-    unsafe { clif_sendchararea(as_ptr(sd)); clif_getchararea(as_ptr(sd)); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_sendchararea(&pe); clif_getchararea(&pe); } }
     0
 }
 
@@ -468,7 +481,7 @@ fn command_state(sd: &mut MapSessionData, line: &str) -> i32 {
         unsafe { pc_res(as_ptr(sd)); }
     } else {
         sd.player.combat.state = (state_val % 5) as i8;
-        unsafe { broadcast_update_state(as_ptr(sd)); }
+        if let Some(pe) = pe_of(sd) { unsafe { broadcast_update_state(&pe); } }
     }
     0
 }
@@ -476,7 +489,7 @@ fn command_state(sd: &mut MapSessionData, line: &str) -> i32 {
 fn command_armorcolor(sd: &mut MapSessionData, line: &str) -> i32 {
     let ac = match parse_int(line) { Some(v) => v, None => return -1 };
     sd.player.appearance.armor_color = ac as u16;
-    unsafe { clif_sendchararea(as_ptr(sd)); clif_getchararea(as_ptr(sd)); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_sendchararea(&pe); clif_getchararea(&pe); } }
     0
 }
 
@@ -534,7 +547,7 @@ fn command_lua(sd: &mut MapSessionData, line: &str) -> i32 {
 fn command_speed(sd: &mut MapSessionData, line: &str) -> i32 {
     let d = match parse_int(line) { Some(v) => v, None => return -1 };
     sd.speed = d;
-    unsafe { clif_sendchararea(as_ptr(sd)); clif_getchararea(as_ptr(sd)); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_sendchararea(&pe); clif_getchararea(&pe); } }
     0
 }
 
@@ -664,12 +677,12 @@ fn command_blockcount(_sd: &mut MapSessionData, _line: &str) -> i32 { 0 }
 fn command_stealth(sd: &mut MapSessionData, _line: &str) -> i32 {
     if sd.optFlags & OPT_FLAG_STEALTH != 0 {
         sd.optFlags ^= OPT_FLAG_STEALTH;
-        unsafe { clif_refresh(as_ptr(sd)); }
+        if let Some(pe) = pe_of(sd) { unsafe { clif_refresh(&pe); } }
         send_minitext(sd, "Stealth :OFF");
     } else {
         unsafe { clif_lookgone_by_id(sd.id); }
         sd.optFlags ^= OPT_FLAG_STEALTH;
-        unsafe { clif_refresh(as_ptr(sd)); }
+        if let Some(pe) = pe_of(sd) { unsafe { clif_refresh(&pe); } }
         send_minitext(sd, "Stealth :ON");
     }
     0
@@ -677,7 +690,7 @@ fn command_stealth(sd: &mut MapSessionData, _line: &str) -> i32 {
 
 fn command_ghosts(sd: &mut MapSessionData, _line: &str) -> i32 {
     sd.optFlags ^= OPT_FLAG_GHOSTS;
-    unsafe { clif_refresh(as_ptr(sd)); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_refresh(&pe); } }
     if sd.optFlags & OPT_FLAG_GHOSTS != 0 {
         send_minitext(sd, "Ghosts :ON");
     } else {
@@ -716,10 +729,14 @@ fn command_silence(sd: &mut MapSessionData, line: &str) -> i32 {
             (*tsd).uFlags ^= U_FLAG_SILENCED;
             if (*tsd).uFlags & U_FLAG_SILENCED != 0 {
                 send_minitext(sd, "Silenced.");
-                clif_sendminitext(tsd, c"You have been silenced.".as_ptr());
+                if let Some(pe) = map_id2sd_pc((*tsd).id) {
+                    clif_sendminitext(&pe, c"You have been silenced.".as_ptr());
+                }
             } else {
                 send_minitext(sd, "Unsilenced.");
-                clif_sendminitext(tsd, c"Silence lifted.".as_ptr());
+                if let Some(pe) = map_id2sd_pc((*tsd).id) {
+                    clif_sendminitext(&pe, c"Silence lifted.".as_ptr());
+                }
             }
         }
     } else {
@@ -787,7 +804,7 @@ fn command_weap(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.weapon = id as u16;
     sd.gfx.cweapon = color as u8;
-    unsafe { clif_getchararea(as_ptr(sd)); clif_sendchararea(as_ptr(sd)); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
     0
 }
 
@@ -795,7 +812,7 @@ fn command_shield(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.shield = id as u16;
     sd.gfx.cshield = color as u8;
-    unsafe { clif_getchararea(as_ptr(sd)); clif_sendchararea(as_ptr(sd)); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
     0
 }
 
@@ -803,7 +820,7 @@ fn command_armor(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.armor = id as u16;
     sd.gfx.carmor = color as u8;
-    unsafe { clif_getchararea(as_ptr(sd)); clif_sendchararea(as_ptr(sd)); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
     0
 }
 
@@ -811,7 +828,7 @@ fn command_boots(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.boots = id as u16;
     sd.gfx.cboots = color as u8;
-    unsafe { clif_getchararea(as_ptr(sd)); clif_sendchararea(as_ptr(sd)); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
     0
 }
 
@@ -819,7 +836,7 @@ fn command_mantle(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.mantle = id as u16;
     sd.gfx.cmantle = color as u8;
-    unsafe { clif_getchararea(as_ptr(sd)); clif_sendchararea(as_ptr(sd)); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
     0
 }
 
@@ -827,7 +844,7 @@ fn command_necklace(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.necklace = id as u16;
     sd.gfx.cnecklace = color as u8;
-    unsafe { clif_getchararea(as_ptr(sd)); clif_sendchararea(as_ptr(sd)); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
     0
 }
 
@@ -835,7 +852,7 @@ fn command_faceacc(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.face_acc = id as u16;
     sd.gfx.cface_acc = color as u8;
-    unsafe { clif_getchararea(as_ptr(sd)); clif_sendchararea(as_ptr(sd)); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
     0
 }
 
@@ -843,7 +860,7 @@ fn command_crown(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.crown = id as u16;
     sd.gfx.ccrown = color as u8;
-    unsafe { clif_getchararea(as_ptr(sd)); clif_sendchararea(as_ptr(sd)); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
     0
 }
 
@@ -851,7 +868,7 @@ fn command_helm(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.helm = id as u16;
     sd.gfx.chelm = color as u8;
-    unsafe { clif_getchararea(as_ptr(sd)); clif_sendchararea(as_ptr(sd)); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
     0
 }
 
@@ -869,7 +886,7 @@ fn command_weather(sd: &mut MapSessionData, line: &str) -> i32 {
     let m = sd.m;
     crate::game::map_server::for_each_player(|tsd| {
         if tsd.m == m {
-            unsafe { clif_sendweather(tsd as *mut MapSessionData); }
+            if let Some(pe) = map_id2sd_pc(tsd.id) { unsafe { clif_sendweather(&pe); } }
         }
     });
     0
@@ -895,8 +912,10 @@ fn command_gm(sd: &mut MapSessionData, line: &str) -> i32 {
     let msg = format!("<GM>{}: {}", name_str, line);
     crate::game::map_server::for_each_player(|tsd| {
         if tsd.player.identity.gm_level != 0 {
-            if let Ok(cs) = CString::new(msg.as_str()) {
-                unsafe { clif_sendmsg(tsd as *mut MapSessionData, 11, cs.as_ptr()); }
+            if let Some(pe) = map_id2sd_pc(tsd.id) {
+                if let Ok(cs) = CString::new(msg.as_str()) {
+                    unsafe { clif_sendmsg(&pe, 11, cs.as_ptr()); }
+                }
             }
         }
     });
@@ -908,8 +927,10 @@ fn command_report(sd: &mut MapSessionData, line: &str) -> i32 {
     let msg = format!("<REPORT>{}: {}", name_str, line);
     crate::game::map_server::for_each_player(|tsd| {
         if tsd.player.identity.gm_level > 0 {
-            if let Ok(cs) = CString::new(msg.as_str()) {
-                unsafe { clif_sendmsg(tsd as *mut MapSessionData, 12, cs.as_ptr()); }
+            if let Some(pe) = map_id2sd_pc(tsd.id) {
+                if let Ok(cs) = CString::new(msg.as_str()) {
+                    unsafe { clif_sendmsg(&pe, 12, cs.as_ptr()); }
+                }
             }
         }
     });
@@ -928,7 +949,11 @@ fn command_url(_sd: &mut MapSessionData, line: &str) -> i32 {
 
     let tsd = unsafe { map_name2sd(namebuf.as_ptr()) };
     if tsd.is_null() { return -1; }
-    unsafe { clif_sendurl(tsd, url_type, urlbuf.as_ptr()); }
+    unsafe {
+        if let Some(pe) = map_id2sd_pc((*tsd).id) {
+            clif_sendurl(&pe, url_type, urlbuf.as_ptr());
+        }
+    }
     0
 }
 
@@ -937,7 +962,8 @@ fn command_cinv(sd: &mut MapSessionData, line: &str) -> i32 {
     for x in start..=end {
         let x = x as usize;
         if x < 52 && sd.player.inventory.inventory[x].id > 0 && sd.player.inventory.inventory[x].amount > 0 {
-            unsafe { pc_delitem(as_ptr(sd), x as i32, sd.player.inventory.inventory[x].amount, 0); }
+            let amount = sd.player.inventory.inventory[x].amount;
+            if let Some(pe) = pe_of(sd) { unsafe { pc_delitem(&pe, x as i32, amount, 0); } }
         }
     }
     0
@@ -1145,7 +1171,7 @@ fn command_reloadwarps(sd: &mut MapSessionData, _line: &str) -> i32 {
 }
 
 fn command_transfer(sd: &mut MapSessionData, _line: &str) -> i32 {
-    unsafe { clif_transfer_test(as_ptr(sd), 1, 10, 10); }
+    if let Some(pe) = pe_of(sd) { unsafe { clif_transfer_test(&pe, 1, 10, 10); } }
     0
 }
 

@@ -567,16 +567,16 @@ pub unsafe fn pc_timer(id: i32, _none: i32) -> i32 {
 
         if (*sd).player.social.pk_duration == 0 {
             (*sd).player.social.pk = 0;
-            clif_sendchararea(sd);
+            if let Some(pe) = map_server::map_id2sd_pc((*sd).id) { clif_sendchararea(&pe); }
         }
     }
 
     if (*sd).group_count > 0 {
-        clif_grouphealth_update(sd);
+        if let Some(pe) = map_server::map_id2sd_pc((*sd).id) { clif_grouphealth_update(&pe); }
     }
 
     if reset != 0 {
-        clif_getchararea(sd);
+        if let Some(pe) = map_server::map_id2sd_pc((*sd).id) { clif_getchararea(&pe); }
     }
 
     0
@@ -602,7 +602,7 @@ pub unsafe fn pc_scripttimer(id: i32, _none: i32) -> i32 {
                 if tsd.is_null() { continue; }
                 if (*tsd).m == (*sd).m {
                     clif_send_groupbars(&mut *sd, &mut *tsd);
-                    clif_grouphealth_update(sd);
+                    if let Some(pe) = map_server::map_id2sd_pc((*sd).id) { clif_grouphealth_update(&pe); }
                 }
             }
         }
@@ -793,7 +793,7 @@ pub unsafe fn pc_checklevel(sd: *mut MapSessionData) -> i32 {
 /// Note: the `if (exp < 0)` branch in C is dead code because `exp` is `unsigned int`
 /// and can never be negative; it is preserved here for faithful translation.
 pub unsafe fn pc_givexp(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     exp: u32,
     xprate: u32,
 ) -> i32 {
@@ -801,9 +801,8 @@ pub unsafe fn pc_givexp(
     let mut stack: i32 = 0;
 
     // stack check — count non-GM PCs at the exact same tile
-    let sx = (*sd).x;
-    let sy = (*sd).y;
-    if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+    let (sx, sy, m) = { let r = pe.read(); (r.x, r.y, r.m) };
+    if let Some(grid) = block_grid::get_grid(m as usize) {
         for id in grid.ids_at_tile(sx, sy) {
             if stack >= 32768 { break; }
             if let Some(tsd_arc) = map_server::map_id2sd_pc(id) {
@@ -822,19 +821,19 @@ pub unsafe fn pc_givexp(
             xpstring.len(),
             msg.as_ptr() as *const i8,
         );
-        clif_sendminitext(sd, xpstring.as_ptr());
+        clif_sendminitext(pe, xpstring.as_ptr());
         return 0;
     }
 
     // AFK check
-    if (*sd).afk == 1 {
+    if pe.read().afk == 1 {
         let msg = b"You cannot gain experience while AFK.\0";
         libc::snprintf(
             xpstring.as_mut_ptr(),
             xpstring.len(),
             msg.as_ptr() as *const i8,
         );
-        clif_sendminitext(sd, xpstring.as_ptr());
+        clif_sendminitext(pe, xpstring.as_ptr());
         return 0;
     }
 
@@ -842,30 +841,32 @@ pub unsafe fn pc_givexp(
 
     // cast to i64 makes this unreachable; preserved as dead code matching C original where exp is unsigned int
     if (exp as i64) < 0 {
-        if ((*sd).player.progression.exp as i64) < (exp as i64).abs() {
-            (*sd).player.progression.exp = 0;
+        let cur_exp = pe.read().player.progression.exp;
+        if (cur_exp as i64) < (exp as i64).abs() {
+            pe.write().player.progression.exp = 0;
         } else {
-            (*sd).player.progression.exp = (*sd).player.progression.exp.wrapping_add(exp);
+            pe.write().player.progression.exp = cur_exp.wrapping_add(exp);
         }
         return 0;
     }
 
+    let cur_exp = pe.read().player.progression.exp;
     let totalxp: i64 = (exp as i64).wrapping_mul(xprate as i64);
-    let difxp: u32 = 4294967295u32.wrapping_sub((*sd).player.progression.exp);
+    let difxp: u32 = 4294967295u32.wrapping_sub(cur_exp);
 
     let (tempxp, defaultxp): (u32, u32) = if (difxp as i64) > totalxp {
         (
-            (*sd).player.progression.exp.wrapping_add(totalxp as u32),
+            cur_exp.wrapping_add(totalxp as u32),
             totalxp as u32,
         )
     } else {
         (
-            (*sd).player.progression.exp.wrapping_add(difxp),
+            cur_exp.wrapping_add(difxp),
             difxp,
         )
     };
 
-    (*sd).player.progression.exp = tempxp;
+    pe.write().player.progression.exp = tempxp;
 
     libc::snprintf(
         xpstring.as_mut_ptr(),
@@ -874,10 +875,10 @@ pub unsafe fn pc_givexp(
         defaultxp,
     );
 
-    pc_checklevel(sd);
-    clif_sendminitext(sd, xpstring.as_ptr());
-    clif_sendstatus(sd, SFLAG_XPMONEY);
-    clif_sendupdatestatus_onequip(sd);
+    pc_checklevel(pe.data_ptr()); // TODO(phase6c): migrate
+    clif_sendminitext(pe, xpstring.as_ptr());
+    clif_sendstatus(pe, SFLAG_XPMONEY);
+    clif_sendupdatestatus_onequip(pe);
 
     0
 }
@@ -886,177 +887,190 @@ pub unsafe fn pc_givexp(
 /// equipped items, applies active magic aether/passive skills, computes TNL percentage,
 /// clamps all stats, then sends a full status update to the client.
 ///
-pub unsafe fn pc_calcstat(sd: *mut MapSessionData) -> i32 {
+pub unsafe fn pc_calcstat(pe: &PlayerEntity) -> i32 {
 
+    {
+        let mut sd = pe.write();
 
-    if sd.is_null() { return 0; }
+        // Reset combat modifiers
+        sd.dam       = 0;
+        sd.hit       = 0;
+        sd.miss      = 0;
+        sd.crit      = 0;
+        sd.critmult  = 0.0f32;
+        sd.deduction = 1.0f32;
+        sd.snare     = 0;
+        sd.sleep     = 1.0f32;
+        sd.silence   = 0;
+        sd.paralyzed = 0;
+        sd.blind     = 0;
+        sd.drunk     = 0;
 
-    // Reset combat modifiers
-    (*sd).dam       = 0;
-    (*sd).hit       = 0;
-    (*sd).miss      = 0;
-    (*sd).crit      = 0;
-    (*sd).critmult  = 0.0f32;
-    (*sd).deduction = 1.0f32;
-    (*sd).snare     = 0;
-    (*sd).sleep     = 1.0f32;
-    (*sd).silence   = 0;
-    (*sd).paralyzed = 0;
-    (*sd).blind     = 0;
-    (*sd).drunk     = 0;
+        if sd.rage == 0.0f32      { sd.rage     = 1.0f32; }
+        if sd.enchanted == 0.0f32 { sd.enchanted = 1.0f32; }
 
-    if (*sd).rage == 0.0f32      { (*sd).rage     = 1.0f32; }
-    if (*sd).enchanted == 0.0f32 { (*sd).enchanted = 1.0f32; }
+        // C: `if (sd->status.basehp <= 0)` — unsigned int, so equivalent to == 0.
+        if sd.player.combat.max_hp == 0 { sd.player.combat.max_hp = 5; }
+        if sd.player.combat.max_mp == 0 { sd.player.combat.max_mp = 5; }
 
-    // C: `if (sd->status.basehp <= 0)` — unsigned int, so equivalent to == 0.
-    if (*sd).player.combat.max_hp == 0 { (*sd).player.combat.max_hp = 5; }
-    if (*sd).player.combat.max_mp == 0 { (*sd).player.combat.max_mp = 5; }
+        // Copy base stats
+        sd.armor   = sd.player.combat.base_armor  as i32;
+        sd.max_hp  = sd.player.combat.max_hp;
+        sd.max_mp  = sd.player.combat.max_mp;
+        sd.might   = sd.player.combat.base_might  as i32;
+        sd.grace   = sd.player.combat.base_grace  as i32;
+        sd.will    = sd.player.combat.base_will   as i32;
 
-    // Copy base stats
-    (*sd).armor   = (*sd).player.combat.base_armor  as i32;
-    (*sd).max_hp  = (*sd).player.combat.max_hp;
-    (*sd).max_mp  = (*sd).player.combat.max_mp;
-    (*sd).might   = (*sd).player.combat.base_might  as i32;
-    (*sd).grace   = (*sd).player.combat.base_grace  as i32;
-    (*sd).will    = (*sd).player.combat.base_will   as i32;
+        sd.maxSdam = 0;
+        sd.minSdam = 0;
+        sd.minLdam = 0;
+        sd.maxLdam = 0;
 
-    (*sd).maxSdam = 0;
-    (*sd).minSdam = 0;
-    (*sd).minLdam = 0;
-    (*sd).maxLdam = 0;
+        sd.attack_speed = 20;
+        sd.protection   = 0;
+        sd.healing      = 0;
+        sd.player.progression.tnl   = 0;
+        sd.player.progression.real_tnl = 0;
 
-    (*sd).attack_speed = 20;
-    (*sd).protection   = 0;
-    (*sd).healing      = 0;
-    (*sd).player.progression.tnl   = 0;
-    (*sd).player.progression.real_tnl = 0;
-
-    // Accumulate stats from equipped items
-    for x in 0..14usize {
-        let id = (&(*sd).player.inventory.equip)[x].id;
-        if id > 0 {
-            let db = item_db::search(id);
-            (*sd).max_hp  = (*sd).max_hp.wrapping_add(db.vita  as u32);
-            (*sd).max_mp  = (*sd).max_mp.wrapping_add(db.mana  as u32);
-            (*sd).might   += db.might;
-            (*sd).grace   += db.grace;
-            (*sd).will    += db.will;
-            (*sd).armor   += db.ac;
-            (*sd).healing += db.healing;
-            (*sd).dam     += db.dam;
-            (*sd).hit     += db.hit;
-            (*sd).minSdam += db.min_sdam as i32; // u32 field, i32 accumulator
-            (*sd).maxSdam += db.max_sdam as i32;
-            (*sd).minLdam += db.min_ldam as i32;
-            (*sd).maxLdam += db.max_ldam as i32;
-            (*sd).protection = ((*sd).protection as i32 + db.protection) as i16;
+        // Accumulate stats from equipped items
+        for x in 0..14usize {
+            let id = sd.player.inventory.equip[x].id;
+            if id > 0 {
+                let db = item_db::search(id);
+                sd.max_hp  = sd.max_hp.wrapping_add(db.vita  as u32);
+                sd.max_mp  = sd.max_mp.wrapping_add(db.mana  as u32);
+                sd.might   += db.might;
+                sd.grace   += db.grace;
+                sd.will    += db.will;
+                sd.armor   += db.ac;
+                sd.healing += db.healing;
+                sd.dam     += db.dam;
+                sd.hit     += db.hit;
+                sd.minSdam += db.min_sdam as i32; // u32 field, i32 accumulator
+                sd.maxSdam += db.max_sdam as i32;
+                sd.minLdam += db.min_ldam as i32;
+                sd.maxLdam += db.max_ldam as i32;
+                sd.protection = (sd.protection as i32 + db.protection) as i16;
+            }
         }
-    }
 
-    // Mount state
-    if (*sd).player.combat.state == PC_MOUNTED as i8 {
-        if (*sd).player.identity.gm_level == 0 {
-            if (*sd).speed < 40 { (*sd).speed = 40; }
+        // Mount state
+        if sd.player.combat.state == PC_MOUNTED as i8 {
+            if sd.player.identity.gm_level == 0 {
+                if sd.speed < 40 { sd.speed = 40; }
+            }
+        } else {
+            sd.speed = 90;
         }
-        sl_doscript_simple_pc("remount", None, (*sd).id);
-    } else {
-        (*sd).speed = 90;
+    } // drop write guard before Lua calls
+
+    // Mount state Lua hook
+    if pe.read().player.combat.state == PC_MOUNTED as i8 {
+        sl_doscript_simple_pc("remount", None, pe.id);
     }
 
     // Fire recast and passive scripts (only when alive)
-    if (*sd).player.combat.state != PC_DIE as i8 {
+    let state = pe.read().player.combat.state;
+    if state != PC_DIE as i8 {
         // Recast active magic aether slots
-        for x in 0..MAX_MAGIC_TIMERS {
-            let p = &(&(*sd).player.spells.dura_aether)[x];
-            if p.id > 0 && p.duration > 0 {
-                let tsd = map_id2sd_pc(p.caster_id);
-                if !tsd.is_null() {
-                    sl_doscript_2_pc(scripting::carray_to_str(&magic_db::search(p.id as i32).yname), Some("recast"), (*sd).id, (*tsd).id);
-                } else {
-                    // sl_doscript_simple(magicdb_yname(p->id), "recast", &sd->bl)
-                    sl_doscript_simple_pc(scripting::carray_to_str(&magic_db::search(p.id as i32).yname), Some("recast"), (*sd).id);
-                }
+        let dura_ids: Vec<(u16, i32, u32)> = pe.read().player.spells.dura_aether.iter()
+            .filter(|p| p.id > 0 && p.duration > 0)
+            .map(|p| (p.id, p.id as i32, p.caster_id))
+            .collect();
+        for (_, mid, caster_id) in &dura_ids {
+            let tsd = map_id2sd_pc(*caster_id);
+            if !tsd.is_null() {
+                sl_doscript_2_pc(scripting::carray_to_str(&magic_db::search(*mid).yname), Some("recast"), pe.id, (*tsd).id);
+            } else {
+                sl_doscript_simple_pc(scripting::carray_to_str(&magic_db::search(*mid).yname), Some("recast"), pe.id);
             }
         }
 
         // Passive skills
-        for x in 0..52usize {
-            if (&(*sd).player.spells.skills)[x] > 0 {
-                sl_doscript_simple_pc(scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.skills)[x] as i32).yname), Some("passive"), (*sd).id);
+        let skills: Vec<u16> = pe.read().player.spells.skills.iter().copied().collect();
+        for skill in skills {
+            if skill > 0 {
+                sl_doscript_simple_pc(scripting::carray_to_str(&magic_db::search(skill as i32).yname), Some("passive"), pe.id);
             }
         }
 
         // Re-equip scripts
-        for x in 0..14usize {
-            if (&(*sd).player.inventory.equip)[x].id > 0 {
-                sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.equip)[x].id).yname), Some("re_equip"), (*sd).id);
+        let equip_ids: Vec<u32> = pe.read().player.inventory.equip.iter().map(|e| e.id).collect();
+        for id in equip_ids {
+            if id > 0 {
+                sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search(id).yname), Some("re_equip"), pe.id);
             }
         }
     }
 
-    // Compute TNL percentage for group status window (added 8-5-16)
-    if (*sd).player.progression.tnl == 0 {
-        let path_raw = (*sd).player.progression.class as i32;
-        let path = if path_raw > 5 { classdb_path(path_raw) } else { path_raw };
-        let level = (*sd).player.progression.level as i32;
+    {
+        let mut sd = pe.write();
 
-        if level < 99 {
-            let helper = classdb_level(path, level).wrapping_sub(classdb_level(path, level - 1)) as i64;
-            let tnl    = classdb_level(path, level) as i64 - (*sd).player.progression.exp as i64;
-            let mut percentage = (((helper - tnl) as f32) / (helper as f32)) * 100.0f32;
-            // C bug preserved: tnl assigned before death-penalty correction; C never re-assigns it
-            (*sd).player.progression.tnl = percentage as i32 as u32;
-            if tnl > helper {
-                // XP went below previous level threshold (e.g. after a death penalty);
-                // recomputes percentage for internal use only — status.tnl is NOT updated here (matches C)
-                percentage = ((*sd).player.progression.exp as f32 / helper as f32) * 100.0f32 + 0.5f32;
+        // Compute TNL percentage for group status window (added 8-5-16)
+        if sd.player.progression.tnl == 0 {
+            let path_raw = sd.player.progression.class as i32;
+            let path = if path_raw > 5 { classdb_path(path_raw) } else { path_raw };
+            let level = sd.player.progression.level as i32;
+
+            if level < 99 {
+                let helper = classdb_level(path, level).wrapping_sub(classdb_level(path, level - 1)) as i64;
+                let tnl    = classdb_level(path, level) as i64 - sd.player.progression.exp as i64;
+                let mut percentage = (((helper - tnl) as f32) / (helper as f32)) * 100.0f32;
+                // C bug preserved: tnl assigned before death-penalty correction; C never re-assigns it
+                sd.player.progression.tnl = percentage as i32 as u32;
+                if tnl > helper {
+                    // XP went below previous level threshold (e.g. after a death penalty);
+                    // recomputes percentage for internal use only — status.tnl is NOT updated here (matches C)
+                    percentage = (sd.player.progression.exp as f32 / helper as f32) * 100.0f32 + 0.5f32;
+                }
+                let _ = percentage; // suppress unused-variable warning; death-penalty path uses it in C for nothing further
+            } else {
+                sd.player.progression.tnl = ((sd.player.progression.exp as f64 / 4294967295.0f64) * 100.0f64) as i32 as u32;
             }
-            let _ = percentage; // suppress unused-variable warning; death-penalty path uses it in C for nothing further
-        } else {
-            (*sd).player.progression.tnl = (((*sd).player.progression.exp as f64 / 4294967295.0f64) * 100.0f64) as i32 as u32;
         }
-    }
 
-    // Compute real TNL for F1 menu (added 8-6-16)
-    if (*sd).player.progression.real_tnl == 0 {
-        let path_raw = (*sd).player.progression.class as i32;
-        let path = if path_raw > 5 { classdb_path(path_raw) } else { path_raw };
-        let level = (*sd).player.progression.level as i32;
+        // Compute real TNL for F1 menu (added 8-6-16)
+        if sd.player.progression.real_tnl == 0 {
+            let path_raw = sd.player.progression.class as i32;
+            let path = if path_raw > 5 { classdb_path(path_raw) } else { path_raw };
+            let level = sd.player.progression.level as i32;
 
-        if level < 99 {
-            let tnl = classdb_level(path, level) as i64 - (*sd).player.progression.exp as i64;
-            (*sd).player.progression.real_tnl = tnl as i32 as u32;
-        } else {
-            (*sd).player.progression.real_tnl = 0;
+            if level < 99 {
+                let tnl = classdb_level(path, level) as i64 - sd.player.progression.exp as i64;
+                sd.player.progression.real_tnl = tnl as i32 as u32;
+            } else {
+                sd.player.progression.real_tnl = 0;
+            }
         }
-    }
 
-    // Clamp stat values
-    if (*sd).might  > 255 { (*sd).might  = 255; }
-    if (*sd).grace  > 255 { (*sd).grace  = 255; }
-    if (*sd).will   > 255 { (*sd).will   = 255; }
-    if (*sd).might  < 0   { (*sd).might  = 0;   }
-    if (*sd).grace  < 0   { (*sd).grace  = 0;   }
-    if (*sd).will   < 0   { (*sd).will   = 0;   }
+        // Clamp stat values
+        if sd.might  > 255 { sd.might  = 255; }
+        if sd.grace  > 255 { sd.grace  = 255; }
+        if sd.will   > 255 { sd.will   = 255; }
+        if sd.might  < 0   { sd.might  = 0;   }
+        if sd.grace  < 0   { sd.grace  = 0;   }
+        if sd.will   < 0   { sd.will   = 0;   }
 
-    if (*sd).dam    < 0   { (*sd).dam    = 0;   }
-    if (*sd).dam    > 255 { (*sd).dam    = 255; }
-    if (*sd).armor  < -127 { (*sd).armor = -127; }
-    if (*sd).armor  > 127  { (*sd).armor =  127; }
-    if (*sd).dam    < 0   { (*sd).dam    = 0;   }   // duplicate clamp, preserved faithfully
-    if (*sd).attack_speed < 3 { (*sd).attack_speed = 3; }
+        if sd.dam    < 0   { sd.dam    = 0;   }
+        if sd.dam    > 255 { sd.dam    = 255; }
+        if sd.armor  < -127 { sd.armor = -127; }
+        if sd.armor  > 127  { sd.armor =  127; }
+        if sd.dam    < 0   { sd.dam    = 0;   }   // duplicate clamp, preserved faithfully
+        if sd.attack_speed < 3 { sd.attack_speed = 3; }
 
-    // Global map health/magic overrides
-    let max_health = map_readglobalreg((*sd).m as i32, c"maxHealth".as_ptr());
-    let max_magic  = map_readglobalreg((*sd).m as i32, c"maxMagic".as_ptr());
-    if max_health > 0 { (*sd).max_hp = max_health as u32; }
-    if max_magic  > 0 { (*sd).max_mp = max_magic  as u32; }
+        // Global map health/magic overrides
+        let max_health = map_readglobalreg(sd.m as i32, c"maxHealth".as_ptr());
+        let max_magic  = map_readglobalreg(sd.m as i32, c"maxMagic".as_ptr());
+        if max_health > 0 { sd.max_hp = max_health as u32; }
+        if max_magic  > 0 { sd.max_mp = max_magic  as u32; }
 
-    // Clamp current HP/MP
-    if (*sd).player.combat.hp > (*sd).max_hp { (*sd).player.combat.hp = (*sd).max_hp; }
-    if (*sd).player.combat.mp > (*sd).max_mp { (*sd).player.combat.mp = (*sd).max_mp; }
+        // Clamp current HP/MP
+        let (max_hp, max_mp) = (sd.max_hp, sd.max_mp);
+        if sd.player.combat.hp > max_hp { sd.player.combat.hp = max_hp; }
+        if sd.player.combat.mp > max_mp { sd.player.combat.mp = max_mp; }
+    } // drop write guard
 
-    clif_sendstatus(sd, SFLAG_FULLSTATS | SFLAG_HPMP | SFLAG_XPMONEY);
+    clif_sendstatus(pe, SFLAG_FULLSTATS | SFLAG_HPMP | SFLAG_XPMONEY);
 
     0
 }
@@ -1266,16 +1280,18 @@ pub unsafe fn pc_readparam(sd: *mut MapSessionData, type_: i32) -> i32 {
 
 /// Sets a player parameter by SP_* constant.
 ///
-pub unsafe fn pc_setparam(sd: *mut MapSessionData, type_: i32, val: i32) -> i32 {
-    if sd.is_null() { return 0; }
-    match type_ {
-        SP_HP  => (*sd).player.combat.hp  = val as u32,
-        SP_MP  => (*sd).player.combat.mp  = val as u32,
-        SP_MHP => (*sd).max_hp     = val as u32,
-        SP_MMP => (*sd).max_mp     = val as u32,
-        _      => {}
-    }
-    clif_sendupdatestatus(sd);
+pub unsafe fn pc_setparam(pe: &PlayerEntity, type_: i32, val: i32) -> i32 {
+    {
+        let mut sd = pe.write();
+        match type_ {
+            SP_HP  => sd.player.combat.hp  = val as u32,
+            SP_MP  => sd.player.combat.mp  = val as u32,
+            SP_MHP => sd.max_hp     = val as u32,
+            SP_MMP => sd.max_mp     = val as u32,
+            _      => {}
+        }
+    } // drop write guard
+    clif_sendupdatestatus(pe);
     0
 }
 
@@ -1691,10 +1707,11 @@ pub unsafe fn pc_addtocurrent_inner(
 
 /// Add item to inventory with logging.
 pub unsafe fn pc_additem(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     fl: *mut Item,
 ) -> i32 {
-    if sd.is_null() || fl.is_null() { return 0; }
+    if fl.is_null() { return 0; }
+    let sd = pe.data_ptr(); // TODO(phase6c): migrate
 
     // Gold dupe guard: id==0 with amount is bogus.
     if (*fl).id == 0 && (*fl).amount != 0 { return 0; }
@@ -1717,11 +1734,11 @@ pub unsafe fn pc_additem(
                 c"(%s). You can't have more than (%i).".as_ptr(),
                 item_db::search(id_u).name.as_ptr(), item_db::search(id_u).max_amount,
             );
-            pc_dropitemfull_inner(sd, fl);
-            clif_sendminitext(sd, errbuf.as_ptr());
+            pc_dropitemfull_inner(sd, fl); // TODO(phase6c): migrate
+            clif_sendminitext(pe, errbuf.as_ptr());
         } else {
-            clif_sendminitext(sd, map_msg()[MAP_ERRITMFULL].message.as_ptr());
-            pc_dropitemfull_inner(sd, fl);
+            clif_sendminitext(pe, map_msg()[MAP_ERRITMFULL].message.as_ptr());
+            pc_dropitemfull_inner(sd, fl); // TODO(phase6c): migrate
         }
         return 0;
     }
@@ -1767,7 +1784,7 @@ pub unsafe fn pc_additem(
             (*fl).amount   = 0;
         }
 
-        clif_sendadditem(sd, num);
+        clif_sendadditem(pe, num);
         num = pc_isinvenspace(
             sd, id_u as i32, (*fl).owner as i32,
             (*fl).real_name.as_ptr(),
@@ -1786,11 +1803,11 @@ pub unsafe fn pc_additem(
                 c"(%s). You can't have more than (%i).".as_ptr(),
                 item_db::search(id_u).name.as_ptr(), item_db::search(id_u).max_amount,
             );
-            pc_dropitemfull_inner(sd, fl);
-            clif_sendminitext(sd, errbuf.as_ptr());
+            pc_dropitemfull_inner(sd, fl); // TODO(phase6c): migrate
+            clif_sendminitext(pe, errbuf.as_ptr());
         } else {
-            pc_dropitemfull_inner(sd, fl);
-            clif_sendminitext(sd, map_msg()[MAP_ERRITMFULL].message.as_ptr());
+            pc_dropitemfull_inner(sd, fl); // TODO(phase6c): migrate
+            clif_sendminitext(pe, map_msg()[MAP_ERRITMFULL].message.as_ptr());
         }
     }
     0
@@ -1800,10 +1817,11 @@ pub unsafe fn pc_additem(
 
 /// Add item without SQL logging.
 pub unsafe fn pc_additemnolog(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     fl: *mut Item,
 ) -> i32 {
-    if sd.is_null() || fl.is_null() { return 0; }
+    if fl.is_null() { return 0; }
+    let sd = pe.data_ptr(); // TODO(phase6c): migrate
 
     if (*fl).id == 0 && (*fl).amount != 0 { return 0; }
 
@@ -1825,11 +1843,11 @@ pub unsafe fn pc_additemnolog(
                 c"(%s). You can't have more than (%i).".as_ptr(),
                 item_db::search(id_u).name.as_ptr(), item_db::search(id_u).max_amount,
             );
-            pc_dropitemfull_inner(sd, fl);
-            clif_sendminitext(sd, errbuf.as_ptr());
+            pc_dropitemfull_inner(sd, fl); // TODO(phase6c): migrate
+            clif_sendminitext(pe, errbuf.as_ptr());
         } else {
-            clif_sendminitext(sd, map_msg()[MAP_ERRITMFULL].message.as_ptr());
-            pc_dropitemfull_inner(sd, fl);
+            clif_sendminitext(pe, map_msg()[MAP_ERRITMFULL].message.as_ptr());
+            pc_dropitemfull_inner(sd, fl); // TODO(phase6c): migrate
         }
         return 0;
     }
@@ -1871,7 +1889,7 @@ pub unsafe fn pc_additemnolog(
             (*fl).amount   = 0;
         }
 
-        clif_sendadditem(sd, num);
+        clif_sendadditem(pe, num);
         num = pc_isinvenspace(
             sd, id_u as i32, (*fl).owner as i32,
             (*fl).real_name.as_ptr(),
@@ -1890,11 +1908,11 @@ pub unsafe fn pc_additemnolog(
                 c"(%s). You can't have more than (%i).".as_ptr(),
                 item_db::search(id_u).name.as_ptr(), item_db::search(id_u).max_amount,
             );
-            pc_dropitemfull_inner(sd, fl);
-            clif_sendminitext(sd, errbuf.as_ptr());
+            pc_dropitemfull_inner(sd, fl); // TODO(phase6c): migrate
+            clif_sendminitext(pe, errbuf.as_ptr());
         } else {
-            pc_dropitemfull_inner(sd, fl);
-            clif_sendminitext(sd, map_msg()[MAP_ERRITMFULL].message.as_ptr());
+            pc_dropitemfull_inner(sd, fl); // TODO(phase6c): migrate
+            clif_sendminitext(pe, map_msg()[MAP_ERRITMFULL].message.as_ptr());
         }
     }
     0
@@ -1907,12 +1925,12 @@ pub unsafe fn pc_additemnolog(
 /// the client is notified with a delete-item packet; otherwise the client
 /// receives an updated add-item count and a mini-text with the item name.
 pub unsafe fn pc_delitem(
-    sd:     *mut MapSessionData,
+    pe:     &PlayerEntity,
     id:     i32,
     amount: i32,
     type_:  i32,
 ) -> i32 {
-    if sd.is_null() { return 0; }
+    let sd = pe.data_ptr(); // TODO(phase6c): migrate
     let maxinv = (*sd).player.inventory.max_inv as i32;
     if id < 0 || id >= maxinv { return 0; }
     let inv = &mut (&mut (*sd).player.inventory.inventory)[id as usize];
@@ -1922,7 +1940,7 @@ pub unsafe fn pc_delitem(
     if amount >= inv.amount {
         inv.amount = 0;
         libc::memset(inv as *mut Item as *mut libc::c_void, 0, mem::size_of::<Item>());
-        clif_senddelitem(sd, id, type_);
+        clif_senddelitem(pe, id, type_);
         return 0;
     }
 
@@ -1930,7 +1948,7 @@ pub unsafe fn pc_delitem(
 
     if inv.amount <= 0 {
         libc::memset(inv as *mut Item as *mut libc::c_void, 0, mem::size_of::<Item>());
-        clif_senddelitem(sd, id, type_);
+        clif_senddelitem(pe, id, type_);
     } else {
         let item_id = (&(*sd).player.inventory.inventory)[id as usize].id;
         let mut buf = [0i8; 255];
@@ -1940,8 +1958,8 @@ pub unsafe fn pc_delitem(
             item_db::search(item_id).name.as_ptr(),
             amount,
         );
-        clif_sendminitext(sd, buf.as_ptr());
-        clif_sendadditem(sd, id);
+        clif_sendminitext(pe, buf.as_ptr());
+        clif_sendadditem(pe, id);
     }
     0
 }
@@ -1951,18 +1969,18 @@ pub unsafe fn pc_delitem(
 /// Drop one (or all) units
 /// of inventory slot `id` onto the map floor.
 pub unsafe fn pc_dropitemmap(
-    sd:    *mut MapSessionData,
+    pe:    &PlayerEntity,
     id:    i32,
     type_: i32,
 ) -> i32 {
-    if sd.is_null() { return 0; }
+    let sd = pe.data_ptr(); // TODO(phase6c): migrate
     let id_u = id as usize;
 
     if id > (*sd).player.inventory.max_inv as i32 { return 0; }
     if (&(*sd).player.inventory.inventory)[id_u].id == 0 { return 0; }
 
     if (&(*sd).player.inventory.inventory)[id_u].amount <= 0 {
-        clif_senddelitem(sd, id, 1);
+        clif_senddelitem(pe, id, 1);
         return 0;
     }
 
@@ -2002,11 +2020,11 @@ pub unsafe fn pc_dropitemmap(
             0,
             mem::size_of::<Item>(),
         );
-        clif_senddelitem(sd, id, 1);
+        clif_senddelitem(pe, id, 1);
     } else {
         // Partial drop: update count.
         (*fl).data.amount = 1;
-        clif_sendadditem(sd, id);
+        clif_sendadditem(pe, id);
     }
 
     if def[0] == 0 {
@@ -2033,11 +2051,11 @@ pub unsafe fn pc_dropitemmap(
 /// Swap inventory slots `id1`
 /// and `id2`, sending the appropriate add/delete packets to the client.
 pub unsafe fn pc_changeitem(
-    sd:  *mut MapSessionData,
+    pe:  &PlayerEntity,
     id1: i32,
     id2: i32,
 ) -> i32 {
-    if sd.is_null() { return 0; }
+    let sd = pe.data_ptr(); // TODO(phase6c): migrate
     let maxinv = (*sd).player.inventory.max_inv as i32;
     if id1 >= maxinv { return 0; }
     if id2 >= maxinv { return 0; }
@@ -2052,15 +2070,15 @@ pub unsafe fn pc_changeitem(
 
     if (&(*sd).player.inventory.inventory)[i1].id != 0 {
         if (&(*sd).player.inventory.inventory)[i2].id == 0 {
-            clif_senddelitem(sd, id2, 0);
+            clif_senddelitem(pe, id2, 0);
         }
-        clif_sendadditem(sd, id1);
+        clif_sendadditem(pe, id1);
     }
     if (&(*sd).player.inventory.inventory)[i2].id != 0 {
         if (&(*sd).player.inventory.inventory)[i1].id == 0 {
-            clif_senddelitem(sd, id1, 0);
+            clif_senddelitem(pe, id1, 0);
         }
-        clif_sendadditem(sd, id2);
+        clif_sendadditem(pe, id2);
     }
     0
 }
@@ -2072,10 +2090,10 @@ pub unsafe fn pc_changeitem(
 /// Handles all item types: food, usables, consumables, mounts, equipment, etc.
 /// Delegates equip logic to `pc_equipitem`.
 pub unsafe fn pc_useitem(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     id: i32,
 ) -> i32 {
-    if sd.is_null() { return 0; }
+    let sd = pe.data_ptr(); // TODO(phase6c): migrate
     let maxinv = (*sd).player.inventory.max_inv as i32;
     if id < 0 || id >= maxinv { return 0; }
     let id_u = id as usize;
@@ -2086,7 +2104,7 @@ pub unsafe fn pc_useitem(
     if (&(*sd).player.inventory.inventory)[id_u].owner != 0
         && (&(*sd).player.inventory.inventory)[id_u].owner != (*sd).player.identity.id
     {
-        clif_sendminitext(sd, c"You cannot use this, it does not belong to you!".as_ptr());
+        clif_sendminitext(pe, c"You cannot use this, it does not belong to you!".as_ptr());
         return 0;
     }
 
@@ -2095,7 +2113,7 @@ pub unsafe fn pc_useitem(
     if equip_type >= 0 && (equip_type as usize) < (*sd).player.inventory.equip.len() {
         if (&(*sd).player.inventory.equip)[equip_type as usize].id > 0 && (*sd).player.identity.gm_level == 0 {
             if item_db::search((&(*sd).player.inventory.equip)[equip_type as usize].id).unequip as i32 == 1 {
-                clif_sendminitext(sd, c"You are unable to unequip that.".as_ptr());
+                clif_sendminitext(pe, c"You are unable to unequip that.".as_ptr());
                 return 0;
             }
         }
@@ -2109,28 +2127,28 @@ pub unsafe fn pc_useitem(
             if classdb_path((*sd).player.progression.class as i32)
                 != item_db::search((&(*sd).player.inventory.inventory)[id_u].id).class as i32
             {
-                clif_sendminitext(sd, map_msg()[MAP_ERRITMPATH].message.as_ptr());
+                clif_sendminitext(pe, map_msg()[MAP_ERRITMPATH].message.as_ptr());
                 return 0;
             }
         } else {
             if (*sd).player.progression.class as i32 != item_db::search((&(*sd).player.inventory.inventory)[id_u].id).class as i32 {
-                clif_sendminitext(sd, map_msg()[MAP_ERRITMPATH].message.as_ptr());
+                clif_sendminitext(pe, map_msg()[MAP_ERRITMPATH].message.as_ptr());
                 return 0;
             }
         }
         if ((*sd).player.progression.mark as i32) < item_db::search((&(*sd).player.inventory.inventory)[id_u].id).rank {
-            clif_sendminitext(sd, map_msg()[MAP_ERRITMMARK].message.as_ptr());
+            clif_sendminitext(pe, map_msg()[MAP_ERRITMMARK].message.as_ptr());
             return 0;
         }
     }
 
     // Ghost / mounted state restrictions.
     if (*sd).player.combat.state == PC_DIE as i8 {
-        clif_sendminitext(sd, map_msg()[MAP_ERRGHOST].message.as_ptr());
+        clif_sendminitext(pe, map_msg()[MAP_ERRGHOST].message.as_ptr());
         return 0;
     }
     if (*sd).player.combat.state == PC_MOUNTED as i8 {
-        clif_sendminitext(sd, map_msg()[MAP_ERRMOUNT].message.as_ptr());
+        clif_sendminitext(pe, map_msg()[MAP_ERRMOUNT].message.as_ptr());
         return 0;
     }
 
@@ -2171,139 +2189,139 @@ pub unsafe fn pc_useitem(
     match item_type {
         t if t == ITM_EAT => {
             if !can_eat!() {
-                clif_sendminitext(sd, c"You cannot eat this here.".as_ptr());
+                clif_sendminitext(pe, c"You cannot eat this here.".as_ptr());
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd);
+            sl_async_freeco(sd); // TODO(phase6c): migrate
             sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
             sl_doscript_simple_pc("use", None, (*sd).id);
-            pc_delitem(sd, id, 1, 2);
+            pc_delitem(pe, id, 1, 2);
         }
         t if t == ITM_USE => {
             if !can_use!() {
-                clif_sendminitext(sd, c"You cannot use this here.".as_ptr());
+                clif_sendminitext(pe, c"You cannot use this here.".as_ptr());
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd);
+            sl_async_freeco(sd); // TODO(phase6c): migrate
             sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
             sl_doscript_simple_pc("use", None, (*sd).id);
-            pc_delitem(sd, id, 1, 6);
+            pc_delitem(pe, id, 1, 6);
         }
         t if t == ITM_USESPC => {
             if !can_use!() {
-                clif_sendminitext(sd, c"You cannot use this here.".as_ptr());
+                clif_sendminitext(pe, c"You cannot use this here.".as_ptr());
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd);
+            sl_async_freeco(sd); // TODO(phase6c): migrate
             sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
             sl_doscript_simple_pc("use", None, (*sd).id);
             // No auto-delete for USESPC — script decides.
         }
         t if t == ITM_BAG => {
             if !can_use!() {
-                clif_sendminitext(sd, c"You cannot use this here.".as_ptr());
+                clif_sendminitext(pe, c"You cannot use this here.".as_ptr());
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd);
+            sl_async_freeco(sd); // TODO(phase6c): migrate
             sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
             sl_doscript_simple_pc("use", None, (*sd).id);
         }
         t if t == ITM_MAP => {
             if !can_use!() {
-                clif_sendminitext(sd, c"You cannot use this here.".as_ptr());
+                clif_sendminitext(pe, c"You cannot use this here.".as_ptr());
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd);
+            sl_async_freeco(sd); // TODO(phase6c): migrate
             sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
             sl_doscript_simple_pc("maps", Some("use"), (*sd).id);
         }
         t if t == ITM_QUIVER => {
             if !can_use!() {
-                clif_sendminitext(sd, c"You cannot use this here.".as_ptr());
+                clif_sendminitext(pe, c"You cannot use this here.".as_ptr());
                 return 0;
             }
             (*sd).invslot = id as u8;
-            clif_sendminitext(sd, c"This item is only usable with a bow.".as_ptr());
+            clif_sendminitext(pe, c"This item is only usable with a bow.".as_ptr());
         }
         t if t == ITM_MOUNT => {
             if !can_use!() {
-                clif_sendminitext(sd, c"You cannot use this here.".as_ptr());
+                clif_sendminitext(pe, c"You cannot use this here.".as_ptr());
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd);
+            sl_async_freeco(sd); // TODO(phase6c): migrate
             sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
             sl_doscript_simple_pc("onMountItem", None, (*sd).id);
         }
         t if t == ITM_FACE => {
             if !can_use!() {
-                clif_sendminitext(sd, c"You cannot use this here.".as_ptr());
+                clif_sendminitext(pe, c"You cannot use this here.".as_ptr());
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd);
+            sl_async_freeco(sd); // TODO(phase6c): migrate
             sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
             sl_doscript_simple_pc("useFace", None, (*sd).id);
         }
         t if t == ITM_SET => {
             if !can_use!() {
-                clif_sendminitext(sd, c"You cannot use this here.".as_ptr());
+                clif_sendminitext(pe, c"You cannot use this here.".as_ptr());
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd);
+            sl_async_freeco(sd); // TODO(phase6c): migrate
             sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
             sl_doscript_simple_pc("useSetItem", None, (*sd).id);
         }
         t if t == ITM_SKIN => {
             if !can_use!() {
-                clif_sendminitext(sd, c"You cannot use this here.".as_ptr());
+                clif_sendminitext(pe, c"You cannot use this here.".as_ptr());
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd);
+            sl_async_freeco(sd); // TODO(phase6c): migrate
             sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
             sl_doscript_simple_pc("useSkinItem", None, (*sd).id);
         }
         t if t == ITM_HAIR_DYE => {
             if !can_use!() {
-                clif_sendminitext(sd, c"You cannot use this here.".as_ptr());
+                clif_sendminitext(pe, c"You cannot use this here.".as_ptr());
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd);
+            sl_async_freeco(sd); // TODO(phase6c): migrate
             sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
             sl_doscript_simple_pc("useHairDye", None, (*sd).id);
         }
         t if t == ITM_FACEACCTWO => {
             if !can_use!() {
-                clif_sendminitext(sd, c"You cannot use this here.".as_ptr());
+                clif_sendminitext(pe, c"You cannot use this here.".as_ptr());
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd);
+            sl_async_freeco(sd); // TODO(phase6c): migrate
             sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
             sl_doscript_simple_pc("useBeardItem", None, (*sd).id);
         }
         t if t == ITM_SMOKE => {
             if !can_smoke!() {
-                clif_sendminitext(sd, c"You cannot smoke this here.".as_ptr());
+                clif_sendminitext(pe, c"You cannot smoke this here.".as_ptr());
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd);
+            sl_async_freeco(sd); // TODO(phase6c): migrate
             sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
             sl_doscript_simple_pc("use", None, (*sd).id);
             (&mut (*sd).player.inventory.inventory)[id_u].dura -= 1;
             if (&(*sd).player.inventory.inventory)[id_u].dura == 0 {
-                pc_delitem(sd, id, 1, 3);
+                pc_delitem(pe, id, 1, 3);
             } else {
-                clif_sendadditem(sd, id);
+                clif_sendadditem(pe, id);
             }
         }
         // All equip types: ITM_WEAP(3) through ITM_HAND(17) inclusive.
@@ -2311,18 +2329,18 @@ pub unsafe fn pc_useitem(
         // SUBRIGHT, FACEACC, CROWN, MANTLE, NECKLACE, BOOTS, COAT, HAND.
         t if t >= ITM_WEAP && t <= ITM_HAND => {
             if !can_equip!() {
-                clif_sendminitext(sd, c"You cannot equip/de-equip on this map.".as_ptr());
+                clif_sendminitext(pe, c"You cannot equip/de-equip on this map.".as_ptr());
                 return 0;
             }
-            pc_equipitem(sd, id);
+            pc_equipitem(pe, id);
         }
         t if t == ITM_ETC => {
             if !can_use!() {
-                clif_sendminitext(sd, c"You cannot use this here.".as_ptr());
+                clif_sendminitext(pe, c"You cannot use this here.".as_ptr());
                 return 0;
             }
             (*sd).invslot = id as u8;
-            sl_async_freeco(sd);
+            sl_async_freeco(sd); // TODO(phase6c): migrate
             sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("use"), (*sd).id);
             sl_doscript_simple_pc("use", None, (*sd).id);
         }
@@ -2377,12 +2395,12 @@ pub unsafe fn pc_isequip(
 
 /// Send all non-empty inventory slots to the
 /// client via `clif_sendadditem`.
-pub unsafe fn pc_loaditem(sd: *mut MapSessionData) -> i32 {
-    if sd.is_null() { return 0; }
+pub unsafe fn pc_loaditem(pe: &PlayerEntity) -> i32 {
+    let sd = pe.data_ptr(); // TODO(phase6c): migrate
     let maxinv = (*sd).player.inventory.max_inv as usize;
     for i in 0..maxinv {
         if (&(*sd).player.inventory.inventory)[i].id != 0 {
-            clif_sendadditem(sd, i as i32);
+            clif_sendadditem(pe, i as i32);
         }
     }
     0
@@ -2392,11 +2410,11 @@ pub unsafe fn pc_loaditem(sd: *mut MapSessionData) -> i32 {
 /// via `clif_sendequip`.
 ///
 /// Only slots 0..14 are active equipment positions.
-pub unsafe fn pc_loadequip(sd: *mut MapSessionData) -> i32 {
-    if sd.is_null() { return 0; }
+pub unsafe fn pc_loadequip(pe: &PlayerEntity) -> i32 {
+    let sd = pe.data_ptr(); // TODO(phase6c): migrate
     for i in 0..14 {
         if (&(*sd).player.inventory.equip)[i].id > 0 {
-            clif_sendequip(sd, i as i32);
+            clif_sendequip(pe, i as i32);
         }
     }
     0
@@ -2490,10 +2508,10 @@ pub unsafe fn pc_canequipstats(
 /// firing the `onEquip` Lua event via `sl_doscript_simple_pc`.  The actual slot
 /// assignment happens in `pc_equipscript` which runs from within the Lua hook.
 pub unsafe fn pc_equipitem(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     id: i32,
 ) -> i32 {
-    if sd.is_null() { return 0; }
+    let sd = pe.data_ptr(); // TODO(phase6c): migrate
     let maxinv = (*sd).player.inventory.max_inv as i32;
     if id < 0 || id >= maxinv { return 0; }
     let id_u = id as usize;
@@ -2503,29 +2521,29 @@ pub unsafe fn pc_equipitem(
     // State restrictions (non-GMs only).
     if (*sd).player.combat.state != 0 && (*sd).player.identity.gm_level == 0 {
         if (*sd).player.combat.state == 1 {
-            clif_sendminitext(sd, c"Spirit's can't do that.".as_ptr());
+            clif_sendminitext(pe, c"Spirit's can't do that.".as_ptr());
         }
         if (*sd).player.combat.state == 3 {
-            clif_sendminitext(sd, c"You can't do that while riding a mount.".as_ptr());
+            clif_sendminitext(pe, c"You can't do that while riding a mount.".as_ptr());
         }
         if (*sd).player.combat.state == 4 {
-            clif_sendminitext(sd, c"You can't do that while transformed.".as_ptr());
+            clif_sendminitext(pe, c"You can't do that while transformed.".as_ptr());
         }
         return 0;
     }
 
     // Ownership check.
     if (&(*sd).player.inventory.inventory)[id_u].owner != 0
-        && (&(*sd).player.inventory.inventory)[id_u].owner != (*sd).id
+        && (&(*sd).player.inventory.inventory)[id_u].owner != pe.id
     {
-        clif_sendminitext(sd, c"This does not belong to you.".as_ptr());
+        clif_sendminitext(pe, c"This does not belong to you.".as_ptr());
         return 0;
     }
 
     // Equip eligibility (level, might, sex, 2h conflicts).
     let ret = pc_canequipitem(sd, id);
     if ret != 0 {
-        clif_sendminitext(sd, map_msg()[ret as usize].message.as_ptr());
+        clif_sendminitext(pe, map_msg()[ret as usize].message.as_ptr());
         return 0;
     }
 
@@ -2539,7 +2557,7 @@ pub unsafe fn pc_equipitem(
 
     // Stat check.
     if pc_canequipstats(sd, (&(*sd).player.inventory.inventory)[id_u].id) == 0 {
-        clif_sendminitext(sd, c"Your stats are too low to equip that.".as_ptr());
+        clif_sendminitext(pe, c"Your stats are too low to equip that.".as_ptr());
         return 0;
     }
 
@@ -2548,8 +2566,8 @@ pub unsafe fn pc_equipitem(
     (*sd).invslot = id as u8;
 
     // Fire the Lua equip hooks.
-    sl_doscript_simple_pc("onEquip", None, (*sd).id);
-    sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("onEquip"), (*sd).id);
+    sl_doscript_simple_pc("onEquip", None, pe.id);
+    sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((&(*sd).player.inventory.inventory)[id_u].id).yname), Some("onEquip"), pe.id);
 
     0
 }
@@ -2561,8 +2579,8 @@ pub unsafe fn pc_equipitem(
 /// previously-equipped item in that slot via an `onUnequip` hook, copies the
 /// inventory item into the equip array, removes it from the inventory, and then
 /// updates client state.
-pub unsafe fn pc_equipscript(sd: *mut MapSessionData) -> i32 {
-    if sd.is_null() { return 0; }
+pub unsafe fn pc_equipscript(pe: &PlayerEntity) -> i32 {
+    let sd = pe.data_ptr(); // TODO(phase6c): migrate
 
     let mut ret = item_db::search((*sd).equipid).typ as i32 - 3;
 
@@ -2595,16 +2613,16 @@ pub unsafe fn pc_equipscript(sd: *mut MapSessionData) -> i32 {
     // State restrictions (non-GMs only).
     if (*sd).player.combat.state != 0 && (*sd).player.identity.gm_level == 0 {
         if (*sd).player.combat.state == 1 {
-            clif_sendminitext(sd, c"Spirits can't do that.".as_ptr());
+            clif_sendminitext(pe, c"Spirits can't do that.".as_ptr());
         }
         if (*sd).player.combat.state == 2 {
-            clif_sendminitext(sd, c"You can't do that while transformed.".as_ptr());
+            clif_sendminitext(pe, c"You can't do that while transformed.".as_ptr());
         }
         if (*sd).player.combat.state == 3 {
-            clif_sendminitext(sd, c"You can't do that while riding a mount.".as_ptr());
+            clif_sendminitext(pe, c"You can't do that while riding a mount.".as_ptr());
         }
         if (*sd).player.combat.state == 4 {
-            clif_sendminitext(sd, c"You can't do that while transformed.".as_ptr());
+            clif_sendminitext(pe, c"You can't do that while transformed.".as_ptr());
         }
         return 0;
     }
@@ -2612,11 +2630,11 @@ pub unsafe fn pc_equipscript(sd: *mut MapSessionData) -> i32 {
     if (&(*sd).player.inventory.equip)[ret as usize].id != 0 {
         // A different item is already in this slot — trigger its unequip hook
         // instead of equipping immediately.
-        (*sd).target   = (*sd).id as i32;
-        (*sd).attacker = (*sd).id;
+        (*sd).target   = pe.id as i32;
+        (*sd).attacker = pe.id;
         (*sd).takeoffid = ret as i8;
-        sl_doscript_simple_pc("onUnequip", None, (*sd).id);
-        sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((*sd).equipid).yname), Some("equip"), (*sd).id);
+        sl_doscript_simple_pc("onUnequip", None, pe.id);
+        sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((*sd).equipid).yname), Some("equip"), pe.id);
         (*sd).equipid = 0;
         return 0;
     }
@@ -2629,8 +2647,8 @@ pub unsafe fn pc_equipscript(sd: *mut MapSessionData) -> i32 {
         mem::size_of::<Item>(),
     );
 
-    pc_delitem(sd, invslot as i32, 1, 6);
-    sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((*sd).equipid).yname), Some("equip"), (*sd).id);
+    pc_delitem(pe, invslot as i32, 1, 6);
+    sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search((*sd).equipid).yname), Some("equip"), pe.id);
     (*sd).equipid = 0;
 
     // If a two-handed weapon was equipped, reset enchantment.
@@ -2638,15 +2656,15 @@ pub unsafe fn pc_equipscript(sd: *mut MapSessionData) -> i32 {
         (*sd).enchanted = 1.0f32;
         (*sd).flank    = 0;
         (*sd).backstab = 0;
-        clif_sendminitext(sd, c"Your weapon loses its enchantment.".as_ptr());
+        clif_sendminitext(pe, c"Your weapon loses its enchantment.".as_ptr());
     }
 
-    clif_sendequip(sd, ret);
+    clif_sendequip(pe, ret);
     (&mut (*sd).player.inventory.equip)[ret as usize].amount = 1;
 
-    pc_calcstat(sd);
-    clif_sendupdatestatus_onequip(sd);
-    broadcast_update_state(sd);
+    pc_calcstat(pe);
+    clif_sendupdatestatus_onequip(pe);
+    broadcast_update_state(pe);
 
     0
 }
@@ -2679,8 +2697,8 @@ pub unsafe fn pc_unequip(
 /// returned to inventory.
 ///
 /// In both paths the client is updated and `pc_calcstat` recalculates stats.
-pub unsafe fn pc_unequipscript(sd: *mut MapSessionData) -> i32 {
-    if sd.is_null() { return 0; }
+pub unsafe fn pc_unequipscript(pe: &PlayerEntity) -> i32 {
+    let sd = pe.data_ptr(); // TODO(phase6c): migrate
 
     let type_  = (*sd).takeoffid as usize;
     let takeoff = (&(*sd).player.inventory.equip)[type_].id;
@@ -2700,9 +2718,9 @@ pub unsafe fn pc_unequipscript(sd: *mut MapSessionData) -> i32 {
             mem::size_of::<Item>(),
         );
 
-        pc_delitem(sd, invslot as i32, 1, 6);
-        pc_additem(sd, &mut it as *mut _);
-        clif_sendequip(sd, type_ as i32);
+        pc_delitem(pe, invslot as i32, 1, 6);
+        pc_additem(pe, &mut it as *mut _);
+        clif_sendequip(pe, type_ as i32);
         (&mut (*sd).player.inventory.equip)[type_].amount = 1;
     } else {
         // Simple unequip: clear slot and return item to inventory.
@@ -2717,15 +2735,15 @@ pub unsafe fn pc_unequipscript(sd: *mut MapSessionData) -> i32 {
         // arithmetic, but effectively means id==0 due to struct layout).
         if it.id == 0 { return 1; }
 
-        if pc_additem(sd, &mut it as *mut _) != 0 { return 1; }
+        if pc_additem(pe, &mut it as *mut _) != 0 { return 1; }
 
         libc::memset(
             &mut (&mut (*sd).player.inventory.equip)[type_] as *mut _ as *mut libc::c_void,
             0,
             mem::size_of::<Item>(),
         );
-        (*sd).target   = (*sd).id as i32;
-        (*sd).attacker = (*sd).id;
+        (*sd).target   = pe.id as i32;
+        (*sd).attacker = pe.id;
     }
 
     // If a two-handed weapon was unequipped, reset enchantment.
@@ -2733,16 +2751,16 @@ pub unsafe fn pc_unequipscript(sd: *mut MapSessionData) -> i32 {
         (*sd).enchanted = 1.0f32;
         (*sd).flank    = 0;
         (*sd).backstab = 0;
-        clif_sendminitext(sd, c"Your weapon loses its enchantment.".as_ptr());
+        clif_sendminitext(pe, c"Your weapon loses its enchantment.".as_ptr());
     }
 
     // Fire the item's unequip Lua hook.
-    sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search(takeoff).yname), Some("unequip"), (*sd).id);
+    sl_doscript_simple_pc(scripting::carray_to_str(&item_db::search(takeoff).yname), Some("unequip"), pe.id);
 
     (*sd).takeoffid = -1i8;
-    pc_calcstat(sd);
-    clif_sendupdatestatus_onequip(sd);
-    broadcast_update_state(sd);
+    pc_calcstat(pe);
+    clif_sendupdatestatus_onequip(pe);
+    broadcast_update_state(pe);
 
     0
 }
@@ -2758,10 +2776,10 @@ pub unsafe fn pc_unequipscript(sd: *mut MapSessionData) -> i32 {
 ///
 /// `clif_lookgone` + `map_delitem` are called when the floor item is exhausted.
 pub unsafe fn pc_getitemscript(
-    sd: *mut MapSessionData,
+    pe: &PlayerEntity,
     id: i32,
 ) -> i32 {
-    if sd.is_null() { return 0; }
+    let sd = pe.data_ptr(); // TODO(phase6c): migrate
 
     let fl_raw = map_id2fl(id as u32);
     if fl_raw.is_null() { return 0; }
@@ -2770,7 +2788,7 @@ pub unsafe fn pc_getitemscript(
     if (*fl).data.id == 0 {
         // It's gold — credit the amount and remove from map.
         (*sd).player.inventory.money += (*fl).data.amount as u32;
-        clif_sendstatus(sd, SFLAG_XPMONEY);
+        clif_sendstatus(pe, SFLAG_XPMONEY);
         clif_lookgone_by_id((*fl).id);
         map_delitem((*fl).id);
 
@@ -2779,7 +2797,7 @@ pub unsafe fn pc_getitemscript(
 
     // Non-droppable items are blocked for regular players.
     if item_db::search((*fl).data.id).droppable != 0 && (*sd).player.identity.gm_level == 0 {
-        clif_sendminitext(sd, c"That item cannot be picked up.".as_ptr());
+        clif_sendminitext(pe, c"That item cannot be picked up.".as_ptr());
         return 0;
     }
 
@@ -2816,7 +2834,7 @@ pub unsafe fn pc_getitemscript(
     }
 
     if add {
-        pc_additem(sd, &mut it as *mut _);
+        pc_additem(pe, &mut it as *mut _);
     }
 
     if (*sd).pickuptype > 0 && (*fl).data.amount > 0 {

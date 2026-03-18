@@ -31,7 +31,7 @@ pub mod events;
 use crate::database::map_db::raw_map_ptr;
 use crate::session::{SessionId, session_exists, session_get_data, session_get_eof, session_set_eof};
 use crate::game::time_util::timer_insert;
-use crate::game::pc::MapSessionData;
+use crate::game::player::entity::PlayerEntity;
 
 use crate::game::map_parse::packet::{
     rfifob, rfifow, rfifol, rfifop, rfiforest, rfifoskip, swap16, swap32, decrypt,
@@ -75,9 +75,11 @@ use crate::database::item_db;
 use crate::game::pc::pc_atkspeed;
 
 // pc_warp: actual fn takes i32, old extern had u16 — wrap with cast.
+// pc_warp in spatial.rs still takes *mut MapSessionData (not yet migrated).
 #[inline]
-unsafe fn pc_warp(sd: *mut MapSessionData, map_id: u16, x: u16, y: u16) {
-    let _ = crate::game::pc::pc_warp(sd, map_id as i32, x as i32, y as i32);
+unsafe fn pc_warp(pe: &PlayerEntity, map_id: u16, x: u16, y: u16) {
+    #[allow(deprecated)]
+    let _ = crate::game::pc::pc_warp(pe.data_ptr(), map_id as i32, x as i32, y as i32);
 }
 // clif_debug: actual fn takes i32 for len, old extern had u16 — wrap with cast.
 #[inline]
@@ -86,8 +88,8 @@ unsafe fn clif_debug_u16(buf: *const u8, len: u16) {
 }
 // createdb_start wrapper.
 #[inline]
-unsafe fn createdb_start(sd: *mut MapSessionData) {
-    crate::game::client::handlers::createdb_start(sd);
+unsafe fn createdb_start(pe: &PlayerEntity) {
+    crate::game::client::handlers::createdb_start(pe);
 }
 
 /// Main packet dispatcher.
@@ -99,11 +101,11 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
     let sd = session_get_data(fd);
 
     if session_get_eof(fd) != 0 {
-        if !sd.is_null() {
+        if let Some(pe) = sd.as_deref() {
             libc::printf(b"[map] [session_eof] name=%s\n\0".as_ptr() as *const i8,
-                (*sd).player.identity.name.as_ptr());
-            clif_handle_disconnect(sd).await;
-            clif_closeit(sd);
+                pe.name.as_ptr());
+            clif_handle_disconnect(pe).await;
+            clif_closeit(pe);
         }
         clif_print_disconnect(fd);
         // session_eof(fd) is a C inline that calls session_set_eof(fd, 1)
@@ -122,7 +124,7 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
 
     if rfiforest(fd) < len as i32 { return 0; }
 
-    if sd.is_null() {
+    if sd.is_none() {
         match rfifob(fd, 3) {
             0x10 => {
                 clif_accept2(fd, rfifop(fd, 16) as *mut i8, rfifob(fd, 15) as i32).await;
@@ -133,28 +135,31 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
         return 0;
     }
 
-    // sd is non-null past here
-    let current_seed = rfifob(fd, 4);
-    (*sd).PrevSeed = current_seed;
-    (*sd).NextSeed = current_seed.wrapping_add(1);
+    // sd is Some past here
+    let pe = sd.as_deref().unwrap();
+    {
+        let mut legacy = pe.write();
+        legacy.PrevSeed = rfifob(fd, 4);
+        legacy.NextSeed = rfifob(fd, 4).wrapping_add(1);
+    }
 
     // Dual login check
     let mut logincount = 0i32;
     for i in 0..crate::session::get_fd_max() {
         if session_exists(SessionId::from_raw(i)) {
             let tsd = session_get_data(SessionId::from_raw(i));
-            if !tsd.is_null() {
-                if (*sd).player.identity.id == (*tsd).player.identity.id {
+            if let Some(tpe) = tsd.as_deref() {
+                if pe.read().player.identity.id == tpe.read().player.identity.id {
                     logincount += 1;
                 }
                 if logincount >= 2 {
                     libc::printf(
                         b"%s attempted dual login on IP:%s\n\0".as_ptr() as *const i8,
-                        (*sd).player.identity.name.as_ptr(),
-                        (*sd).player.identity.ipaddress.as_ptr(),
+                        pe.read().player.identity.name.as_ptr(),
+                        pe.read().player.identity.ipaddress.as_ptr(),
                     );
-                    session_set_eof((*sd).fd, 1);
-                    session_set_eof((*tsd).fd, 1);
+                    session_set_eof(pe.fd, 1);
+                    session_set_eof(tpe.fd, 1);
                     break;
                 }
             }
@@ -166,324 +171,339 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
 
     match rfifob(fd, 3) {
         0x05 => {
-            clif_parsemap(sd);
+            clif_parsemap(pe);
         }
         0x06 => {
-            clif_cancelafk(sd);
-            clif_parsewalk(sd);
+            clif_cancelafk(pe);
+            clif_parsewalk(pe);
         }
         0x07 => {
-            clif_cancelafk(sd);
-            (*sd).time += 1;
-            if (*sd).time < 4 {
-                clif_parsegetitem(sd);
+            clif_cancelafk(pe);
+            pe.write().time += 1;
+            if pe.read().time < 4 {
+                clif_parsegetitem(pe);
             }
         }
         0x08 => {
-            clif_cancelafk(sd);
-            clif_parsedropitem(sd);
+            clif_cancelafk(pe);
+            clif_parsedropitem(pe);
         }
         0x09 => {
-            clif_cancelafk(sd);
-            clif_parselookat_2(sd);
+            clif_cancelafk(pe);
+            clif_parselookat_2(pe);
         }
         0x0A => {
-            clif_cancelafk(sd);
-            clif_parselookat(sd);
+            clif_cancelafk(pe);
+            clif_parselookat(pe);
         }
         0x0B => {
-            clif_cancelafk(sd);
-            clif_closeit(sd);
+            clif_cancelafk(pe);
+            clif_closeit(pe);
         }
         0x0C => {
-            clif_handle_missingobject(sd);
+            clif_handle_missingobject(pe);
         }
         0x0D => {
-            clif_parseignore(sd);
+            clif_parseignore(pe);
         }
         0x0E => {
-            clif_cancelafk(sd);
-            if (*sd).player.identity.gm_level != 0 {
-                clif_parsesay(sd);
+            clif_cancelafk(pe);
+            if pe.read().player.identity.gm_level != 0 {
+                clif_parsesay(pe);
             } else {
-                (*sd).chat_timer += 1;
-                if (*sd).chat_timer < 2 && (*sd).player.social.mute == 0 {
-                    clif_parsesay(sd);
+                pe.write().chat_timer += 1;
+                if pe.read().chat_timer < 2 && pe.read().player.social.mute == 0 {
+                    clif_parsesay(pe);
                 }
             }
         }
         0x0F => {
-            clif_cancelafk(sd);
-            (*sd).time += 1;
-            if (*sd).paralyzed == 0 && (*sd).sleep == 1.0f32 {
-                if (*sd).time < 4 {
-                    if (*raw_map_ptr().add((*sd).m as usize)).spell != 0 || (*sd).player.identity.gm_level != 0 {
-                        clif_parsemagic(&mut *sd);
+            clif_cancelafk(pe);
+            pe.write().time += 1;
+            if pe.read().paralyzed == 0 && pe.read().sleep == 1.0f32 {
+                if pe.read().time < 4 {
+                    if (*raw_map_ptr().add(pe.read().m as usize)).spell != 0 || pe.read().player.identity.gm_level != 0 {
+                        clif_parsemagic(&mut *pe.data_ptr());
                     } else {
-                        clif_sendminitext(sd, b"That doesn't work here.\0".as_ptr() as *const i8);
+                        clif_sendminitext(pe, b"That doesn't work here.\0".as_ptr() as *const i8);
                     }
                 }
             }
         }
         0x11 => {
-            clif_cancelafk(sd);
-            clif_parseside(sd);
+            clif_cancelafk(pe);
+            clif_parseside(pe);
         }
         0x12 => {
-            clif_cancelafk(sd);
-            clif_parsewield(sd);
+            clif_cancelafk(pe);
+            clif_parsewield(pe);
         }
         0x13 => {
-            clif_cancelafk(sd);
-            (*sd).time += 1;
-            if (*sd).attacked != 1 && (*sd).attack_speed > 0 {
-                (*sd).attacked = 1;
-                let delay = (((*sd).attack_speed as u32) * 1000) / 60;
+            clif_cancelafk(pe);
+            pe.write().time += 1;
+            if pe.read().attacked != 1 && pe.read().attack_speed > 0 {
+                let attack_speed = pe.read().attack_speed;
+                let id = pe.id;
+                pe.write().attacked = 1;
+                let delay = ((attack_speed as u32) * 1000) / 60;
                 timer_insert(
                     delay,
                     delay,
                     Some(pc_atkspeed as unsafe fn(i32, i32) -> i32),
-                    (*sd).id as i32,
+                    id as i32,
                     0,
                 );
-                clif_parseattack(&mut *sd);
+                #[allow(deprecated)]
+                clif_parseattack(&mut *pe.data_ptr());
             }
         }
         0x17 => {
-            clif_cancelafk(sd);
-            let pos = rfifob((*sd).fd, 6) as usize;
-            let confirm = rfifob((*sd).fd, 5);
+            clif_cancelafk(pe);
+            let pe_fd = pe.fd;
+            let pos = rfifob(pe_fd, 6) as usize;
+            let confirm = rfifob(pe_fd, 5);
             // pos is 1-based; inventory is 0-based. Guard against underflow and OOB.
-            if pos == 0 || pos - 1 >= (*sd).player.inventory.inventory.len() {
+            if pos == 0 || pos - 1 >= pe.read().player.inventory.inventory.len() {
                 rfifoskip(fd, len);
                 return 0;
             }
-            if item_db::search((&(*sd).player.inventory.inventory)[pos - 1].id).thrownconfirm == 1 {
+            let item_id = pe.read().player.inventory.inventory[pos - 1].id;
+            if item_db::search(item_id).thrownconfirm == 1 {
                 if confirm == 1 {
-                    clif_parsethrow(sd);
+                    clif_parsethrow(pe);
                 } else {
-                    clif_throwconfirm(sd);
+                    clif_throwconfirm(pe);
                 }
             } else {
-                clif_parsethrow(sd);
+                clif_parsethrow(pe);
             }
         }
         0x18 => {
-            clif_cancelafk(sd);
-            clif_user_list(sd);
+            clif_cancelafk(pe);
+            clif_user_list(pe);
         }
         0x19 => {
-            clif_cancelafk(sd);
-            clif_parsewisp(sd);
+            clif_cancelafk(pe);
+            clif_parsewisp(pe);
         }
         0x1A => {
-            clif_cancelafk(sd);
-            clif_parseeatitem(sd);
+            clif_cancelafk(pe);
+            clif_parseeatitem(pe);
         }
         0x1B => {
-            if (*sd).loaded != 0 {
-                clif_changestatus(sd, rfifob((*sd).fd, 6) as i32);
+            if pe.read().loaded != 0 {
+                let pe_fd = pe.fd;
+                clif_changestatus(pe, rfifob(pe_fd, 6) as i32);
             }
         }
         0x1C => {
-            clif_cancelafk(sd);
-            clif_parseuseitem(sd);
+            clif_cancelafk(pe);
+            clif_parseuseitem(pe);
         }
         0x1D => {
-            clif_cancelafk(sd);
-            (*sd).time += 1;
-            if (*sd).time < 4 {
-                clif_parseemotion(sd);
+            clif_cancelafk(pe);
+            pe.write().time += 1;
+            if pe.read().time < 4 {
+                clif_parseemotion(pe);
             }
         }
         0x1E => {
-            clif_cancelafk(sd);
-            (*sd).time += 1;
-            if (*sd).time < 4 {
-                clif_parsewield(sd);
+            clif_cancelafk(pe);
+            pe.write().time += 1;
+            if pe.read().time < 4 {
+                clif_parsewield(pe);
             }
         }
         0x1F => {
-            clif_cancelafk(sd);
-            if (*sd).time < 4 {
-                clif_parseunequip(sd);
+            clif_cancelafk(pe);
+            if pe.read().time < 4 {
+                clif_parseunequip(pe);
             }
         }
         0x20 => {
-            clif_cancelafk(sd);
-            clif_open_sub(sd);
+            clif_cancelafk(pe);
+            clif_open_sub(pe);
         }
         0x23 => {
-            clif_paperpopupwrite_save(sd);
+            clif_paperpopupwrite_save(pe);
         }
         0x24 => {
-            clif_cancelafk(sd);
-            clif_dropgold(sd, swap32(rfifol((*sd).fd, 5)));
+            clif_cancelafk(pe);
+            let pe_fd = pe.fd;
+            clif_dropgold(pe, swap32(rfifol(pe_fd, 5)));
         }
         0x27 => {
-            clif_cancelafk(sd);
+            clif_cancelafk(pe);
             // reserved for quest tab — no-op
         }
         0x29 => {
-            clif_cancelafk(sd);
-            clif_handitem(sd);
+            clif_cancelafk(pe);
+            clif_handitem(pe);
         }
         0x2A => {
-            clif_cancelafk(sd);
-            clif_handgold(sd);
+            clif_cancelafk(pe);
+            clif_handgold(pe);
         }
         0x2D => {
-            clif_cancelafk(sd);
-            if rfifob((*sd).fd, 5) == 0 {
-                clif_mystaytus(sd).await;
+            clif_cancelafk(pe);
+            let pe_fd = pe.fd;
+            if rfifob(pe_fd, 5) == 0 {
+                clif_mystaytus(pe).await;
             } else {
-                clif_groupstatus(sd);
+                clif_groupstatus(pe);
             }
         }
         0x2E => {
-            clif_cancelafk(sd);
-            clif_addgroup(sd);
+            clif_cancelafk(pe);
+            clif_addgroup(pe);
         }
         0x30 => {
-            clif_cancelafk(sd);
-            if rfifob((*sd).fd, 5) == 1 {
-                clif_parsechangespell(sd);
+            clif_cancelafk(pe);
+            let pe_fd = pe.fd;
+            if rfifob(pe_fd, 5) == 1 {
+                clif_parsechangespell(pe);
             } else {
-                clif_parsechangepos(sd);
+                clif_parsechangepos(pe);
             }
         }
         0x32 => {
-            clif_cancelafk(sd);
-            clif_parsewalk(sd);
+            clif_cancelafk(pe);
+            clif_parsewalk(pe);
         }
         // NOTE: 0x34 falls through to 0x38 in the original C (missing break).
         // Preserved here: call both clif_postitem AND clif_refresh for 0x34.
         0x34 => {
-            clif_cancelafk(sd);
-            clif_postitem(sd);
-            clif_refresh(sd);
+            clif_cancelafk(pe);
+            clif_postitem(pe);
+            clif_refresh(pe);
         }
         0x38 => {
-            clif_cancelafk(sd);
-            clif_refresh(sd);
+            clif_cancelafk(pe);
+            clif_refresh(pe);
         }
         0x39 => {
-            clif_cancelafk(sd);
-            clif_handle_menuinput(sd);
+            clif_cancelafk(pe);
+            clif_handle_menuinput(pe);
         }
         0x3A => {
-            clif_cancelafk(sd);
-            clif_parsenpcdialog(sd);
+            clif_cancelafk(pe);
+            clif_parsenpcdialog(pe);
         }
         0x3B => {
-            clif_cancelafk(sd);
-            clif_handle_boards(sd).await;
+            clif_cancelafk(pe);
+            clif_handle_boards(pe).await;
         }
         0x3F => {
-            pc_warp(sd,
-                swap16(rfifow((*sd).fd, 5)),
-                swap16(rfifow((*sd).fd, 7)),
-                swap16(rfifow((*sd).fd, 9)),
+            let pe_fd = pe.fd;
+            pc_warp(pe,
+                swap16(rfifow(pe_fd, 5)),
+                swap16(rfifow(pe_fd, 7)),
+                swap16(rfifow(pe_fd, 9)),
             );
         }
         0x41 => {
-            clif_cancelafk(sd);
-            clif_parseparcel(sd);
+            clif_cancelafk(pe);
+            clif_parseparcel(pe);
         }
         0x42 => {
             // client crash debug — no-op
         }
         0x43 => {
-            clif_cancelafk(sd);
-            clif_handle_clickgetinfo(sd).await;
+            clif_cancelafk(pe);
+            clif_handle_clickgetinfo(pe).await;
         }
         0x4A => {
-            clif_cancelafk(sd);
-            clif_parse_exchange(sd);
+            clif_cancelafk(pe);
+            clif_parse_exchange(pe);
         }
         0x4C => {
-            clif_cancelafk(sd);
-            clif_handle_powerboards(sd);
+            clif_cancelafk(pe);
+            clif_handle_powerboards(pe);
         }
         0x4F => {
-            clif_cancelafk(sd);
-            clif_changeprofile(sd);
+            clif_cancelafk(pe);
+            clif_changeprofile(pe);
         }
         0x60 => {
             // PING — no-op
         }
         0x66 => {
-            clif_cancelafk(sd);
-            clif_sendtowns(sd);
+            clif_cancelafk(pe);
+            clif_sendtowns(pe);
         }
         0x69 => {
             // obstruction — disabled
         }
         0x6B => {
-            clif_cancelafk(sd);
-            createdb_start(sd);
+            clif_cancelafk(pe);
+            createdb_start(pe);
         }
         0x73 => {
-            clif_cancelafk(sd);
-            if rfifob((*sd).fd, 5) == 0x04 {
-                clif_sendprofile(sd);
+            clif_cancelafk(pe);
+            let pe_fd = pe.fd;
+            if rfifob(pe_fd, 5) == 0x04 {
+                clif_sendprofile(pe);
             }
-            if rfifob((*sd).fd, 5) == 0x00 {
-                clif_sendboard(sd);
+            if rfifob(pe_fd, 5) == 0x00 {
+                clif_sendboard(pe);
             }
         }
         0x75 => {
             // clif_parsewalkpong is in movement.rs
-            crate::game::map_parse::movement::clif_parsewalkpong(sd);
+            crate::game::map_parse::movement::clif_parsewalkpong(pe);
         }
         0x77 => {
-            clif_cancelafk(sd);
-            let name_ptr = rfifop((*sd).fd, 5) as *const i8;
-            let name_len = swap16(rfifow((*sd).fd, 1)) as i32 - 5;
-            clif_parsefriends(sd, name_ptr, name_len).await;
+            clif_cancelafk(pe);
+            let pe_fd = pe.fd;
+            let name_ptr = rfifop(pe_fd, 5) as *const i8;
+            let name_len = swap16(rfifow(pe_fd, 1)) as i32 - 5;
+            clif_parsefriends(pe, name_ptr, name_len).await;
         }
         0x7B => {
             libc::printf(b"request: %u\n\0".as_ptr() as *const i8,
-                rfifob((*sd).fd, 5) as u32);
-            match rfifob((*sd).fd, 5) {
-                0 => { send_meta(sd); }
-                1 => { send_metalist(sd); }
+                rfifob(pe.fd, 5) as u32);
+            match rfifob(pe.fd, 5) {
+                #[allow(deprecated)]
+                0 => { send_meta(pe.data_ptr()); }
+                #[allow(deprecated)]
+                1 => { send_metalist(pe.data_ptr()); }
                 _ => {}
             }
         }
         0x7C => {
-            clif_cancelafk(sd);
-            clif_sendminimap(sd);
+            clif_cancelafk(pe);
+            clif_sendminimap(pe);
         }
         0x7D => {
-            clif_cancelafk(sd);
+            clif_cancelafk(pe);
             match rfifob(fd, 5) {
-                5 => { clif_sendRewardInfo(sd, fd).await; }
-                6 => { clif_getReward(sd, fd).await; }
-                _ => { clif_parseranking(sd, fd).await; }
+                5 => { clif_sendRewardInfo(pe, fd).await; }
+                6 => { clif_getReward(pe, fd).await; }
+                _ => { clif_parseranking(pe, fd).await; }
             }
         }
         0x82 => {
-            clif_cancelafk(sd);
-            clif_parseviewchange(sd);
+            clif_cancelafk(pe);
+            clif_parseviewchange(pe);
         }
         0x83 => {
             // screenshots — no-op
         }
         0x84 => {
-            clif_cancelafk(sd);
-            clif_huntertoggle(sd).await;
+            clif_cancelafk(pe);
+            clif_huntertoggle(pe).await;
         }
         0x85 => {
-            clif_sendhunternote(sd).await;
-            clif_cancelafk(sd);
+            clif_sendhunternote(pe).await;
+            clif_cancelafk(pe);
         }
         _ => {
+            let pe_fd = pe.fd;
             libc::printf(
                 b"[Map] Unknown Packet ID: %02X\nPacket content:\n\0".as_ptr() as *const i8,
-                rfifob((*sd).fd, 3) as u32,
+                rfifob(pe_fd, 3) as u32,
             );
-            clif_debug_u16(rfifop((*sd).fd, 0), swap16(rfifow((*sd).fd, 1)));
+            clif_debug_u16(rfifop(pe_fd, 0), swap16(rfifow(pe_fd, 1)));
         }
     }
 

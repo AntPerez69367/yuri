@@ -1352,7 +1352,7 @@ unsafe fn broadcast_move(
             let ids = block_grid::ids_in_area(grid, (*mob).x as i32, (*mob).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    { let guard = sd_arc.read(); clif_mob_move_inner(&*guard, mob); }
+                    clif_mob_move_inner(&*sd_arc, mob);
                 }
             }
         }
@@ -1643,7 +1643,7 @@ pub unsafe fn mob_move2(mob: *mut MobSpawnData, x: i32, y: i32, side: i32) -> i3
             let ids = block_grid::ids_in_area(grid, (*mob).x as i32, (*mob).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    { let guard = sd_arc.read(); clif_mob_move_inner(&*guard, mob); }
+                    clif_mob_move_inner(&*sd_arc, mob);
                 }
             }
         }
@@ -1962,8 +1962,9 @@ pub unsafe fn mob_attack(mob: *mut MobSpawnData, id: i32) -> i32 {
     }
     let target = id as u32;
     // Try typed lookups — target is either a PC or another mob.
-    let sd: *mut MapSessionData = crate::game::map_server::map_id2sd_pc(target)
-        .map(|arc| arc.data_ptr())
+    let sd_arc = crate::game::map_server::map_id2sd_pc(target);
+    let sd: *mut MapSessionData = sd_arc.as_deref()
+        .map(|pe| pe.data_ptr()) // TODO(phase6c): migrate mob_attack off raw ptr
         .unwrap_or(std::ptr::null_mut());
     let tmob: *mut MobSpawnData = if sd.is_null() {
         crate::game::map_server::map_id2mob_ref(target)
@@ -2015,7 +2016,7 @@ pub unsafe fn mob_attack(mob: *mut MobSpawnData, id: i32) -> i32 {
             } else {
                 clif_send_pc_health(&mut *sd, dmg, 255);
             }
-            clif_sendstatus_mob(sd, SFLAG_HPMP);
+            if let Some(ref pe) = sd_arc { clif_sendstatus_mob(pe, SFLAG_HPMP); }
         } else if !tmob.is_null() {
             if (*mob).critchance == 1 {
                 clif_send_mob_health(&mut *tmob, dmg, 33);

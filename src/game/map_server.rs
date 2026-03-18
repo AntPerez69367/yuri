@@ -303,19 +303,8 @@ unsafe fn box_into_arc_rwlock<T>(b: Box<T>) -> Arc<RwLock<T>> {
 
 /// Insert a player — takes ownership of the Box, wrapping it in Arc<RwLock>.
 pub fn map_addiddb_player(id: u32, fd: crate::session::SessionId, sd: Box<crate::game::pc::MapSessionData>) {
-    // Heap-allocate PlayerEntity without stack intermediary.
-    // parking_lot RawRwLock::INIT is all-zero bits, so zeroed RwLock is valid (unlocked).
-    // LookAccum fields are i32 = 0, matching Default.
-    let mut pe_box: Box<PlayerEntity> = unsafe { Box::new_zeroed().assume_init() };
-    pe_box.id = id;
-    pe_box.fd = fd;
-    // Copy MapSessionData from sd into legacy RwLock data slot, avoiding stack copy.
-    unsafe {
-        let src = Box::into_raw(sd);
-        std::ptr::copy_nonoverlapping(src, pe_box.legacy.data_ptr(), 1);
-        std::alloc::dealloc(src as *mut u8, std::alloc::Layout::for_value(&*src));
-    }
-    let arc = Arc::from(pe_box);
+    let name = sd.player.identity.name.clone();
+    let arc = Arc::from(PlayerEntity::new(id, fd, name, sd));
     player_map().insert(id, arc);
 }
 
@@ -460,17 +449,14 @@ pub fn mob_map_remove(id: u32) {
 pub unsafe fn map_name2sd(name: *const i8) -> *mut MapSessionData {
     use crate::session::{session_exists, session_get_data, session_get_eof, SessionId};
     if name.is_null() { return std::ptr::null_mut(); }
+    let target = std::ffi::CStr::from_ptr(name).to_string_lossy();
     for i in 0..crate::session::get_fd_max() {
         let fd = SessionId::from_raw(i);
         if !session_exists(fd) { continue; }
         if session_get_eof(fd) != 0 { continue; }
-        let sd = session_get_data(fd);
-        if sd.is_null() { continue; }
-        {
-            let target = std::ffi::CStr::from_ptr(name).to_string_lossy();
-            if (*sd).player.identity.name.eq_ignore_ascii_case(&target) {
-                return sd;
-            }
+        let sd = match session_get_data(fd) { Some(a) => a, None => continue };
+        if sd.read().player.identity.name.eq_ignore_ascii_case(&target) {
+            return sd.data_ptr();
         }
     }
     std::ptr::null_mut()
@@ -1702,9 +1688,8 @@ pub async unsafe fn change_time_char(_id: i32, _n: i32) -> i32 {
     for i in 0..crate::session::get_fd_max() {
         let fd = SessionId::from_raw(i);
         if session_exists(fd) {
-            let sd = session_get_data(fd);
-            if !sd.is_null() {
-                crate::game::map_parse::player_state::clif_sendtime(sd);
+            if let Some(sd) = session_get_data(fd) {
+                crate::game::map_parse::player_state::clif_sendtime(&*sd);
             }
         }
     }
@@ -2788,8 +2773,7 @@ pub unsafe fn map_savechars(_none: i32, _nonetoo: i32) -> i32 {
         let fd = SessionId::from_raw(x);
         if !session_exists(fd) { continue; }
         if session_get_eof(fd) != 0 { continue; }
-        let sd = session_get_data(fd);
-        if !sd.is_null() { sl_intif_save(sd); }
+        if let Some(sd) = session_get_data(fd) { sl_intif_save(sd.data_ptr()); }
     }
     0
 }
@@ -3060,13 +3044,13 @@ pub unsafe fn map_reset_timer(v1: i32, v2: i32) -> i32 {
             let fd = SessionId::from_raw(x);
             if session_exists(fd) {
                 let sd = session_get_data(fd);
-                if !sd.is_null() && session_get_eof(fd) == 0 {
-                    let sd_usize = sd as usize;
-                    // SAFETY: MapSessionData: Send (pc.rs:335). blocking_run_async joins before
-                    // returning, preventing concurrent access from the session thread.
+                if let Some(ref sd_arc) = sd {
+                  if session_get_eof(fd) == 0 {
+                    let player_id = sd_arc.id;
                     crate::database::blocking_run_async(crate::database::assert_send(async move {
-                        let sd = sd_usize as *mut crate::game::pc::MapSessionData;
-                        unsafe { crate::game::client::handlers::clif_handle_disconnect(sd).await }
+                        if let Some(pe) = map_id2sd_pc(player_id) {
+                            crate::game::client::handlers::clif_handle_disconnect(&pe).await;
+                        }
                     }));
                     // session_call_parse is now async; schedule it on the LocalSet.
                     // map_reset_timer is a sync TimerFn so it cannot .await directly.
@@ -3079,6 +3063,7 @@ pub unsafe fn map_reset_timer(v1: i32, v2: i32) -> i32 {
                         }
                     }
                     session_set_eof(fd, 1);
+                  }
                 }
             }
         }

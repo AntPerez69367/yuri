@@ -4,9 +4,7 @@
 
 use crate::database::get_pool;
 
-use crate::game::pc::{
-    MapSessionData,
-};
+use crate::game::player::entity::PlayerEntity;
 
 use super::packet::{
     rfifob, wfifop,
@@ -160,12 +158,12 @@ pub unsafe fn clif_intcheck(number: i32, field: i32, fd: SessionId) {
 
 // ─── sendRewardParcel ─────────────────────────────────────────────────────────
 
-/// Insert a reward parcel row for `sd` and return 1 on success, 0 or 1 on error.
+/// Insert a reward parcel row for `pe` and return 1 on success, 0 or 1 on error.
 ///
 /// Finds the highest existing `ParPosition` for the destination character and
 /// inserts a new row one slot higher.  C line 4100.
 pub async unsafe fn sendRewardParcel(
-    sd:           *mut MapSessionData,
+    pe:           &PlayerEntity,
     eventid:      i32,
     rank:         i32,
     rewarditem:   i32,
@@ -173,18 +171,19 @@ pub async unsafe fn sendRewardParcel(
 ) -> i32 {
     let _ = eventid; // used in reward message only (via sprintf); not in SQL directly
 
-    let receiver = (*sd).player.identity.id as u32;
+    let receiver = pe.read().player.identity.id as u32;
     let rewarditem_u = rewarditem as u32;
 
     // Build escape string: "name,\nCongratulations on attaining Rank N!\nHere is your reward: (amount) name"
     let mut escape = [0i8; 255];
     {
         let item_name = item_db::search(rewarditem_u).name.as_ptr();
+        let name = pe.read().player.identity.name.clone();
         libc::sprintf(
             escape.as_mut_ptr(),
             b"%s,\nCongratulations on attaining Rank %i!\nHere is your reward: (%i) %s\0"
                 .as_ptr() as *const i8,
-            (*sd).player.identity.name.as_ptr() as *const i8,
+            name.as_ptr() as *const i8,
             rank,
             rewardamount,
             item_name,
@@ -250,7 +249,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
 ///
 /// C line 4186.
 #[allow(unused_assignments)]
-pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: SessionId) -> i32 {
+pub async unsafe fn clif_getReward(pe: &PlayerEntity, fd: SessionId) -> i32 {
     let eventid = rfifob(fd, 7) as i32;
     let g_cur_year   = cur_year.load(AtomicOrd::Relaxed);
     let g_cur_season = cur_season.load(AtomicOrd::Relaxed);
@@ -368,7 +367,7 @@ pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: SessionId) -> i3
 
     // Query 2: player's rank for this event
     // ChaId is int(10) signed — bind as i32; player.identity.id is u32 so cast
-    let cha_id = (*sd).player.identity.id as i32;
+    let cha_id = pe.read().player.identity.id as i32;
     let Some(rank) = sqlx::query_scalar::<_, i32>(
             "SELECT `Rank` FROM `RankingScores` WHERE `ChaId` = ? AND `EventId` = ?"
         )
@@ -446,20 +445,20 @@ pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: SessionId) -> i3
     // Assign legend slot
     use crate::common::player::legends::MAX_LEGENDS;
     for i in 0..MAX_LEGENDS {
-        let leg_name_ptr  = (&(*sd).player.legends.legends)[i].name.as_ptr();
-        let leg_name1_ptr = if i + 1 < MAX_LEGENDS { (&(*sd).player.legends.legends)[i + 1].name.as_ptr() } else { b"\0".as_ptr() as *const i8 };
+        let leg_name_ptr  = pe.read().player.legends.legends[i].name.as_ptr();
+        let leg_name1_ptr = if i + 1 < MAX_LEGENDS { pe.read().player.legends.legends[i + 1].name.as_ptr() } else { b"\0".as_ptr() as *const i8 };
 
         if libc::strcmp(leg_name_ptr, b"\0".as_ptr() as *const i8) == 0
             && libc::strcasecmp(leg_name1_ptr, b"\0".as_ptr() as *const i8) == 0
         {
-            libc::strcpy((&mut (*sd).player.legends.legends)[i].text.as_mut_ptr(), legendbuf.as_ptr());
+            libc::strcpy(pe.write().player.legends.legends[i].text.as_mut_ptr(), legendbuf.as_ptr());
             libc::sprintf(
-                (&mut (*sd).player.legends.legends)[i].name.as_mut_ptr(),
+                pe.write().player.legends.legends[i].name.as_mut_ptr(),
                 b"Event %i Place: %i\0".as_ptr() as *const i8,
                 eventid, rank,
             );
-            (&mut (*sd).player.legends.legends)[i].icon  = legendicon as u16;
-            (&mut (*sd).player.legends.legends)[i].color = legendiconcolor as u16;
+            pe.write().player.legends.legends[i].icon  = legendicon as u16;
+            pe.write().player.legends.legends[i].color = legendiconcolor as u16;
             break;
         }
     }
@@ -473,12 +472,15 @@ pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: SessionId) -> i3
     let mut sent_parcel_success: i32 = 0;
 
     if reward1amount >= 1 && reward2amount >= 1 {
-        sent_parcel_success  = sendRewardParcel(sd, eventid, rank, reward1item, reward1amount).await;
-        sent_parcel_success += sendRewardParcel(sd, eventid, rank, reward2item, reward2amount).await;
+        sent_parcel_success  = sendRewardParcel(pe, eventid, rank, reward1item, reward1amount).await;
+        sent_parcel_success += sendRewardParcel(pe, eventid, rank, reward2item, reward2amount).await;
     }
     if reward1amount >= 1 && reward2amount == 0 {
-        sent_parcel_success = sendRewardParcel(sd, eventid, rank, reward1item, reward1amount).await;
+        sent_parcel_success = sendRewardParcel(pe, eventid, rank, reward1item, reward1amount).await;
     }
+
+    let pe_name = pe.read().player.identity.name.clone();
+    let pe_name_ptr = pe_name.as_ptr() as *const i8;
 
     if sent_parcel_success == 2 {
         if rank == 1 {
@@ -487,7 +489,7 @@ pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: SessionId) -> i3
                 b"Congratulations on winning the %s Event, %s!\n\nYou have been rewarded: \
 (%i) %s, (%i) %s.\n\nPlease continue to play for more great rewards!\0"
                     .as_ptr() as *const i8,
-                eventname.as_ptr(), (*sd).player.identity.name.as_ptr() as *const i8,
+                eventname.as_ptr(), pe_name_ptr,
                 reward1amount, item_db::search(reward1item as u32).name.as_ptr(),
                 reward2amount, item_db::search(reward2item as u32).name.as_ptr(),
             );
@@ -495,16 +497,17 @@ pub async unsafe fn clif_getReward(sd: *mut MapSessionData, fd: SessionId) -> i3
                 msg.as_mut_ptr(),
                 b"Congratulations on winning the event, %s! Please visit your post office to collect your winnings.\0"
                     .as_ptr() as *const i8,
-                (*sd).player.identity.name.as_ptr() as *const i8,
+                pe_name_ptr,
             );
-            nmail_sendmail(sd, (*sd).player.identity.name.as_ptr() as *const i8, topic.as_ptr(), message.as_ptr());
+            // TODO(phase6c): migrate nmail_sendmail
+            nmail_sendmail(pe.data_ptr(), pe_name_ptr, topic.as_ptr(), message.as_ptr());
         } else {
             libc::sprintf(
                 message.as_mut_ptr(),
                 b"Thanks for participating in the %s Event, %s.\n\nRank:%s Place\n\n\
 You have been rewarded: (%i) %s, (%i) %s.\n\nPlease continue to play for more great rewards!\0"
                     .as_ptr() as *const i8,
-                eventname.as_ptr(), (*sd).player.identity.name.as_ptr() as *const i8, rankname.as_ptr(),
+                eventname.as_ptr(), pe_name_ptr, rankname.as_ptr(),
                 reward1amount, item_db::search(reward1item as u32).name.as_ptr(),
                 reward2amount, item_db::search(reward2item as u32).name.as_ptr(),
             );
@@ -512,9 +515,10 @@ You have been rewarded: (%i) %s, (%i) %s.\n\nPlease continue to play for more gr
                 msg.as_mut_ptr(),
                 b"Thanks for participating in the Event, %s! Please visit your post office to collect your winnings.\0"
                     .as_ptr() as *const i8,
-                (*sd).player.identity.name.as_ptr() as *const i8,
+                pe_name_ptr,
             );
-            nmail_sendmail(sd, (*sd).player.identity.name.as_ptr() as *const i8, topic.as_ptr(), message.as_ptr());
+            // TODO(phase6c): migrate nmail_sendmail
+            nmail_sendmail(pe.data_ptr(), pe_name_ptr, topic.as_ptr(), message.as_ptr());
         }
     }
 
@@ -525,32 +529,34 @@ You have been rewarded: (%i) %s, (%i) %s.\n\nPlease continue to play for more gr
                 b"Congratulations on winning the %s Event, %s!\n\nYou have been rewarded: \
 (%i) %s.\n\nPlease continue to play for more great rewards!\0"
                     .as_ptr() as *const i8,
-                eventname.as_ptr(), (*sd).player.identity.name.as_ptr() as *const i8,
+                eventname.as_ptr(), pe_name_ptr,
                 reward1amount, item_db::search(reward1item as u32).name.as_ptr(),
             );
             libc::sprintf(
                 msg.as_mut_ptr(),
                 b"Congratulations on winning the event, %s! Please visit your post office to collect your winnings.\0"
                     .as_ptr() as *const i8,
-                (*sd).player.identity.name.as_ptr() as *const i8,
+                pe_name_ptr,
             );
-            nmail_sendmail(sd, (*sd).player.identity.name.as_ptr() as *const i8, topic.as_ptr(), message.as_ptr());
+            // TODO(phase6c): migrate nmail_sendmail
+            nmail_sendmail(pe.data_ptr(), pe_name_ptr, topic.as_ptr(), message.as_ptr());
         } else {
             libc::sprintf(
                 message.as_mut_ptr(),
                 b"Thanks for participating in the %s Event, %s.\n\nRank:%s Place\n\n\
 You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewards!\0"
                     .as_ptr() as *const i8,
-                eventname.as_ptr(), (*sd).player.identity.name.as_ptr() as *const i8, rankname.as_ptr(),
+                eventname.as_ptr(), pe_name_ptr, rankname.as_ptr(),
                 reward1amount, item_db::search(reward1item as u32).name.as_ptr(),
             );
             libc::sprintf(
                 msg.as_mut_ptr(),
                 b"Thanks for participating in the event, %s. Please visit your post office to collect your winnings.\0"
                     .as_ptr() as *const i8,
-                (*sd).player.identity.name.as_ptr() as *const i8,
+                pe_name_ptr,
             );
-            nmail_sendmail(sd, (*sd).player.identity.name.as_ptr() as *const i8, topic.as_ptr(), message.as_ptr());
+            // TODO(phase6c): migrate nmail_sendmail
+            nmail_sendmail(pe.data_ptr(), pe_name_ptr, topic.as_ptr(), message.as_ptr());
         }
     }
 
@@ -559,17 +565,17 @@ You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewar
             msg.as_mut_ptr(),
             b"Sorry %s, there was an error encountered while attempting to send your rewards in a parcel. Please contact a GM for assistance.\0"
                 .as_ptr() as *const i8,
-            (*sd).player.identity.name.as_ptr() as *const i8,
+            pe_name_ptr,
         );
     }
 
-    clif_sendmsg(sd, 0, msg.as_ptr());
+    clif_sendmsg(pe, 0, msg.as_ptr());
 
     if sent_parcel_success >= 1 {
         // EventId is int(10) signed — i32 bind is correct
         let eventid_i32 = eventid;
         // ChaId is int(10) signed — bind as i32; player.identity.id is u32 so cast
-        let cha_id_i32  = (*sd).player.identity.id as i32;
+        let cha_id_i32  = pe.read().player.identity.id as i32;
         let _ = sqlx::query(
                 "UPDATE `RankingScores` SET `EventClaim` = 2 WHERE `EventId` = ? AND `ChaId` = ?"
             )
@@ -579,7 +585,7 @@ You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewar
             .await;
     }
 
-    clif_parseranking(sd, fd).await;
+    clif_parseranking(pe, fd).await;
     0
 }
 
@@ -590,7 +596,7 @@ You have been rewarded: (%i) %s.\n\nPlease continue to play for more great rewar
 /// Iterates `rewardranks` times, writing per-rank legend title, icon, and
 /// item reward information into the WFIFO.  C line 4561.
 #[allow(unused_assignments)]
-pub async unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: SessionId) -> i32 {
+pub async unsafe fn clif_sendRewardInfo(_pe: &PlayerEntity, fd: SessionId) -> i32 {
     let g_cur_year = cur_year.load(AtomicOrd::Relaxed);
     wfifohead(fd, 0);
     wfifob(fd, 0, 0xAA);
@@ -603,8 +609,6 @@ pub async unsafe fn clif_sendRewardInfo(sd: *mut MapSessionData, fd: SessionId) 
     wfifob(fd, 9, 227);
     wfifob(fd, 10, 0);
     wfifob(fd, 12, 1);
-
-    let _ = sd; // sd is passed by C but not used in this function
 
     let mut buf: [i8; 40] = [0; 40];
     let mut legend: [i8; 17] = [0; 17];
@@ -855,11 +859,11 @@ pub async unsafe fn retrieveEventDates(eventid: i32, pos: i32, fd: SessionId) {
 /// Return the player's score for `eventid`, or 0 if not found / on error.
 ///
 /// C line 4951.
-pub async unsafe fn checkPlayerScore(eventid: i32, sd: *mut MapSessionData) -> i32 {
+pub async unsafe fn checkPlayerScore(eventid: i32, pe: &PlayerEntity) -> i32 {
     // EventId is int(10) signed — i32 bind is correct
     let event_id_i = eventid;
     // ChaId is int(10) signed — bind as i32; player.identity.id is u32 so cast
-    let cha_id = (*sd).player.identity.id as i32;
+    let cha_id = pe.read().player.identity.id as i32;
     sqlx::query_scalar::<_, i32>(
             "SELECT `Score` FROM `RankingScores` WHERE `EventId` = ? AND `ChaId` = ?"
         )
@@ -896,11 +900,11 @@ pub async unsafe fn updateRanks(eventid: i32) {
 /// Return the player's current rank for `eventid`, or 0 if not found / on error.
 ///
 /// C line 5018.
-pub async unsafe fn checkPlayerRank(eventid: i32, sd: *mut MapSessionData) -> i32 {
+pub async unsafe fn checkPlayerRank(eventid: i32, pe: &PlayerEntity) -> i32 {
     // EventId is int(10) signed — i32 bind is correct
     let event_id_i = eventid;
     // ChaId is int(10) signed — bind as i32; player.identity.id is u32 so cast
-    let cha_id = (*sd).player.identity.id as i32;
+    let cha_id = pe.read().player.identity.id as i32;
     sqlx::query_scalar::<_, i32>(
             "SELECT `Rank` FROM `RankingScores` WHERE `EventId` = ? AND `ChaId` = ?"
         )
@@ -919,9 +923,9 @@ pub async unsafe fn checkPlayerRank(eventid: i32, sd: *mut MapSessionData) -> i3
 /// Returns the column value on success, or 2 if no row is found.
 ///
 /// SQL: SELECT EventClaim FROM RankingScores WHERE EventId=? AND ChaId=?
-pub async unsafe fn checkevent_claim(eventid: i32, _fd: SessionId, sd: *mut MapSessionData) -> i32 {
+pub async unsafe fn checkevent_claim(eventid: i32, _fd: SessionId, pe: &PlayerEntity) -> i32 {
     // ChaId is int(10) signed — bind as i32; player.identity.id is u32 so cast
-    let cha_id = (*sd).player.identity.id as i32;
+    let cha_id = pe.read().player.identity.id as i32;
     // EventId is int(10) signed — i32 bind is correct
     let event_id = eventid;
 
@@ -944,13 +948,13 @@ pub async unsafe fn checkevent_claim(eventid: i32, _fd: SessionId, sd: *mut MapS
 /// Writes the event header bytes and delegates date fields to `retrieveEventDates`,
 /// then appends the claim byte at pos+20.
 ///
-pub async unsafe fn dateevent_block(pos: i32, eventid: i32, fd: SessionId, sd: *mut MapSessionData) {
+pub async unsafe fn dateevent_block(pos: i32, eventid: i32, fd: SessionId, pe: &PlayerEntity) {
     wfifob(fd, pos as usize,       0);
     wfifob(fd, pos as usize + 1,   eventid as u8);
     wfifob(fd, pos as usize + 2,   142);
     wfifob(fd, pos as usize + 3,   227);
     retrieveEventDates(eventid, pos, fd).await;
-    wfifob(fd, pos as usize + 20,  checkevent_claim(eventid, fd, sd).await as u8);
+    wfifob(fd, pos as usize + 20,  checkevent_claim(eventid, fd, pe).await as u8);
 }
 
 // ─── filler_block ─────────────────────────────────────────────────────────────
@@ -958,9 +962,9 @@ pub async unsafe fn dateevent_block(pos: i32, eventid: i32, fd: SessionId, sd: *
 /// Write the "filler" event block into the WFIFO at position `pos`.
 ///
 /// Writes player rank / score / claim bytes for the chosen event.
-pub async unsafe fn filler_block(pos: i32, eventid: i32, fd: SessionId, sd: *mut MapSessionData) {
-    let player_score = checkPlayerScore(eventid, sd).await;
-    let player_rank  = checkPlayerRank(eventid, sd).await;
+pub async unsafe fn filler_block(pos: i32, eventid: i32, fd: SessionId, pe: &PlayerEntity) {
+    let player_score = checkPlayerScore(eventid, pe).await;
+    let player_rank  = checkPlayerRank(eventid, pe).await;
 
     wfifob(fd, pos as usize + 1,  rfifob(fd, 7));
     wfifob(fd, pos as usize + 2,  142);
@@ -968,7 +972,7 @@ pub async unsafe fn filler_block(pos: i32, eventid: i32, fd: SessionId, sd: *mut
     wfifob(fd, pos as usize + 4,  1);
     clif_intcheck(player_rank,  pos + 8,  fd);
     clif_intcheck(player_score, pos + 12, fd);
-    wfifob(fd, pos as usize + 13, checkevent_claim(eventid, fd, sd).await as u8);
+    wfifob(fd, pos as usize + 13, checkevent_claim(eventid, fd, pe).await as u8);
 }
 
 // ─── gettotalscores ───────────────────────────────────────────────────────────
@@ -1008,7 +1012,7 @@ pub async unsafe fn getevents() -> i32 {
 ///
 /// Returns updated `pos` after writing all blocks.
 /// SQL: SELECT EventName FROM RankingEvents
-pub async unsafe fn getevent_name(mut pos: i32, fd: SessionId, sd: *mut MapSessionData) -> i32 {
+pub async unsafe fn getevent_name(mut pos: i32, fd: SessionId, pe: &PlayerEntity) -> i32 {
     // EventId is int(10) signed — i32 bind is correct
     struct EventRow { event_id: i32, name: String }
     impl sqlx::FromRow<'_, sqlx::mysql::MySqlRow> for EventRow {
@@ -1027,7 +1031,7 @@ pub async unsafe fn getevent_name(mut pos: i32, fd: SessionId, sd: *mut MapSessi
             .unwrap_or_default();
 
     for row in rows.iter() {
-        dateevent_block(pos, row.event_id as i32, fd, sd).await;
+        dateevent_block(pos, row.event_id as i32, fd, pe).await;
         pos += 21;
         let name_bytes = row.name.as_bytes();
         let name_len   = name_bytes.len();
@@ -1118,7 +1122,7 @@ pub async unsafe fn getevent_playerscores(
 /// Assembles: event count, event name/date blocks, filler block, score list,
 /// total score count, encrypts and sends.
 ///
-pub async unsafe fn clif_parseranking(sd: *mut MapSessionData, fd: SessionId) -> i32 {
+pub async unsafe fn clif_parseranking(pe: &PlayerEntity, fd: SessionId) -> i32 {
     wfifohead(fd, 0);
     wfifob(fd, 0, 0xAA);
     wfifob(fd, 1, 0x02);
@@ -1137,8 +1141,8 @@ pub async unsafe fn clif_parseranking(sd: *mut MapSessionData, fd: SessionId) ->
     updateRanks(chosen_event).await;
 
     let mut pos: i32 = 8;
-    pos = getevent_name(pos, fd, sd).await;
-    filler_block(pos, chosen_event, fd, sd).await;
+    pos = getevent_name(pos, fd, pe).await;
+    filler_block(pos, chosen_event, fd, pe).await;
     pos += 15;
     wfifob(fd, pos as usize, 10);
     let totalscores = gettotalscores(chosen_event).await;
@@ -1161,9 +1165,11 @@ pub async unsafe fn clif_parseranking(sd: *mut MapSessionData, fd: SessionId) ->
 /// Allowed when: GM, or has `carnagehost` global reg set, and map id is 2001..=2099.
 ///
 /// Pure logic — no SQL.
-pub unsafe fn canusepowerboards(sd: *mut MapSessionData) -> i32 {
-    if (*sd).player.identity.gm_level != 0 { return 1; }
-    if pc_readglobalreg(sd, c"carnagehost".as_ptr()) == 0 { return 0; }
-    if (*sd).m >= 2001 && (*sd).m <= 2099 { return 1; }
+pub unsafe fn canusepowerboards(pe: &PlayerEntity) -> i32 {
+    if pe.read().player.identity.gm_level != 0 { return 1; }
+    // TODO(phase6c): migrate pc_readglobalreg
+    if pc_readglobalreg(pe.data_ptr(), c"carnagehost".as_ptr()) == 0 { return 0; }
+    let pe_m = pe.read().m;
+    if pe_m >= 2001 && pe_m <= 2099 { return 1; }
     0
 }

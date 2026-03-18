@@ -302,7 +302,7 @@ use crate::game::map_parse::movement::{
 use crate::game::map_parse::visual::clif_spawn;
 use crate::game::map_parse::items::{clif_throwitem_script, clif_sendadditem, clif_checkinvbod};
 use crate::game::map_parse::chat::{clif_guitextsd, clif_sendminitext, clif_sendscriptsay};
-use crate::game::map_server::{boards_showposts, boards_readpost, nmail_sendmail};
+use crate::game::map_server::{boards_showposts, boards_readpost, nmail_sendmail, map_id2sd_pc};
 use crate::game::map_parse::dialogs::clif_send_timer;
 // map lookups — use typed versions
 use crate::database::{magic_db, class_db, clan_db};
@@ -682,13 +682,17 @@ pub unsafe fn sl_pc_getgroup(sd: &mut MapSessionData, out: *mut u32, max: i32) -
 
 pub unsafe fn sl_pc_addhealth(sd: &mut MapSessionData, damage: i32) {
     clif_send_pc_healthscript(&mut *sd, -damage, 0);
-    clif_sendstatus(sd, SFLAG_HPMP);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_sendstatus(&*arc, SFLAG_HPMP);
+    }
 }
 
 pub unsafe fn sl_pc_removehealth(sd: &mut MapSessionData, damage: i32, caster: i32) {
     if caster > 0 { sd.attacker = caster as u32; }
     clif_send_pc_healthscript(&mut *sd, damage, 0);
-    clif_sendstatus(sd, SFLAG_HPMP);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_sendstatus(&*arc, SFLAG_HPMP);
+    }
 }
 
 pub unsafe fn sl_pc_freeasync(sd: &mut MapSessionData) {
@@ -712,13 +716,15 @@ pub fn sl_pc_showhealth(sd: &mut MapSessionData, damage: i32, kind: i32) {
 }
 
 pub unsafe fn sl_pc_calcstat(sd: &mut MapSessionData) {
-    pc_calcstat(sd);
+    if let Some(arc) = map_id2sd_pc(sd.id) { pc_calcstat(&arc); }
 }
 
 pub unsafe fn sl_pc_sendstatus(sd: &mut MapSessionData) {
     pc_requestmp(sd);
-    clif_sendstatus(sd, SFLAG_FULLSTATS | SFLAG_HPMP | SFLAG_XPMONEY);
-    clif_sendupdatestatus_onequip(sd);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_sendstatus(&*arc, SFLAG_FULLSTATS | SFLAG_HPMP | SFLAG_XPMONEY);
+        clif_sendupdatestatus_onequip(&*arc);
+    }
 }
 
 pub fn sl_pc_status(sd: &mut MapSessionData) -> i32 {
@@ -733,27 +739,37 @@ pub unsafe fn sl_pc_warp(sd: &mut MapSessionData, m: i32, x: i32, y: i32) {
 
 pub unsafe fn sl_pc_refresh(sd: &mut MapSessionData) {
     pc_setpos(sd, sd.m as i32, sd.x as i32, sd.y as i32);
-    clif_refreshnoclick(sd);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_refreshnoclick(&*arc);
+    }
 }
 
 pub unsafe fn sl_pc_pickup(sd: &mut MapSessionData, id: u32) {
-    pc_getitemscript(sd, id as i32);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        pc_getitemscript(&*arc, id as i32);
+    }
 }
 
 pub unsafe fn sl_pc_throwitem(sd: &mut MapSessionData) {
-    clif_throwitem_script(sd);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_throwitem_script(&*arc);
+    }
 }
 
 pub unsafe fn sl_pc_forcedrop(sd: &mut MapSessionData, id: i32) {
-    pc_dropitemmap(sd, id, 0);
+    if let Some(arc) = map_id2sd_pc(sd.id) { pc_dropitemmap(&arc, id, 0); }
 }
 
 pub unsafe fn sl_pc_lock(sd: &mut MapSessionData) {
-    clif_blockmovement(sd, 0);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_blockmovement(&*arc, 0);
+    }
 }
 
 pub unsafe fn sl_pc_unlock(sd: &mut MapSessionData) {
-    clif_blockmovement(sd, 1);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_blockmovement(&*arc, 1);
+    }
 }
 
 pub unsafe fn sl_pc_swing(sd: &mut MapSessionData) {
@@ -776,7 +792,9 @@ pub unsafe fn sl_pc_sendhealth(sd: &mut MapSessionData, dmgf: f32, critical: i32
 // ── Movement / UI ─────────────────────────────────────────────────────────────
 
 pub unsafe fn sl_pc_move(sd: &mut MapSessionData, speed: i32) {
-    clif_noparsewalk(sd, speed as i8);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_noparsewalk(&*arc, speed as i8);
+    }
 }
 
 pub unsafe fn sl_pc_lookat(_sd: &mut MapSessionData, _id: i32) {
@@ -784,31 +802,43 @@ pub unsafe fn sl_pc_lookat(_sd: &mut MapSessionData, _id: i32) {
 }
 
 pub unsafe fn sl_pc_minirefresh(sd: &mut MapSessionData) {
-    clif_refreshnoclick(sd);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_refreshnoclick(&*arc);
+    }
 }
 
 pub unsafe fn sl_pc_refreshinventory(sd: &mut MapSessionData) {
-    for i in 0..MAX_INVENTORY as i32 {
-        clif_sendadditem(sd, i);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        for i in 0..MAX_INVENTORY as i32 {
+            clif_sendadditem(&*arc, i);
+        }
     }
 }
 
 pub unsafe fn sl_pc_updateinv(sd: &mut MapSessionData) {
-    pc_loaditem(sd);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        pc_loaditem(&*arc);
+    }
 }
 
 pub unsafe fn sl_pc_checkinvbod(sd: &mut MapSessionData) {
-    clif_checkinvbod(sd);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_checkinvbod(&*arc);
+    }
 }
 
 // ── Equipment ────────────────────────────────────────────────────────────────
 
 pub unsafe fn sl_pc_equip(sd: &mut MapSessionData) {
-    pc_equipscript(sd);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        pc_equipscript(&*arc);
+    }
 }
 
 pub unsafe fn sl_pc_takeoff(sd: &mut MapSessionData) {
-    pc_unequipscript(sd);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        pc_unequipscript(&*arc);
+    }
 }
 
 pub unsafe fn sl_pc_deductarmor(sd: &mut MapSessionData, v: i32) {
@@ -841,7 +871,7 @@ pub fn sl_pc_hasequipped(sd: &mut MapSessionData, item_id: u32) -> i32 {
 }
 
 pub unsafe fn sl_pc_removeitemslot(sd: &mut MapSessionData, slot: i32, amount: i32, kind: i32) {
-    pc_delitem(sd, slot, amount, kind);
+    if let Some(arc) = map_id2sd_pc(sd.id) { pc_delitem(&arc, slot, amount, kind); }
 }
 
 pub fn sl_pc_hasitem(sd: &mut MapSessionData, item_id: u32, amount: i32) -> i32 {
@@ -867,21 +897,28 @@ pub unsafe fn sl_pc_checklevel(sd: &mut MapSessionData) {
 // ── Display / UI ──────────────────────────────────────────────────────────────
 
 pub unsafe fn sl_pc_sendminimap(sd: &mut MapSessionData) {
-    clif_sendminimap(sd);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_sendminimap(&*arc);
+    }
 }
 
 pub unsafe fn sl_pc_popup(sd: &mut MapSessionData, msg: *const i8) {
-    // clif_popup is in visual.rs
     use crate::game::client::visual::clif_popup;
-    clif_popup(sd, msg);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_popup(&*arc, msg);
+    }
 }
 
 pub unsafe fn sl_pc_guitext(sd: &mut MapSessionData, msg: *const i8) {
-    clif_guitextsd(msg, sd);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_guitextsd(msg, &*arc);
+    }
 }
 
 pub unsafe fn sl_pc_sendminitext(sd: &mut MapSessionData, msg: *const i8) {
-    clif_sendminitext(sd, msg);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_sendminitext(&*arc, msg);
+    }
 }
 
 pub fn sl_pc_powerboard(_sd: &mut MapSessionData) { /* stub */ }
@@ -895,13 +932,17 @@ pub unsafe fn sl_pc_showpost(sd: &mut MapSessionData, id: i32, post: i32) {
 }
 
 pub unsafe fn sl_pc_changeview(sd: &mut MapSessionData, x: i32, y: i32) {
-    clif_sendxychange(sd, x, y);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_sendxychange(&*arc, x, y);
+    }
 }
 
 // ── Social ────────────────────────────────────────────────────────────────────
 
 pub unsafe fn sl_pc_speak(sd: &mut MapSessionData, msg: *const i8, len: i32, kind: i32) {
-    clif_sendscriptsay(sd, msg, len, kind);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_sendscriptsay(&*arc, msg, len, kind);
+    }
 }
 
 pub unsafe fn sl_pc_sendmail(sd: &mut MapSessionData, to: *const i8, topic: *const i8, msg: *const i8) -> i32 {
@@ -909,7 +950,9 @@ pub unsafe fn sl_pc_sendmail(sd: &mut MapSessionData, to: *const i8, topic: *con
 }
 
 pub unsafe fn sl_pc_sendurl(sd: &mut MapSessionData, kind: i32, url: *const i8) {
-    clif_sendurl(sd, kind, url);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_sendurl(&*arc, kind, url);
+    }
 }
 
 pub unsafe fn sl_pc_swingtarget(sd: &mut MapSessionData, id: i32) {
@@ -1195,17 +1238,25 @@ pub unsafe fn sl_pc_getcasterid(_sd: &mut MapSessionData, name: *const i8) -> i3
 }
 
 pub unsafe fn sl_pc_settimer(sd: &mut MapSessionData, kind: i32, length: u32) {
-    clif_send_timer(sd, kind as i8, length);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_send_timer(&*arc, kind as i8, length);
+    }
 }
 
 pub unsafe fn sl_pc_addtime(sd: &mut MapSessionData, v: i32) {
     sd.disptimertick = sd.disptimertick.wrapping_add(v as u32);
-    clif_send_timer(sd, sd.disptimertype, sd.disptimertick);
+    let (timer_type, timer_tick) = (sd.disptimertype, sd.disptimertick);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_send_timer(&*arc, timer_type, timer_tick);
+    }
 }
 
 pub unsafe fn sl_pc_removetime(sd: &mut MapSessionData, v: i32) {
     sd.disptimertick = sd.disptimertick.saturating_sub(v as u32);
-    clif_send_timer(sd, sd.disptimertype, sd.disptimertick);
+    let (timer_type, timer_tick) = (sd.disptimertype, sd.disptimertick);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_send_timer(&*arc, timer_type, timer_tick);
+    }
 }
 
 pub fn sl_pc_setheroshow(sd: &mut MapSessionData, flag: i32) {
@@ -1342,7 +1393,9 @@ pub unsafe fn sl_user_coref_container(sd: &mut MapSessionData) -> u32 {
 /// addMagic / addMana — add `amount` to sd->status.mp and send HP/MP status.
 pub unsafe fn sl_pc_addmagic(sd: &mut MapSessionData, amount: i32) {
     sd.player.combat.mp = (sd.player.combat.mp as i32).wrapping_add(amount) as u32;
-    clif_sendstatus(sd, SFLAG_HPMP);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_sendstatus(&*arc, SFLAG_HPMP);
+    }
 }
 
 /// addManaExtend — alias for addMagic.
@@ -1353,7 +1406,9 @@ pub unsafe fn sl_pc_addmanaextend(sd: &mut MapSessionData, amount: i32) {
 /// addGold — add gold to sd->status.money and send XP/money status.
 pub unsafe fn sl_pc_addgold(sd: &mut MapSessionData, amount: i32) {
     sd.player.inventory.money = (sd.player.inventory.money as i32).wrapping_add(amount) as u32;
-    clif_sendstatus(sd, SFLAG_XPMONEY);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_sendstatus(&*arc, SFLAG_XPMONEY);
+    }
 }
 
 /// removeGold — subtract gold (floor at 0) and send XP/money status.
@@ -1363,7 +1418,9 @@ pub unsafe fn sl_pc_removegold(sd: &mut MapSessionData, amount: i32) {
     } else {
         sd.player.inventory.money -= amount as u32;
     }
-    clif_sendstatus(sd, SFLAG_XPMONEY);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_sendstatus(&*arc, SFLAG_XPMONEY);
+    }
 }
 
 /// setTimeValues — prepend newval to the timevalues ring buffer.
@@ -1378,7 +1435,9 @@ pub fn sl_pc_settimevalues(sd: &mut MapSessionData, newval: u32) {
 /// addHealth (extend variant) — heal by amount (negative damage).
 pub unsafe fn sl_pc_addhealth_extend(sd: &mut MapSessionData, amount: i32) {
     clif_send_pc_healthscript(&mut *sd, -amount, 0);
-    clif_sendstatus(sd, SFLAG_HPMP);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_sendstatus(&*arc, SFLAG_HPMP);
+    }
 }
 
 /// removeHealth (extend variant) — damage by amount, skipped if dead.
@@ -1386,7 +1445,9 @@ pub unsafe fn sl_pc_removehealth_extend(sd: &mut MapSessionData, damage: i32) {
     use crate::game::pc::PC_DIE;
     if sd.player.combat.state != PC_DIE as i8 {
         clif_send_pc_healthscript(&mut *sd, damage, 0);
-        clif_sendstatus(sd, SFLAG_HPMP);
+        if let Some(arc) = map_id2sd_pc(sd.id) {
+            clif_sendstatus(&*arc, SFLAG_HPMP);
+        }
     }
 }
 
@@ -1576,12 +1637,16 @@ use crate::game::map_parse::chat::{clif_sendmsg as clif_sendmsg_pc, clif_broadca
 
 pub unsafe fn sl_pc_gmmsg(sd: &mut MapSessionData, msg: *const i8) {
     if msg.is_null() { return; }
-    clif_sendmsg_pc(sd, 0, msg);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_sendmsg_pc(&*arc, 0, msg);
+    }
 }
 
 pub unsafe fn sl_pc_talkself(sd: &mut MapSessionData, color: i32, msg: *const i8) {
     if msg.is_null() { return; }
-    clif_sendmsg_pc(sd, color, msg);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_sendmsg_pc(&*arc, color, msg);
+    }
 }
 
 pub unsafe fn sl_pc_broadcast_sd(
@@ -1622,7 +1687,7 @@ pub unsafe fn sl_pc_additem(
     if !engrave.is_null() && *engrave != 0 {
         libc::strncpy(fl.real_name.as_mut_ptr(), engrave, fl.real_name.len() - 1);
     }
-    pc_additem_acc(sd, &mut fl);
+    if let Some(arc) = map_id2sd_pc(sd.id) { pc_additem_acc(&arc, &mut fl); }
 }
 
 pub unsafe fn sl_pc_removeitem(
@@ -1632,6 +1697,7 @@ pub unsafe fn sl_pc_removeitem(
     engrave: *const i8,
 ) {
     let engrave = if engrave.is_null() { c"".as_ptr() } else { engrave };
+    let pc_id = sd.id;
     let maxinv = sd.player.inventory.max_inv as usize;
     for x in 0..maxinv {
         if amount == 0 { break; }
@@ -1642,7 +1708,7 @@ pub unsafe fn sl_pc_removeitem(
         let avail = inv.amount as u32;
         if avail == 0 { continue; }
         let take = avail.min(amount);
-        crate::game::pc::pc_delitem(sd, x as i32, take as i32, type_);
+        if let Some(arc) = map_id2sd_pc(pc_id) { crate::game::pc::pc_delitem(&arc, x as i32, take as i32, type_); }
         amount -= take;
     }
 }
@@ -1653,6 +1719,7 @@ pub unsafe fn sl_pc_removeitemdura(
     type_: i32,
 ) {
     let max_dura = crate::database::item_db::search(id).dura;
+    let pc_id = sd.id;
     let maxinv = sd.player.inventory.max_inv as usize;
     for x in 0..maxinv {
         if amount == 0 { break; }
@@ -1662,7 +1729,7 @@ pub unsafe fn sl_pc_removeitemdura(
         let avail = inv.amount as u32;
         if avail == 0 { continue; }
         let take = avail.min(amount);
-        crate::game::pc::pc_delitem(sd, x as i32, take as i32, type_);
+        if let Some(arc) = map_id2sd_pc(pc_id) { crate::game::pc::pc_delitem(&arc, x as i32, take as i32, type_); }
         amount -= take;
     }
 }
@@ -1762,7 +1829,9 @@ pub unsafe fn sl_pc_activespells(sd: &mut MapSessionData, name: *const i8) -> i3
 // ─── Give XP ─────────────────────────────────────────────────────────────────
 
 pub unsafe fn sl_pc_givexp(sd: &mut MapSessionData, amount: u32) {
-    crate::game::pc::pc_givexp(sd, amount, crate::config_globals::XP_RATE.load(std::sync::atomic::Ordering::Relaxed) as u32);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        crate::game::pc::pc_givexp(&arc, amount, crate::config_globals::XP_RATE.load(std::sync::atomic::Ordering::Relaxed) as u32);
+    }
 }
 
 // ─── Clan bank reads ──────────────────────────────────────────────────────────
@@ -1829,13 +1898,15 @@ use crate::game::map_parse::dialogs::{
 };
 
 pub unsafe fn sl_pc_input_send(sd: &mut MapSessionData, msg: *const i8) {
-    clif_input_pc(sd, sd.last_click as i32, msg, c"".as_ptr());
+    let last_click = sd.last_click;
+    if let Some(arc) = map_id2sd_pc(sd.id) { clif_input_pc(&arc, last_click as i32, msg, c"".as_ptr()); }
 }
 
 pub unsafe fn sl_pc_dialog_send(
     sd: &mut MapSessionData, msg: *const i8, prev: i32, next: i32,
 ) {
-    clif_scriptmes_pc(sd, sd.last_click as i32, msg, prev, next);
+    let last_click = sd.last_click;
+    if let Some(arc) = map_id2sd_pc(sd.id) { clif_scriptmes_pc(&arc, last_click as i32, msg, prev, next); }
 }
 
 pub unsafe fn sl_pc_dialogseq_send(
@@ -1853,7 +1924,8 @@ pub unsafe fn sl_pc_dialogseq_send(
         }
     }
     let cmsg = std::ffi::CString::new(combined).unwrap_or_default();
-    clif_scriptmes_pc(sd, sd.last_click as i32, cmsg.as_ptr(), 0, can_continue);
+    let last_click = sd.last_click;
+    if let Some(arc) = map_id2sd_pc(sd.id) { clif_scriptmes_pc(&arc, last_click as i32, cmsg.as_ptr(), 0, can_continue); }
 }
 
 /// Build 1-indexed option array (buf[0]=NULL, buf[1..n]=options[0..n-1]) and call clif.
@@ -1865,7 +1937,8 @@ unsafe fn menu_send_1idx(
     let mut buf: Vec<*const i8> = Vec::with_capacity(nu + 1);
     buf.push(std::ptr::null());
     for i in 0..nu { buf.push(if options.is_null() { std::ptr::null() } else { *options.add(i) }); }
-    clif_scriptmenuseq_pc(sd, sd.last_click as i32, msg, buf.as_mut_ptr(), n, 0, 0);
+    let last_click = sd.last_click;
+    if let Some(arc) = map_id2sd_pc(sd.id) { clif_scriptmenuseq_pc(&arc, last_click as i32, msg, buf.as_mut_ptr(), n, 0, 0); }
 }
 
 pub unsafe fn sl_pc_menu_send(
@@ -1910,7 +1983,8 @@ pub unsafe fn sl_pc_buy_send(
                           *buytext.add(i), ilist[i].buytext.len() - 1);
         }
     }
-    clif_buydialog_pc(sd, sd.last_click, msg, ilist.as_mut_ptr(), values as *mut i32, n);
+    let last_click = sd.last_click;
+    if let Some(arc) = map_id2sd_pc(sd.id) { clif_buydialog_pc(&arc, last_click, msg, ilist.as_mut_ptr(), values as *mut i32, n); }
 }
 
 pub unsafe fn sl_pc_buydialog_send(
@@ -1920,7 +1994,8 @@ pub unsafe fn sl_pc_buydialog_send(
     let nu = n as usize;
     let mut ilist: Vec<crate::common::types::Item> = vec![std::mem::zeroed(); nu];
     for i in 0..nu { ilist[i].id = *items.add(i) as u32; }
-    clif_buydialog_pc(sd, sd.last_click, msg, ilist.as_mut_ptr(), std::ptr::null_mut(), n);
+    let last_click = sd.last_click;
+    if let Some(arc) = map_id2sd_pc(sd.id) { clif_buydialog_pc(&arc, last_click, msg, ilist.as_mut_ptr(), std::ptr::null_mut(), n); }
 }
 
 pub unsafe fn sl_pc_buyextend_send(
@@ -1932,7 +2007,8 @@ pub unsafe fn sl_pc_buyextend_send(
     let nu = n as usize;
     let mut ilist: Vec<crate::common::types::Item> = vec![std::mem::zeroed(); nu];
     for i in 0..nu { ilist[i].id = *items.add(i) as u32; }
-    clif_buydialog_pc(sd, sd.last_click, msg, ilist.as_mut_ptr(), prices as *mut i32, n);
+    let last_click = sd.last_click;
+    if let Some(arc) = map_id2sd_pc(sd.id) { clif_buydialog_pc(&arc, last_click, msg, ilist.as_mut_ptr(), prices as *mut i32, n); }
 }
 
 unsafe fn sell_send_inner(sd: &mut MapSessionData, msg: *const i8, items: *const i32, n: i32) {
@@ -1945,7 +2021,8 @@ unsafe fn sell_send_inner(sd: &mut MapSessionData, msg: *const i8, items: *const
             if sd.player.inventory.inventory[x].id == item_id { slots.push(x as i32); }
         }
     }
-    clif_selldialog_pc(sd, sd.last_click, msg, slots.as_ptr() as *const i32, slots.len() as i32);
+    let last_click = sd.last_click;
+    if let Some(arc) = map_id2sd_pc(sd.id) { clif_selldialog_pc(&arc, last_click, msg, slots.as_ptr() as *const i32, slots.len() as i32); }
 }
 
 pub unsafe fn sl_pc_sell_send(
@@ -2021,7 +2098,9 @@ pub unsafe fn sl_pc_setpk(sd: &mut MapSessionData, id: i32) {
             if sd.pvp[x][0] == 0 {
                 sd.pvp[x][0] = id as u32;
                 sd.pvp[x][1] = libc::time(std::ptr::null_mut()) as u32;
-                clif_getchararea(sd);
+                if let Some(arc) = map_id2sd_pc(sd.id) {
+                    clif_getchararea(&*arc);
+                }
                 break;
             }
         }
@@ -2041,6 +2120,7 @@ pub unsafe fn sl_pc_removehealth_nodmgnum(sd: &mut MapSessionData, damage: i32, 
 ///
 pub unsafe fn sl_pc_expireitem(sd: &mut MapSessionData) {
     let t = libc::time(std::ptr::null_mut()) as u32;
+    let pe = map_id2sd_pc(sd.id);
 
     for x in 0..sd.player.inventory.max_inv as usize {
         let id = sd.player.inventory.inventory[x].id;
@@ -2052,8 +2132,10 @@ pub unsafe fn sl_pc_expireitem(sd: &mut MapSessionData) {
             let name = crate::game::scripting::types::item::fixed_str(&db_item.name);
             let msg = format!("Your {} has expired! Please visit the cash shop to purchase another.", name);
             if let Ok(cmsg) = std::ffi::CString::new(msg) {
-                pc_delitem(sd, x as i32, 1, 8);
-                clif_sendminitext(sd, cmsg.as_ptr());
+                if let Some(ref arc) = pe { pc_delitem(&**arc, x as i32, 1, 8); }
+                if let Some(ref arc) = pe {
+                    clif_sendminitext(&**arc, cmsg.as_ptr());
+                }
             }
         }
     }
@@ -2075,8 +2157,10 @@ pub unsafe fn sl_pc_expireitem(sd: &mut MapSessionData) {
             let msg = format!("Your {} has expired! Please visit the cash shop to purchase another.", name);
             if let Ok(cmsg) = std::ffi::CString::new(msg) {
                 pc_unequip_slot(sd, x as i32);
-                if eqdel >= 0 { pc_delitem(sd, eqdel, 1, 8); }
-                clif_sendminitext(sd, cmsg.as_ptr());
+                if eqdel >= 0 { if let Some(ref arc) = pe { pc_delitem(&**arc, eqdel, 1, 8); } }
+                if let Some(ref arc) = pe {
+                    clif_sendminitext(&**arc, cmsg.as_ptr());
+                }
             }
         }
     }
@@ -2097,5 +2181,7 @@ pub unsafe fn sl_pc_addhealth2(sd: &mut MapSessionData, amount: i32, _type: i32)
         );
     }
     clif_send_pc_healthscript(&mut *sd, -amount, 0);
-    clif_sendstatus(sd, SFLAG_HPMP);
+    if let Some(arc) = map_id2sd_pc(sd.id) {
+        clif_sendstatus(&*arc, SFLAG_HPMP);
+    }
 }

@@ -22,7 +22,7 @@ use crate::common::constants::entity::player::{SFLAG_FULLSTATS, SFLAG_HPMP, SFLA
 
 // ---------------------------------------------------------------------------
 
-use crate::game::map_server::map_fd;
+use crate::game::map_server::{map_fd, map_id2sd_pc};
 
 use crate::session::{get_session_manager, SessionId};
 use crate::network::crypt::crypt_populate_table;
@@ -66,13 +66,8 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
     // Zeroed String/Vec/HashMap fields are overwritten before any code can read/drop them.
     ptr::write(ptr::addr_of_mut!((*sd).player), player);
 
-    // Attach to session.
+    // Attach to session (fd only; session_data will be set after map_addiddb_player below).
     (*sd).fd = sid;
-    if let Some(session_arc) = get_session_manager().get_session(sid) {
-        if let Ok(mut session) = session_arc.try_lock() {
-            session.session_data = Some(sd);
-        }
-    }
 
     // Build the per-session encryption hash table from the character name.
     {
@@ -148,6 +143,22 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
     pc_starttimer(sd);
     pc_requestmp(sd);
 
+    // Insert into PLAYER_MAP before calling migrated clif functions that require &PlayerEntity.
+    tracing::info!("[map] [login] fd={:?} step=addiddb", sid);
+    let sd_id = (*sd).id;
+    let sd_fd = (*sd).fd;
+    crate::game::map_server::map_addiddb_player(sd_id, sd_fd, sd_box);
+    let arc = map_id2sd_pc(sd_id).expect("player just inserted");
+    // Re-bind legacy raw pointer for unmigrated callers.
+    let sd: *mut crate::game::pc::MapSessionData = arc.data_ptr();
+
+    // Store Arc<PlayerEntity> in session so encrypt/decrypt can find the EncHash.
+    if let Some(session_arc) = get_session_manager().get_session(sd_fd) {
+        if let Ok(mut session) = session_arc.try_lock() {
+            session.session_data = Some(arc.clone());
+        }
+    }
+
     use crate::game::map_parse::player_state::{
         clif_sendack, clif_sendtime, clif_sendid, clif_sendmapinfo,
         clif_sendstatus, clif_mystaytus_by_addr, clif_refresh, clif_sendxy,
@@ -155,56 +166,48 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
     };
     let fd = (*sd).fd;
     tracing::info!("[map] [login] fd={} step=sendack", fd);
-    clif_sendack(sd);
+    clif_sendack(&*arc);
     tracing::info!("[map] [login] fd={} step=sendtime", fd);
-    clif_sendtime(sd);
+    clif_sendtime(&*arc);
     tracing::info!("[map] [login] fd={} step=sendid", fd);
-    clif_sendid(sd);
+    clif_sendid(&*arc);
     tracing::info!("[map] [login] fd={} step=sendmapinfo", fd);
-    clif_sendmapinfo(sd);
+    clif_sendmapinfo(&*arc);
     tracing::info!("[map] [login] fd={} step=sendstatus", fd);
-    clif_sendstatus(sd, SFLAG_FULLSTATS | SFLAG_HPMP | SFLAG_XPMONEY);
+    clif_sendstatus(&*arc, SFLAG_FULLSTATS | SFLAG_HPMP | SFLAG_XPMONEY);
     tracing::info!("[map] [login] fd={} step=mystaytus_1", fd);
     crate::database::blocking_run_async(clif_mystaytus_by_addr(sd as usize));
     tracing::info!("[map] [login] fd={} step=spawn", fd);
-    clif_spawn(sd);
+    clif_spawn(sd); // TODO(phase6c): migrate clif_spawn to &PlayerEntity
     tracing::info!("[map] [login] fd={} step=refresh", fd);
-    clif_refresh(sd);
+    clif_refresh(&*arc);
     tracing::info!("[map] [login] fd={} step=sendxy", fd);
-    clif_sendxy(sd);
+    clif_sendxy(&*arc);
     tracing::info!("[map] [login] fd={} step=getchararea", fd);
-    clif_getchararea(sd);
+    clif_getchararea(&*arc);
 
     tracing::info!("[map] [login] fd={} step=mob_look_start", fd);
-    clif_mob_look_start_func_inner((*sd).fd, &mut (*sd).net.look);
-    if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
-        let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).m as usize);
-        let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
-        for id in ids {
-            clif_object_look_by_id((*sd).fd, &mut (*sd).net.look, (*sd).player.identity.id, id);
+    {
+        let mut net = arc.net.write();
+        clif_mob_look_start_func_inner(arc.fd, &mut net.look);
+        if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
+            let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).m as usize);
+            let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
+            for id in ids {
+                clif_object_look_by_id(arc.fd, &mut net.look, (*sd).player.identity.id, id);
+            }
         }
+        clif_mob_look_close_func_inner(arc.fd, &mut net.look);
     }
-    clif_mob_look_close_func_inner((*sd).fd, &mut (*sd).net.look);
 
     tracing::info!("[map] [login] fd={} step=loaditem", fd);
-    pc_loaditem(sd);
+    pc_loaditem(&*arc);
     tracing::info!("[map] [login] fd={} step=loadequip", fd);
-    pc_loadequip(sd);
+    pc_loadequip(&*arc);
 
     tracing::info!("[map] [login] fd={} step=magic_startup", fd);
     pc_magic_startup(sd);
 
-    tracing::info!("[map] [login] fd={} step=addiddb", fd);
-    let sd_id = (*sd).id;
-    crate::game::map_server::map_addiddb_player(sd_id, (*sd).fd, sd_box);
-    let sd: *mut crate::game::pc::MapSessionData =
-        crate::game::map_server::map_id2sd_pc(sd_id)
-            .expect("player just inserted").data_ptr();
-    if let Some(session_arc) = crate::session::get_session_manager().get_session((*sd).fd) {
-        if let Ok(mut session) = session_arc.try_lock() {
-            session.session_data = Some(sd);
-        }
-    }
     let fire_login_hook = crate::database::blocking_run_async(
         crate::database::assert_send(crate::game::map_server::mmo_setonline((*sd).player.identity.id, 1))
     );
@@ -222,16 +225,16 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
     }
 
     tracing::info!("[map] [login] fd={} step=calcstat", fd);
-    pc_calcstat(sd);
+    pc_calcstat(&*arc);
     pc_checklevel(sd);
     tracing::info!("[map] [login] fd={} step=mystaytus_2", fd);
     crate::database::blocking_run_async(clif_mystaytus_by_addr(sd as usize));
 
     tracing::info!("[map] [login] fd={} step=updatestate", fd);
-    broadcast_update_state(sd);
+    broadcast_update_state(&*arc);
 
     tracing::info!("[map] [login] fd={} step=retrieveprofile", fd);
-    clif_retrieveprofile(sd);
+    clif_retrieveprofile(&*arc);
     tracing::info!("[map] [login] fd={} step=done", fd);
     0
 }
@@ -241,6 +244,7 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
 pub mod intif_save_impl {
     use crate::game::pc::MapSessionData;
     use crate::game::block::map_is_loaded;
+    use crate::game::player::entity::PlayerEntity;
 
     pub unsafe fn sl_intif_save(sd: *mut MapSessionData) -> i32 {
         if sd.is_null() { return -1; }
@@ -262,9 +266,9 @@ pub mod intif_save_impl {
         0
     }
 
-    pub unsafe fn sl_intif_savequit(sd: *mut MapSessionData) -> i32 {
-        if sd.is_null() { return -1; }
-
+    pub fn sl_intif_savequit(pe: &PlayerEntity) -> i32 {
+        let sd = pe.data_ptr();
+        unsafe {
         if !map_is_loaded((*sd).player.identity.dest_pos.m as i32) {
             if (*sd).player.identity.dest_pos.m == 0 {
                 (*sd).player.identity.dest_pos.m = (*sd).m;
@@ -295,6 +299,7 @@ pub mod intif_save_impl {
         if let Some(world) = crate::world::get_world() {
             world.online.remove(&char_id);
         }
+        } // end unsafe
         0
     }
 }

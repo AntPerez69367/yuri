@@ -1290,7 +1290,7 @@ impl UserData for PcObject {
 
         // ── Combat ───────────────────────────────────────────────────────────────
         methods.add_method("giveXP",        |_, this, amount: i32| { { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_givexp(&mut *sd, amount as u32) } } else { Default::default() } }; Ok(()) });
-        methods.add_method("updateState",   |_, this, ()| { { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { broadcast_update_state(&mut *sd) } } else { Default::default() } }; Ok(()) });
+        methods.add_method("updateState",   |_, this, ()| { if let Some(arc) = crate::game::map_server::map_id2sd_pc(this.id) { unsafe { broadcast_update_state(&arc) } }; Ok(()) });
         methods.add_method("addMagic",      |_, this, amount: i32| { { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_addmagic(&mut *sd, amount) } } else { Default::default() } }; Ok(()) });
         methods.add_method("addManaExtend", |_, this, amount: i32| { { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_addmanaextend(&mut *sd, amount) } } else { Default::default() } }; Ok(()) });
         methods.add_method("setTimeValues", |_, this, newval: i32| { { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_settimevalues(&mut *sd, newval as u32) } } else { Default::default() } }; Ok(()) });

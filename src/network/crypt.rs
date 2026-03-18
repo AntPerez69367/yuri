@@ -182,11 +182,13 @@ pub unsafe fn encrypt(fd: SessionId) -> i32 {
     use crate::config::config;
     use crate::session::{session_get_data, get_session_manager};
 
-    let sd = session_get_data(fd);
-    if sd.is_null() {
-        tracing::error!("[encrypt] sd is NULL for fd={}", fd);
-        return 1;
-    }
+    let pe = match session_get_data(fd) {
+        Some(arc) => arc,
+        None => {
+            tracing::error!("[encrypt] sd is NULL for fd={}", fd);
+            return 1;
+        }
+    };
 
     if let Some(s) = get_session_manager().get_session(fd) {
         if let Ok(mut session) = s.try_lock() {
@@ -206,12 +208,14 @@ pub unsafe fn encrypt(fd: SessionId) -> i32 {
             set_packet_indexes(buf_slice);
 
             if is_key_server(buf_slice[3]) {
+                let sd = pe.read();
                 let enc_hash = std::slice::from_raw_parts(
-                    (*sd).EncHash.as_ptr() as *const u8,
-                    (*sd).EncHash.len(),
+                    sd.EncHash.as_ptr() as *const u8,
+                    sd.EncHash.len(),
                 );
                 let mut key = [0u8; 10];
                 generate_key2(buf_slice, enc_hash, &mut key, false);
+                drop(sd);
                 tk_crypt_dynamic(buf_slice, &key);
             } else {
                 tk_crypt_static(buf_slice, config().xor_key.as_bytes());
@@ -235,10 +239,10 @@ pub unsafe fn decrypt(fd: SessionId) -> i32 {
     use crate::config::config;
     use crate::session::{session_get_data, get_session_manager};
 
-    let sd = session_get_data(fd);
-    if sd.is_null() {
-        return 1;
-    }
+    let pe = match session_get_data(fd) {
+        Some(arc) => arc,
+        None => return 1,
+    };
 
     if let Some(s) = get_session_manager().get_session(fd) {
         if let Ok(mut session) = s.try_lock() {
@@ -247,16 +251,19 @@ pub unsafe fn decrypt(fd: SessionId) -> i32 {
             if pos >= size { return 0; }
             let buf_slice = &mut session.rdata[pos..size];
 
+            let sd = pe.read();
             let enc_hash = std::slice::from_raw_parts(
-                (*sd).EncHash.as_ptr() as *const u8,
-                (*sd).EncHash.len(),
+                sd.EncHash.as_ptr() as *const u8,
+                sd.EncHash.len(),
             );
 
             if is_key_client(buf_slice[3]) {
                 let mut key = [0u8; 10];
                 generate_key2(buf_slice, enc_hash, &mut key, true);
+                drop(sd);
                 tk_crypt_dynamic(buf_slice, &key);
             } else {
+                drop(sd);
                 tk_crypt_static(buf_slice, config().xor_key.as_bytes());
             }
         }
