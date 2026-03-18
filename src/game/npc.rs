@@ -2,7 +2,11 @@
 
 #![allow(non_snake_case, dead_code)]
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use parking_lot::{RwLock};
+
+use crate::common::traits::Spatial;
+use crate::config::Point;
 use crate::database::map_db::GlobalReg;
 use crate::common::types::Item;
 use crate::common::player::inventory::MAX_EQUIP;
@@ -11,12 +15,39 @@ use crate::game::types::GfxViewer;
 use crate::database::map_db::{WarpList, BLOCK_SIZE};
 use crate::database::{blocking_run_async, get_pool};
 use crate::database::map_db::{get_map_ptr, map_is_loaded};
-
-// MAX_EQUIP is defined in charstatus::MAX_EQUIP (imported above) — same slot count.
 pub use crate::common::constants::entity::player::MAX_GLOBALNPCREG;
 pub use crate::common::constants::entity::npc::{NPC_START_NUM, NPCT_START_NUM, F1_NPC};
 pub use crate::common::constants::entity::{BL_PC, BL_MOB, BL_NPC};
 
+
+pub struct NpcEntity {
+    // level -1: Atomic Snapshot
+    pub id: u32,
+    pub pos_atomic: AtomicU64,
+
+    // level 1: Legacy
+    pub legacy: RwLock<NpcData>,
+}
+
+impl Spatial for NpcEntity {
+    fn id(&self) -> u32 {
+        self.id
+    }
+
+    fn position(&self) -> Point {
+        let pos = self.pos_atomic.load(Ordering::Relaxed);
+        Point::from_u64(pos)
+    }
+
+    fn set_position(&self, p: Point) {
+        let pos = p.to_u64();
+        self.pos_atomic.store(pos, Ordering::Relaxed);
+    }
+
+    fn map_id(&self) -> u16 {
+        self.position().m
+    }
+}
 ///
 /// # Layout
 ///

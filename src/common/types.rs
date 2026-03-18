@@ -22,6 +22,20 @@ impl Point {
     pub fn new(m: u16, x: u16, y: u16) -> Self {
         Self { m, x, y }
     }
+
+    #[inline]
+    pub fn from_u64(val: u64) -> Self {
+        Self {
+            m: (val & 0xFFFF) as u16,
+            x: ((val >> 16) & 0xFFFF) as u16,
+            y: ((val >> 32) & 0xFFFF) as u16,
+        }
+    }
+
+    #[inline]
+    pub fn to_u64(&self) -> u64 {
+        (self.m as u64) | ((self.x as u64) << 16) | ((self.y as u64) << 32)
+    }   
 }
 
 unsafe impl bytemuck::Zeroable for Point {}

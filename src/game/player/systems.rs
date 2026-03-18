@@ -1,19 +1,13 @@
-//! Player-character game logic.
-
 #![allow(non_snake_case, dead_code, unused_variables)]
 
 use std::mem;
-use std::sync::atomic::{AtomicU64, Ordering};
-
-use crate::common::player::PlayerData;
+use crate::game::player::prelude::*;
 use crate::common::player::spells::MAX_SPELLS;
 use crate::common::types::Item;
-use crate::config::Point;
 use crate::database::{self, map_db, item_db, magic_db};
 use crate::database::class_db::{path as classdb_path, level as classdb_level};
 use crate::game::block::AreaType;
 use crate::game::block_grid;
-use crate::game::client::handlers::{clif_quit, clif_transfer};
 use crate::game::client::visual::{
     broadcast_update_state, clif_sendupdatestatus, clif_sendupdatestatus_onequip,
 };
@@ -27,524 +21,41 @@ use crate::game::map_parse::items::{clif_sendadditem, clif_senddelitem, clif_sen
 use crate::game::map_parse::movement::clif_sendchararea;
 use crate::game::map_parse::packet::{wfifop, wfifohead, wfifoset};
 use crate::game::map_parse::player_state::{
-    clif_sendstatus, clif_getchararea, clif_refresh, clif_sendtime,
+    clif_sendstatus, clif_getchararea, 
 };
-use crate::game::map_parse::visual::{clif_spawn, clif_lookgone_by_id, clif_object_look2_item};
+use crate::game::map_parse::visual::{clif_lookgone_by_id, clif_object_look2_item};
 use crate::game::map_server::{
-    self, map_id2fl, map_delitem, map_additem, map_readglobalreg,
+    self as map_server, map_id2fl, map_delitem, map_additem, map_readglobalreg,
 };
-use crate::game::mob::{
-    MAX_MAGIC_TIMERS, MAX_THREATCOUNT,
-    MOB_START_NUM, MOB_SPAWN_START, MOB_SPAWN_MAX,
-    MOB_ONETIME_START, MOB_ONETIME_MAX,
-};
+use crate::game::mob::MAX_MAGIC_TIMERS;
 use crate::game::npc::NpcData;
 use crate::game::scripting::{self, sl_async_freeco};
 use crate::game::scripting::pc_accessors::sl_pc_forcesave;
 use crate::game::scripting::types::floor::FloorItemData;
 use crate::game::time_util::{timer_insert, timer_remove, gettick};
-use crate::game::types::GfxViewer;
 use crate::network::crypt::encrypt;
 use crate::session::{session_exists, SessionId};
-
-/// Linked-list node for parcels/NPC posts.
-#[repr(C)]
-pub struct NPost {
-    pub prev: *mut NPost,
-    pub pos:  u32,
-}
-
-/// Tracks batched "object look" packet assembly for one viewer.
-#[derive(Clone, Copy, Default)]
-pub struct LookAccum {
-    pub len:   i32,
-    pub count: i32,
-    pub item:  i32,
-}
-
-/// Network-facing session state for a connected player.
-pub struct PcNetworkState {
-    pub look: LookAccum,
-}
-
-/// Player entity — the top-level handle stored in PLAYER_MAP.
-///
-/// Level -1 fields (`id`, `fd`) are lockless — set once at connection, never mutated.
-/// Level 1 fields are per-domain `RwLock`s. `legacy` holds everything not yet
-/// decomposed and shrinks over time as fields migrate to proper domains.
-pub struct PlayerEntity {
-    // Level -1: Identity (lockless, set once at connection)
-    pub id: u32,
-    pub fd: SessionId,
-    // Player position m: 0-15, x: 16-31, y:32-47, packed into a single atomic for lockless reads in hot code paths.
-    pub pos_atomic: AtomicU64,
-
-    // Level 1: Decomposed domains
-    pub net: parking_lot::RwLock<PcNetworkState>,
-
-    // Level 1: Legacy bucket (shrinks as domains are extracted)
-    pub legacy: parking_lot::RwLock<MapSessionData>,
-}
-
-// SAFETY: PlayerEntity fields are only accessed from the single game thread.
-// The RwLocks enforce correct access patterns and prepare for future multi-threading.
-unsafe impl Send for PlayerEntity {}
-unsafe impl Sync for PlayerEntity {}
-
-impl PlayerEntity {
-    /// Compatibility shim — delegates to legacy lock. Remove as callers migrate.
-    #[inline]
-    pub fn read(&self) -> parking_lot::RwLockReadGuard<'_, MapSessionData> {
-        self.legacy.read()
-    }
-    /// Compatibility shim — delegates to legacy lock. Remove as callers migrate.
-    #[inline]
-    pub fn write(&self) -> parking_lot::RwLockWriteGuard<'_, MapSessionData> {
-        self.legacy.write()
-    }
-    /// Compatibility shim — delegates to legacy lock. Remove as callers migrate.
-    #[inline]
-    pub fn try_read(&self) -> Option<parking_lot::RwLockReadGuard<'_, MapSessionData>> {
-        self.legacy.try_read()
-    }
-
-    pub fn get_pos(&self) -> Point {
-        let val = self.pos_atomic.load(Ordering::Relaxed);
-        Point {
-            m: ((val) & 0xFFFF) as u16,
-            x: ((val >> 16) & 0xFFFF) as u16,
-            y: ((val >> 32) & 0xFFFF) as u16,
-        }
-    }
-
-    pub fn set_pos(&self, p: Point) {
-        let val = (p.m as u64) | ((p.x as u64) << 16) | ((p.y as u64) << 32);
-        self.pos_atomic.store(val, Ordering::Relaxed);
-    }
-    
-    /// Compatibility shim — raw pointer to legacy data. Remove as callers migrate.
-    #[inline]
-    pub fn data_ptr(&self) -> *mut MapSessionData {
-        self.legacy.data_ptr()
-    }
-}
-
-/// Integer registry slot.
-#[repr(C)]
-pub struct ScriptReg {
-    pub index: i32,
-    pub data:  i32,
-}
-
-/// String registry slot.
-#[repr(C)]
-pub struct ScriptRegStr {
-    pub index: i32,
-    pub data:  [i8; 256],
-}
-
-/// Linked-list node for the player ignore list.
-#[repr(C)]
-pub struct SdIgnoreList {
-    pub name: [i8; 100],
-    pub Next: *mut SdIgnoreList,
-}
-
-// SAFETY: Single game thread with appropriate locks.
-unsafe impl Send for NPost {}
-unsafe impl Send for SdIgnoreList {}
-
-// ─── Nested sub-structs for MapSessionData ────────────────────────────────────
-
-/// Player exchange/trade state.
-#[repr(C)]
-pub struct PcExchange {
-    pub item:          [Item; 52],
-    pub item_count:    i32,
-    pub exchange_done: i32,
-    pub list_count:    i32,
-    pub gold:          u32,
-    pub target:        u32,
-}
-
-/// Player UI state flags.
-#[repr(C)]
-pub struct PcState {
-    pub menu_or_input: i32,
-}
-
-/// Break-on-death items — items that are destroyed when the player dies.
-#[repr(C)]
-pub struct PcBodItems {
-    pub item:      [Item; 52],
-    pub bod_count: i32,
-}
-
-// ─── MapSessionData ────────────────────────────────────────────────────────────
-
-/// Player session state — the legacy monolith that shrinks as fields migrate to
-/// domain sub-structs in `PlayerEntity`.
-#[repr(C)]
-pub struct MapSessionData {
-    pub id:            u32,
-    pub graphic_id:    u32,
-    pub graphic_color: u32,
-    pub m:             u16,
-    pub x:             u16,
-    pub y:             u16,
-    pub bl_type:       u8,
-    pub subtype:       u8,
-    pub fd:                SessionId,
-
-    // Domain-typed player persistence data (replaces MmoCharStatus).
-    pub player:            PlayerData,
-
-    // status timers
-    pub equiptimer:        u64,
-    pub ambushtimer:       u64,
-
-    // unsigned int group (multi-field C declarations, split individually)
-    pub max_hp:            u32,
-    pub max_mp:            u32,
-    pub tempmax_hp:        u32,
-    pub attacker:          u32,
-    pub rangeTarget:       u32,
-    pub equipid:           u32,
-    pub breakid:           u32,
-    pub pvp:               [[u32; 2]; 20],
-    pub killspvp:          u32,
-    pub timevalues:        [u32; 5],
-    pub lastvita:          u32,
-    pub groupid:           u32,
-    pub disptimer:         u32,
-    pub disptimertick:     u32,
-    pub basemight:         u32,
-    pub basewill:          u32,
-    pub basegrace:         u32,
-    pub basearmor:         u32,
-    pub intpercentage:     u32,
-    pub profileStatus:     u32,
-
-    // int combat stats (first C declaration line)
-    pub might:             i32,
-    pub will:              i32,
-    pub grace:             i32,
-    pub armor:             i32,
-    pub minSdam:           i32,
-    pub maxSdam:           i32,
-    pub minLdam:           i32,
-    pub maxLdam:           i32,
-    pub hit:               i32,
-    pub dam:               i32,
-    pub healing:           i32,
-    pub healingtimer:      i32,
-    pub pongtimer:         i32,
-    pub backstab:          i32,
-
-    pub heartbeat:         i32,
-
-    // int status flags (second C declaration line)
-    pub flank:             i32,
-    pub polearm:           i32,
-    pub tooclose:          i32,
-    pub canmove:           i32,
-    pub iswalking:         i32,
-    pub paralyzed:         i32,
-    pub blind:             i32,
-    pub drunk:             i32,
-    pub snare:             i32,
-    pub silence:           i32,
-    pub critchance:        i32,
-    pub afk:               i32,
-    pub afktime:           i32,
-    pub totalafktime:      i32,
-    pub afktimer:          i32,
-    pub extendhit:         i32,
-    pub speed:             i32,
-
-    // int timers/misc (third C declaration line)
-    pub crit:              i32,
-    pub duratimer:         i32,
-    pub scripttimer:       i32,
-    pub scripttick:        i32,
-    pub secondduratimer:   i32,
-    pub thirdduratimer:    i32,
-    pub fourthduratimer:   i32,
-    pub fifthduratimer:    i32,
-    pub wisdom:            i32,
-    pub bindx:             i32,
-    pub bindy:             i32,
-    pub hunter:            i32,
-
-    // short stats
-    pub protection:        i16,
-    pub miss:              i16,
-    pub attack_speed:      i16,
-    pub con:               i16,
-
-    // float stats
-    pub rage:              f32,
-    pub enchanted:         f32,
-    pub sleep:             f32,
-    pub deduction:         f32,
-    pub damage:            f32,
-    pub invis:             f32,
-    pub fury:              f32,
-    pub critmult:          f32,
-    pub dmgshield:         f32,
-    pub vregenoverflow:    f32,
-    pub mregenoverflow:    f32,
-
-    // double stats
-    pub dmgdealt:          f64,
-    pub dmgtaken:          f64,
-
-    // char arrays / single chars
-    pub afkmessage:        [i8; 80],
-    pub mail:              [i8; 4000],
-    pub ipaddress:         [i8; 255],
-
-    pub takeoffid:         i8,
-    pub attacked:          i8,
-    pub boardshow:         i8,
-    pub clone:             i8,
-    pub action:            i8,
-    pub luaexec:           i8,
-    pub deathflag:         i8,
-    pub selfbar:           i8,
-    pub groupbars:         i8,
-    pub mobbars:           i8,
-    pub disptimertype:     i8,
-    pub sendstatus_tick:   i8,
-
-    pub underLevelFlag:    i8,
-    pub dialogtype:        i8,
-    pub alignment:         i8,
-    pub boardnameval:      i8,
-
-    // unsigned short flags
-    pub disguise:          u16,
-    pub disguise_color:    u16,
-
-    pub cursed:            u8,
-    pub castusetimer:      i32,
-    pub fakeDrop:          u8,
-
-    // unsigned char status bytes
-    pub confused:          u8,
-    pub talktype:          u8,
-    pub pickuptype:        u8,
-    pub invslot:           u8,
-    pub equipslot:         u8,
-    pub spottraps:         u8,
-
-    // unsigned short coords
-    pub throwx:            u16,
-    pub throwy:            u16,
-    pub viewx:             u16,
-    pub viewy:             u16,
-    pub bindmap:           u16,
-
-    // encryption hash buffer (0x401 = 1025 bytes)
-    pub EncHash:           [i8; 0x401],
-
-    // npc
-    pub npc_id:            i32,
-    pub npc_pos:           i32,
-    pub npc_lastpos:       i32,
-    pub npc_menu:          i32,
-    pub npc_amount:        i32,
-    pub npc_g:             i32,
-    pub npc_gc:            i32,
-    pub target:            i32,
-    pub time:              i32,
-    pub time2:             i32,
-    pub lasttime:          i32,
-    pub timer:             i32,
-    pub npc_stack:         i32,
-    pub npc_stackmax:      i32,
-
-    pub npc_script:        *mut i8,
-    pub npc_scriptroot:    *mut i8,
-
-    // registry
-    pub reg:               *mut ScriptReg,
-    pub regstr:            *mut ScriptRegStr,
-    pub npcp:              NPost,
-    pub reg_num:           i32,
-    pub regstr_num:        i32,
-
-    // group
-    pub bcount:            i32,
-    pub group_count:       i32,
-    pub group_on:          i32,
-    pub group_leader:      u32,
-
-    // exchange
-    pub exchange_on:       i32,
-    pub exchange:          PcExchange,
-    pub state:             PcState,
-    pub boditems:          PcBodItems,
-
-    // lua
-    pub coref:             u32,
-    pub coref_container:   u32,
-
-    // creation system
-    pub creation_works:    i32,
-    pub creation_item:     i32,
-    pub creation_itemamount: i32,
-
-    // boards
-    pub board_candel:      i32,
-    pub board_canwrite:    i32,
-    pub board:             i32,
-    pub board_popup:       i32,
-    pub co_timer:          i32,
-
-    pub question:          [i8; 64],
-    pub speech:            [i8; 255],
-    pub profilepic_data:   [i8; 65535],
-    pub profile_data:      [i8; 255],
-
-    pub profilepic_size:   u16,
-    pub profile_size:      u8,
-
-    pub net: PcNetworkState,
-
-    pub msPing:            i32,
-    pub pbColor:           i32,
-
-    pub time_check:        u32,
-    pub time_hash:         u32,
-    pub last_click:        u32,
-
-    pub chat_timer:        i32,
-    pub savetimer:         i32,
-
-    pub gfx:               GfxViewer,
-    pub IgnoreList:        *mut SdIgnoreList,
-
-    pub optFlags:          u64,
-    pub uFlags:            u64,
-    pub LastPongStamp:     u64,
-    pub LastPingTick:      u64,
-    pub flags:             u64,
-    pub LastWalkTick:      u64,
-
-    pub PrevSeed:          u8,
-    pub NextSeed:          u8,
-    pub LastWalk:          u8,
-    pub loaded:            u8,
-}
-
-// SAFETY: Single game thread with RwLock guards. Sync required for Arc<RwLock<T>>.
-unsafe impl Send for MapSessionData {}
-unsafe impl Sync for MapSessionData {}
-
-#[cfg(test)]
-mod layout_tests {
-    use super::*;
-    // MmoCharStatus removed — struct is now ~165KB (was ~3.3MB with the legacy status field).
-    // Update this constant when PlayerData sub-structs grow or new fields are added.
-    const EXPECTED_SIZE: usize = 164792;
-    #[test]
-    fn map_session_data_size() {
-        assert_eq!(mem::size_of::<MapSessionData>(), EXPECTED_SIZE);
-    }
-}
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-// Registry capacity limits
-pub use crate::common::constants::entity::player::{
-    MAX_GLOBALREG, MAX_GLOBALPLAYERREG, MAX_GLOBALQUESTREG, MAX_GLOBALNPCREG,
-};
-
-// BL_* type flags
-pub use crate::common::constants::entity::{BL_PC, BL_MOB, BL_NPC, BL_ITEM};
-
-// PC state values
-pub use crate::common::constants::entity::player::{
-    PC_ALIVE, PC_DIE, PC_INVIS, PC_MOUNTED, PC_DISGUISE,
-};
-
-// optFlags values
-pub use crate::common::constants::entity::player::{
-    OPT_FLAG_STEALTH, OPT_FLAG_NOCLICK, OPT_FLAG_WALKTHROUGH, OPT_FLAG_GHOSTS,
-};
-
-// uFlags values
-pub use crate::common::constants::entity::player::{
-    U_FLAG_NONE, U_FLAG_SILENCED, U_FLAG_CANPK, U_FLAG_CANBEPK,
-    U_FLAG_IMMORTAL, U_FLAG_UNPHYSICAL, U_FLAG_EVENTHOST, U_FLAG_CONSTABLE,
-    U_FLAG_ARCHON, U_FLAG_GM,
-};
-
-// SFLAG values for clif_sendstatus
-pub use crate::common::constants::entity::player::{
-    SFLAG_UNKNOWN1, SFLAG_UNKNOWN2, SFLAG_UNKNOWN3, SFLAG_ALWAYSON,
-    SFLAG_XPMONEY, SFLAG_HPMP, SFLAG_FULLSTATS, SFLAG_GMON,
-};
-
-// settingFlags values
-pub use crate::common::constants::entity::player::{
-    FLAG_WHISPER, FLAG_GROUP, FLAG_SHOUT, FLAG_ADVICE, FLAG_MAGIC,
-    FLAG_WEATHER, FLAG_REALM, FLAG_EXCHANGE, FLAG_FASTMOVE, FLAG_SOUND,
-    FLAG_HELM, FLAG_NECKLACE,
-};
-
-// normalFlags
-pub use crate::common::constants::entity::player::{FLAG_PARCEL, FLAG_MAIL};
-
-pub use crate::common::constants::world::MAX_MAP_PER_SERVER;
-
-// SP_* parameter type constants
-pub use crate::common::constants::entity::player::{SP_HP, SP_MP, SP_MHP, SP_MMP};
-
-// AREA broadcast constant
-pub use crate::common::constants::network::AREA;
-
-// LOOK_SEND
-pub use crate::common::constants::network::LOOK_SEND;
-
-// FLOOR subtype constant — re-exported so callers using game::pc::FLOOR continue to work
-pub use crate::common::constants::entity::SUBTYPE_FLOOR as FLOOR;
-
-// BLOCK_SIZE (i32 variant for pc.rs arithmetic)
-pub const BLOCK_SIZE_PC: i32 = crate::common::constants::world::BLOCK_SIZE as i32;
-
-// MAX_GROUP_MEMBERS
-pub use crate::common::constants::world::MAX_GROUP_MEMBERS;
-
-// ITM_* item type constants
-pub use crate::common::constants::entity::player::{
-    ITM_EAT, ITM_USE, ITM_SMOKE, ITM_WEAP, ITM_ARMOR, ITM_SHIELD, ITM_HELM,
-    ITM_LEFT, ITM_RIGHT, ITM_SUBLEFT, ITM_SUBRIGHT, ITM_FACEACC, ITM_CROWN,
-    ITM_MANTLE, ITM_NECKLACE, ITM_BOOTS, ITM_COAT, ITM_HAND, ITM_ETC,
-    ITM_USESPC, ITM_TRAPS, ITM_BAG, ITM_MAP, ITM_QUIVER, ITM_MOUNT, ITM_FACE,
+use crate::common::constants::entity::player::{
+    PC_DIE, SFLAG_HPMP,
+    EQ_WEAP, EQ_SHIELD, EQ_LEFT, EQ_RIGHT,
+    EQ_SUBLEFT, EQ_SUBRIGHT,
+    ITM_EAT, ITM_USE, ITM_SMOKE, ITM_WEAP, ITM_SHIELD, ITM_HAND, ITM_ETC,
+    ITM_USESPC, ITM_BAG, ITM_MAP, ITM_QUIVER, ITM_MOUNT, ITM_FACE,
     ITM_SET, ITM_SKIN, ITM_HAIR_DYE, ITM_FACEACCTWO,
+    SP_HP, SP_MP, SP_MHP, SP_MMP, MAP_ERRGHOST, MAP_ERRITMLEVEL, MAP_ERRITMMIGHT, MAP_ERRITMSEX, MAP_ERRITMFULL, MAP_ERRITMPATH,
+    MAP_ERRITMMARK, MAP_ERRITM2H, MAP_ERRMOUNT, FLAG_ADVICE, FLAG_PARCEL, FLAG_MAIL,
+    SFLAG_XPMONEY, SFLAG_FULLSTATS, PC_MOUNTED,
 };
-
-// EQ_* equip slot constants
-pub use crate::common::constants::entity::player::{
-    EQ_WEAP, EQ_ARMOR, EQ_SHIELD, EQ_HELM, EQ_LEFT, EQ_RIGHT,
-    EQ_SUBLEFT, EQ_SUBRIGHT, EQ_FACEACC, EQ_CROWN, EQ_MANTLE,
-    EQ_NECKLACE, EQ_BOOTS, EQ_COAT, EQ_FACEACCTWO,
-};
-
-// MAP_ERR* message indices
-pub use crate::common::constants::entity::player::{
-    MAP_WHISPFAIL, MAP_ERRGHOST, MAP_ERRITMLEVEL, MAP_ERRITMMIGHT, MAP_ERRITMGRACE,
-    MAP_ERRITMWILL, MAP_ERRITMSEX, MAP_ERRITMFULL, MAP_ERRITMMAX, MAP_ERRITMPATH,
-    MAP_ERRITMMARK, MAP_ERRITM2H, MAP_ERRMOUNT,
-};
-
-pub use crate::game::map_server::{MapMsgData, map_msg};
-pub use crate::game::map_server::groups;
+use crate::common::constants::entity::BL_NPC;
+use crate::common::constants::world::MAX_GROUP_MEMBERS;
+use crate::common::constants::entity::SUBTYPE_FLOOR as FLOOR;
+use crate::game::map_server::{map_msg, groups};
+use super::entity::{ScriptReg, ScriptRegStr};
+use super::spatial::pc_diescript;
+use super::types::MapSessionData;
 
 /// Legacy raw-pointer player lookup for deeply unsafe code paths.
-fn map_id2sd_pc(id: u32) -> *mut MapSessionData {
+pub(super) fn map_id2sd_pc(id: u32) -> *mut MapSessionData {
     match map_server::map_id2sd_pc(id) {
         Some(arc) => &mut *arc.write() as *mut MapSessionData,
         None => std::ptr::null_mut(),
@@ -557,12 +68,12 @@ unsafe fn gettick_pc() -> u32 { gettick() }
 // ─── Lua dispatch helpers ─────────────────────────────────────────────────────
 
 /// Dispatch a Lua event with a single entity-ID argument.
-fn sl_doscript_simple_pc(root: &str, method: Option<&str>, id: u32) -> i32 {
+pub(super) fn sl_doscript_simple_pc(root: &str, method: Option<&str>, id: u32) -> i32 {
     scripting::doscript_blargs_id(root, method, &[id])
 }
 
 /// Dispatch a Lua event with two entity-ID arguments.
-fn sl_doscript_2_pc(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
+pub(super) fn sl_doscript_2_pc(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
     scripting::doscript_blargs_id(root, method, &[id1, id2])
 }
 
@@ -1296,8 +807,8 @@ pub unsafe fn pc_givexp(
         for id in grid.ids_at_tile(sx, sy) {
             if stack >= 32768 { break; }
             if let Some(tsd_arc) = map_server::map_id2sd_pc(id) {
-                let tsd = tsd_arc.read();
-                if tsd.x == sx && tsd.y == sy && tsd.player.identity.gm_level == 0 {
+                let pos = tsd_arc.position();
+                if pos.x == sx && pos.y == sy && tsd_arc.read().player.identity.gm_level == 0 {
                     stack += 1;
                 }
             }
@@ -3315,149 +2826,7 @@ pub unsafe fn pc_getitemscript(
     0
 }
 
-// ─── Position / warp / magic / state / combat functions ───────────────────────
-//
 
-
-/// Sets the player's block-list
-/// position without sending any client packets.
-///
-/// Guards against attempting to set position on a mob object (bl.id >= MOB_START_NUM).
-/// Sets bl.m, bl.x, bl.y, and bl.type.
-pub unsafe fn pc_setpos(
-    sd: *mut MapSessionData,
-    m: i32,
-    x: i32,
-    y: i32,
-) -> i32 {
-
-    if (*sd).id >= MOB_START_NUM { return 0; }
-    (*sd).m  = m as u16;
-    (*sd).x  = x as u16;
-    (*sd).y  = y as u16;
-    (*sd).bl_type = BL_PC as u8;
-    0
-}
-
-/// Full warp sequence.
-///
-/// If the target map is not loaded on this server, queries the `Maps` table for
-/// the destination map server and calls `clif_transfer`. Otherwise, fires
-/// pre-warp Lua hooks, calls `clif_quit` / `pc_setpos` / `clif_spawn` /
-/// `clif_refresh`, then fires post-warp Lua hooks.
-async fn lookup_map_server(map_id: i32) -> Option<u32> {
-    sqlx::query_scalar::<_, Option<u32>>(
-        "SELECT `MapServer` FROM `Maps` WHERE `MapId` = ?"
-    )
-    .bind(map_id)
-    .fetch_optional(database::get_pool())
-    .await
-    .ok()
-    .flatten()
-    .flatten()
-}
-
-pub async unsafe fn pc_warp(
-    sd: *mut MapSessionData,
-    mut m: i32,
-    mut x: i32,
-    mut y: i32,
-) -> i32 {
-
-
-    if sd.is_null() { return 0; }
-
-    let oldmap = (*sd).m as i32;
-
-    if m < 0 { m = 0; }
-    if m >= MAX_MAP_PER_SERVER { m = MAX_MAP_PER_SERVER - 1; }
-
-    // If the target map is not loaded on this server, hand off to the right server.
-    if !map_db::map_is_loaded(m as u16) {
-        if !session_exists((*sd).fd) {
-            return 0;
-        }
-
-        let destsrv = lookup_map_server(m).await;
-
-        let destsrv = match destsrv {
-            Some(srv) => srv as i32,
-            None => return 0,
-        };
-
-        if x < 0 || x > 255 { x = 1; }
-        if y < 0 || y > 255 { y = 1; }
-
-        (*sd).player.identity.dest_pos.m = m as u16;
-        (*sd).player.identity.dest_pos.x = x as u16;
-        (*sd).player.identity.dest_pos.y = y as u16;
-
-        clif_transfer(sd, destsrv, m, x, y);
-        return 0;
-    }
-
-    // Map is loaded locally — clamp coordinates to map bounds.
-    let map_ptr = map_db::get_map_ptr(m as u16);
-    if map_ptr.is_null() { return 0; }
-    let xs = (*map_ptr).xs as i32;
-    let ys = (*map_ptr).ys as i32;
-    let can_mount = (*map_ptr).can_mount;
-
-    if x == -1 {
-        x = (xs / 2) + if xs % 2 != 0 { 1 } else { 0 };
-        y = (ys / 2) + if ys % 2 != 0 { 1 } else { 0 };
-    }
-
-    if x < 0 { x = 0; }
-    if y < 0 { y = 0; }
-    if x >= xs { x = xs - 1; }
-    if y >= ys { y = ys - 1; }
-
-    // Fire map-leave hooks when changing maps.
-    if m != oldmap {
-        sl_doscript_simple_pc("mapLeave", None, (*sd).id);
-        if can_mount == 0 {
-            sl_doscript_simple_pc("onDismount", None, (*sd).id);
-        }
-    }
-
-    // Fire passive_before_warp for each known spell.
-    for i in 0..MAX_SPELLS {
-        sl_doscript_simple_pc(scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.skills)[i] as i32).yname), Some("passive_before_warp"), (*sd).id);
-    }
-
-    // Fire before_warp_while_cast for each active aether timer.
-    for i in 0..MAX_MAGIC_TIMERS {
-        sl_doscript_simple_pc(scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[i].id as i32).yname), Some("before_warp_while_cast"), (*sd).id);
-    }
-
-    // Perform the actual move.
-    clif_quit(sd);
-    pc_setpos(sd, m, x, y);
-    clif_sendtime(sd);
-    clif_spawn(sd);
-    clif_refresh(sd);
-
-    // Fire map-enter hooks when changing maps.
-    if m != oldmap {
-        sl_doscript_simple_pc("mapEnter", None, (*sd).id);
-    }
-
-    // Fire passive_on_warp for each known spell.
-    for i in 0..MAX_SPELLS {
-        sl_doscript_simple_pc(scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.skills)[i] as i32).yname), Some("passive_on_warp"), (*sd).id);
-    }
-
-    // Fire on_warp_while_cast for each active aether timer.
-    for i in 0..MAX_MAGIC_TIMERS {
-        sl_doscript_simple_pc(scripting::carray_to_str(&magic_db::search((&(*sd).player.spells.dura_aether)[i].id as i32).yname), Some("on_warp_while_cast"), (*sd).id);
-    }
-
-    0
-}
-
-/// Sends each of the player's known spells to
-/// the client via `clif_sendmagic`.
 pub unsafe fn pc_loadmagic(sd: *mut MapSessionData) -> i32 {
 
     for i in 0..MAX_SPELLS {
@@ -3516,167 +2885,5 @@ pub unsafe fn pc_reload_aether(sd: *mut MapSessionData) -> i32 {
             clif_send_aether(&mut *sd, p.id as i32, p.aether / 1000);
         }
     }
-    0
-}
-
-/// Fires the `onDeathPlayer` Lua hook.
-///
-/// The actual stat/state changes are handled by `pc_diescript`; this function
-/// just fires the hook so scripts can respond immediately.
-pub unsafe fn pc_die(sd: *mut MapSessionData) -> i32 {
-    sl_doscript_simple_pc("onDeathPlayer", None, (*sd).id);
-    0
-}
-
-/// Full death processing.
-///
-/// - Clears `deathflag`, sets state to dead, zeroes HP.
-/// - Clears all non-dispel-immune aether timers and fires their `uncast` hooks.
-/// - Removes the dead player from all mob threat tables.
-/// - Resets combat state (enchanted, flank, backstab, dmgshield).
-/// - Recalculates stats and broadcasts updated state.
-pub unsafe fn pc_diescript(sd: *mut MapSessionData) -> i32 {
-
-
-    if sd.is_null() { return 0; }
-
-    let attacker_id = (*sd).attacker;
-
-    (*sd).deathflag = 0;
-
-    // Set the killer if the attacker entity still exists.
-    if attacker_id > 0 && map_server::entity_position(attacker_id).is_some() {
-        (*sd).player.social.killed_by = attacker_id;
-    }
-    (*sd).player.combat.state = 1; // PC_DIE
-    (*sd).player.combat.hp    = 0;
-
-    // Clear active aether timers that are not dispel-immune.
-    for i in 0..MAX_MAGIC_TIMERS {
-        let id = (&(*sd).player.spells.dura_aether)[i].id;
-        if id == 0 { continue; }
-
-        if magic_db::search(id as i32).dispell as i32 > 0 { continue; }
-
-        (&mut (*sd).player.spells.dura_aether)[i].duration = 0;
-        clif_send_duration(
-            &mut *sd,
-            (&(*sd).player.spells.dura_aether)[i].id as i32,
-            0,
-            map_id2sd_pc((&(*sd).player.spells.dura_aether)[i].caster_id),
-        );
-        (&mut (*sd).player.spells.dura_aether)[i].caster_id = 0;
-
-        {
-            let anim = (&(*sd).player.spells.dura_aether)[i].animation as i32;
-            if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
-                let slot = &*map_db::get_map_ptr((*sd).m as u16);
-                let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
-                for id in ids {
-                    if let Some(tsd_arc) = map_server::map_id2sd_pc(id) {
-                        let tsd_guard = tsd_arc.read();
-                        clif_sendanimation_inner(tsd_guard.fd, tsd_guard.player.appearance.setting_flags, anim, (*sd).id, -1);
-                    }
-                }
-            }
-        }
-        (&mut (*sd).player.spells.dura_aether)[i].animation = 0;
-
-        if (&(*sd).player.spells.dura_aether)[i].aether == 0 {
-            (&mut (*sd).player.spells.dura_aether)[i].id = 0;
-        }
-
-        // Fire uncast hook.
-        let caster_id = (&(*sd).player.spells.dura_aether)[i].caster_id;
-        if caster_id != (*sd).id && caster_id > 0 && map_server::entity_position(caster_id).is_some() {
-            sl_doscript_2_pc(scripting::carray_to_str(&magic_db::search(id as i32).yname), Some("uncast"), (*sd).id, caster_id);
-        } else {
-            sl_doscript_simple_pc(scripting::carray_to_str(&magic_db::search(id as i32).yname), Some("uncast"), (*sd).id);
-        }
-    }
-
-    // Remove dead player from all spawn-mob threat tables.
-    let spawn_start = MOB_SPAWN_START.load(Ordering::Relaxed);
-    let spawn_max   = MOB_SPAWN_MAX.load(Ordering::Relaxed);
-    if spawn_start != spawn_max {
-        let mut x = spawn_start;
-        while x < spawn_max {
-            if let Some(tmob_arc) = map_server::map_id2mob_ref(x) {
-                let mut tmob = tmob_arc.write();
-                for i in 0..MAX_THREATCOUNT {
-                    if tmob.threat[i].user == (*sd).id {
-                        tmob.threat[i].user   = 0;
-                        tmob.threat[i].amount = 0;
-                    }
-                }
-            }
-            x += 1;
-        }
-    }
-
-    // Remove dead player from all one-time mob threat tables.
-    let onetime_start = MOB_ONETIME_START.load(Ordering::Relaxed);
-    let onetime_max   = MOB_ONETIME_MAX.load(Ordering::Relaxed);
-    if onetime_start != onetime_max {
-        let mut x = onetime_start;
-        while x < onetime_max {
-            if let Some(tmob_arc) = map_server::map_id2mob_ref(x) {
-                let mut tmob = tmob_arc.write();
-                for i in 0..MAX_THREATCOUNT {
-                    if tmob.threat[i].user == (*sd).id {
-                        tmob.threat[i].user   = 0;
-                        tmob.threat[i].amount = 0;
-                    }
-                }
-            }
-            x += 1;
-        }
-    }
-
-    // Reset combat modifiers.
-    (*sd).enchanted  = 1.0_f32;
-    (*sd).flank      = 0;
-    (*sd).backstab   = 0;
-    (*sd).dmgshield  = 0.0_f32;
-
-    pc_calcstat(sd);
-    broadcast_update_state(sd);
-
-    0
-}
-
-/// Sync bridge for Lua/FFI callers that cannot `.await`.
-/// SAFETY: MapSessionData: Send; blocking_run_async joins before returning.
-pub unsafe fn pc_warp_sync(sd: *mut MapSessionData, m: i32, x: i32, y: i32) -> i32 {
-    let sd_usize = sd as usize;
-    database::blocking_run_async(database::assert_send(async move {
-        let sd = sd_usize as *mut MapSessionData;
-        pc_warp(sd, m, x, y).await
-    }))
-}
-
-/// Resurrects the player in-place.
-///
-/// Sets state to alive, restores 100 HP, sends an HP/MP status update, and
-/// warps the player to their current position (which re-spawns them for other
-/// clients on the same map).
-pub unsafe fn pc_res(sd: *mut MapSessionData) -> i32 {
-    (*sd).player.combat.state = PC_ALIVE as i8;
-    (*sd).player.combat.hp    = 100;
-    clif_sendstatus(sd, SFLAG_HPMP);
-    pc_warp_sync(sd, (*sd).m as i32, (*sd).x as i32, (*sd).y as i32);
-    0
-}
-
-// ─── Kill-registry helpers ────────────────────────────────────────────────────
-
-/// Increment the kill-count for `mob` in `sd`'s kill registry, or add a new
-/// entry if the mob is not yet present.
-///
-/// # Safety
-/// `sd` must be a valid, non-null pointer to an initialised [`MapSessionData`].
-pub unsafe fn addtokillreg(sd: *mut MapSessionData, mob: i32) -> i32 {
-    if sd.is_null() { return 0; }
-    (*sd).player.registries.add_kill(mob as u32);
     0
 }

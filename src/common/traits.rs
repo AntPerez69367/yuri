@@ -1,4 +1,6 @@
 use crate::common::player::combat::PlayerCombat;
+use crate::common::player::inventory::PlayerInventory;
+use crate::common::player::registries::PlayerRegistries;
 use crate::common::types::{Item, Point};
 
 /// Anything that participates in combat. Returns the shared PlayerCombat struct.
@@ -18,9 +20,10 @@ pub trait InventoryHolder {
 }
 
 /// Anything with a position on the map.
-pub trait Positioned {
-    fn position(&self) -> &Point;
-    fn set_position(&mut self, pos: Point);
+pub trait Spatial {
+    fn id(&self) -> u32;
+    fn position(&self) -> Point;
+    fn set_position(&self, p: Point);
     fn map_id(&self) -> u16;
 }
 
@@ -38,7 +41,6 @@ impl Combatant for PlayerCombat {
     fn is_alive(&self) -> bool { self.state >= 0 }
 }
 
-use crate::common::player::inventory::PlayerInventory;
 
 impl InventoryHolder for PlayerInventory {
     fn equip(&self) -> &[Item] { &self.equip }
@@ -48,7 +50,7 @@ impl InventoryHolder for PlayerInventory {
     fn set_money(&mut self, val: u32) { self.money = val; }
 }
 
-use crate::common::player::registries::PlayerRegistries;
+
 
 impl ScriptTarget for PlayerRegistries {
     fn get_reg(&self, key: &str) -> Option<i32> {
@@ -57,6 +59,13 @@ impl ScriptTarget for PlayerRegistries {
     fn set_reg(&mut self, key: &str, val: i32) {
         self.global_reg.insert(key.to_owned(), val);
     }
+}
+
+// LegacyEntity trait to help with breaking up god structs
+pub trait LegacyEntity {
+    type Data;
+    fn read_legacy(&self) -> parking_lot::RwLockReadGuard<'_, Self::Data>;
+    fn write_legacy(&self) -> parking_lot::RwLockWriteGuard<'_, Self::Data>;
 }
 
 #[cfg(test)]

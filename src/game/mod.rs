@@ -9,6 +9,7 @@ pub mod mob;
 pub mod npc;
 pub mod client;
 pub mod gm_command;
-pub mod pc;
+pub mod player;
+pub use self::player as pc;
 pub mod scripting;
 pub mod types;

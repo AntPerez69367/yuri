@@ -7,6 +7,7 @@ use crate::database::map_db::{GlobalReg, WarpList};
 use crate::database::mob_db::MobDbData;
 use crate::database::map_db::{get_map_ptr as ffi_get_map_ptr, map_is_loaded as ffi_map_is_loaded};
 use crate::game::pc::MapSessionData;
+use crate::game::player::prelude::*;
 use crate::game::types::GfxViewer;
 use crate::common::types::{Item, SkillInfo};
 use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
@@ -1387,8 +1388,9 @@ unsafe fn check_pc_collision(moving_mob: *mut MobSpawnData, m: i32, x: i32, y: i
     if let Some(grid) = crate::game::block_grid::get_grid(m as usize) {
         for id in grid.ids_at_tile(x as u16, y as u16) {
             if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                let sd = sd_arc.read();
-                if sd.x as i32 == x && sd.y as i32 == y {
+                let pos = sd_arc.position();
+                if pos.x as i32 == x && pos.y as i32 == y {
+                    let sd = sd_arc.read();
                     let state  = sd.player.combat.state;
                     let gm_lvl = sd.player.identity.gm_level;
                     let passable = (show_ghosts != 0 && state == PC_DIE as i8)

@@ -31,6 +31,8 @@ use crate::game::map_parse::player_state::clif_sendxy;
 use crate::game::map_parse::trading::{clif_exchange_close, clif_exchange_message};
 use crate::game::map_parse::visual::{clif_lookgone_by_id, clif_object_look_specific};
 use crate::game::mob::{BL_PC, MAX_MAGIC_TIMERS};
+use crate::game::player::prelude::*;
+use crate::config::Point;
 use crate::game::pc::{pc_stoptimer, MapSessionData};
 
 
@@ -311,6 +313,9 @@ pub unsafe fn clif_handle_obstruction(sd: *mut MapSessionData) -> i32 {
 
     (*sd).x = nx as u16;
     (*sd).y = ny as u16;
+    if let Some(pc_arc) = map_id2sd_pc((*sd).id) {
+        pc_arc.set_position(Point { m: (*sd).m, x: (*sd).x, y: (*sd).y });
+    }
     clif_sendxy(sd);
     0
 }

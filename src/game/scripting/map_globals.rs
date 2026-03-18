@@ -9,8 +9,7 @@ use crate::game::block::{map_is_loaded, AreaType};
 use crate::game::block_grid;
 use crate::game::client::visual::clif_sendweather;
 use crate::game::map_server::{entity_position, map_deliddb, map_id2sd_pc, map_readglobalreg, map_setglobalreg};
-use crate::game::pc::MapSessionData;
-
+use crate::game::player::{MapSessionData, prelude::*};
 use crate::game::map_parse::chat::{clif_sendmsg, clif_playsound_entity, clif_speak_inner};
 use crate::game::map_parse::visual::clif_lookgone_by_id;
 use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from, clif_sendside_pc, clif_sendside_mob, clif_sendside_npc};
@@ -454,7 +453,8 @@ pub unsafe fn sl_g_selfanimation(
     times: i32,
 ) {
     let Some(arc) = map_id2sd_pc(target_id as u32) else { return; };
-    let (m, tx, ty) = { let sd = arc.read(); (sd.m as i32, sd.x as i32, sd.y as i32) };
+    let pos = arc.position();
+    let (m, tx, ty) = (pos.m as i32, pos.x as i32, pos.y as i32);
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let cell_ids = grid.ids_at_tile(tx as u16, ty as u16);
         for id in cell_ids {
@@ -479,7 +479,8 @@ pub unsafe fn sl_g_selfanimationxy(
     times: i32,
 ) {
     let Some(arc) = map_id2sd_pc(target_id as u32) else { return; };
-    let (m, sx, sy) = { let sd = arc.read(); (sd.m as i32, sd.x as i32, sd.y as i32) };
+    let pos = arc.position();
+    let (m, sx, sy) = (pos.m as i32, pos.x as i32, pos.y as i32);
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let cell_ids = grid.ids_at_tile(sx as u16, sy as u16);
         for id in cell_ids {

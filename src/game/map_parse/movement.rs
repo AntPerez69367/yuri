@@ -19,6 +19,8 @@ use std::ptr;
 use crate::database::map_db::{WarpList, BLOCK_SIZE};
 use crate::database::map_db::map_data;
 use crate::session::session_exists;
+use crate::config::Point;
+use crate::game::player::prelude::*;
 use crate::game::pc::{
     MapSessionData,
     BL_PC, BL_MOB, BL_NPC,
@@ -788,6 +790,9 @@ pub unsafe fn clif_parsewalk(sd: *mut MapSessionData) -> i32 {
         map_moveblock_id((*sd).id, (*sd).m, old_x, old_y, dx as u16, dy as u16);
         (*sd).x = dx as u16;
         (*sd).y = dy as u16;
+        if let Some(pc_arc) = map_id2sd_pc((*sd).id) {
+            pc_arc.set_position(Point { m: (*sd).m, x: (*sd).x, y: (*sd).y });
+        }
     }
 
     // If client sent viewport sub-packet, scan and send new tile strip
@@ -1028,6 +1033,9 @@ pub unsafe fn clif_noparsewalk(sd: *mut MapSessionData, _speed: i8) -> i32 {
         map_moveblock_id((*sd).id, (*sd).m, old_x, old_y, dx as u16, dy as u16);
         (*sd).x = dx as u16;
         (*sd).y = dy as u16;
+        if let Some(pc_arc) = map_id2sd_pc((*sd).id) {
+            pc_arc.set_position(Point { m: (*sd).m, x: (*sd).x, y: (*sd).y });
+        }
     }
 
     // Send new viewport strip if in bounds
