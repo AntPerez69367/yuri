@@ -1,5 +1,6 @@
 old_src
-
+*.md
+!README.md
 # Prerequisites
 *.d
 

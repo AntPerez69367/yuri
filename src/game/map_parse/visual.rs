@@ -1073,10 +1073,13 @@ unsafe fn clif_charlook_inner(entity: *const MapSessionData, viewer: *const MapS
     }
 
     // Invisibility / stealth state
+    let src_isingroup = if let Some(src_pe) = crate::game::map_server::map_id2sd_pc((*src_sd).id) {
+        clif_isingroup(&src_pe, sd) != 0
+    } else { false };
     let invis_cond = ((*sd).player.combat.state == 2 || ((*sd).optFlags & OPT_FLAG_STEALTH) != 0)
         && (*sd).id != (*src_sd).id
         && ((*src_sd).player.identity.gm_level != 0
-            || clif_isingroup(src_sd, sd) != 0
+            || src_isingroup
             || ((*sd).gfx.dye == (*src_sd).gfx.dye
                 && (*sd).gfx.dye != 0
                 && (*src_sd).gfx.dye != 0));
@@ -1296,8 +1299,10 @@ unsafe fn clif_charlook_inner(entity: *const MapSessionData, viewer: *const MapS
         wfifob((*src_sd).fd, 58, 3);
     }
 
-    if clif_isingroup(src_sd, sd) != 0 {
-        wfifob((*src_sd).fd, 58, 2);
+    if let Some(src_pe) = crate::game::map_server::map_id2sd_pc((*src_sd).id) {
+        if clif_isingroup(&src_pe, sd) != 0 {
+            wfifob((*src_sd).fd, 58, 2);
+        }
     }
 
     let mut exist: i32 = -1;
@@ -1414,7 +1419,9 @@ pub unsafe fn clif_spawn(sd: *mut MapSessionData) -> i32 {
     if crate::game::block::map_addblock_id((*sd).id, (*sd).bl_type, (*sd).m, (*sd).x, (*sd).y) != 0 {
         // printf("Error Spawn\n") — silently ignore in Rust
     }
-    clif_sendchararea(sd);
+    if let Some(pe) = crate::game::map_server::map_id2sd_pc((*sd).id) {
+        clif_sendchararea(&pe);
+    }
     0
 }
 
