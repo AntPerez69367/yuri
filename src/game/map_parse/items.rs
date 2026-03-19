@@ -16,6 +16,7 @@ use crate::game::pc::{
 };
 use crate::game::pc::MapSessionData;
 use crate::game::player::entity::PlayerEntity;
+use crate::game::player::prelude::*;
 
 // MAP_EQ* message indices
 use crate::common::constants::entity::player::{
@@ -1120,7 +1121,7 @@ pub unsafe fn clif_throw_check_id(entity_id: u32, found: *mut i32) -> i32 {
 
     // Check entity type and alive status via typed lookups
     if let Some(arc) = crate::game::map_server::map_id2npc_ref(entity_id) {
-        let nd = &*arc.data_ptr();
+        let nd = arc.read();
         if nd.subtype != SCRIPT { return 0; }
     } else if let Some(arc) = crate::game::map_server::map_id2mob_ref(entity_id) {
         let mob = &*arc.data_ptr();

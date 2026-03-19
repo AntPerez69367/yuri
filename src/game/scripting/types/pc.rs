@@ -1517,7 +1517,7 @@ impl UserData for PcObject {
         methods.add_method("_repairAll_send", |_, this, npc_bl: mlua::AnyUserData| {
             let npc_ptr = if let Ok(npc) = npc_bl.borrow::<crate::game::scripting::types::npc::NpcObject>() {
                 crate::game::map_server::map_id2npc_ref(npc.id)
-                    .map(|arc| arc.data_ptr() as *mut std::ffi::c_void)
+                    .map(|arc| arc.legacy.data_ptr() as *mut std::ffi::c_void)
                     .unwrap_or(std::ptr::null_mut())
             } else {
                 std::ptr::null_mut()
@@ -1537,7 +1537,7 @@ fn extract_bl_ptr(ud: &mlua::AnyUserData) -> *mut std::ffi::c_void {
     }
     if let Ok(npc) = ud.borrow::<crate::game::scripting::types::npc::NpcObject>() {
         return crate::game::map_server::map_id2npc_ref(npc.id)
-            .map(|arc| arc.data_ptr() as *mut std::ffi::c_void)
+            .map(|arc| arc.legacy.data_ptr() as *mut std::ffi::c_void)
             .unwrap_or(std::ptr::null_mut());
     }
     std::ptr::null_mut()

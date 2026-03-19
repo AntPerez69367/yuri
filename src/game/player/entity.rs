@@ -70,14 +70,14 @@ impl PlayerEntity {
         }
 
     #[inline]
-    pub fn read(&self) -> impl Deref<Target = MapSessionData> + '_ {                                                   
-      parking_lot::RwLockReadGuard::map(self.legacy.read(), |b| b.as_ref())                                             
-  }      
+    pub fn read(&self) -> impl Deref<Target = MapSessionData> + '_ {
+        parking_lot::RwLockReadGuard::map(self.legacy.read(), |b| b.as_ref())
+    }
 
     #[inline]
-    pub fn write(&self) -> impl DerefMut<Target = MapSessionData> + '_ {                                                   
-      parking_lot::RwLockWriteGuard::map(self.legacy.write(), |b| b.as_mut())                                             
-  }      
+    pub fn write(&self) -> impl DerefMut<Target = MapSessionData> + '_ {
+        parking_lot::RwLockWriteGuard::map(self.legacy.write(), |b| b.as_mut())
+    }
 
     #[inline]
     #[deprecated(note = "Prefer domain-specific accessors, e.g. player.read().player for persistence data.")]
@@ -89,11 +89,11 @@ impl PlayerEntity {
 impl LegacyEntity for PlayerEntity {
     type Data = Box<MapSessionData>;
     #[inline]
-    fn read_legacy(&self) -> parking_lot::RwLockReadGuard<'_, Self::Data> {
+    fn read(&self) -> parking_lot::RwLockReadGuard<'_, Self::Data> {
         self.legacy.read()
     }
     #[inline]
-    fn write_legacy(&self) -> parking_lot::RwLockWriteGuard<'_, Self::Data> {
+    fn write(&self) -> parking_lot::RwLockWriteGuard<'_, Self::Data> {
         self.legacy.write()
     }
 }

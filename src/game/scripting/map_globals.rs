@@ -741,16 +741,23 @@ pub unsafe fn sl_g_addnpc(
     // freeing the original allocation. `raw` is dangling after this.
     let id = (*raw).id;
     map_addiddb_npc(id, Box::from_raw(raw));
-    // Get the live pointer from the Arc<RwLock>.
-    let raw = crate::game::map_server::map_id2npc_ref(id)
-        .expect("npc just inserted").data_ptr();
-    map_addblock_id((*raw).id, (*raw).bl_type, (*raw).m, (*raw).x, (*raw).y);
+    // Get values from the Arc before any Lua call.
+    let arc = crate::game::map_server::map_id2npc_ref(id)
+        .expect("npc just inserted");
+    let (npc_id, bl_type, npc_m, npc_x, npc_y, npc_name, spawn_id) = {
+        let npc = arc.read();
+        (npc.id, npc.bl_type, npc.m, npc.x, npc.y,
+         crate::game::scripting::carray_to_str(&npc.name).to_owned(),
+         npc.id)
+    };
+    map_addblock_id(npc_id, bl_type, npc_m, npc_x, npc_y);
 
     // Fire on_spawn Lua event: npc.on_spawn(nd).
+    // Guard is dropped before the Lua call to avoid holding the lock across Lua dispatch.
     crate::game::scripting::doscript_blargs_id(
-        crate::game::scripting::carray_to_str(&(*raw).name),
+        &npc_name,
         Some("on_spawn"),
-        &[(*raw).id],
+        &[spawn_id],
     );
 }
 

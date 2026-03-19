@@ -2126,8 +2126,7 @@ pub unsafe fn mob_move_inner_id(entity_id: u32, mob: *mut MobSpawnData) -> i32 {
     if (*mob).canmove == 1 { return 0; }
 
     if let Some(arc) = crate::game::map_server::map_id2npc_ref(entity_id) {
-        let npc = &*arc.data_ptr();
-        if npc.subtype != 0 { return 0; }
+        if arc.read().subtype != 0 { return 0; }
     } else if let Some(arc) = crate::game::map_server::map_id2mob_ref(entity_id) {
         let m2 = &*arc.data_ptr();
         if m2.state == MOB_DEAD { return 0; }

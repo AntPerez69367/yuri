@@ -64,8 +64,8 @@ impl ScriptTarget for PlayerRegistries {
 // LegacyEntity trait to help with breaking up god structs
 pub trait LegacyEntity {
     type Data;
-    fn read_legacy(&self) -> parking_lot::RwLockReadGuard<'_, Self::Data>;
-    fn write_legacy(&self) -> parking_lot::RwLockWriteGuard<'_, Self::Data>;
+    fn read(&self) -> parking_lot::RwLockReadGuard<'_, Self::Data>;
+    fn write(&self) -> parking_lot::RwLockWriteGuard<'_, Self::Data>;
 }
 
 #[cfg(test)]

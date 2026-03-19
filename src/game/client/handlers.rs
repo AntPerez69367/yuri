@@ -548,11 +548,14 @@ pub unsafe fn clif_sendheartbeat(id: i32, _none: i32) -> i32 {
 pub unsafe fn clif_runfloor_sub_inner(entity_id: u32, pe: &PlayerEntity) -> i32 {
     use crate::game::pc::FLOOR;
     let Some(arc) = crate::game::map_server::map_id2npc_ref(entity_id) else { return 0; };
-    let nd = &*arc.data_ptr();
-    if nd.subtype as i32 != FLOOR as i32 { return 0; }
+    let (npc_name, npc_id) = {
+        let nd = arc.read();
+        if nd.subtype as i32 != FLOOR as i32 { return 0; }
+        (carray_to_str(&nd.name).to_owned(), nd.id)
+    };
     let sd_ptr = &mut *pe.write() as *mut MapSessionData;
     sl_async_freeco(sd_ptr);
-    sl_doscript_2(carray_to_str(&nd.name), Some("click2"), pe.id, nd.id);
+    sl_doscript_2(&npc_name, Some("click2"), pe.id, npc_id);
     0
 }
 

@@ -3,6 +3,7 @@ use mlua::{MetaMethod, UserData, UserDataMethods};
 
 use crate::database::map_db::MapData;
 use crate::database::map_db::get_map_ptr;
+use crate::common::traits::LegacyEntity;
 use crate::game::npc::{NpcData, npc_move, npc_warp};
 use crate::game::scripting::map_globals::{
     sl_g_sendside, sl_g_sendanimxy, sl_g_talk, sl_g_deliddb, sl_g_addpermanentspawn,
@@ -57,7 +58,9 @@ impl UserData for NpcObject {
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
                             let Some(arc) = crate::game::map_server::map_id2npc_ref(id) else { return Ok(0); };
-                            Ok(unsafe { npc_move(arc.data_ptr()) })
+                            // SAFETY: npc_move may dispatch Lua callbacks that access this NPC.
+                            // Do not hold the write lock; use the stable raw pointer from the RwLock.
+                            Ok(unsafe { npc_move(arc.legacy.data_ptr()) })
                         }
                     )?));
                 }
@@ -66,7 +69,8 @@ impl UserData for NpcObject {
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, m, x, y): (mlua::Value, i32, i32, i32)| {
                             let Some(arc) = crate::game::map_server::map_id2npc_ref(id) else { return Ok(()); };
-                            unsafe { npc_warp(arc.data_ptr(), m, x, y); }
+                            // SAFETY: npc_warp may dispatch Lua callbacks; do not hold write lock.
+                            unsafe { npc_warp(arc.legacy.data_ptr(), m, x, y); }
                             Ok(())
                         }
                     )?));
@@ -77,11 +81,14 @@ impl UserData for NpcObject {
                         move |lua, (_, num): (mlua::Value, usize)| -> mlua::Result<mlua::Value> {
                             if num >= MAX_EQUIP { return Ok(mlua::Value::Nil); }
                             let Some(arc) = crate::game::map_server::map_id2npc_ref(id) else { return Ok(mlua::Value::Nil); };
-                            let item = unsafe { &(*arc.data_ptr()).equip[num] };
-                            if item.id == 0 { return Ok(mlua::Value::Nil); }
+                            let (item_id, item_custom) = {
+                                let nd = arc.read();
+                                (nd.equip[num].id, nd.equip[num].custom)
+                            };
+                            if item_id == 0 { return Ok(mlua::Value::Nil); }
                             let t = lua.create_table()?;
-                            t.raw_set(1, item.id)?;
-                            t.raw_set(2, item.custom)?;
+                            t.raw_set(1, item_id)?;
+                            t.raw_set(2, item_custom)?;
                             Ok(mlua::Value::Table(t))
                         }
                     )?));
@@ -89,13 +96,13 @@ impl UserData for NpcObject {
                 // Registry sub-objects — constructed lazily from the NPC ID.
                 "registry"     => {
                     let ptr = crate::game::map_server::map_id2npc_ref(entity_id)
-                        .map(|a| a.data_ptr() as *mut std::ffi::c_void)
+                        .map(|a| a.legacy.data_ptr() as *mut std::ffi::c_void)
                         .unwrap_or(std::ptr::null_mut());
                     return lua.pack(NpcRegObject { ptr });
                 }
                 "mapRegistry"  => {
                     let ptr = crate::game::map_server::map_id2npc_ref(entity_id)
-                        .map(|a| a.data_ptr() as *mut std::ffi::c_void)
+                        .map(|a| a.legacy.data_ptr() as *mut std::ffi::c_void)
                         .unwrap_or(std::ptr::null_mut());
                     return lua.pack(MapRegObject { ptr });
                 }
@@ -234,7 +241,7 @@ impl UserData for NpcObject {
                                 let Some(arc) = crate::game::map_server::map_id2npc_ref(id) else {
                                     return Ok(mlua::Value::Table(lua.create_table()?));
                                 };
-                                m = unsafe { (*arc.data_ptr()).m as i32 };
+                                m = arc.read().m as i32;
                             }
                             let tbl = lua.create_table()?;
                             if amount <= 0 { return Ok(mlua::Value::Table(tbl)); }
@@ -298,7 +305,7 @@ impl UserData for NpcObject {
             let Some(arc) = crate::game::map_server::map_id2npc_ref(entity_id) else {
                 return Ok(mlua::Value::Nil);
             };
-            let nd = unsafe { &*arc.data_ptr() };
+            let nd = arc.read();
 
             macro_rules! int  { ($e:expr) => { Ok(mlua::Value::Integer($e as i64)) }; }
             macro_rules! str_ { ($e:expr) => {
@@ -323,12 +330,12 @@ impl UserData for NpcObject {
                 "blType"     => int!(nd.bl_type),
                 "ID"         => int!(nd.id),
                 "xmax" => {
-                    let mp = unsafe { npc_map(nd as *const NpcData) };
+                    let mp = unsafe { npc_map(&*nd as *const NpcData) };
                     if mp.is_null() { return Ok(mlua::Value::Nil); }
                     int!(unsafe { (*mp).xs.saturating_sub(1) })
                 }
                 "ymax" => {
-                    let mp = unsafe { npc_map(nd as *const NpcData) };
+                    let mp = unsafe { npc_map(&*nd as *const NpcData) };
                     if mp.is_null() { return Ok(mlua::Value::Nil); }
                     int!(unsafe { (*mp).ys.saturating_sub(1) })
                 }
@@ -379,8 +386,8 @@ impl UserData for NpcObject {
         // ── __newindex ───────────────────────────────────────────────────────
         methods.add_meta_method(MetaMethod::NewIndex, |_, this, (key, val): (String, mlua::Value)| {
             let Some(arc) = crate::game::map_server::map_id2npc_ref(this.id) else { return Ok(()); };
-            let nd = unsafe { &mut *arc.data_ptr() };
-            let mp = unsafe { npc_map(nd as *const NpcData) };
+            let mut nd = arc.write();
+            let mp = unsafe { npc_map(&*nd as *const NpcData) };
 
             macro_rules! map_set { ($field:ident) => {
                 if !mp.is_null() { unsafe { (*mp).$field = val_to_int(&val) as _; } }

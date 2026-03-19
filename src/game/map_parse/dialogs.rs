@@ -14,6 +14,7 @@ use crate::game::pc::{
 use crate::common::types::Item;
 use crate::session::{SessionId, session_exists};
 use crate::game::player::entity::PlayerEntity;
+use crate::game::player::prelude::*;
 
 use super::packet::{
     encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow,
@@ -1016,7 +1017,7 @@ pub async unsafe fn clif_handle_clickgetinfo(pe: &PlayerEntity) -> i32 {
         clif_clickonplayer(pe, target_id).await;
     } else if bl_type == BL_NPC {
         let Some(arc) = crate::game::map_server::map_id2npc_ref(target_id) else { return 0; };
-        let nd = &*arc.data_ptr();
+        let nd = arc.read();
         let mut radius = 10i32;
         if nd.subtype as i32 == crate::common::constants::entity::SUBTYPE_FLOOR as i32 { radius = 0; }
 

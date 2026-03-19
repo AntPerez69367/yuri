@@ -10,6 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::database::get_pool;
 use crate::database::{blocking_run_async, boards as db_boards};
+use crate::game::npc::NpcEntity;
+use crate::game::npc::prelude::*;
 use crate::game::pc::{
     MapSessionData, PlayerEntity, FLAG_MAIL,
     U_FLAG_UNPHYSICAL,
@@ -27,7 +29,8 @@ use crate::network::crypt::encrypt;
 use crate::database::board_db;
 use crate::session::{session_call_parse, get_session_manager};
 use crate::game::scripting::sl_exec;
-
+use crate::common::types::Point;
+use std::sync::atomic::AtomicU64;
 use crate::core::request_shutdown;
 use crate::game::map_char::intif_save_impl::sl_intif_save;
 
@@ -213,7 +216,7 @@ pub unsafe fn map_setmapip(id: i32, ip: u32, port: u16) -> i32 {
 
 static PLAYER_MAP: OnceLock<Mutex<HashMap<u32, Arc<PlayerEntity>>>> = OnceLock::new();
 static MOB_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<crate::game::mob::MobSpawnData>>>>> = OnceLock::new();
-static NPC_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<crate::game::npc::NpcData>>>>> = OnceLock::new();
+static NPC_MAP: OnceLock<Mutex<HashMap<u32, Arc<NpcEntity>>>> = OnceLock::new();
 static ITEM_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<crate::game::scripting::types::floor::FloorItemData>>>>> = OnceLock::new();
 
 #[inline]
@@ -225,7 +228,7 @@ fn mob_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<RwLock<crate::ga
     MOB_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
 }
 #[inline]
-fn npc_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<RwLock<crate::game::npc::NpcData>>>> {
+fn npc_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<NpcEntity>>> {
     NPC_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
 }
 #[inline]
@@ -311,9 +314,16 @@ pub fn map_addiddb_mob(id: u32, mob: Box<crate::game::mob::MobSpawnData>) {
     mob_map().insert(id, unsafe { box_into_arc_rwlock(mob) });
 }
 
-/// Insert an NPC — takes ownership of the Box, wrapping it in Arc<RwLock>.
+/// Insert an NPC — takes ownership of the Box, wrapping it in Arc<NpcEntity>.
 pub fn map_addiddb_npc(id: u32, npc: Box<crate::game::npc::NpcData>) {
-    npc_map().insert(id, unsafe { box_into_arc_rwlock(npc) });
+
+    let pos = Point::new(npc.m, npc.x, npc.y).to_u64();
+    let entity = Arc::new(NpcEntity {
+        id: npc.id,
+        pos_atomic: AtomicU64::new(pos),
+        legacy: RwLock::new(*npc),
+    });
+    npc_map().insert(id, entity);
 }
 
 /// Insert a floor item — takes ownership of the Box, wrapping it in Arc<RwLock>.
@@ -365,7 +375,7 @@ pub fn map_id2mob_ref(id: u32) -> Option<Arc<RwLock<crate::game::mob::MobSpawnDa
 /// Typed lookup — returns `Arc<RwLock<NpcData>>` if id is a npc.
 #[must_use]
 #[inline]
-pub fn map_id2npc_ref(id: u32) -> Option<Arc<RwLock<crate::game::npc::NpcData>>> {
+pub fn map_id2npc_ref(id: u32) -> Option<Arc<NpcEntity>> {
     let map = npc_map();
     map.get(&id).cloned()
 }
@@ -385,7 +395,7 @@ pub fn map_id2fl_ref(id: u32) -> Option<Arc<RwLock<crate::game::scripting::types
 pub enum GameEntity {
     Player(Arc<PlayerEntity>),
     Mob(Arc<RwLock<crate::game::mob::MobSpawnData>>),
-    Npc(Arc<RwLock<crate::game::npc::NpcData>>),
+    Npc(Arc<NpcEntity>),
     Item(Arc<RwLock<crate::game::scripting::types::floor::FloorItemData>>),
 }
 

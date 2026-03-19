@@ -5,7 +5,7 @@
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use parking_lot::{RwLock};
 
-use crate::common::traits::Spatial;
+use crate::common::traits::{LegacyEntity, Spatial};
 use crate::config::Point;
 use crate::database::map_db::GlobalReg;
 use crate::common::types::Item;
@@ -20,6 +20,17 @@ pub use crate::common::constants::entity::npc::{NPC_START_NUM, NPCT_START_NUM, F
 pub use crate::common::constants::entity::{BL_PC, BL_MOB, BL_NPC};
 
 
+pub mod prelude {
+    // Traits
+    pub use crate::common::traits::{Combatant, LegacyEntity, InventoryHolder, Spatial, ScriptTarget};
+    
+    // Core Structs
+    pub use crate::game::npc::{NpcEntity, NpcData};
+
+    // Common type signatures
+    pub use crate::common::types::{Item, Point};
+}
+
 pub struct NpcEntity {
     // level -1: Atomic Snapshot
     pub id: u32,
@@ -27,6 +38,21 @@ pub struct NpcEntity {
 
     // level 1: Legacy
     pub legacy: RwLock<NpcData>,
+}
+
+impl LegacyEntity for NpcEntity {
+    type Data = NpcData;
+
+    #[inline]
+    fn read(&self) -> parking_lot::RwLockReadGuard<'_, Self::Data> {
+        self.legacy.read()
+    }
+
+    #[inline]
+    fn write(&self) -> parking_lot::RwLockWriteGuard<'_, Self::Data> {
+        self.legacy.write()
+    }
+
 }
 
 impl Spatial for NpcEntity {
@@ -769,7 +795,7 @@ pub async unsafe fn npc_init_async() -> i32 {
             crate::game::map_server::map_addiddb_npc(id, Box::from_raw(nd));
             // nd is dangling after this; get the live pointer from the Arc.
             nd = crate::game::map_server::map_id2npc_ref(id)
-                .expect("npc just inserted").data_ptr();
+                .expect("npc just inserted").legacy.data_ptr();
         }
 
         // Add to block grid only if subtype < 3 (using live pointer)
@@ -864,8 +890,7 @@ pub unsafe fn npc_move_sub_id(entity_id: u32, nd: *mut NpcData) -> i32 {
     if (*nd).canmove == 1 { return 0; }
 
     if let Some(arc) = crate::game::map_server::map_id2npc_ref(entity_id) {
-        let npc = &*arc.data_ptr();
-        if npc.subtype != 0 { return 0; }
+        if arc.read().subtype != 0 { return 0; }
     } else if let Some(arc) = crate::game::map_server::map_id2mob_ref(entity_id) {
         let mob = &*arc.data_ptr();
         if mob.state == crate::game::mob::MOB_DEAD { return 0; }

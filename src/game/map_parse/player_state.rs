@@ -17,6 +17,7 @@ use crate::game::pc::{
     SFLAG_ALWAYSON, SFLAG_FULLSTATS, SFLAG_GMON, SFLAG_HPMP, SFLAG_XPMONEY,
 };
 use crate::game::player::entity::PlayerEntity;
+use crate::game::player::prelude::*;
 use crate::common::player::legends::MAX_LEGENDS;
 
 use super::packet::{

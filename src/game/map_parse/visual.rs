@@ -6,6 +6,7 @@
 
 use crate::game::mob::{MobSpawnData, MOB_DEAD};
 use crate::game::npc::NpcData;
+use crate::game::npc::prelude::*;
 use crate::game::pc::{
     MapSessionData, LookAccum,
     EQ_ARMOR, EQ_COAT, EQ_WEAP, EQ_SHIELD, EQ_HELM,
@@ -477,7 +478,7 @@ pub unsafe fn clif_object_look_specific(sd: *mut MapSessionData, id: u32) -> i32
         }
     } else if bl_type == BL_NPC_U8 {
         let Some(arc) = crate::game::map_server::map_id2npc_ref(id) else { return 0; };
-        let nd = &*arc.data_ptr();
+        let nd = arc.read();
         if nd.subtype != 0 || nd.npctype == 1 { return 0; }
 
         wfifob(fd, 11, 12);

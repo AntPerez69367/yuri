@@ -16,6 +16,7 @@ use crate::game::pc::{
 use crate::common::player::spells::MAX_SPELLS;
 use crate::game::pc::MapSessionData;
 use crate::game::player::entity::PlayerEntity;
+use crate::game::player::prelude::*;
 
 use super::packet::{
     encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow, wfifoheader,

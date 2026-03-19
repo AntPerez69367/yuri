@@ -244,6 +244,7 @@ pub fn ids_in_area(
 
 /// Re-export AreaType for callers migrating from block.rs.
 pub use crate::game::block::AreaType;
+use crate::game::mob::BL_PC;
 
 /// Filter entity IDs by `bl_type` bitmask, returning only those whose type
 /// matches the mask and that are alive (mobs not dead, PCs not dead/stealthed).
@@ -256,7 +257,7 @@ pub fn filter_by_type(ids: &[u32], bl_type_mask: i32) -> Vec<u32> {
         .filter(|&id| {
             if let Some(ent) = map_id2entity(id) {
                 let ty = match &ent {
-                    GameEntity::Player(_) => crate::common::constants::entity::BL_PC,
+                    GameEntity::Player(_) => BL_PC,
                     GameEntity::Mob(_) => BL_MOB,
                     GameEntity::Npc(_) => BL_NPC,
                     GameEntity::Item(_) => BL_ITEM,
