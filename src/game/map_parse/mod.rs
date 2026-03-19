@@ -31,6 +31,7 @@ pub mod events;
 use crate::database::map_db::raw_map_ptr;
 use crate::session::{SessionId, session_exists, session_get_data, session_get_eof, session_set_eof};
 use crate::game::time_util::timer_insert;
+use crate::game::pc::MapSessionData;
 use crate::game::player::entity::PlayerEntity;
 
 use crate::game::map_parse::packet::{
@@ -78,8 +79,8 @@ use crate::game::pc::pc_atkspeed;
 // pc_warp in spatial.rs still takes *mut MapSessionData (not yet migrated).
 #[inline]
 unsafe fn pc_warp(pe: &PlayerEntity, map_id: u16, x: u16, y: u16) {
-    #[allow(deprecated)]
-    let _ = crate::game::pc::pc_warp(pe.data_ptr(), map_id as i32, x as i32, y as i32);
+    let sd_ptr = &mut *pe.write() as *mut MapSessionData;
+    std::mem::drop(crate::game::pc::pc_warp(sd_ptr, map_id as i32, x as i32, y as i32));
 }
 // clif_debug: actual fn takes i32 for len, old extern had u16 — wrap with cast.
 #[inline]
@@ -94,6 +95,9 @@ unsafe fn createdb_start(pe: &PlayerEntity) {
 
 /// Main packet dispatcher.
 // clif_parse — ported to rust (src/game/map_parse/mod.rs)
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
     if fd.raw() < 0 { return 0; }
     if !session_exists(fd) { return 0; }
@@ -102,7 +106,7 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
 
     if session_get_eof(fd) != 0 {
         if let Some(pe) = sd.as_deref() {
-            libc::printf(b"[map] [session_eof] name=%s\n\0".as_ptr() as *const i8,
+            libc::printf(c"[map] [session_eof] name=%s\n".as_ptr(),
                 pe.name.as_ptr());
             clif_handle_disconnect(pe).await;
             clif_closeit(pe);
@@ -125,11 +129,8 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
     if rfiforest(fd) < len as i32 { return 0; }
 
     if sd.is_none() {
-        match rfifob(fd, 3) {
-            0x10 => {
-                clif_accept2(fd, rfifop(fd, 16) as *mut i8, rfifob(fd, 15) as i32).await;
-            }
-            _ => {}
+        if rfifob(fd, 3) == 0x10 {
+            clif_accept2(fd, rfifop(fd, 16) as *mut i8, rfifob(fd, 15) as i32).await;
         }
         rfifoskip(fd, len);
         return 0;
@@ -154,7 +155,7 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
                 }
                 if logincount >= 2 {
                     libc::printf(
-                        b"%s attempted dual login on IP:%s\n\0".as_ptr() as *const i8,
+                        c"%s attempted dual login on IP:%s\n".as_ptr(),
                         pe.read().player.identity.name.as_ptr(),
                         pe.read().player.identity.ipaddress.as_ptr(),
                     );
@@ -220,15 +221,14 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
         0x0F => {
             clif_cancelafk(pe);
             pe.write().time += 1;
-            if pe.read().paralyzed == 0 && pe.read().sleep == 1.0f32 {
-                if pe.read().time < 4 {
+            if pe.read().paralyzed == 0 && pe.read().sleep == 1.0f32
+                && pe.read().time < 4 {
                     if (*raw_map_ptr().add(pe.read().m as usize)).spell != 0 || pe.read().player.identity.gm_level != 0 {
-                        clif_parsemagic(&mut *pe.data_ptr());
+                        clif_parsemagic(&mut pe.write());
                     } else {
-                        clif_sendminitext(pe, b"That doesn't work here.\0".as_ptr() as *const i8);
+                        clif_sendminitext(pe, c"That doesn't work here.".as_ptr());
                     }
                 }
-            }
         }
         0x11 => {
             clif_cancelafk(pe);
@@ -253,8 +253,7 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
                     id as i32,
                     0,
                 );
-                #[allow(deprecated)]
-                clif_parseattack(&mut *pe.data_ptr());
+                clif_parseattack(&mut pe.write());
             }
         }
         0x17 => {
@@ -263,7 +262,7 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
             let pos = rfifob(pe_fd, 6) as usize;
             let confirm = rfifob(pe_fd, 5);
             // pos is 1-based; inventory is 0-based. Guard against underflow and OOB.
-            if pos == 0 || pos - 1 >= pe.read().player.inventory.inventory.len() {
+            if pos == 0 || pos > pe.read().player.inventory.inventory.len() {
                 rfifoskip(fd, len);
                 return 0;
             }
@@ -460,13 +459,11 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
             clif_parsefriends(pe, name_ptr, name_len).await;
         }
         0x7B => {
-            libc::printf(b"request: %u\n\0".as_ptr() as *const i8,
+            libc::printf(c"request: %u\n".as_ptr(),
                 rfifob(pe.fd, 5) as u32);
             match rfifob(pe.fd, 5) {
-                #[allow(deprecated)]
-                0 => { send_meta(pe.data_ptr()); }
-                #[allow(deprecated)]
-                1 => { send_metalist(pe.data_ptr()); }
+                0 => { send_meta(&mut *pe.write() as *mut MapSessionData); }
+                1 => { send_metalist(&mut *pe.write() as *mut MapSessionData); }
                 _ => {}
             }
         }
@@ -500,7 +497,7 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
         _ => {
             let pe_fd = pe.fd;
             libc::printf(
-                b"[Map] Unknown Packet ID: %02X\nPacket content:\n\0".as_ptr() as *const i8,
+                c"[Map] Unknown Packet ID: %02X\nPacket content:\n".as_ptr(),
                 rfifob(pe_fd, 3) as u32,
             );
             clif_debug_u16(rfifop(pe_fd, 0), swap16(rfifow(pe_fd, 1)));

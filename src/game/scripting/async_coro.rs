@@ -32,6 +32,9 @@ pub fn clear_menu_opts(user: *mut std::ffi::c_void) {
 /// Resume after a menu selection.
 /// If opts were stored by `store_menu_opts` (menuString/menuString2), resumes
 /// with the selected option string; otherwise resumes with the raw selection number.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn resume_menu(selection: u32, user: *mut std::ffi::c_void) {
     let lua = crate::game::scripting::sl_state();
     let key = user as usize;
@@ -52,6 +55,9 @@ pub unsafe fn resume_menu(selection: u32, user: *mut std::ffi::c_void) {
 
 /// Resume after a sequential menu response.
 /// `selection == 1` → cancel; `selection == 2` → chosen.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn resume_menuseq(selection: u32, choice: i32, user: *mut std::ffi::c_void) {
     let lua = crate::game::scripting::sl_state();
     let key = user as usize;
@@ -81,6 +87,9 @@ pub unsafe fn resume_menuseq(selection: u32, choice: i32, user: *mut std::ffi::c
 
 /// Resume after a dialog button click.
 /// choice: 0 = previous, 1 = quit, 2 = next, other = "quit".
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn resume_dialog(choice: u32, user: *mut std::ffi::c_void) {
     let lua = crate::game::scripting::sl_state();
     let key = user as usize;
@@ -98,6 +107,9 @@ pub unsafe fn resume_dialog(choice: u32, user: *mut std::ffi::c_void) {
 
 /// Resume after a sequential input response.
 /// choice: 0 = previous, 1 = quit, 2 = next + typed text, other = quit.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn resume_inputseq(choice: u32, input: *const i8, user: *mut std::ffi::c_void) {
     let lua = crate::game::scripting::sl_state();
     let key = user as usize;
@@ -131,6 +143,9 @@ pub unsafe fn resume_inputseq(choice: u32, input: *const i8, user: *mut std::ffi
 }
 
 /// Resume after a shop buy response.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn resume_buy(items: *const i8, user: *mut std::ffi::c_void) {
     let lua = crate::game::scripting::sl_state();
     let text = if items.is_null() {
@@ -142,6 +157,9 @@ pub unsafe fn resume_buy(items: *const i8, user: *mut std::ffi::c_void) {
 }
 
 /// Resume after a shop sell response.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn resume_sell(choice: u32, user: *mut std::ffi::c_void) {
     let lua = crate::game::scripting::sl_state();
     thread_registry::resume(lua, user as usize, choice as i32);
@@ -149,6 +167,9 @@ pub unsafe fn resume_sell(choice: u32, user: *mut std::ffi::c_void) {
 
 /// Resume after a freeform input response.
 /// Only the typed text (`input`) is returned to Lua; the tag is ignored.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn resume_input(_tag: *const i8, input: *const i8, user: *mut std::ffi::c_void) {
     let lua = crate::game::scripting::sl_state();
     let text = if input.is_null() {

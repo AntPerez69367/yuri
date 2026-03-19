@@ -171,8 +171,8 @@ pub fn parse_map_file(path: &str) -> Result<ParsedTiles> {
         );
     }
 
-    let bxs = ((xs as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as u16;
-    let bys = ((ys as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as u16;
+    let bxs = (xs as usize).div_ceil(BLOCK_SIZE) as u16;
+    let bys = (ys as usize).div_ceil(BLOCK_SIZE) as u16;
 
     let tile = alloc_zeroed_slice::<u16>(cell_count);
     let pass = alloc_zeroed_slice::<u16>(cell_count);
@@ -629,6 +629,9 @@ pub fn map_data_mut(m: usize) -> Option<&'static mut MapData> {
 }
 
 /// Allocate the 65535-slot map array, load all maps from DB + files, set globals.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_init(maps_dir: &str, server_id: i32) -> i32 {
     let raw = unsafe {
         let layout = std::alloc::Layout::new::<[MapData; MAP_SLOTS]>();
@@ -665,6 +668,9 @@ pub unsafe fn map_init(maps_dir: &str, server_id: i32) -> i32 {
 }
 
 /// Reload map metadata + registry in-place.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_reload(maps_dir: &str, server_id: i32) -> i32 {
     if raw_map_ptr().is_null() { return -1; }
     let slots = unsafe { &mut *(raw_map_ptr() as *mut [MapData; MAP_SLOTS]) };
@@ -686,6 +692,9 @@ pub fn get_map_ptr(id: u16) -> *mut MapData {
 }
 
 /// Returns the warp list head at the block containing `(dx, dy)` on map `m`.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_get_warp(m: u16, dx: u16, dy: u16) -> *mut WarpList {
     let md_ptr = get_map_ptr(m);
     if md_ptr.is_null() { return std::ptr::null_mut(); }
@@ -702,6 +711,9 @@ pub unsafe fn map_get_warp(m: u16, dx: u16, dy: u16) -> *mut WarpList {
 }
 
 /// Returns true if the map slot for `id` is loaded (xs > 0).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_is_loaded(id: u16) -> bool {
     let ptr = get_map_ptr(id);
     !ptr.is_null() && (*ptr).xs > 0

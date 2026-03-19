@@ -92,6 +92,9 @@ unsafe fn wfifol_be(fd: SessionId, pos: usize, val: u32) {
 // ─── clif_groupstatus ─────────────────────────────────────────────────────────
 
 /// Send full group status packet to `pe`.  C line 8343.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_groupstatus(pe: &PlayerEntity) -> i32 {
     let mut rogue:   [u32; 256] = [0; 256];
     let mut warrior: [u32; 256] = [0; 256];
@@ -190,7 +193,7 @@ pub unsafe fn clif_groupstatus(pe: &PlayerEntity) -> i32 {
         let pe_group_leader = pe.read().group_leader;
         wfifol_be(pe.fd, len + 7, (*tsd).id);
         wfifob(pe.fd, len + 11, name_len as u8);
-        wfifop_copy(pe.fd, len + 12, name_ptr as *const u8, name_len);
+        wfifop_copy(pe.fd, len + 12, name_ptr, name_len);
 
         len += 11;
         len += name_len + 1;
@@ -295,6 +298,9 @@ pub unsafe fn clif_groupstatus(pe: &PlayerEntity) -> i32 {
 // ─── clif_grouphealth_update ──────────────────────────────────────────────────
 
 /// Send per-member HP/MP update and re-send full group status.  C line 8565.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_grouphealth_update(pe: &PlayerEntity) -> i32 {
     let group_count = pe.read().group_count as usize;
     let groupid     = pe.read().groupid as usize;
@@ -341,6 +347,9 @@ pub unsafe fn clif_grouphealth_update(pe: &PlayerEntity) -> i32 {
 // ─── clif_addgroup ────────────────────────────────────────────────────────────
 
 /// Add a player by name to the caller's group.  C line 8638.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_addgroup(pe: &PlayerEntity) -> i32 {
     let name_len = rfifob(pe.fd, 5) as usize;
     let mut nameof = [0i8; 256];
@@ -360,32 +369,31 @@ pub unsafe fn clif_addgroup(pe: &PlayerEntity) -> i32 {
     let pe_identity_id = pe.read().player.identity.id;
     if (*tsd).player.identity.id == pe_identity_id {
         // TODO(phase6c): migrate clif_sendminitext
-        clif_sendminitext(pe, b"You can't group yourself...\0".as_ptr() as *const i8);
+        clif_sendminitext(pe, c"You can't group yourself...".as_ptr());
         return 0;
     }
 
     let pe_group_leader = pe.read().group_leader;
     let pe_id = pe.id;
-    if (*tsd).group_count != 0 {
-        if (*tsd).group_leader == pe_group_leader && pe_group_leader == pe_id {
+    if (*tsd).group_count != 0
+        && (*tsd).group_leader == pe_group_leader && pe_group_leader == pe_id {
             let tsd_arc = match crate::game::map_server::map_id2sd_pc((*tsd).id) {
                 Some(a) => a, None => return 0,
             };
             clif_leavegroup(tsd_arc.as_ref());
             return 0;
         }
-    }
 
     let pe_group_count = pe.read().group_count;
     if pe_group_count >= MAX_GROUP_MEMBERS as i32 {
         // TODO(phase6c): migrate clif_sendminitext
-        clif_sendminitext(pe, b"Your group is already full.\0".as_ptr() as *const i8);
+        clif_sendminitext(pe, c"Your group is already full.".as_ptr());
         return 0;
     }
 
     if (*tsd).player.combat.state == 1 {
         // TODO(phase6c): migrate clif_sendminitext
-        clif_sendminitext(pe, b"They are unable to join your party.\0".as_ptr() as *const i8);
+        clif_sendminitext(pe, c"They are unable to join your party.".as_ptr());
         return 0;
     }
 
@@ -397,7 +405,7 @@ pub unsafe fn clif_addgroup(pe: &PlayerEntity) -> i32 {
     if sd_map_ok == 0 {
         // TODO(phase6c): migrate clif_sendminitext
         clif_sendminitext(pe,
-            b"You are unable to join a party. (Grouping disabled on map)\0".as_ptr() as *const i8);
+            c"You are unable to join a party. (Grouping disabled on map)".as_ptr());
         return 0;
     }
 
@@ -407,18 +415,18 @@ pub unsafe fn clif_addgroup(pe: &PlayerEntity) -> i32 {
     if tsd_map_ok == 0 {
         // TODO(phase6c): migrate clif_sendminitext
         clif_sendminitext(pe,
-            b"They are unable to join your party. (Grouping disabled on map)\0".as_ptr() as *const i8);
+            c"They are unable to join your party. (Grouping disabled on map)".as_ptr());
         return 0;
     }
 
     if (*tsd).player.appearance.setting_flags as u32 & FLAG_GROUP == 0 {
         // TODO(phase6c): migrate clif_sendminitext
-        clif_sendminitext(pe, b"They have refused to join your party.\0".as_ptr() as *const i8);
+        clif_sendminitext(pe, c"They have refused to join your party.".as_ptr());
         return 0;
     }
     if (*tsd).group_count != 0 {
         // TODO(phase6c): migrate clif_sendminitext
-        clif_sendminitext(pe, b"They have refused to join your party.\0".as_ptr() as *const i8);
+        clif_sendminitext(pe, c"They have refused to join your party.".as_ptr());
         return 0;
     }
 
@@ -434,7 +442,7 @@ pub unsafe fn clif_addgroup(pe: &PlayerEntity) -> i32 {
         if x == MAX_GROUPS {
             // TODO(phase6c): migrate clif_sendminitext
             clif_sendminitext(pe,
-                b"All groups are currently occupied, please try again later.\0".as_ptr() as *const i8);
+                c"All groups are currently occupied, please try again later.".as_ptr());
             return 0;
         }
         groups_set(x, 0, pe_identity_id);
@@ -465,6 +473,9 @@ pub unsafe fn clif_addgroup(pe: &PlayerEntity) -> i32 {
 // ─── clif_updategroup ─────────────────────────────────────────────────────────
 
 /// Broadcast a group message to all members and refresh their status.  C line 8727.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_updategroup(
     pe:      &PlayerEntity,
     message: *mut i8,
@@ -502,6 +513,9 @@ pub unsafe fn clif_updategroup(
 // ─── clif_leavegroup ──────────────────────────────────────────────────────────
 
 /// Remove the caller from their current group.  C line 8756.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_leavegroup(pe: &PlayerEntity) -> i32 {
     let group_count = pe.read().group_count as usize;
     let groupid     = pe.read().groupid as usize;
@@ -535,7 +549,7 @@ pub unsafe fn clif_leavegroup(pe: &PlayerEntity) -> i32 {
     pe.write().group_count -= 1;
     clif_updategroup(pe, buff.as_mut_ptr());
 
-    let msg_left = b"You have left the group.\0".as_ptr() as *const i8;
+    let msg_left = c"You have left the group.".as_ptr();
     // TODO(phase6c): migrate clif_sendminitext
     clif_sendminitext(pe, msg_left);
 
@@ -548,6 +562,9 @@ pub unsafe fn clif_leavegroup(pe: &PlayerEntity) -> i32 {
 // ─── clif_findmount ───────────────────────────────────────────────────────────
 
 /// Find a mountable mob adjacent to `pe` and fire the onMount script.  C line 8794.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_findmount(pe: &PlayerEntity) -> i32 {
     let (mut x, mut y) = (pe.read().x as i32, pe.read().y as i32);
     match pe.read().player.combat.side {
@@ -577,7 +594,7 @@ pub unsafe fn clif_findmount(pe: &PlayerEntity) -> i32 {
     } else { 0 };
     if can_mount == 0 && pe.read().player.identity.gm_level == 0 {
         // TODO(phase6c): migrate clif_sendminitext
-        clif_sendminitext(pe, b"You cannot mount here.\0".as_ptr() as *const i8);
+        clif_sendminitext(pe, c"You cannot mount here.".as_ptr());
         return 0;
     }
 
@@ -588,6 +605,9 @@ pub unsafe fn clif_findmount(pe: &PlayerEntity) -> i32 {
 // ─── clif_isingroup ───────────────────────────────────────────────────────────
 
 /// Return 1 if `tsd` is in `pe`'s group, 0 otherwise.  C line 9139.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_isingroup(
     pe:  &PlayerEntity,
     tsd: *mut MapSessionData,
@@ -610,6 +630,9 @@ pub unsafe fn clif_isingroup(
 ///
 /// Sets `pe->canmove = 1` if `bl` blocks movement.
 /// C line 9148.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_canmove_sub_inner(
     entity_id: u32,
     pe: &PlayerEntity,
@@ -674,6 +697,9 @@ pub unsafe fn clif_canmove_sub_inner(
 /// Check whether `pe` can move in direction `direct`.  C line 9189.
 ///
 /// Returns `pe->canmove` (0 = blocked by nothing, 1 = something is blocking).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_canmove(
     pe:     &PlayerEntity,
     direct: i32,
@@ -712,21 +738,28 @@ pub unsafe fn clif_canmove(
 
 // ─── clif_mapselect ───────────────────────────────────────────────────────────
 
+/// Map list data passed to `clif_mapselect`.
+pub struct MapSelectData {
+    pub wm:    *const i8,
+    pub x0:    *const i32,
+    pub y0:    *const i32,
+    pub mname: *const *const i8,
+    pub id:    *const u32,
+    pub x1:    *const i32,
+    pub y1:    *const i32,
+    pub i:     i32,
+}
+
 /// Send the map-selection UI to `pe`.  C line 9306.
 ///
 /// # Safety
+///
 /// `x0`, `y0`, `mname`, `id`, `x1`, `y1` must each point to at least `i` valid elements.
 pub unsafe fn clif_mapselect(
-    pe:    &PlayerEntity,
-    wm:    *const i8,
-    x0:    *const i32,
-    y0:    *const i32,
-    mname: *const *const i8,
-    id:    *const u32,
-    x1:    *const i32,
-    y1:    *const i32,
-    i:     i32,
+    pe:   &PlayerEntity,
+    data: MapSelectData,
 ) -> i32 {
+    let MapSelectData { wm, x0, y0, mname, id, x1, y1, i } = data;
     if !session_exists(pe.fd) {
         return 0;
     }
@@ -782,6 +815,9 @@ pub unsafe fn clif_mapselect(
 /// `tsd` is the player being rendered, `pe` is the player whose WFIFO buffer is being written,
 /// `len_ptr` points to `int[2]`: len[0] = byte offset, len[1] = count (mutated in-place).
 /// C line 9352.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_pb_sub_inner(
     tsd: *const MapSessionData,
     pe: &PlayerEntity,
@@ -818,6 +854,9 @@ pub unsafe fn clif_pb_sub_inner(
 // ─── clif_sendpowerboard ──────────────────────────────────────────────────────
 
 /// Send the powerboard (class ranking) to `pe`.  C line 9389.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendpowerboard(pe: &PlayerEntity) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
@@ -855,12 +894,14 @@ pub unsafe fn clif_sendpowerboard(pe: &PlayerEntity) -> i32 {
 // ─── clif_parseparcel ─────────────────────────────────────────────────────────
 
 /// Handle an incoming parcel packet — inform player to see the kingdom messenger.  C line 9412.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parseparcel(pe: &PlayerEntity) -> i32 {
     // TODO(phase6c): migrate clif_sendminitext
     clif_sendminitext(
         pe,
-        b"You should go see your kingdom's messenger to collect this parcel\0".as_ptr()
-            as *const i8,
+        c"You should go see your kingdom's messenger to collect this parcel".as_ptr(),
     );
     0
 }
@@ -868,6 +909,9 @@ pub unsafe fn clif_parseparcel(pe: &PlayerEntity) -> i32 {
 // ─── clif_huntertoggle ────────────────────────────────────────────────────────
 
 /// Toggle hunter mode on/off for `pe` and persist to database.  C line 9419.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn clif_huntertoggle(pe: &PlayerEntity) -> i32 {
     pe.write().hunter = rfifob(pe.fd, 5) as i32;
 
@@ -910,6 +954,9 @@ pub async unsafe fn clif_huntertoggle(pe: &PlayerEntity) -> i32 {
 // ─── clif_sendhunternote ──────────────────────────────────────────────────────
 
 /// Fetch and send the hunter note for a named player.  C line 9468.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn clif_sendhunternote(pe: &PlayerEntity) -> i32 {
     let hname_len = rfifob(pe.fd, 5) as usize;
     let mut huntername = [0i8; 16];

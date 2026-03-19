@@ -15,6 +15,7 @@
 use crate::session::{session_exists, session_set_eof};
 use crate::game::pc::FLAG_EXCHANGE;
 use crate::game::player::entity::PlayerEntity;
+use crate::game::pc::MapSessionData;
 use crate::common::constants::entity::{BL_ALL, BL_MOB, BL_NPC, BL_PC};
 use crate::common::player::inventory::MAX_INVENTORY;
 
@@ -32,7 +33,7 @@ use crate::game::map_parse::player_state::clif_sendstatus;
 use crate::game::block_grid;
 use crate::game::pc::{
     pc_additem, pc_additemnolog,
-    pc_delitem, pc_isinvenspace,
+    pc_delitem, pc_isinvenspace, ItemCustomization,
     pc_readglobalreg,
 };
 use crate::database::item_db;
@@ -66,6 +67,9 @@ unsafe fn string_truncate(buf: &mut [i8], max_len: usize) {
 // ─── clif_exchange_cleanup ───────────────────────────────────────────────────
 
 /// Reset the exchange state on one side.  C lines 9316-9321.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_exchange_cleanup(pe: &PlayerEntity) -> i32 {
     let mut g = pe.write();
     g.exchange.exchange_done = 0;
@@ -77,6 +81,9 @@ pub unsafe fn clif_exchange_cleanup(pe: &PlayerEntity) -> i32 {
 // ─── clif_exchange_message ───────────────────────────────────────────────────
 
 /// Send an exchange status message to one player.  C lines 9389-9412.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_exchange_message(
     pe:      &PlayerEntity,
     message: *const i8,
@@ -100,7 +107,7 @@ pub unsafe fn clif_exchange_message(
     wfifob(pe.fd, 6, extra as u8);
     wfifob(pe.fd, 7, msg_len as u8);
     // copy message bytes into WFIFOP(pe->fd, 8)
-    let dst = wfifop(pe.fd, 8) as *mut u8;
+    let dst = wfifop(pe.fd, 8);
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(message as *const u8, dst, msg_len);
     }
@@ -114,6 +121,9 @@ pub unsafe fn clif_exchange_message(
 // ─── clif_exchange_finalize ──────────────────────────────────────────────────
 
 /// Transfer items/gold between both sides and clean up.  C lines 9323-9387.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_exchange_finalize(
     pe:  &PlayerEntity,
     tpe: &PlayerEntity,
@@ -151,6 +161,9 @@ pub unsafe fn clif_exchange_finalize(
 // ─── clif_exchange_sendok ────────────────────────────────────────────────────
 
 /// Handle one side confirming the exchange.  C lines 9414-9435.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_exchange_sendok(
     pe:  &PlayerEntity,
     tpe: &PlayerEntity,
@@ -158,7 +171,7 @@ pub unsafe fn clif_exchange_sendok(
     if tpe.read().exchange.exchange_done == 1 {
         clif_exchange_finalize(pe, tpe);
 
-        let msg = b"You exchanged, and gave away ownership of the items.\0".as_ptr() as *const i8;
+        let msg = c"You exchanged, and gave away ownership of the items.".as_ptr();
         clif_exchange_message(pe,  msg, 5, 0);
         clif_exchange_message(tpe, msg, 5, 0);
 
@@ -166,7 +179,7 @@ pub unsafe fn clif_exchange_sendok(
         clif_exchange_cleanup(tpe);
     } else {
         pe.write().exchange.exchange_done = 1;
-        let msg = b"You exchanged, and gave away ownership of the items.\0".as_ptr() as *const i8;
+        let msg = c"You exchanged, and gave away ownership of the items.".as_ptr();
         clif_exchange_message(tpe, msg, 5, 1);
         clif_exchange_message(pe,  msg, 5, 1);
     }
@@ -176,12 +189,15 @@ pub unsafe fn clif_exchange_sendok(
 // ─── clif_startexchange ──────────────────────────────────────────────────────
 
 /// Initiate a trade window between two players.  C lines 9545-9634.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_startexchange(
     pe:     &PlayerEntity,
     tpe:    &PlayerEntity,
 ) -> i32 {
     if tpe.id == pe.id {
-        let msg = b"You move your items from one hand to another, but quickly get bored.\0".as_ptr() as *const i8;
+        let msg = c"You move your items from one hand to another, but quickly get bored.".as_ptr();
         clif_sendminitext(pe, msg);
         return 0;
     }
@@ -189,7 +205,7 @@ pub unsafe fn clif_startexchange(
     pe.write().exchange.target  = tpe.id;
     tpe.write().exchange.target = pe.id;
 
-    if tpe.read().player.appearance.setting_flags as u32 & FLAG_EXCHANGE != 0 {
+    if tpe.read().player.appearance.setting_flags & FLAG_EXCHANGE != 0 {
         let mut buff = [0i8; 256];
 
         // Build name string for pe (to send to tpe)
@@ -218,7 +234,7 @@ pub unsafe fn clif_startexchange(
         let mut len: usize = 4;
         let buf_len = libc::strlen(buff.as_ptr());
         wfifob(pe.fd, len + 6, buf_len as u8);
-        let dst = wfifop(pe.fd, len + 7) as *mut u8;
+        let dst = wfifop(pe.fd, len + 7);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(buff.as_ptr() as *const u8, dst, buf_len);
         }
@@ -256,7 +272,7 @@ pub unsafe fn clif_startexchange(
         let mut len: usize = 4;
         let buf_len = libc::strlen(buff.as_ptr());
         wfifob(tpe.fd, len + 6, buf_len as u8);
-        let dst = wfifop(tpe.fd, len + 7) as *mut u8;
+        let dst = wfifop(tpe.fd, len + 7);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(buff.as_ptr() as *const u8, dst, buf_len);
         }
@@ -276,7 +292,7 @@ pub unsafe fn clif_startexchange(
         pe.write().exchange.list_count  = 0;
         tpe.write().exchange.list_count = 1;
     } else {
-        let msg = b"They have refused to exchange with you\0".as_ptr() as *const i8;
+        let msg = c"They have refused to exchange with you".as_ptr();
         clif_sendminitext(pe, msg);
     }
     0
@@ -285,6 +301,9 @@ pub unsafe fn clif_startexchange(
 // ─── clif_exchange_additem_else ──────────────────────────────────────────────
 
 /// Send a real_name (engrave) additem packet once per item.  C lines 9635-9694.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_exchange_additem_else(
     pe:  &PlayerEntity,
     tpe: &PlayerEntity,
@@ -320,7 +339,7 @@ pub unsafe fn clif_exchange_additem_else(
     if !pw.is_null() { pw.write_unaligned(0xFFFF_u16.to_le()); }
     wfifob(pe.fd, len + 10, 0x00);
     wfifob(pe.fd, len + 11, buf_len as u8);
-    let dst = wfifop(pe.fd, len + 12) as *mut u8;
+    let dst = wfifop(pe.fd, len + 12);
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(nameof.as_ptr() as *const u8, dst, buf_len);
     }
@@ -345,7 +364,7 @@ pub unsafe fn clif_exchange_additem_else(
     if !pw2.is_null() { pw2.write_unaligned(0xFFFF_u16.to_le()); }
     wfifob(tpe.fd, 10, 0);
     wfifob(tpe.fd, 11, buf_len as u8);
-    let dst2 = wfifop(tpe.fd, 12) as *mut u8;
+    let dst2 = wfifop(tpe.fd, 12);
     if !dst2.is_null() {
         std::ptr::copy_nonoverlapping(nameof.as_ptr() as *const u8, dst2, buf_len);
     }
@@ -360,6 +379,9 @@ pub unsafe fn clif_exchange_additem_else(
 // ─── clif_exchange_additem ───────────────────────────────────────────────────
 
 /// Add one inventory slot to the exchange offer.  C lines 9696-9851.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_exchange_additem(
     pe:     &PlayerEntity,
     tpe:    &PlayerEntity,
@@ -372,13 +394,12 @@ pub unsafe fn clif_exchange_additem(
     }
     let item_id = pe.read().player.inventory.inventory[slot].id;
 
-    if item_id != 0 {
-        if item_db::search(item_id).exchangeable != 0 {
-            let msg = b"You cannot exchange that.\0".as_ptr() as *const i8;
+    if item_id != 0
+        && item_db::search(item_id).exchangeable != 0 {
+            let msg = c"You cannot exchange that.".as_ptr();
             clif_sendminitext(pe, msg);
             return 0;
         }
-    }
 
     // Check target has inventory space
     let (inv_owner, inv_real_name, inv_custom_look, inv_custom_look_color, inv_custom_icon, inv_custom_icon_color) = {
@@ -387,17 +408,19 @@ pub unsafe fn clif_exchange_additem(
         (inv.owner, inv.real_name, inv.custom_look, inv.custom_look_color, inv.custom_icon, inv.custom_icon_color)
     };
     let space = pc_isinvenspace(
-        tpe.data_ptr(), // TODO(phase6c): migrate
+        &mut *tpe.write() as *mut MapSessionData,
         item_id as i32,
         inv_owner as i32,
-        inv_real_name.as_ptr(),
-        inv_custom_look,
-        inv_custom_look_color,
-        inv_custom_icon,
-        inv_custom_icon_color,
+        ItemCustomization {
+            engrave: inv_real_name.as_ptr(),
+            custom_look: inv_custom_look,
+            custom_look_color: inv_custom_look_color,
+            custom_icon: inv_custom_icon,
+            custom_icon_color: inv_custom_icon_color,
+        },
     );
     if space >= tpe.read().player.inventory.max_inv as i32 {
-        let msg = b"Receiving player does not have enough inventory space.\0".as_ptr() as *const i8;
+        let msg = c"Receiving player does not have enough inventory space.".as_ptr();
         clif_sendminitext(pe, msg);
         return 0;
     }
@@ -444,13 +467,13 @@ pub unsafe fn clif_exchange_additem(
     if amount > 1 {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s(%d)\0".as_ptr() as *const i8,
+            c"%s(%d)".as_ptr(),
             nameof.as_ptr(), amount,
         );
     } else {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s\0".as_ptr() as *const i8,
+            c"%s".as_ptr(),
             nameof.as_ptr(),
         );
     }
@@ -462,31 +485,31 @@ pub unsafe fn clif_exchange_additem(
         } else { 0.0 };
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s (%d%%)\0".as_ptr() as *const i8,
+            c"%s (%d%%)".as_ptr(),
             nameof.as_ptr(), percentage as i32,
         );
     } else if ex_type == ITM_SMOKE {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s [%d %s]\0".as_ptr() as *const i8,
+            c"%s [%d %s]".as_ptr(),
             nameof.as_ptr(), ex_dura, ex_item_data.text.as_ptr(),
         );
     } else if ex_type == ITM_BAG {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s [%d]\0".as_ptr() as *const i8,
+            c"%s [%d]".as_ptr(),
             nameof.as_ptr(), ex_dura,
         );
     } else if ex_type == ITM_MAP {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"[T%d] %s\0".as_ptr() as *const i8,
+            c"[T%d] %s".as_ptr(),
             ex_dura, nameof.as_ptr(),
         );
     } else if ex_type == ITM_QUIVER {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s [%d]\0".as_ptr() as *const i8,
+            c"%s [%d]".as_ptr(),
             nameof.as_ptr(), ex_dura,
         );
     }
@@ -515,7 +538,7 @@ pub unsafe fn clif_exchange_additem(
         wfifob(pe.fd, len + 10, ex_item_data.icon_color as u8);
     }
     wfifob(pe.fd, len + 11, buf_len as u8);
-    let dst = wfifop(pe.fd, len + 12) as *mut u8;
+    let dst = wfifop(pe.fd, len + 12);
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(buff.as_ptr() as *const u8, dst, buf_len);
     }
@@ -534,13 +557,13 @@ pub unsafe fn clif_exchange_additem(
     if amount > 1 {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s (%d)\0".as_ptr() as *const i8,
+            c"%s (%d)".as_ptr(),
             nameof.as_ptr(), amount,
         );
     } else {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s\0".as_ptr() as *const i8,
+            c"%s".as_ptr(),
             nameof.as_ptr(),
         );
     }
@@ -552,31 +575,31 @@ pub unsafe fn clif_exchange_additem(
         } else { 0.0 };
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s (%d%%)\0".as_ptr() as *const i8,
+            c"%s (%d%%)".as_ptr(),
             nameof.as_ptr(), percentage as i32,
         );
     } else if ex_type == ITM_SMOKE {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s [%d %s]\0".as_ptr() as *const i8,
+            c"%s [%d %s]".as_ptr(),
             nameof.as_ptr(), ex_dura, ex_item_data.text.as_ptr(),
         );
     } else if ex_type == ITM_BAG {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s [%d]\0".as_ptr() as *const i8,
+            c"%s [%d]".as_ptr(),
             nameof.as_ptr(), ex_dura,
         );
     } else if ex_type == ITM_MAP {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"[T%d] %s\0".as_ptr() as *const i8,
+            c"[T%d] %s".as_ptr(),
             ex_dura, nameof.as_ptr(),
         );
     } else if ex_type == ITM_QUIVER {
         libc::snprintf(
             buff.as_mut_ptr(), buff.len(),
-            b"%s [%d]\0".as_ptr() as *const i8,
+            c"%s [%d]".as_ptr(),
             nameof.as_ptr(), ex_dura,
         );
     }
@@ -604,7 +627,7 @@ pub unsafe fn clif_exchange_additem(
         wfifob(tpe.fd, 10, ex_item_data.icon_color as u8);
     }
     wfifob(tpe.fd, 11, buf_len as u8);
-    let dst2 = wfifop(tpe.fd, 12) as *mut u8;
+    let dst2 = wfifop(tpe.fd, 12);
     if !dst2.is_null() {
         std::ptr::copy_nonoverlapping(buff.as_ptr() as *const u8, dst2, buf_len);
     }
@@ -627,6 +650,9 @@ pub unsafe fn clif_exchange_additem(
 // ─── clif_exchange_money ─────────────────────────────────────────────────────
 
 /// Broadcast the current gold offer to both sides.  C lines 9853-9904.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_exchange_money(
     pe:  &PlayerEntity,
     tpe: &PlayerEntity,
@@ -681,6 +707,9 @@ pub unsafe fn clif_exchange_money(
 // ─── clif_exchange_close ─────────────────────────────────────────────────────
 
 /// Cancel the exchange and return all held items.  C lines 9906-9926.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_exchange_close(pe: &PlayerEntity) -> i32 {
     pe.write().exchange.target = 0;
 
@@ -696,6 +725,9 @@ pub unsafe fn clif_exchange_close(pe: &PlayerEntity) -> i32 {
 // ─── clif_handgold ───────────────────────────────────────────────────────────
 
 /// Handle a "hand gold" packet — offer gold from adjacent cell.  C lines 9090-9155.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_handgold(pe: &PlayerEntity) -> i32 {
     let gold = {
         // SWAP32(RFIFOL(sd->fd, 5)) — network big-endian
@@ -720,11 +752,11 @@ pub unsafe fn clif_handgold(pe: &PlayerEntity) -> i32 {
             if bl_type as i32 == BL_PC {
                 if let Some(tpe_arc) = crate::game::map_server::map_id2sd_pc(target_id) {
                     let tpe = tpe_arc.as_ref();
-                    if tpe.read().player.appearance.setting_flags as u32 & FLAG_EXCHANGE != 0 {
+                    if tpe.read().player.appearance.setting_flags & FLAG_EXCHANGE != 0 {
                         clif_startexchange(pe, tpe);
                         clif_exchange_money(pe, tpe);
                     } else {
-                        let msg = b"They have refused to exchange with you\0".as_ptr() as *const i8;
+                        let msg = c"They have refused to exchange with you".as_ptr();
                         clif_sendminitext(pe, msg);
                     }
                 }
@@ -737,6 +769,9 @@ pub unsafe fn clif_handgold(pe: &PlayerEntity) -> i32 {
 // ─── clif_handitem ───────────────────────────────────────────────────────────
 
 /// Handle a "hand item" packet — offer/give item from adjacent cell.  C lines 9206-9314.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_handitem(pe: &PlayerEntity) -> i32 {
     let slot      = rfifob(pe.fd, 5).saturating_sub(1) as usize;
     let handgive  = rfifob(pe.fd, 6);
@@ -763,11 +798,11 @@ pub unsafe fn clif_handitem(pe: &PlayerEntity) -> i32 {
     if bl_type == BL_PC {
         if let Some(tpe_arc) = crate::game::map_server::map_id2sd_pc(target_id) {
             let tpe = tpe_arc.as_ref();
-            if tpe.read().player.appearance.setting_flags as u32 & FLAG_EXCHANGE != 0 {
+            if tpe.read().player.appearance.setting_flags & FLAG_EXCHANGE != 0 {
                 clif_startexchange(pe, tpe);
                 clif_exchange_additem(pe, tpe, slot as i32, amount);
             } else {
-                let msg = b"They have refused to exchange with you\0".as_ptr() as *const i8;
+                let msg = c"They have refused to exchange with you".as_ptr();
                 clif_sendminitext(pe, msg);
             }
         }
@@ -834,7 +869,7 @@ pub unsafe fn clif_handitem(pe: &PlayerEntity) -> i32 {
             let mut msg = [0i8; 128];
             libc::snprintf(
                 msg.as_mut_ptr(), msg.len(),
-                b"What are you trying to do? Keep your junky %s with you!\0".as_ptr() as *const i8,
+                c"What are you trying to do? Keep your junky %s with you!".as_ptr(),
                 item_name,
             );
             let msg_len = libc::strlen(msg.as_ptr());
@@ -850,7 +885,7 @@ pub unsafe fn clif_handitem(pe: &PlayerEntity) -> i32 {
                 if !p.is_null() { p.write_unaligned(target_id.to_be()); }
             }
             wfifob(pe.fd, 10, msg_len as u8);
-            let dst = wfifop(pe.fd, 11) as *mut u8;
+            let dst = wfifop(pe.fd, 11);
             if !dst.is_null() {
                 std::ptr::copy_nonoverlapping(msg.as_ptr() as *const u8, dst, msg_len);
             }
@@ -870,11 +905,14 @@ pub unsafe fn clif_handitem(pe: &PlayerEntity) -> i32 {
 // ─── clif_parse_exchange ─────────────────────────────────────────────────────
 
 /// Dispatch incoming exchange sub-packet by type byte.  C lines 9438-9543.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parse_exchange(pe: &PlayerEntity) -> i32 {
     let kind = rfifob(pe.fd, 5) as i32;
 
-    let reg_str = b"goldbardupe\0".as_ptr() as *const i8;
-    let _dupe_times = pc_readglobalreg(pe.data_ptr(), reg_str); // TODO(phase6c): migrate
+    let reg_str = c"goldbardupe".as_ptr();
+    let _dupe_times = pc_readglobalreg(&mut *pe.write() as *mut MapSessionData, reg_str);
     // C has a commented-out quarantine block here; no-op as in C.
 
     match kind {
@@ -977,7 +1015,7 @@ pub unsafe fn clif_parse_exchange(pe: &PlayerEntity) -> i32 {
             // Quit exchange
             let raw = rfifol(pe.fd, 6);
             let target_id = u32::from_be_bytes(raw.to_le_bytes());
-            let msg = b"Exchange cancelled.\0".as_ptr() as *const i8;
+            let msg = c"Exchange cancelled.".as_ptr();
             clif_exchange_message(pe, msg, 4, 0);
             if let Some(tpe_arc) = crate::game::map_server::map_id2sd_pc(target_id) {
                 let tpe = tpe_arc.as_ref();
@@ -999,7 +1037,7 @@ pub unsafe fn clif_parse_exchange(pe: &PlayerEntity) -> i32 {
 
             if pe_exchange_target != target_id {
                 clif_exchange_close(pe);
-                let msg = b"Exchange cancelled.\0".as_ptr() as *const i8;
+                let msg = c"Exchange cancelled.".as_ptr();
                 clif_exchange_message(pe, msg, 4, 0);
                 if let Some(ref arc) = tpe_arc {
                     let tpe = arc.as_ref();
@@ -1011,8 +1049,8 @@ pub unsafe fn clif_parse_exchange(pe: &PlayerEntity) -> i32 {
                 }
                 return 0;
             }
-            let msg_no_gold = b"You do not have that amount.\0".as_ptr() as *const i8;
-            let msg_cancel  = b"Exchange cancelled.\0".as_ptr() as *const i8;
+            let msg_no_gold = c"You do not have that amount.".as_ptr();
+            let msg_cancel  = c"Exchange cancelled.".as_ptr();
             if pe_exchange_gold > pe_money {
                 clif_exchange_message(pe, msg_no_gold, 4, 0);
                 if let Some(ref arc) = tpe_arc {

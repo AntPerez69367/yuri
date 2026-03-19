@@ -4,7 +4,6 @@
 
 /// Map an equipment-type enum value (EQ_*) to the CLIF slot index sent in packets.
 ///
-
 /// EQ_* enum values (from item_db.h, 0-based):
 ///   0=EQ_WEAP, 1=EQ_ARMOR, 2=EQ_SHIELD, 3=EQ_HELM,
 ///   4=EQ_LEFT, 5=EQ_RIGHT, 6=EQ_SUBLEFT, 7=EQ_SUBRIGHT,

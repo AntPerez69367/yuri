@@ -506,6 +506,9 @@ pub fn npc_warp_add(_file: *const i8) -> i32 { 0 }
 // ---------------------------------------------------------------------------
 
 /// Loads warp data from the `Warps` table into the map grid.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn warp_init_async() -> i32 {
     let p = get_pool();
 
@@ -552,17 +555,17 @@ pub async unsafe fn warp_init_async() -> i32 {
 
         // Check destination coords too (log only, don't skip — matches C behavior)
         let md_dst = &*get_map_ptr(row.dst_map as u16);
-        if row.dst_x as i32 > md_dst.xs as i32 - 1 || row.dst_y as i32 > md_dst.ys as i32 - 1 {
+        if row.dst_x > md_dst.xs as i32 - 1 || row.dst_y > md_dst.ys as i32 - 1 {
             tracing::error!("[warp] map id: {}, x: {}, y: {}, destination out of bounds",
                 row.dst_map, row.dst_x, row.dst_y);
         }
 
         let war = Box::new(WarpList {
-            x:    row.src_x as i32,
-            y:    row.src_y as i32,
-            tm:   row.dst_map as i32,
-            tx:   row.dst_x as i32,
-            ty:   row.dst_y as i32,
+            x:    row.src_x,
+            y:    row.src_y,
+            tm:   row.dst_map,
+            tx:   row.dst_x,
+            ty:   row.dst_y,
             next: std::ptr::null_mut(),
             prev: std::ptr::null_mut(),
         });
@@ -589,6 +592,9 @@ pub async unsafe fn warp_init_async() -> i32 {
 }
 
 /// Blocking wrapper. Must be called after the sqlx pool is initialized.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn warp_init() -> i32 {
     blocking_run_async(crate::database::assert_send(async { unsafe { warp_init_async().await } }))
 }
@@ -612,6 +618,9 @@ fn copy_str_to_array<const N: usize>(s: &str, dst: &mut [i8; N]) {
 /// Async implementation of npc_init. Loads all NPCs from DB, allocates NpcData
 /// structs, registers them in the block grid, then loads equipment for npctype==1.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn npc_init_async() -> i32 {
     let p = get_pool();
     let sid = server_id();
@@ -827,6 +836,9 @@ pub async unsafe fn npc_init_async() -> i32 {
 }
 
 /// Blocking wrapper. Must be called after the sqlx pool is initialized.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn npc_init() -> i32 {
     blocking_run_async(crate::database::assert_send(async { unsafe { npc_init_async().await } }))
 }
@@ -1037,7 +1049,7 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> i32 {
                 if nd.npctype == 1 {
                     for &id in &rect_ids {
                         if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_cnpclook(&*nd, &*pc_arc.read());
+                            clif_cnpclook(&*nd, &pc_arc.read());
                         }
                     }
                 } else {
@@ -1164,50 +1176,86 @@ mod tests {
 
 // npc_init, warp_init, and npc_runtimers are on the original function definitions above.
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn npc_action_ffi(nd: *mut NpcData) -> i32 {
     npc_action(nd)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn npc_movetime_ffi(nd: *mut NpcData) -> i32 {
     npc_movetime(nd)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn npc_duration_ffi(nd: *mut NpcData) -> i32 {
     npc_duration(nd)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn npc_warp_ffi(nd: *mut NpcData, m: i32, x: i32, y: i32) -> i32 {
     npc_warp(nd, m, x, y)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn npc_move_ffi(nd: *mut NpcData) -> i32 {
     npc_move(nd)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn npc_readglobalreg_ffi(nd: *mut NpcData, reg: *const i8) -> i32 {
     npc_readglobalreg(nd, reg)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn npc_setglobalreg_ffi(nd: *mut NpcData, reg: *const i8, val: i32) -> i32 {
     npc_setglobalreg(nd, reg, val)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn npc_idlower_ffi(id: i32) -> i32 {
     npc_idlower(id)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn npc_src_clear_ffi() -> i32 {
     npc_src_clear()
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn npc_src_add_ffi(f: *const i8) -> i32 {
     npc_src_add(f)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn npc_warp_add_ffi(f: *const i8) -> i32 {
     npc_warp_add(f)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn npc_get_new_npctempid_ffi() -> u32 {
     npc_get_new_npctempid()
 }

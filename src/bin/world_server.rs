@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
     let config: ServerConfig = {
         let content = std::fs::read_to_string(&conf_file)
             .with_context(|| format!("Cannot read config: {}", conf_file))?;
-        ServerConfig::from_str(&content)
+        ServerConfig::from_yaml_str(&content)
             .with_context(|| format!("Cannot parse config: {}", conf_file))?
     };
 

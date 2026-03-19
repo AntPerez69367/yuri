@@ -203,12 +203,12 @@ impl UserData for FloorListObject {
                 }
                 "delete" => {
                     let id = entity_id;
-                    return Ok(mlua::Value::Function(lua.create_function(
+                    Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
                             crate::game::scripting::map_globals::sl_fl_delete(id);
                             Ok(())
                         }
-                    )?));
+                    )?))
                 }
                 _ => {
                     let db = crate::database::item_db::search(fl_ref.data.id);

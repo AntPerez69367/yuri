@@ -91,6 +91,9 @@ use crate::common::constants::entity::player::OPT_FLAG_WALKTHROUGH;
 ///   [5]      = 0x06
 ///   [6]      = 0x00
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendack(pe: &PlayerEntity) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
@@ -114,6 +117,9 @@ pub unsafe fn clif_sendack(pe: &PlayerEntity) -> i32 {
 
 /// Send the profile retrieval trigger packet.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_retrieveprofile(pe: &PlayerEntity) -> i32 {
     let fd = pe.fd;
     wfifob(fd, 0, 0xAA);
@@ -130,6 +136,9 @@ pub unsafe fn clif_retrieveprofile(pe: &PlayerEntity) -> i32 {
 
 /// Send the AFK / screensaver state packet.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_screensaver(pe: &PlayerEntity, screen: i32) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
@@ -162,6 +171,9 @@ pub unsafe fn clif_screensaver(pe: &PlayerEntity, screen: i32) -> i32 {
 ///   [5]    = cur_time
 ///   [6]    = cur_year
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendtime(pe: &PlayerEntity) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
@@ -194,6 +206,9 @@ pub unsafe fn clif_sendtime(pe: &PlayerEntity) -> i32 {
 ///   [13]     = 0x03
 ///   [14..15] = BE u16 0x0000
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendid(pe: &PlayerEntity) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
@@ -222,8 +237,12 @@ pub unsafe fn clif_sendid(pe: &PlayerEntity) -> i32 {
 /// Builds two packets:
 ///   1. Map header packet (0x15): map id, xs, ys, spell/realm flags, title string, light value.
 ///   2. BGM packet (0x19): bgm type, bgm id × 2, setting flags.
+///
 /// Followed by a call to `clif_sendweather` (still in C).
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendmapinfo(pe: &PlayerEntity) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
@@ -257,10 +276,10 @@ pub unsafe fn clif_sendmapinfo(pe: &PlayerEntity) -> i32 {
     wfifow(fd, 7, md.xs.swap_bytes());
     wfifow(fd, 9, md.ys.swap_bytes());
     // spell/weather flag at [11]
-    let spell_flag: u8 = if setting_flags as u32 & FLAG_WEATHER != 0 { 4 } else { 5 };
+    let spell_flag: u8 = if setting_flags & FLAG_WEATHER != 0 { 4 } else { 5 };
     wfifob(fd, 11, spell_flag);
     // realm flag at [12]
-    let realm_flag: u8 = if setting_flags as u32 & FLAG_REALM != 0 { 0x01 } else { 0x00 };
+    let realm_flag: u8 = if setting_flags & FLAG_REALM != 0 { 0x01 } else { 0x00 };
     wfifob(fd, 12, realm_flag);
     // title length at [13], then title bytes at [14..14+len]
     wfifob(fd, 13, len);
@@ -295,7 +314,7 @@ pub unsafe fn clif_sendmapinfo(pe: &PlayerEntity) -> i32 {
     wfifob(fd, 11, 0x64);
     // SWAP32(sd->status.settingFlags) — C accesses the 4-byte unsigned int field.
     // Rust stores it as u16; zero-extend to u32 for the wire format.
-    wfifol(fd, 12, (setting_flags as u32).swap_bytes());
+    wfifol(fd, 12, setting_flags.swap_bytes());
     wfifob(fd, 16, 0);
     wfifob(fd, 17, 0);
     wfifoset(fd, encrypt(fd) as usize);
@@ -310,6 +329,9 @@ pub unsafe fn clif_sendmapinfo(pe: &PlayerEntity) -> i32 {
 /// Writes absolute position and computes the viewport offset depending on
 /// whether the map is larger than the 16 × 14 client viewport.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendxy(pe: &PlayerEntity) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
@@ -359,7 +381,7 @@ pub unsafe fn clif_sendxy(pe: &PlayerEntity) -> i32 {
     wfifob(fd, 13, 0x00);
     wfifoset(fd, encrypt(fd) as usize);
 
-    crate::game::pc::pc_runfloor_sub(pe.data_ptr()); // TODO(phase6c): migrate
+    crate::game::pc::pc_runfloor_sub(&mut *pe.write() as *mut MapSessionData);
     0
 }
 
@@ -371,6 +393,9 @@ pub unsafe fn clif_sendxy(pe: &PlayerEntity) -> i32 {
 /// meaningful to the caller — no "click" flag is present in either packet
 /// variant (both write 0x00 at [13]).
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendxynoclick(pe: &PlayerEntity) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
@@ -410,7 +435,7 @@ pub unsafe fn clif_sendxynoclick(pe: &PlayerEntity) -> i32 {
     wfifob(fd, 13, 0x00);
     wfifoset(fd, encrypt(fd) as usize);
 
-    crate::game::pc::pc_runfloor_sub(pe.data_ptr()); // TODO(phase6c): migrate
+    crate::game::pc::pc_runfloor_sub(&mut *pe.write() as *mut MapSessionData);
     0
 }
 
@@ -421,6 +446,9 @@ pub unsafe fn clif_sendxynoclick(pe: &PlayerEntity) -> i32 {
 /// Adjusts `dx`/`dy` to prevent the viewport from scrolling off the map edge,
 /// then stores the resulting offsets in `sd->viewx`/`sd->viewy`.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendxychange(pe: &PlayerEntity, dx: i32, dy: i32) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
@@ -471,12 +499,15 @@ pub unsafe fn clif_sendxychange(pe: &PlayerEntity, dx: i32, dy: i32) -> i32 {
 /// `flags` is a bitmask of `SFLAG_*` values.  `SFLAG_ALWAYSON` is always
 /// added; `SFLAG_GMON` is added for GMs who are walking-through.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendstatus(pe: &PlayerEntity, flags: i32) -> i32 {
     let mut f = flags | SFLAG_ALWAYSON;
 
     // XP percentage — delegate to visual (map_parse.c) which computes the percentage
     // within the current level band using classdb_level DB lookups.
-    let percentage: f32 = clif_getXPBarPercent(pe) as f32;
+    let percentage: f32 = clif_getXPBarPercent(pe);
 
     {
         let sd = pe.read();
@@ -492,7 +523,7 @@ pub unsafe fn clif_sendstatus(pe: &PlayerEntity, flags: i32) -> i32 {
 
     wfifohead(fd, 63);
     wfifob(fd, 0, 0xAA);
-    wfifob(fd, 3, OUT_STATUS as u8);
+    wfifob(fd, 3, OUT_STATUS);
     wfifob(fd, 5, f as u8);
 
     let mut len: usize = 0;
@@ -549,7 +580,7 @@ pub unsafe fn clif_sendstatus(pe: &PlayerEntity, flags: i32) -> i32 {
         wfifob(fd, len + 10, 0);
         wfifob(fd, len + 11, sd.flags as u8); // 1=New parcel, 16=new Message
         wfifob(fd, len + 12, 0);              // nothing
-        wfifol(fd, len + 13, (sd.player.appearance.setting_flags as u32).swap_bytes());
+        wfifol(fd, len + 13, sd.player.appearance.setting_flags.swap_bytes());
     }
     len += 11;
 
@@ -571,12 +602,15 @@ pub unsafe fn clif_sendstatus(pe: &PlayerEntity, flags: i32) -> i32 {
 /// Send the client option flags (weather, magic, advice, fastmove, sound,
 /// helm, realm) to the player.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendoptions(pe: &PlayerEntity) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
     }
     let fd = pe.fd;
-    let sf = pe.read().player.appearance.setting_flags as u32;
+    let sf = pe.read().player.appearance.setting_flags;
 
     wfifohead(fd, 12);
     wfifob(fd, 0, 0xAA);
@@ -608,6 +642,9 @@ pub unsafe fn clif_sendoptions(pe: &PlayerEntity) -> i32 {
 ///   - Exchange / group flags
 ///   - Legend entries (icon, color, text — with optional $player substitution)
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn clif_mystaytus(pe: &PlayerEntity) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
@@ -616,8 +653,7 @@ pub async unsafe fn clif_mystaytus(pe: &PlayerEntity) -> i32 {
     // Clamp armor (write, then drop guard).
     {
         let mut sd = pe.write();
-        if sd.armor < -127 { sd.armor = -127; }
-        if sd.armor >  127 { sd.armor =  127; }
+        sd.armor = sd.armor.clamp(-127, 127);
     }
 
     // Compute TNL (to-next-level) — drop guard before calling external function.
@@ -717,7 +753,7 @@ pub async unsafe fn clif_mystaytus(pe: &PlayerEntity) -> i32 {
     }
 
     // ── Group flag ────────────────────────────────────────────────────────────
-    let sf = pe.read().player.appearance.setting_flags as u32;
+    let sf = pe.read().player.appearance.setting_flags;
     wfifob(fd, 8 + len, if sf & FLAG_GROUP != 0 { 1 } else { 0 });
 
     // ── TNL (u32 BE) ──────────────────────────────────────────────────────────
@@ -730,7 +766,7 @@ pub async unsafe fn clif_mystaytus(pe: &PlayerEntity) -> i32 {
         let cn_len = cn_bytes.len();
         if cn_len > 0 {
             wfifob(fd, 8 + len, cn_len as u8);
-            let dst = wfifop(fd, 9 + len) as *mut u8;
+            let dst = wfifop(fd, 9 + len);
             if !dst.is_null() {
                 std::ptr::copy_nonoverlapping(cn_bytes.as_ptr(), dst, cn_len);
             }
@@ -905,7 +941,7 @@ pub fn clif_mystaytus_by_addr(sd_usize: usize) -> ClIfMystaytus {
         inner: Box::pin(async move {
             let id = unsafe { (*(sd_usize as *const MapSessionData)).id };
             if let Some(pe_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                unsafe { clif_mystaytus(&*pe_arc).await }
+                unsafe { clif_mystaytus(&pe_arc).await }
             } else {
                 0
             }
@@ -918,6 +954,9 @@ pub fn clif_mystaytus_by_addr(sd_usize: usize) -> ClIfMystaytus {
 /// Trigger an area scan to send all nearby PC, NPC, and MOB looks to the
 /// player.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_getchararea(pe: &PlayerEntity) -> i32 {
     let sd_guard = pe.read();
     let m = sd_guard.m as i32;
@@ -929,11 +968,11 @@ pub unsafe fn clif_getchararea(pe: &PlayerEntity) -> i32 {
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_charlook(&*pc_arc.read(), sd_ref);
+                clif_charlook(&pc_arc.read(), sd_ref);
             } else if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(id) {
-                clif_cnpclook(&*npc_arc.read(), sd_ref);
+                clif_cnpclook(&npc_arc.read(), sd_ref);
             } else if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(id) {
-                clif_cmoblook(&*mob_arc.read(), sd_ref);
+                clif_cmoblook(&mob_arc.read(), sd_ref);
             }
         }
     }
@@ -949,6 +988,9 @@ pub unsafe fn clif_getchararea(pe: &PlayerEntity) -> i32 {
 /// groups and the player has GROUP enabled, it is disabled and the group is
 /// disbanded.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_refresh(pe: &PlayerEntity) -> i32 {
     clif_sendmapinfo(pe);
     clif_sendxy(pe);
@@ -1019,6 +1061,9 @@ pub unsafe fn clif_refresh(pe: &PlayerEntity) -> i32 {
 /// which only captures the low byte of the big-endian value.  This is an
 /// existing C bug; we replicate it faithfully.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendminimap(pe: &PlayerEntity) -> i32 {
     let fd = pe.fd;
     let m = pe.read().m;
@@ -1028,7 +1073,7 @@ pub unsafe fn clif_sendminimap(pe: &PlayerEntity) -> i32 {
     wfifob(fd, 2, 0x06);
     wfifob(fd, 3, 0x70);
     // C writes SWAP16(sd->bl.m) into a u8 slot — captures only the low byte of BE form.
-    wfifob(fd, 4, (m as u16).swap_bytes() as u8);
+    wfifob(fd, 4, m.swap_bytes() as u8);
     wfifob(fd, 5, 0x00);
     wfifoset(fd, encrypt(fd) as usize);
     0

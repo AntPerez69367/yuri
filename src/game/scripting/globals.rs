@@ -9,7 +9,7 @@ use crate::database::map_db::get_map_ptr;
 use crate::common::constants::entity::{BL_PC, BL_MOB, BL_NPC, BL_ITEM, BL_ALL};
 use crate::game::map_server::{cur_year, cur_season, cur_day, cur_time, map_changepostcolor};
 use crate::game::map_parse::chat::{clif_broadcast, clif_gmbroadcast};
-use crate::game::scripting::map_globals::{sl_g_setmap, sl_g_throw, sl_g_sendmeta};
+use crate::game::scripting::map_globals::{sl_g_setmap, sl_g_throw, sl_g_sendmeta, ThrowVisuals, MapSettings};
 
 
 /// Register all 91 Lua globals on the given Lua state.
@@ -84,13 +84,13 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("broadcast", lua.create_function(|_, (m, msg): (i32, String)| {
         let cmsg = CString::new(msg).map_err(mlua::Error::external)?;
-        unsafe { clif_broadcast(cmsg.as_ptr(), m as i32); }
+        unsafe { clif_broadcast(cmsg.as_ptr(), m); }
         Ok(())
     })?)?;
 
     g.set("gmbroadcast", lua.create_function(|_, (m, msg): (i32, String)| {
         let cmsg = CString::new(msg).map_err(mlua::Error::external)?;
-        unsafe { clif_gmbroadcast(cmsg.as_ptr(), m as i32); }
+        unsafe { clif_gmbroadcast(cmsg.as_ptr(), m); }
         Ok(())
     })?)?;
 
@@ -140,7 +140,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("getObjectsMap", lua.create_function(|lua, _: mlua::MultiValue| {
         // Not implemented in the original C either (commented out).
-        Ok(lua.create_table()?)
+        lua.create_table()
     })?)?;
 
     g.set("getObject", lua.create_function(|_, (m, x, y): (i32, i32, i32)| {
@@ -255,7 +255,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("setWeatherM", lua.create_async_function(|_, (m, w): (i32, i32)| async move {
-        unsafe { crate::game::scripting::map_globals::sl_g_setweatherm(m as i32, w as u8).await; }
+        unsafe { crate::game::scripting::map_globals::sl_g_setweatherm(m, w as u8).await; }
         Ok(())
     })?)?;
 
@@ -307,7 +307,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("setMapRegistry", lua.create_async_function(|_, (m, key, val): (i32, String, i32)| async move {
-        unsafe { crate::game::map_server::map_setglobalreg_str(m as i32, key, val as i32).await; }
+        unsafe { crate::game::map_server::map_setglobalreg_str(m, key, val).await; }
         Ok(())
     })?)?;
 
@@ -402,12 +402,26 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         let ctitle   = CString::new(vs(&args, 2)).map_err(mlua::Error::external)?;
         unsafe {
             sl_g_setmap(
-                vi(&args, 0), cmapfile.as_ptr(), ctitle.as_ptr(),
-                vi(&args, 3), vi(&args, 4), vi(&args, 5), vi(&args, 6),
-                vi(&args, 7) as u8, vi(&args, 8),
-                vi(&args, 9), vi(&args, 10), vi(&args, 11),
-                vi(&args, 12), vi(&args, 13), vi(&args, 14),
-                vi(&args, 15), vi(&args, 16), vi(&args, 17), vi(&args, 18),
+                vi(&args, 0), cmapfile.as_ptr(),
+                MapSettings {
+                    title:       ctitle.as_ptr(),
+                    bgm:         vi(&args, 3),
+                    bgmtype:     vi(&args, 4),
+                    pvp:         vi(&args, 5),
+                    spell:       vi(&args, 6),
+                    light:       vi(&args, 7) as u8,
+                    weather:     vi(&args, 8),
+                    sweeptime:   vi(&args, 9),
+                    cantalk:     vi(&args, 10),
+                    show_ghosts: vi(&args, 11),
+                    region:      vi(&args, 12),
+                    indoor:      vi(&args, 13),
+                    warpout:     vi(&args, 14),
+                    bind:        vi(&args, 15),
+                    reqlvl:      vi(&args, 16),
+                    reqvita:     vi(&args, 17),
+                    reqmana:     vi(&args, 18),
+                },
             );
         }
         Ok(())
@@ -417,7 +431,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // setPostColor / throw / saveMap
     // -----------------------------------------------------------------------
     g.set("setPostColor", lua.create_async_function(|_, (board, post, color): (i32, i32, i32)| async move {
-        unsafe { map_changepostcolor(board as i32, post as i32, color as i32).await };
+        unsafe { map_changepostcolor(board, post, color).await };
         Ok(())
     })?)?;
 
@@ -426,7 +440,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
         unsafe {
             sl_g_throw(
                 vi(&args, 0), vi(&args, 1), vi(&args, 2), vi(&args, 3),
-                vi(&args, 4), vi(&args, 5), vi(&args, 6), vi(&args, 7), vi(&args, 8),
+                ThrowVisuals { x2: vi(&args, 4), y2: vi(&args, 5), icon: vi(&args, 6), color: vi(&args, 7), action: vi(&args, 8) },
             );
         }
         Ok(())
@@ -505,7 +519,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set("getWarps", lua.create_function(|lua, _m: i32| {
         tracing::warn!("[scripting] getWarps: not yet implemented");
-        Ok(lua.create_table()?)
+        lua.create_table()
     })?)?;
 
     // -----------------------------------------------------------------------
@@ -591,7 +605,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("getMapModifiers", lua.create_function(|lua, _: i32| {
         tracing::warn!("[scripting] getMapModifiers: not yet implemented");
-        Ok(lua.create_table()?)
+        lua.create_table()
     })?)?;
 
     g.set("addMapModifier", lua.create_async_function(|_, (mapid, modifier, value): (u32, String, i32)| async move {
@@ -731,7 +745,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("getClanRoster", lua.create_function(|lua, _: i32| {
         tracing::warn!("[scripting] getClanRoster: not yet implemented");
-        Ok(lua.create_table()?)
+        lua.create_table()
     })?)?;
 
     // -----------------------------------------------------------------------
@@ -867,21 +881,21 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     // -----------------------------------------------------------------------
     g.set("addToBoard",          lua.create_function(|_, _: mlua::MultiValue| { tracing::warn!("[scripting] addToBoard: not yet implemented"); Ok(()) })?)?;
     g.set("selectBulletinBoard", lua.create_function(|_, _: mlua::MultiValue| { tracing::warn!("[scripting] selectBulletinBoard: not yet implemented"); Ok(()) })?)?;
-    g.set("getPoems",            lua.create_function(|lua, _: mlua::MultiValue| { tracing::warn!("[scripting] getPoems: not yet implemented"); Ok(lua.create_table()?) })?)?;
+    g.set("getPoems",            lua.create_function(|lua, _: mlua::MultiValue| { tracing::warn!("[scripting] getPoems: not yet implemented"); lua.create_table() })?)?;
     g.set("clearPoems",          lua.create_function(|_, _: mlua::MultiValue| { tracing::warn!("[scripting] clearPoems: not yet implemented"); Ok(()) })?)?;
     g.set("copyPoemToPoetry",    lua.create_function(|_, _: mlua::MultiValue| { tracing::warn!("[scripting] copyPoemToPoetry: not yet implemented"); Ok(()) })?)?;
 
     // -----------------------------------------------------------------------
     // Auction (stubs)
     // -----------------------------------------------------------------------
-    g.set("getAuctions",   lua.create_function(|lua, _: mlua::MultiValue| { tracing::warn!("[scripting] getAuctions: not yet implemented"); Ok(lua.create_table()?) })?)?;
+    g.set("getAuctions",   lua.create_function(|lua, _: mlua::MultiValue| { tracing::warn!("[scripting] getAuctions: not yet implemented"); lua.create_table() })?)?;
     g.set("listAuction",   lua.create_function(|_, _: mlua::MultiValue| { tracing::warn!("[scripting] listAuction: not yet implemented"); Ok(()) })?)?;
     g.set("removeAuction", lua.create_function(|_, _: mlua::MultiValue| { tracing::warn!("[scripting] removeAuction: not yet implemented"); Ok(()) })?)?;
 
     // -----------------------------------------------------------------------
     // getSetItems (stub) / guitext (no-op, commented out in C too)
     // -----------------------------------------------------------------------
-    g.set("getSetItems", lua.create_function(|lua, _: mlua::MultiValue| { tracing::warn!("[scripting] getSetItems: not yet implemented"); Ok(lua.create_table()?) })?)?;
+    g.set("getSetItems", lua.create_function(|lua, _: mlua::MultiValue| { tracing::warn!("[scripting] getSetItems: not yet implemented"); lua.create_table() })?)?;
     g.set("guitext",     lua.create_function(|_, _: mlua::MultiValue| Ok(()))?)?;
 
     Ok(())

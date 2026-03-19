@@ -86,7 +86,7 @@ pub fn populate_table(name: &[u8], table: &mut [u8]) -> bool {
 ///   [1..2] updated to new big-endian length
 pub fn set_packet_indexes(packet: &mut [u8]) -> usize {
     // USE_RANDOM_INDEXES is defined — use fixed deterministic values.
-    let k1: u8 = (0x1337usize & 0x7FFF % 0x9B + 0x64) as u8 ^ 0x21;
+    let k1: u8 = (0x1337usize & (0x7FFF % 0x9B + 0x64)) as u8 ^ 0x21;
     let k2: u16 = ((0x1337usize & 0x7FFF) as u16 + 0x100) ^ 0x7424;
 
     let psize = ((packet[1] as usize) << 8) | (packet[2] as usize);
@@ -349,8 +349,8 @@ pub unsafe fn send_meta(sd: *mut crate::game::pc::MapSessionData) -> i32 {
     let fd = (*sd).fd;
     let name_len = rfifob(fd, 6) as usize;
     let mut buf = vec![0u8; name_len];
-    for i in 0..name_len {
-        buf[i] = rfifob(fd, 7 + i);
+    for (i, byte) in buf.iter_mut().enumerate().take(name_len) {
+        *byte = rfifob(fd, 7 + i);
     }
     let file = String::from_utf8_lossy(&buf).into_owned();
     send_metafile_impl(fd, &file);
@@ -480,6 +480,9 @@ pub fn crypt_is_key_server(opcode: i32) -> bool {
 }
 
 /// Generates an MD5 hex digest of `name` into `buffer` (must be ≥33 bytes).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn crypt_generate_hashvalues(
     name: *const i8,
     buffer: *mut i8,
@@ -494,6 +497,9 @@ pub unsafe fn crypt_generate_hashvalues(
 }
 
 /// Builds the 1025-byte encryption lookup table from `name`.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn crypt_populate_table(
     name: *const i8,
     table: *mut i8,
@@ -508,6 +514,9 @@ pub unsafe fn crypt_populate_table(
 }
 
 /// Appends 3 index bytes to `packet` and updates its length field.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn crypt_set_packet_indexes(packet: *mut u8) -> i32 {
     if packet.is_null() { return 0; }
     let psize = ((*packet.add(1) as usize) << 8) | (*packet.add(2) as usize);
@@ -518,6 +527,9 @@ pub unsafe fn crypt_set_packet_indexes(packet: *mut u8) -> i32 {
 }
 
 /// Derives a 9-byte session key into `keyout[0..10]` (NUL at [9]).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn crypt_generate_key2(
     packet: *mut u8,
     table: *const i8,
@@ -539,16 +551,22 @@ pub unsafe fn crypt_generate_key2(
 }
 
 /// XOR-encrypts/decrypts `buff` in-place using a 9-byte `key`.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn crypt_dynamic(buff: *mut u8, key: *const i8) {
     if buff.is_null() || key.is_null() { return; }
     let total = ((*buff.add(1) as usize) << 8) | (*buff.add(2) as usize);
-    if total < 5 || total > RFIFO_SIZE { return; }
+    if !(5..=RFIFO_SIZE).contains(&total) { return; }
     let buf = slice::from_raw_parts_mut(buff, total);
     let key_bytes = slice::from_raw_parts(key as *const u8, 9);
     tk_crypt_dynamic(buf, key_bytes);
 }
 
 /// XOR-encrypts/decrypts `buff` using the static xor_key.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn crypt_static(buff: *mut u8, xor_key: *const i8) {
     crypt_dynamic(buff, xor_key);
 }

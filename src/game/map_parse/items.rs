@@ -8,13 +8,13 @@ use crate::database::map_db::raw_map_ptr;
 use crate::session::session_exists;
 use crate::game::mob::MOB_DEAD;
 use crate::game::pc::{
-    MapSessionData,
     BL_PC,
     EQ_WEAP, EQ_ARMOR, EQ_SHIELD, EQ_HELM, EQ_LEFT, EQ_RIGHT,
     EQ_SUBLEFT, EQ_SUBRIGHT, EQ_FACEACC, EQ_CROWN, EQ_MANTLE, EQ_NECKLACE, EQ_BOOTS, EQ_COAT,
     SFLAG_FULLSTATS, SFLAG_HPMP, SFLAG_XPMONEY,
     map_msg,
 };
+use crate::game::pc::MapSessionData;
 use crate::game::player::entity::PlayerEntity;
 
 // MAP_EQ* message indices
@@ -45,6 +45,7 @@ const SCRIPT: u8 = 0;
 use crate::game::map_parse::player_state::clif_sendstatus;
 use crate::game::map_parse::chat::{clif_sendmsg, clif_sendminitext};
 use crate::game::client::visual::{clif_getequiptype, broadcast_update_state};
+use crate::game::client::BroadcastSrc;
 use crate::game::map_parse::combat::clif_sendaction_pc;
 use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from};
 use crate::game::map_server::{map_id2name, map_additem};
@@ -96,6 +97,9 @@ unsafe fn sprintf_buf(dst: &mut [i8; 128], fmt: &[u8], arg: *const i8) {
 
 /// Validate inventory on death: break or restore items as needed.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_checkinvbod(pe: &PlayerEntity) -> i32 {
     for x in 0..MAX_INVENTORY {
         pe.write().invslot = x as u8;
@@ -126,7 +130,7 @@ pub unsafe fn clif_checkinvbod(pe: &PlayerEntity) -> i32 {
                 libc::snprintf(
                     buf.as_mut_ptr(),
                     256,
-                    b"Your %s has been restored!\0".as_ptr().cast(),
+                    c"Your %s has been restored!".as_ptr(),
                     item.name.as_ptr(),
                 );
                 clif_sendstatus(pe, SFLAG_FULLSTATS | SFLAG_HPMP);
@@ -151,7 +155,7 @@ pub unsafe fn clif_checkinvbod(pe: &PlayerEntity) -> i32 {
             libc::snprintf(
                 buf.as_mut_ptr(),
                 256,
-                b"Your %s was destroyed!\0".as_ptr().cast(),
+                c"Your %s was destroyed!".as_ptr(),
                 item.name.as_ptr(),
             );
             sl_doscript_simple("characterLog", Some("invBreak"), pe.id);
@@ -177,6 +181,9 @@ pub unsafe fn clif_checkinvbod(pe: &PlayerEntity) -> i32 {
 
 /// Remove an item from the client inventory view.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_senddelitem(pe: &PlayerEntity, num: i32, r#type: i32) -> i32 {
     let n = num as usize;
     {
@@ -218,6 +225,9 @@ pub unsafe fn clif_senddelitem(pe: &PlayerEntity, num: i32, r#type: i32) -> i32 
 
 /// Send an inventory item to the client.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendadditem(pe: &PlayerEntity, num: i32) -> i32 {
     let n = num as usize;
     let id = pe.read().player.inventory.inventory[n].id;
@@ -237,7 +247,7 @@ pub unsafe fn clif_sendadditem(pe: &PlayerEntity, num: i32) -> i32 {
 
     let item = item_db::search(id);
     let item_name = item.name.as_ptr();
-    if id > 0 && strcasecmp_rs(item_name, b"??\0".as_ptr()) == 0 {
+    if id > 0 && strcasecmp_rs(item_name, c"??".as_ptr() as *const u8) == 0 {
         pe.write().player.inventory.inventory[n] = blank_item;
         return 0;
     }
@@ -265,37 +275,37 @@ pub unsafe fn clif_sendadditem(pe: &PlayerEntity, num: i32) -> i32 {
         if amount > 1 {
             libc::snprintf(
                 buf.as_mut_ptr(), 128,
-                b"%s (%d)\0".as_ptr().cast(),
+                c"%s (%d)".as_ptr(),
                 name_ptr, amount,
             );
         } else if item_type == 2 {
             libc::snprintf(
                 buf.as_mut_ptr(), 128,
-                b"%s [%d %s]\0".as_ptr().cast(),
+                c"%s [%d %s]".as_ptr(),
                 name_ptr, dura, item.text.as_ptr(),
             );
         } else if item_type == 21 {
             libc::snprintf(
                 buf.as_mut_ptr(), 128,
-                b"%s [%d]\0".as_ptr().cast(),
+                c"%s [%d]".as_ptr(),
                 name_ptr, dura,
             );
         } else if item_type == 22 {
             libc::snprintf(
                 buf.as_mut_ptr(), 128,
-                b"[T%d] %s\0".as_ptr().cast(),
+                c"[T%d] %s".as_ptr(),
                 dura, name_ptr,
             );
         } else if item_type == 23 {
             libc::snprintf(
                 buf.as_mut_ptr(), 128,
-                b"%s [%d]\0".as_ptr().cast(),
+                c"%s [%d]".as_ptr(),
                 name_ptr, dura,
             );
         } else {
             libc::snprintf(
                 buf.as_mut_ptr(), 128,
-                b"%s\0".as_ptr().cast(),
+                c"%s".as_ptr(),
                 name_ptr,
             );
         }
@@ -320,7 +330,7 @@ pub unsafe fn clif_sendadditem(pe: &PlayerEntity, num: i32) -> i32 {
     }
 
     // display name
-    let buf_len = strlen_cstr(buf.as_ptr()) as usize;
+    let buf_len = strlen_cstr(buf.as_ptr());
     wfifob(fd, 9, buf_len as u8);
     {
         let dst = wfifop(fd, 10);
@@ -350,7 +360,7 @@ pub unsafe fn clif_sendadditem(pe: &PlayerEntity, num: i32) -> i32 {
     let item_type = item.typ as i32;
     let db_prot = item.protected as u32;
     let final_prot = if inv_protected >= db_prot { inv_protected } else { db_prot };
-    if item_type >= 3 && item_type <= 17 {
+    if (3..=17).contains(&item_type) {
         wfifob(fd, len, 0);
         wfifol(fd, len + 1, (inv_dura as u32).swap_bytes());
         wfifob(fd, len + 5, final_prot as u8);
@@ -401,6 +411,9 @@ pub unsafe fn clif_sendadditem(pe: &PlayerEntity, num: i32) -> i32 {
 
 /// Send an equip slot item to the client.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_equipit(pe: &PlayerEntity, id: i32) -> i32 {
     let slot = id as usize;
 
@@ -468,6 +481,9 @@ pub unsafe fn clif_equipit(pe: &PlayerEntity, id: i32) -> i32 {
 
 /// Equip an item and send a confirmation message to the client.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendequip(pe: &PlayerEntity, id: i32) -> i32 {
     let slot = id as usize;
 
@@ -497,7 +513,7 @@ pub unsafe fn clif_sendequip(pe: &PlayerEntity, id: i32) -> i32 {
 
     let eq_item = item_db::search(eq_id);
 
-    if eq_id > 0 && strcasecmp_rs(eq_item.name.as_ptr(), b"??\0".as_ptr()) == 0 {
+    if eq_id > 0 && strcasecmp_rs(eq_item.name.as_ptr(), c"??".as_ptr() as *const u8) == 0 {
         pe.write().player.inventory.equip[slot] = crate::common::types::Item {
             id: 0, owner: 0, custom: 0, time: 0, dura: 0, amount: 0,
             pos: 0, _pad0: [0; 3], custom_look: 0, custom_icon: 0,
@@ -530,6 +546,9 @@ pub unsafe fn clif_sendequip(pe: &PlayerEntity, id: i32) -> i32 {
 
 /// Handle a use-item packet from the client.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parseuseitem(pe: &PlayerEntity) -> i32 {
     pc_useitem(pe, rfifob(pe.fd, 5) as i32 - 1);
     0
@@ -539,6 +558,9 @@ pub unsafe fn clif_parseuseitem(pe: &PlayerEntity) -> i32 {
 
 /// Handle an eat-item packet; only processes items of type ITM_EAT.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parseeatitem(pe: &PlayerEntity) -> i32 {
     let slot = rfifob(pe.fd, 5) as usize - 1;
     let id = pe.read().player.inventory.inventory[slot].id;
@@ -546,7 +568,7 @@ pub unsafe fn clif_parseeatitem(pe: &PlayerEntity) -> i32 {
     if item_db::search(id).typ as i32 == 0 {
         pc_useitem(pe, slot as i32);
     } else {
-        clif_sendminitext(pe, b"That item is not edible.\0".as_ptr().cast());
+        clif_sendminitext(pe, c"That item is not edible.".as_ptr());
     }
     0
 }
@@ -555,6 +577,9 @@ pub unsafe fn clif_parseeatitem(pe: &PlayerEntity) -> i32 {
 
 /// Handle a pick-up-item packet from the client.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parsegetitem(pe: &PlayerEntity) -> i32 {
     let combat_state = pe.read().player.combat.state;
     if combat_state == 1 || combat_state == 3 {
@@ -567,14 +592,14 @@ pub unsafe fn clif_parsegetitem(pe: &PlayerEntity) -> i32 {
         broadcast_update_state(pe);
     }
 
-    clif_sendaction_pc(&mut *pe.write(), 4, 40, 0);
+    clif_sendaction_pc(&mut pe.write(), 4, 40, 0);
 
     pe.write().pickuptype = rfifob(pe.fd, 5);
 
     let dura_aether = pe.read().player.spells.dura_aether.clone();
-    for x in 0..MAX_MAGIC_TIMERS {
-        if dura_aether[x].id > 0 && dura_aether[x].duration > 0 {
-            sl_doscript_simple(crate::game::scripting::carray_to_str(&magic_db::search(dura_aether[x].id as i32).yname), Some("on_pickup_while_cast"), pe.id);
+    for da in dura_aether.iter().take(MAX_MAGIC_TIMERS) {
+        if da.id > 0 && da.duration > 0 {
+            sl_doscript_simple(crate::game::scripting::carray_to_str(&magic_db::search(da.id as i32).yname), Some("on_pickup_while_cast"), pe.id);
         }
     }
 
@@ -587,6 +612,9 @@ pub unsafe fn clif_parsegetitem(pe: &PlayerEntity) -> i32 {
 
 /// Send an unequip confirmation to the client.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_unequipit(pe: &PlayerEntity, spot: i32) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
@@ -608,6 +636,9 @@ pub unsafe fn clif_unequipit(pe: &PlayerEntity, spot: i32) -> i32 {
 
 /// Handle an unequip packet from the client.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parseunequip(pe: &PlayerEntity) -> i32 {
     let slot_byte = rfifob(pe.fd, 5) as i32;
     let eq_type: i32 = match slot_byte {
@@ -638,19 +669,19 @@ pub unsafe fn clif_parseunequip(pe: &PlayerEntity) -> i32 {
     };
 
     if item_db::search(eq_id).unequip as i32 == 1 && gm_level == 0 {
-        clif_sendminitext(pe, b"You are unable to unequip that.\0".as_ptr().cast());
+        clif_sendminitext(pe, c"You are unable to unequip that.".as_ptr());
         return 0;
     }
 
     for x in 0..maxinv {
         if pe.read().player.inventory.inventory[x].id == 0 {
-            pc_unequip(pe.data_ptr(), eq_type); // TODO(phase6c): migrate
+            pc_unequip(&mut *pe.write() as *mut MapSessionData, eq_type);
             clif_unequipit(pe, slot_byte);
             return 0;
         }
     }
 
-    clif_sendminitext(pe, b"Your inventory is full.\0".as_ptr().cast());
+    clif_sendminitext(pe, c"Your inventory is full.".as_ptr());
 
     0
 }
@@ -659,15 +690,18 @@ pub unsafe fn clif_parseunequip(pe: &PlayerEntity) -> i32 {
 
 /// Handle a wield (equip) packet from the client.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parsewield(pe: &PlayerEntity) -> i32 {
     let pos = rfifob(pe.fd, 5) as usize - 1;
     let id = pe.read().player.inventory.inventory[pos].id;
     let item_type = item_db::search(id).typ as i32;
 
-    if item_type >= 3 && item_type <= 16 {
+    if (3..=16).contains(&item_type) {
         pc_useitem(pe, pos as i32);
     } else {
-        clif_sendminitext(pe, b"You cannot wield that!\0".as_ptr().cast());
+        clif_sendminitext(pe, c"You cannot wield that!".as_ptr());
     }
 
     0
@@ -677,6 +711,9 @@ pub unsafe fn clif_parsewield(pe: &PlayerEntity) -> i32 {
 
 /// foreach_in_cell callback: add gold to an existing floor item.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_addtocurrent_inner(fl: *mut FloorItemData, def: *mut i32, amount: u32, _pe: Option<&PlayerEntity>) -> i32 {
     if fl.is_null() { return 0; }
 
@@ -694,9 +731,12 @@ pub unsafe fn clif_addtocurrent_inner(fl: *mut FloorItemData, def: *mut i32, amo
 
 /// Drop gold coins onto the current cell.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_dropgold(pe: &PlayerEntity, amounts: u32) -> i32 {
     let reg_str = b"goldbardupe\0";
-    let dupe_times = pc_readglobalreg(pe.data_ptr(), reg_str.as_ptr().cast()); // TODO(phase6c): migrate
+    let dupe_times = pc_readglobalreg(&mut *pe.write() as *mut MapSessionData, reg_str.as_ptr().cast());
     if dupe_times != 0 {
         return 0;
     }
@@ -708,15 +748,15 @@ pub unsafe fn clif_dropgold(pe: &PlayerEntity, amounts: u32) -> i32 {
 
     if gm_level == 0 {
         if combat_state == 1 {
-            clif_sendminitext(pe, b"Spirits can't do that.\0".as_ptr().cast());
+            clif_sendminitext(pe, c"Spirits can't do that.".as_ptr());
             return 0;
         }
         if combat_state == 3 {
-            clif_sendminitext(pe, b"You cannot do that while riding a mount.\0".as_ptr().cast());
+            clif_sendminitext(pe, c"You cannot do that while riding a mount.".as_ptr());
             return 0;
         }
         if combat_state == 4 {
-            clif_sendminitext(pe, b"You cannot do that while transformed.\0".as_ptr().cast());
+            clif_sendminitext(pe, c"You cannot do that while transformed.".as_ptr());
             return 0;
         }
     }
@@ -726,12 +766,12 @@ pub unsafe fn clif_dropgold(pe: &PlayerEntity, amounts: u32) -> i32 {
 
     let mut amount = amounts;
 
-    clif_sendaction_pc(&mut *pe.write(), 5, 20, 0);
+    clif_sendaction_pc(&mut pe.write(), 5, 20, 0);
 
     let mut fl = Box::new(unsafe { std::mem::zeroed::<FloorItemData>() });
-    (*fl).m = sd_m;
-    (*fl).x = sd_x;
-    (*fl).y = sd_y;
+    fl.m = sd_m;
+    fl.x = sd_x;
+    fl.y = sd_y;
 
     if money < amount {
         amount = money;
@@ -740,28 +780,28 @@ pub unsafe fn clif_dropgold(pe: &PlayerEntity, amounts: u32) -> i32 {
         pe.write().player.inventory.money -= amount;
     }
 
-    (*fl).data.id = match amount {
+    fl.data.id = match amount {
         1          => 0u32,
         2..=99     => 1u32,
         100..=999  => 2u32,
         _          => 3u32,
     };
-    (*fl).data.amount = amount as i32;
+    fl.data.amount = amount as i32;
 
     pe.write().fakeDrop = 0;
 
-    sl_doscript_2("on_drop_gold", None, pe.id, (*fl).id);
+    sl_doscript_2("on_drop_gold", None, pe.id, fl.id);
 
     let dura_aether = pe.read().player.spells.dura_aether.clone();
-    for x in 0..MAX_MAGIC_TIMERS {
-        if dura_aether[x].id > 0 && dura_aether[x].duration > 0 {
-            sl_doscript_2(crate::game::scripting::carray_to_str(&magic_db::search(dura_aether[x].id as i32).yname), Some("on_drop_gold_while_cast"), pe.id, (*fl).id);
+    for da in dura_aether.iter().take(MAX_MAGIC_TIMERS) {
+        if da.id > 0 && da.duration > 0 {
+            sl_doscript_2(crate::game::scripting::carray_to_str(&magic_db::search(da.id as i32).yname), Some("on_drop_gold_while_cast"), pe.id, fl.id);
         }
     }
 
-    for x in 0..MAX_MAGIC_TIMERS {
-        if dura_aether[x].id > 0 && dura_aether[x].aether > 0 {
-            sl_doscript_2(crate::game::scripting::carray_to_str(&magic_db::search(dura_aether[x].id as i32).yname), Some("on_drop_gold_while_aether"), pe.id, (*fl).id);
+    for da in dura_aether.iter().take(MAX_MAGIC_TIMERS) {
+        if da.id > 0 && da.aether > 0 {
+            sl_doscript_2(crate::game::scripting::carray_to_str(&magic_db::search(da.id as i32).yname), Some("on_drop_gold_while_aether"), pe.id, fl.id);
         }
     }
 
@@ -770,8 +810,8 @@ pub unsafe fn clif_dropgold(pe: &PlayerEntity, amounts: u32) -> i32 {
     let mut mini = [0i8; 64];
     libc::snprintf(
         mini.as_mut_ptr(), 64,
-        b"You dropped %d coins\0".as_ptr().cast(),
-        (*fl).data.amount,
+        c"You dropped %d coins".as_ptr(),
+        fl.data.amount,
     );
     clif_sendminitext(pe, mini.as_ptr());
 
@@ -787,20 +827,20 @@ pub unsafe fn clif_dropgold(pe: &PlayerEntity, amounts: u32) -> i32 {
 
     if def[0] == 0 {
         let fl_raw = Box::into_raw(fl);
-        map_additem(fl_raw as *mut FloorItemData);
+        map_additem(fl_raw);
 
         sl_doscript_2("after_drop_gold", None, pe.id, (*fl_raw).id);
 
         let dura_aether = pe.read().player.spells.dura_aether.clone();
-        for x in 0..MAX_MAGIC_TIMERS {
-            if dura_aether[x].id > 0 && dura_aether[x].duration > 0 {
-                sl_doscript_2(crate::game::scripting::carray_to_str(&magic_db::search(dura_aether[x].id as i32).yname), Some("after_drop_gold_while_cast"), pe.id, (*fl_raw).id);
+        for da in dura_aether.iter().take(MAX_MAGIC_TIMERS) {
+            if da.id > 0 && da.duration > 0 {
+                sl_doscript_2(crate::game::scripting::carray_to_str(&magic_db::search(da.id as i32).yname), Some("after_drop_gold_while_cast"), pe.id, (*fl_raw).id);
             }
         }
 
-        for x in 0..MAX_MAGIC_TIMERS {
-            if dura_aether[x].id > 0 && dura_aether[x].aether > 0 {
-                sl_doscript_2(crate::game::scripting::carray_to_str(&magic_db::search(dura_aether[x].id as i32).yname), Some("after_drop_gold_while_aether"), pe.id, (*fl_raw).id);
+        for da in dura_aether.iter().take(MAX_MAGIC_TIMERS) {
+            if da.id > 0 && da.aether > 0 {
+                sl_doscript_2(crate::game::scripting::carray_to_str(&magic_db::search(da.id as i32).yname), Some("after_drop_gold_while_aether"), pe.id, (*fl_raw).id);
             }
         }
 
@@ -828,6 +868,9 @@ pub unsafe fn clif_dropgold(pe: &PlayerEntity, amounts: u32) -> i32 {
 
 /// Trigger the onOpen script hook.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_open_sub(pe: &PlayerEntity) -> i32 {
     sl_doscript_simple("onOpen", None, pe.id);
     0
@@ -837,6 +880,9 @@ pub unsafe fn clif_open_sub(pe: &PlayerEntity) -> i32 {
 
 /// Send a remove-spell packet to the client.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_removespell(pe: &PlayerEntity, pos: i32) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
@@ -857,6 +903,9 @@ pub unsafe fn clif_removespell(pe: &PlayerEntity, pos: i32) -> i32 {
 
 /// Handle a swap-spell-slots packet from the client.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parsechangespell(pe: &PlayerEntity) -> i32 {
     let start_pos = rfifob(pe.fd, 6) as usize - 1;
     let stop_pos  = rfifob(pe.fd, 7) as usize - 1;
@@ -875,8 +924,8 @@ pub unsafe fn clif_parsechangespell(pe: &PlayerEntity) -> i32 {
         g.player.spells.skills[stop_pos]  = start_id;
     }
 
-    pc_loadmagic(pe.data_ptr()); // TODO(phase6c): migrate
-    pc_reload_aether(pe.data_ptr()); // TODO(phase6c): migrate
+    pc_loadmagic(&mut *pe.write() as *mut MapSessionData);
+    pc_reload_aether(&mut *pe.write() as *mut MapSessionData);
 
     0
 }
@@ -886,6 +935,9 @@ pub unsafe fn clif_parsechangespell(pe: &PlayerEntity) -> i32 {
 /// Execute a throw: fire the onThrow script with source/destination floor items.
 ///
 /// Note: this is NOT a foreachinarea callback; it is called directly.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_throwitem_sub(
     pe: &PlayerEntity,
     id: i32,
@@ -905,15 +957,15 @@ pub unsafe fn clif_throwitem_sub(
     }
 
     let mut fl = Box::new(unsafe { std::mem::zeroed::<FloorItemData>() });
-    (*fl).m = sd_m;
-    (*fl).x = x as u16;
-    (*fl).y = y as u16;
+    fl.m = sd_m;
+    fl.x = x as u16;
+    fl.y = y as u16;
 
     // memcpy(&fl->data, &sd->status.inventory[id], sizeof(struct item))
     let inv_item = pe.read().player.inventory.inventory[id as usize];
     std::ptr::copy_nonoverlapping(
         &inv_item as *const _ as *const u8,
-        &raw mut (*fl).data as *mut u8,
+        &raw mut fl.data as *mut u8,
         std::mem::size_of::<crate::common::types::Item>(),
     );
 
@@ -924,7 +976,7 @@ pub unsafe fn clif_throwitem_sub(
         g.throwy = y as u16;
     }
 
-    sl_doscript_2("onThrow", None, pe.id, (*fl).id);
+    sl_doscript_2("onThrow", None, pe.id, fl.id);
 
     // fl is dropped here — it was a temporary used only to pass data to the script.
     drop(fl);
@@ -935,6 +987,9 @@ pub unsafe fn clif_throwitem_sub(
 
 /// Complete a throw action after script approval.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_throwitem_script(pe: &PlayerEntity) -> i32 {
     let (id, x, y, sd_m, sd_x, sd_y) = {
         let g = pe.read();
@@ -943,25 +998,25 @@ pub unsafe fn clif_throwitem_script(pe: &PlayerEntity) -> i32 {
     let item_type = 0i32;
 
     let mut fl = Box::new(unsafe { std::mem::zeroed::<FloorItemData>() });
-    (*fl).m = sd_m;
-    (*fl).x = x as u16;
-    (*fl).y = y as u16;
+    fl.m = sd_m;
+    fl.x = x as u16;
+    fl.y = y as u16;
 
     let inv_item = pe.read().player.inventory.inventory[id];
     std::ptr::copy_nonoverlapping(
         &inv_item as *const _ as *const u8,
-        &raw mut (*fl).data as *mut u8,
+        &raw mut fl.data as *mut u8,
         std::mem::size_of::<crate::common::types::Item>(),
     );
 
     let mut def = [0i32; 1];
 
-    if (*fl).data.dura == item_db::search((*fl).data.id).dura {
+    if fl.data.dura == item_db::search(fl.data.id).dura {
         if let Some(grid) = block_grid::get_grid(sd_m as usize) {
             let cell_ids = grid.ids_at_tile(x as u16, y as u16);
             for cid in cell_ids {
                 if let Some(fl_ref_arc) = crate::game::map_server::map_id2fl_ref(cid) { let fl_ref = &mut *fl_ref_arc.write();
-                    pc_addtocurrent_inner(&mut *fl_ref as *mut FloorItemData, def.as_mut_ptr(), id as i32, item_type, pe.data_ptr()); // TODO(phase6c): migrate
+                    pc_addtocurrent_inner(&mut *fl_ref as *mut FloorItemData, def.as_mut_ptr(), id as i32, item_type, &mut *pe.write() as *mut MapSessionData);
                 }
             }
         }
@@ -980,7 +1035,7 @@ pub unsafe fn clif_throwitem_script(pe: &PlayerEntity) -> i32 {
         };
         clif_senddelitem(pe, id as i32, 4);
     } else {
-        (*fl).data.amount = 1;
+        fl.data.amount = 1;
         clif_sendadditem(pe, id as i32);
     }
 
@@ -996,13 +1051,13 @@ pub unsafe fn clif_throwitem_script(pe: &PlayerEntity) -> i32 {
         sndbuf[5] = id_be[0]; sndbuf[6] = id_be[1];
         sndbuf[7] = id_be[2]; sndbuf[8] = id_be[3];
 
-        if (*fl).data.custom_icon != 0 {
-            let icon_be = (((*fl).data.custom_icon + 49152) as u16).to_be_bytes();
+        if fl.data.custom_icon != 0 {
+            let icon_be = ((fl.data.custom_icon + 49152) as u16).to_be_bytes();
             sndbuf[9]  = icon_be[0];
             sndbuf[10] = icon_be[1];
-            sndbuf[11] = (*fl).data.custom_icon_color as u8;
+            sndbuf[11] = fl.data.custom_icon_color as u8;
         } else {
-            let fl_item = item_db::search((*fl).data.id);
+            let fl_item = item_db::search(fl.data.id);
             let icon_be = (fl_item.icon as u16).to_be_bytes();
             sndbuf[9]  = icon_be[0];
             sndbuf[10] = icon_be[1];
@@ -1012,7 +1067,7 @@ pub unsafe fn clif_throwitem_script(pe: &PlayerEntity) -> i32 {
         let fl_id_be = if def[0] != 0 {
             (def[0] as u32).to_be_bytes()
         } else {
-            ((*fl).id).to_be_bytes()
+            (fl.id).to_be_bytes()
         };
         sndbuf[12] = fl_id_be[0]; sndbuf[13] = fl_id_be[1];
         sndbuf[14] = fl_id_be[2]; sndbuf[15] = fl_id_be[3];
@@ -1029,14 +1084,14 @@ pub unsafe fn clif_throwitem_script(pe: &PlayerEntity) -> i32 {
         sndbuf[28] = 0x02;
         sndbuf[29] = 0x00;
 
-        clif_send(sndbuf.as_ptr(), 48, pe.id, sd_m, sd_x, sd_y, BL_PC as u8, SAMEAREA);
+        clif_send(sndbuf.as_ptr(), 48, BroadcastSrc { id: pe.id, m: sd_m, x: sd_x, y: sd_y, bl_type: BL_PC as u8 }, SAMEAREA);
     } else {
-        clif_sendaction_pc(&mut *pe.write(), 2, 30, 0);
+        clif_sendaction_pc(&mut pe.write(), 2, 30, 0);
     }
 
     if def[0] == 0 {
         let fl_raw = Box::into_raw(fl);
-        map_additem(fl_raw as *mut FloorItemData);
+        map_additem(fl_raw);
         if let Some(grid) = block_grid::get_grid(sd_m as usize) {
             let slot = &*raw_map_ptr().add(sd_m as usize);
             let ids = block_grid::ids_in_area(grid, sd_x as i32, sd_y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
@@ -1057,13 +1112,16 @@ pub unsafe fn clif_throwitem_script(pe: &PlayerEntity) -> i32 {
 
 /// foreach_in_cell callback: check if a cell is blocked for throwing.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_throw_check_id(entity_id: u32, found: *mut i32) -> i32 {
     if !found.is_null() && *found != 0 { return 0; }
 
     // Check entity type and alive status via typed lookups
     if let Some(arc) = crate::game::map_server::map_id2npc_ref(entity_id) {
         let nd = &*arc.data_ptr();
-        if nd.subtype != SCRIPT as u8 { return 0; }
+        if nd.subtype != SCRIPT { return 0; }
     } else if let Some(arc) = crate::game::map_server::map_id2mob_ref(entity_id) {
         let mob = &*arc.data_ptr();
         if mob.state == MOB_DEAD { return 0; }
@@ -1085,6 +1143,9 @@ pub unsafe fn clif_throw_check_id(entity_id: u32, found: *mut i32) -> i32 {
 
 /// Send a throw-confirm packet to the client.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_throwconfirm(pe: &PlayerEntity) -> i32 {
     let fd = pe.fd;
     wfifob(fd, 0, 0xAA);
@@ -1101,9 +1162,12 @@ pub unsafe fn clif_throwconfirm(pe: &PlayerEntity) -> i32 {
 
 /// Handle a throw-item packet from the client.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parsethrow(pe: &PlayerEntity) -> i32 {
     let reg_str = b"goldbardupe\0";
-    let dupe_times = pc_readglobalreg(pe.data_ptr(), reg_str.as_ptr().cast()); // TODO(phase6c): migrate
+    let dupe_times = pc_readglobalreg(&mut *pe.write() as *mut MapSessionData, reg_str.as_ptr().cast());
     if dupe_times != 0 {
         return 0;
     }
@@ -1115,15 +1179,15 @@ pub unsafe fn clif_parsethrow(pe: &PlayerEntity) -> i32 {
 
     if gm_level == 0 {
         if combat_state == 1 {
-            clif_sendminitext(pe, b"Spirits can't do that.\0".as_ptr().cast());
+            clif_sendminitext(pe, c"Spirits can't do that.".as_ptr());
             return 0;
         }
         if combat_state == 3 {
-            clif_sendminitext(pe, b"You cannot do that while riding a mount.\0".as_ptr().cast());
+            clif_sendminitext(pe, c"You cannot do that while riding a mount.".as_ptr());
             return 0;
         }
         if combat_state == 4 {
-            clif_sendminitext(pe, b"You cannot do that while transformed.\0".as_ptr().cast());
+            clif_sendminitext(pe, c"You cannot do that while transformed.".as_ptr());
             return 0;
         }
     }
@@ -1131,7 +1195,7 @@ pub unsafe fn clif_parsethrow(pe: &PlayerEntity) -> i32 {
     let pos = rfifob(pe.fd, 6) as usize - 1;
     let inv_id = pe.read().player.inventory.inventory[pos].id;
     if item_db::search(inv_id).droppable != 0 {
-        clif_sendminitext(pe, b"You can't throw this item.\0".as_ptr().cast());
+        clif_sendminitext(pe, c"You can't throw this item.".as_ptr());
         return 0;
     }
 

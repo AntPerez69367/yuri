@@ -96,8 +96,8 @@ fn load_leveldb(data_dir: &str) -> Result<usize, std::io::Error> {
         let path_id: u32 = parts[0].trim().parse().unwrap_or(0);
         let arc = map.entry(path_id).or_insert_with(|| make_default(path_id));
         let c = Arc::make_mut(arc);
-        for x in 1..parts.len().min(99) {
-            c.level[x] = parts[x].trim().parse().unwrap_or(0);
+        for (x, part) in parts.iter().enumerate().skip(1).take(parts.len().min(99) - 1) {
+            c.level[x] = part.trim().parse().unwrap_or(0);
         }
         count += 1;
     }

@@ -109,6 +109,7 @@ static CRC_TABLE: [u16; 256] = [
 
 
 use crate::game::client::{clif_send, clif_sendtogm};
+use crate::game::client::BroadcastSrc;
 use crate::game::client::visual::clif_destroyold;
 use crate::game::block::{map_moveblock_id, AreaType};
 use crate::game::block_grid;
@@ -209,6 +210,9 @@ fn nex_crcc(buf: &[u16]) -> u16 {
 ///
 /// Packet: `WFIFOHEADER(fd, 0x51, 5)` + flag byte + two zero bytes = 8 bytes total.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_blockmovement(pe: &PlayerEntity, flag: i32) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
@@ -229,6 +233,9 @@ pub unsafe fn clif_blockmovement(pe: &PlayerEntity, flag: i32) -> i32 {
 ///
 /// Uses `AREA` (the full surrounding area, not just `SAMEAREA`).
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendchararea(pe: &PlayerEntity) -> i32 {
     let (m, x, y) = {
         let sd = pe.read();
@@ -241,7 +248,7 @@ pub unsafe fn clif_sendchararea(pe: &PlayerEntity) -> i32 {
         for id in ids {
             if let Some(pc_arc) = map_id2sd_pc(id) {
                 let pc = pc_arc.read();
-                clif_charlook(sd_ref, &*pc);
+                clif_charlook(sd_ref, &pc);
             }
         }
     }
@@ -255,6 +262,9 @@ pub unsafe fn clif_sendchararea(pe: &PlayerEntity) -> i32 {
 /// Builds a 0x33 packet containing position, state, equipment look, and name.
 /// Applies visibility rules (stealth, ghost, GFX override).
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     // Read locks: this function is verified read-only (builds 0x33 appearance packet).
     // .read() fixes the sender==id deadlock (re-entrant write) and enables concurrent readers.
@@ -276,13 +286,11 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         if md.show_ghosts != 0
             && (*sd).player.combat.state == PC_DIE
             && (*sd).id != (*src_sd).id
-        {
-            if (*src_sd).player.combat.state != PC_DIE
+            && (*src_sd).player.combat.state != PC_DIE
                 && ((*src_sd).optFlags & OPT_FLAG_GHOSTS) == 0
             {
                 return 0;
             }
-        }
     }
 
     if !session_exists((*sd).fd) {
@@ -310,7 +318,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     // State / invis at [16]
     let can_see_invis = (*sd).id != (*src_sd).id
         && ((*src_sd).player.identity.gm_level != 0
-            || clif_isingroup(src_arc.as_ref(), sd as *const MapSessionData as *mut MapSessionData) != 0
+            || clif_isingroup(src_arc.as_ref(), sd as *mut MapSessionData) != 0
             || ((*sd).gfx.dye == (*src_sd).gfx.dye
                 && (*sd).gfx.dye != 0
                 && (*src_sd).gfx.dye != 0));
@@ -352,7 +360,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     wfifob(src_fd, 25, (*sd).player.appearance.skin_color as u8);
 
     // Armor at [26..27], color at [28]
-    let armor_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_ARMOR);
+    let armor_id = pc_isequip(sd as *mut MapSessionData,EQ_ARMOR);
     if armor_id == 0 {
         wfifow(src_fd, 26, ((*sd).player.identity.sex as u16).swap_bytes());
     } else {
@@ -373,7 +381,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         wfifob(src_fd, 28, armor_color);
     }
     // Coat overrides armor
-    let coat_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_COAT);
+    let coat_id = pc_isequip(sd as *mut MapSessionData,EQ_COAT);
     if coat_id != 0 {
         let coat_item = item_db::search(coat_id as u32);
         wfifow(src_fd, 26, (coat_item.look as u16).swap_bytes());
@@ -381,7 +389,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Weapon at [29..30], color at [31]
-    let weap_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_WEAP);
+    let weap_id = pc_isequip(sd as *mut MapSessionData,EQ_WEAP);
     if weap_id == 0 {
         wfifow(src_fd, 29, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 31, 0);
@@ -398,7 +406,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Shield at [32..33], color at [34]
-    let shield_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_SHIELD);
+    let shield_id = pc_isequip(sd as *mut MapSessionData,EQ_SHIELD);
     if shield_id == 0 {
         wfifow(src_fd, 32, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 34, 0);
@@ -415,11 +423,11 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Helm at [35] flag, [36..37] look+color
-    let helm_id    = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_HELM);
+    let helm_id    = pc_isequip(sd as *mut MapSessionData,EQ_HELM);
     let helm_item  = if helm_id != 0 { Some(item_db::search(helm_id as u32)) } else { None };
     let helm_look  = helm_item.as_ref().map_or(-1, |i| i.look);
     if helm_id == 0
-        || ((*sd).player.appearance.setting_flags as u32 & FLAG_HELM) == 0
+        || ((*sd).player.appearance.setting_flags & FLAG_HELM) == 0
         || helm_look == -1
     {
         wfifob(src_fd, 35, 0);
@@ -436,7 +444,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Face accessory at [38..39], color at [40]
-    let faceacc_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_FACEACC);
+    let faceacc_id = pc_isequip(sd as *mut MapSessionData,EQ_FACEACC);
     if faceacc_id == 0 {
         wfifow(src_fd, 38, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 40, 0);
@@ -447,7 +455,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Crown at [41..42], color at [43]; also clears helm flag at [35]
-    let crown_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_CROWN);
+    let crown_id = pc_isequip(sd as *mut MapSessionData,EQ_CROWN);
     if crown_id == 0 {
         wfifow(src_fd, 41, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 43, 0);
@@ -465,7 +473,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Face accessory 2 at [44..45], color at [46]
-    let faceacc2_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_FACEACCTWO);
+    let faceacc2_id = pc_isequip(sd as *mut MapSessionData,EQ_FACEACCTWO);
     if faceacc2_id == 0 {
         wfifow(src_fd, 44, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 46, 0);
@@ -476,7 +484,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Mantle at [47..48], color at [49]
-    let mantle_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_MANTLE);
+    let mantle_id = pc_isequip(sd as *mut MapSessionData,EQ_MANTLE);
     if mantle_id == 0 {
         wfifow(src_fd, 47, 0xFFFFu16.swap_bytes());
         wfifob(src_fd, 49, 0xFF);
@@ -487,11 +495,11 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Necklace at [50..51], color at [52]
-    let neck_id   = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_NECKLACE);
+    let neck_id   = pc_isequip(sd as *mut MapSessionData,EQ_NECKLACE);
     let neck_item = if neck_id != 0 { Some(item_db::search(neck_id as u32)) } else { None };
     let neck_look = neck_item.as_ref().map_or(-1, |i| i.look);
     if neck_id == 0
-        || ((*sd).player.appearance.setting_flags as u32 & FLAG_NECKLACE) == 0
+        || ((*sd).player.appearance.setting_flags & FLAG_NECKLACE) == 0
         || neck_look == -1
     {
         wfifow(src_fd, 50, 0xFFFFu16.swap_bytes());
@@ -502,7 +510,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     }
 
     // Boots at [53..54], color at [55]
-    let boots_id = pc_isequip(sd as *const MapSessionData as *mut MapSessionData,EQ_BOOTS);
+    let boots_id = pc_isequip(sd as *mut MapSessionData,EQ_BOOTS);
     if boots_id == 0 {
         wfifow(src_fd, 53, ((*sd).player.identity.sex as u16).swap_bytes());
         wfifob(src_fd, 55, 0);
@@ -529,7 +537,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
     if invis_or_stealth
         && (*sd).id != (*src_sd).id
         && ((*src_sd).player.identity.gm_level != 0
-            || clif_isingroup(src_arc.as_ref(), sd as *const MapSessionData as *mut MapSessionData) != 0
+            || clif_isingroup(src_arc.as_ref(), sd as *mut MapSessionData) != 0
             || ((*sd).gfx.dye == (*src_sd).gfx.dye
                 && (*sd).gfx.dye != 0
                 && (*src_sd).gfx.dye != 0))
@@ -539,8 +547,9 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         wfifob(src_fd, 56, (*sd).gfx.title_color);
     }
 
-    let name_src = (&(*sd).player.identity.name).as_ptr();
-    let name_len = (&(*sd).player.identity.name).len();
+    let name_ref: &str = &(*sd).player.identity.name;
+    let name_src = name_ref.as_ptr();
+    let name_len = name_ref.len();
     let mut len = name_len;
 
     // Same-clan → title color 3
@@ -551,7 +560,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         wfifob(src_fd, 56, 3);
     }
     // Same group → title color 2
-    if clif_isingroup(src_arc.as_ref(), sd as *const MapSessionData as *mut MapSessionData) != 0 {
+    if clif_isingroup(src_arc.as_ref(), sd as *mut MapSessionData) != 0 {
         wfifob(src_fd, 56, 2);
     }
 
@@ -560,7 +569,7 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
         wfifob(src_fd, 57, len as u8);
         let dst = wfifop(src_fd, 58);
         if !dst.is_null() {
-            ptr::copy_nonoverlapping(name_src as *const u8, dst, len);
+            ptr::copy_nonoverlapping(name_src, dst, len);
         }
     } else {
         wfifow(src_fd, 57, 0);
@@ -641,6 +650,9 @@ pub unsafe fn clif_charspecific(sender: i32, id: i32) -> i32 {
 /// sends walk packets, moves block, triggers area scans and scripted events,
 /// and checks warp tiles.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parsewalk(pe: &PlayerEntity) -> i32 {
     let fd = pe.fd;
     let (m, sd_m, sd_x, sd_y, state, gm_level, player_id) = {
@@ -733,7 +745,7 @@ pub unsafe fn clif_parsewalk(pe: &PlayerEntity) -> i32 {
     // Update viewport offsets
     let (vx, vy, setting_flags, opt_flags) = {
         let sd = pe.read();
-        (sd.viewx as i32, sd.viewy as i32, sd.player.appearance.setting_flags as u32, sd.optFlags)
+        (sd.viewx as i32, sd.viewy as i32, sd.player.appearance.setting_flags, sd.optFlags)
     };
     {
         let mut sd = pe.write();
@@ -760,7 +772,7 @@ pub unsafe fn clif_parsewalk(pe: &PlayerEntity) -> i32 {
         }
         let (viewx, viewy) = {
             let sd = pe.read();
-            (sd.viewx as u16, sd.viewy as u16)
+            (sd.viewx, sd.viewy)
         };
         wfifohead(fd, 15);
         wfifob(fd, 0, 0xAA);
@@ -794,9 +806,9 @@ pub unsafe fn clif_parsewalk(pe: &PlayerEntity) -> i32 {
     buf[14] = 0x00;
 
     if (opt_flags & OPT_FLAG_STEALTH) != 0 {
-        clif_sendtogm(buf.as_mut_ptr(), 32, player_id, sd_m, sd_x, sd_y, BL_PC as u8, AREA_WOS);
+        clif_sendtogm(buf.as_mut_ptr(), 32, BroadcastSrc { id: player_id, m: sd_m, x: sd_x, y: sd_y, bl_type: BL_PC as u8 }, AREA_WOS);
     } else {
-        clif_send(buf.as_ptr(), 32, player_id, sd_m, sd_x, sd_y, BL_PC as u8, AREA_WOS);
+        clif_send(buf.as_ptr(), 32, BroadcastSrc { id: player_id, m: sd_m, x: sd_x, y: sd_y, bl_type: BL_PC as u8 }, AREA_WOS);
     }
 
     {
@@ -824,22 +836,22 @@ pub unsafe fn clif_parsewalk(pe: &PlayerEntity) -> i32 {
             let sd_ref = &*sd_guard;
             for &id in &rect_ids {
                 if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook(&*pc_arc.read(), sd_ref);
+                    clif_charlook(&pc_arc.read(), sd_ref);
                 }
             }
             for &id in &rect_ids {
                 if let Some(npc_arc) = map_id2npc_ref(id) {
-                    clif_cnpclook(&*npc_arc.read(), sd_ref);
+                    clif_cnpclook(&npc_arc.read(), sd_ref);
                 }
             }
             for &id in &rect_ids {
                 if let Some(mob_arc) = map_id2mob_ref(id) {
-                    clif_cmoblook(&*mob_arc.read(), sd_ref);
+                    clif_cmoblook(&mob_arc.read(), sd_ref);
                 }
             }
             for &id in &rect_ids {
                 if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook(sd_ref, &*pc_arc.read());
+                    clif_charlook(sd_ref, &pc_arc.read());
                 }
             }
         }
@@ -885,7 +897,7 @@ pub unsafe fn clif_parsewalk(pe: &PlayerEntity) -> i32 {
     }
 
     sl_doscript_simple("onScriptedTile", None, player_id);
-    pc_runfloor_sub(pe.data_ptr()); // TODO(phase6c): migrate
+    pc_runfloor_sub(&mut *pe.write() as *mut MapSessionData);
 
     // Warp check
     do_warp_check(pe);
@@ -900,6 +912,9 @@ pub unsafe fn clif_parsewalk(pe: &PlayerEntity) -> i32 {
 /// viewport logic as `clif_parsewalk`, but sends `[4]=0x03` and computes
 /// the new-strip viewport coords internally.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_noparsewalk(pe: &PlayerEntity, _speed: i8) -> i32 {
     let fd = pe.fd;
     let (m_val, sd_m, sd_x, sd_y, state, gm_level, player_id, side, viewx, viewy) = {
@@ -1008,7 +1023,7 @@ pub unsafe fn clif_noparsewalk(pe: &PlayerEntity, _speed: i8) -> i32 {
     }
 
     // Temporarily toggle off FASTMOVE (noparsewalk always sends the walk packet)
-    let had_fastmove = (pe.read().player.appearance.setting_flags as u32 & FLAG_FASTMOVE) != 0;
+    let had_fastmove = (pe.read().player.appearance.setting_flags & FLAG_FASTMOVE) != 0;
     if had_fastmove {
         pe.write().player.appearance.setting_flags ^= FLAG_FASTMOVE;
         clif_sendstatus(pe, 0);
@@ -1020,7 +1035,7 @@ pub unsafe fn clif_noparsewalk(pe: &PlayerEntity, _speed: i8) -> i32 {
 
     let (cur_viewx, cur_viewy) = {
         let sd = pe.read();
-        (sd.viewx as u16, sd.viewy as u16)
+        (sd.viewx, sd.viewy)
     };
 
     wfifohead(fd, 15);
@@ -1057,9 +1072,9 @@ pub unsafe fn clif_noparsewalk(pe: &PlayerEntity, _speed: i8) -> i32 {
     buf[14] = 0x00;
 
     if (opt_flags & OPT_FLAG_STEALTH) != 0 {
-        clif_sendtogm(buf.as_mut_ptr(), 32, player_id, sd_m, sd_x, sd_y, BL_PC as u8, AREA_WOS);
+        clif_sendtogm(buf.as_mut_ptr(), 32, BroadcastSrc { id: player_id, m: sd_m, x: sd_x, y: sd_y, bl_type: BL_PC as u8 }, AREA_WOS);
     } else {
-        clif_send(buf.as_ptr(), 32, player_id, sd_m, sd_x, sd_y, BL_PC as u8, AREA_WOS);
+        clif_send(buf.as_ptr(), 32, BroadcastSrc { id: player_id, m: sd_m, x: sd_x, y: sd_y, bl_type: BL_PC as u8 }, AREA_WOS);
     }
 
     {
@@ -1090,29 +1105,29 @@ pub unsafe fn clif_noparsewalk(pe: &PlayerEntity, _speed: i8) -> i32 {
             let sd_ref = &*sd_guard;
             for &id in &rect_ids {
                 if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook(&*pc_arc.read(), sd_ref);
+                    clif_charlook(&pc_arc.read(), sd_ref);
                 }
             }
             for &id in &rect_ids {
                 if let Some(npc_arc) = map_id2npc_ref(id) {
-                    clif_cnpclook(&*npc_arc.read(), sd_ref);
+                    clif_cnpclook(&npc_arc.read(), sd_ref);
                 }
             }
             for &id in &rect_ids {
                 if let Some(mob_arc) = map_id2mob_ref(id) {
-                    clif_cmoblook(&*mob_arc.read(), sd_ref);
+                    clif_cmoblook(&mob_arc.read(), sd_ref);
                 }
             }
             for &id in &rect_ids {
                 if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook(sd_ref, &*pc_arc.read());
+                    clif_charlook(sd_ref, &pc_arc.read());
                 }
             }
         }
     }
 
     sl_doscript_simple("onScriptedTile", None, player_id);
-    pc_runfloor_sub(pe.data_ptr()); // TODO(phase6c): migrate
+    pc_runfloor_sub(&mut *pe.write() as *mut MapSessionData);
 
     do_warp_check(pe);
     1
@@ -1125,6 +1140,9 @@ pub unsafe fn clif_noparsewalk(pe: &PlayerEntity, _speed: i8) -> i32 {
 /// Reads the timestamp at [9..12] (u32 BE → host), updates `msPing` and
 /// `LastPongStamp`.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parsewalkpong(pe: &PlayerEntity) -> i32 {
     let fd = pe.fd;
 
@@ -1158,6 +1176,9 @@ pub unsafe fn clif_parsewalkpong(pe: &PlayerEntity) -> i32 {
 /// Sets `sd->loaded = 1`, reads viewport parameters, then delegates to
 /// `clif_sendmapdata`.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parsemap(pe: &PlayerEntity) -> i32 {
     let fd = pe.fd;
 
@@ -1187,6 +1208,9 @@ pub unsafe fn clif_parsemap(pe: &PlayerEntity) -> i32 {
 /// Builds the tile packet locally, computes NexCRCC checksum, and skips the
 /// send if the client's cached checksum already matches.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendmapdata(
     pe: &PlayerEntity,
     m: i32,
@@ -1301,6 +1325,9 @@ pub unsafe fn clif_sendmapdata(
 /// PC: sent to AREA (including self). MOB/NPC: AREA_WOS.
 ///
 /// Send a facing-direction packet for a PC.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendside_pc(sd: &MapSessionData) -> i32 {
     let mut buf = [0u8; 32];
     buf[0] = 0xAA;
@@ -1311,11 +1338,14 @@ pub unsafe fn clif_sendside_pc(sd: &MapSessionData) -> i32 {
     buf[9]  = sd.player.combat.side as u8;
     buf[10] = 0;
 
-    clif_send(buf.as_ptr(), 32, sd.id, sd.m, sd.x, sd.y, BL_PC as u8, AREA);
+    clif_send(buf.as_ptr(), 32, BroadcastSrc { id: sd.id, m: sd.m, x: sd.x, y: sd.y, bl_type: BL_PC as u8 }, AREA);
     0
 }
 
 /// Send a facing-direction packet for a mob.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendside_mob(mob: &MobSpawnData) -> i32 {
     let mut buf = [0u8; 32];
     buf[0] = 0xAA;
@@ -1326,11 +1356,14 @@ pub unsafe fn clif_sendside_mob(mob: &MobSpawnData) -> i32 {
     buf[9]  = mob.side as u8;
     buf[10] = 0;
 
-    clif_send(buf.as_ptr(), 32, mob.id, mob.m, mob.x, mob.y, BL_MOB as u8, AREA_WOS);
+    clif_send(buf.as_ptr(), 32, BroadcastSrc { id: mob.id, m: mob.m, x: mob.x, y: mob.y, bl_type: BL_MOB as u8 }, AREA_WOS);
     0
 }
 
 /// Send a facing-direction packet for an NPC.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendside_npc(npc: &NpcData) -> i32 {
     let mut buf = [0u8; 32];
     buf[0] = 0xAA;
@@ -1341,7 +1374,7 @@ pub unsafe fn clif_sendside_npc(npc: &NpcData) -> i32 {
     buf[9]  = npc.side as u8;
     buf[10] = 0;
 
-    clif_send(buf.as_ptr(), 32, npc.id, npc.m, npc.x, npc.y, BL_NPC as u8, AREA_WOS);
+    clif_send(buf.as_ptr(), 32, BroadcastSrc { id: npc.id, m: npc.m, x: npc.x, y: npc.y, bl_type: BL_NPC as u8 }, AREA_WOS);
     0
 }
 
@@ -1352,12 +1385,15 @@ pub unsafe fn clif_sendside_npc(npc: &NpcData) -> i32 {
 /// Reads new side from RFIFO[5], broadcasts via `clif_sendside`, fires
 /// `onTurn` Lua event.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parseside(pe: &PlayerEntity) -> i32 {
     let fd = pe.fd;
     pe.write().player.combat.side = rfifob(fd, 5) as i8;
     {
         let sd = pe.read();
-        clif_sendside_pc(&*sd);
+        clif_sendside_pc(&sd);
     }
     sl_doscript_simple("onTurn", None, pe.id);
     0
@@ -1371,7 +1407,7 @@ pub unsafe fn clif_parseside(pe: &PlayerEntity) -> i32 {
 /// Shared by both `clif_parsewalk` and `clif_noparsewalk`.
 #[inline]
 unsafe fn do_warp_check(pe: &crate::game::player::entity::PlayerEntity) {
-    let sd_ptr = pe.data_ptr();
+    let sd_ptr = &mut *pe.write() as *mut MapSessionData;
     let sd = &mut *sd_ptr;
     let fm = sd.m as i32;
     let Some(fmd) = map_data(fm as usize) else { return; };
@@ -1405,7 +1441,7 @@ unsafe fn do_warp_check(pe: &crate::game::player::entity::PlayerEntity) {
     // Level / vita / mana / mark / path minimum requirements
     let below_min = (sd.player.progression.level as u32) < zmd.reqlvl
         || (sd.player.combat.max_hp < zmd.reqvita && sd.player.combat.max_mp < zmd.reqmana)
-        || (sd.player.progression.mark as u8) < zmd.reqmark
+        || sd.player.progression.mark < zmd.reqmark
         || (zmd.reqpath > 0 && sd.player.progression.class != zmd.reqpath);
 
     if below_min && sd.player.identity.gm_level == 0 {
@@ -1417,7 +1453,7 @@ unsafe fn do_warp_check(pe: &crate::game::player::entity::PlayerEntity) {
                 c"Nightmarish visions of your own death repel you."
             } else if lvl_diff >= 5 {
                 c"You're not quite ready to enter yet."
-            } else if (sd.player.progression.mark as u8) < zmd.reqmark {
+            } else if sd.player.progression.mark < zmd.reqmark {
                 c"You do not understand the secrets to enter."
             } else if zmd.reqpath > 0 && sd.player.progression.class != zmd.reqpath {
                 c"Your path forbids it."
@@ -1454,6 +1490,9 @@ const OBJ_LEFT:  u8 = 8;
 
 /// Return non-zero if the object at `(m, x, y)` blocks movement in `side` direction.
 /// `side`: 0=up, 1=right, 2=down, 3=left.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_object_canmove(m: i32, x: i32, y: i32, side: i32) -> i32 {
     let object = read_obj(m, x, y) as usize;
     let Some(flags) = object_flags() else { return 0; };
@@ -1469,6 +1508,9 @@ pub unsafe fn clif_object_canmove(m: i32, x: i32, y: i32, side: i32) -> i32 {
 
 /// Return non-zero if movement is blocked when *leaving* `(m, x, y)` in `side` direction.
 /// Uses the reverse-direction flag (leaving down = OBJ_UP on the destination side).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_object_canmove_from(m: i32, x: i32, y: i32, side: i32) -> i32 {
     let object = read_obj(m, x, y) as usize;
     let Some(flags) = object_flags() else { return 0; };
@@ -1484,6 +1526,9 @@ pub unsafe fn clif_object_canmove_from(m: i32, x: i32, y: i32, side: i32) -> i32
 
 /// Push player back 2 tiles opposite their facing direction.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_pushback(sd: &mut MapSessionData) -> i32 {
     let sd_ptr = sd as *mut MapSessionData;
     let m = sd.m as i32;
@@ -1549,22 +1594,22 @@ pub unsafe fn clif_parseviewchange(pe: &PlayerEntity) -> i32 {
         let sd_ref = &*sd_guard;
         for &id in &rect_ids {
             if let Some(pc_arc) = map_id2sd_pc(id) {
-                clif_charlook(&*pc_arc.read(), sd_ref);
+                clif_charlook(&pc_arc.read(), sd_ref);
             }
         }
         for &id in &rect_ids {
             if let Some(npc_arc) = map_id2npc_ref(id) {
-                clif_cnpclook(&*npc_arc.read(), sd_ref);
+                clif_cnpclook(&npc_arc.read(), sd_ref);
             }
         }
         for &id in &rect_ids {
             if let Some(mob_arc) = map_id2mob_ref(id) {
-                clif_cmoblook(&*mob_arc.read(), sd_ref);
+                clif_cmoblook(&mob_arc.read(), sd_ref);
             }
         }
         for &id in &rect_ids {
             if let Some(pc_arc) = map_id2sd_pc(id) {
-                clif_charlook(sd_ref, &*pc_arc.read());
+                clif_charlook(sd_ref, &pc_arc.read());
             }
         }
     }
@@ -1578,12 +1623,18 @@ pub unsafe fn clif_parseviewchange(pe: &PlayerEntity) -> i32 {
 ///
 /// Fires the "onLook" Lua event when player looks at a cell.
 /// Args: `entity_id` = the object being looked at, `pe` = the looking player.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parselookat_sub_inner(entity_id: u32, pe: &PlayerEntity) -> i32 {
     sl_doscript_2("onLook", None, pe.id, entity_id);
     0
 }
 
 /// Dead code stub — body was removed in original C.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parselookat_scriptsub(
     _pe: &PlayerEntity,
 ) -> i32 {
@@ -1686,8 +1737,8 @@ pub unsafe fn clif_refreshnoclick(pe: &PlayerEntity) -> i32 {
     *w(2) = 0x02;  // payload length = 2
     *w(3) = 0x22;
     *w(4) = 0x03;
-    let mut buf = std::slice::from_raw_parts_mut(wfifop(fd, 0), 8);
-    let n = set_packet_indexes(&mut buf);  // appends 3 index bytes, updates [1-2]
+    let buf = std::slice::from_raw_parts_mut(wfifop(fd, 0), 8);
+    let n = set_packet_indexes(buf);  // appends 3 index bytes, updates [1-2]
     wfifoset(fd, n);
 
     let m = pe.read().m as usize;
@@ -1712,7 +1763,10 @@ pub unsafe fn clif_refreshnoclick(pe: &PlayerEntity) -> i32 {
 
 ///
 /// Broadcast an NPC position packet to nearby players.
-/// Builds a 32-byte buffer and calls `clif_send(buf, 32, ..., AREA_WOS)`.
+/// Builds a 32-byte buffer and calls `clif_send(buf, 32, BroadcastSrc { id: ..., m: AREA_WOS)`.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_npc_move_inner(nd: *const NpcData) -> i32 {
     if nd.is_null() { return 0; }
 
@@ -1727,7 +1781,7 @@ pub unsafe fn clif_npc_move_inner(nd: *const NpcData) -> i32 {
     buf[13] = (*nd).side as u8;
     // buf[14] = 0x00 (already zeroed)
     // SAFETY: clif_send only reads bl for area broadcast
-    clif_send(buf.as_ptr(), 32, (*nd).id, (*nd).m, (*nd).x, (*nd).y, BL_NPC as u8, AREA_WOS);
+    clif_send(buf.as_ptr(), 32, BroadcastSrc { id: (*nd).id, m: (*nd).m, x: (*nd).x, y: (*nd).y, bl_type: BL_NPC as u8 }, AREA_WOS);
     0
 }
 
@@ -1737,6 +1791,9 @@ pub unsafe fn clif_npc_move_inner(nd: *const NpcData) -> i32 {
 ///
 /// Send a mob-position packet to a player.
 /// `pe` is the viewing player, `mob` is the mob to render.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_mob_move_inner(pe: &PlayerEntity, mob: *const MobSpawnData) -> i32 {
     if mob.is_null() { return 0; }
     if (*mob).state == MOB_DEAD { return 0; }
@@ -1748,8 +1805,8 @@ pub unsafe fn clif_mob_move_inner(pe: &PlayerEntity, mob: *const MobSpawnData) -
     // WFIFOL(fd, 5) = SWAP32(mob->bl.id)
     let pw = |off: usize| wfifop(fd, off);
     (pw(5) as *mut u32).write_unaligned((*mob).id.to_be());
-    (pw(9) as *mut u16).write_unaligned(((*mob).prev_x as u16).to_be());
-    (pw(11) as *mut u16).write_unaligned(((*mob).prev_y as u16).to_be());
+    (pw(9) as *mut u16).write_unaligned((*mob).prev_x.to_be());
+    (pw(11) as *mut u16).write_unaligned((*mob).prev_y.to_be());
     *pw(13) = (*mob).side as u8;
     wfifoset(fd, encrypt(fd) as usize);
     0

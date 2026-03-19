@@ -29,7 +29,7 @@ use crate::common::constants::entity::BL_PC;
 use crate::common::constants::entity::player::{PC_ALIVE, SFLAG_HPMP};
 use crate::common::constants::world::MAX_MAP_PER_SERVER;
 use super::types::MapSessionData;
-use super::systems::{pc_calcstat, map_id2sd_pc, sl_doscript_simple_pc, sl_doscript_2_pc};
+use super::systems::{pc_calcstat, sl_doscript_simple_pc, sl_doscript_2_pc};
 
 // ─── Position / warp / magic / state / combat functions ───────────────────────
 //
@@ -62,6 +62,9 @@ impl Spatial for PlayerEntity {
 ///
 /// Guards against attempting to set position on a mob object (bl.id >= MOB_START_NUM).
 /// Sets bl.m, bl.x, bl.y, and bl.type.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn pc_setpos(
     sd: *mut MapSessionData,
     m: i32,
@@ -98,6 +101,9 @@ async fn lookup_map_server(map_id: i32) -> Option<u32> {
     .flatten()
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn pc_warp(
     sd: *mut MapSessionData,
     mut m: i32,
@@ -125,8 +131,8 @@ pub async unsafe fn pc_warp(
             None => return 0,
         };
 
-        if x < 0 || x > 255 { x = 1; }
-        if y < 0 || y > 255 { y = 1; }
+        if !(0..=255).contains(&x) { x = 1; }
+        if !(0..=255).contains(&y) { y = 1; }
 
         (*sd).player.identity.dest_pos.m = m as u16;
         (*sd).player.identity.dest_pos.x = x as u16;
@@ -202,6 +208,9 @@ pub async unsafe fn pc_warp(
 ///
 /// The actual stat/state changes are handled by `pc_diescript`; this function
 /// just fires the hook so scripts can respond immediately.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn pc_die(sd: *mut MapSessionData) -> i32 {
     sl_doscript_simple_pc("onDeathPlayer", None, (*sd).id);
     0
@@ -214,6 +223,9 @@ pub unsafe fn pc_die(sd: *mut MapSessionData) -> i32 {
 /// - Removes the dead player from all mob threat tables.
 /// - Resets combat state (enchanted, flank, backstab, dmgshield).
 /// - Recalculates stats and broadcasts updated state.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn pc_diescript(sd: *mut MapSessionData) -> i32 {
 
 
@@ -238,18 +250,36 @@ pub unsafe fn pc_diescript(sd: *mut MapSessionData) -> i32 {
         if magic_db::search(id as i32).dispell as i32 > 0 { continue; }
 
         (&mut (*sd).player.spells.dura_aether)[i].duration = 0;
-        clif_send_duration(
-            &mut *sd,
-            (&(*sd).player.spells.dura_aether)[i].id as i32,
-            0,
-            map_id2sd_pc((&(*sd).player.spells.dura_aether)[i].caster_id),
-        );
+        {
+            let caster_id = (&(*sd).player.spells.dura_aether)[i].caster_id;
+            let caster_pe = if caster_id > 0 {
+                map_server::map_id2sd_pc(caster_id)
+            } else {
+                None
+            };
+            if let Some(ref cpe) = caster_pe {
+                let mut caster_sd = cpe.write();
+                clif_send_duration(
+                    &mut *sd,
+                    (&(*sd).player.spells.dura_aether)[i].id as i32,
+                    0,
+                    &mut *caster_sd as *mut MapSessionData,
+                );
+            } else {
+                clif_send_duration(
+                    &mut *sd,
+                    (&(*sd).player.spells.dura_aether)[i].id as i32,
+                    0,
+                    std::ptr::null_mut(),
+                );
+            }
+        }
         (&mut (*sd).player.spells.dura_aether)[i].caster_id = 0;
 
         {
             let anim = (&(*sd).player.spells.dura_aether)[i].animation as i32;
             if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
-                let slot = &*map_db::get_map_ptr((*sd).m as u16);
+                let slot = &*map_db::get_map_ptr((*sd).m);
                 let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
                 for id in ids {
                     if let Some(tsd_arc) = map_server::map_id2sd_pc(id) {
@@ -328,6 +358,9 @@ pub unsafe fn pc_diescript(sd: *mut MapSessionData) -> i32 {
 
 /// Sync bridge for Lua/FFI callers that cannot `.await`.
 /// SAFETY: MapSessionData: Send; blocking_run_async joins before returning.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn pc_warp_sync(sd: *mut MapSessionData, m: i32, x: i32, y: i32) -> i32 {
     let sd_usize = sd as usize;
     database::blocking_run_async(database::assert_send(async move {
@@ -341,6 +374,9 @@ pub unsafe fn pc_warp_sync(sd: *mut MapSessionData, m: i32, x: i32, y: i32) -> i
 /// Sets state to alive, restores 100 HP, sends an HP/MP status update, and
 /// warps the player to their current position (which re-spawns them for other
 /// clients on the same map).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn pc_res(sd: *mut MapSessionData) -> i32 {
     (*sd).player.combat.state = PC_ALIVE as i8;
     (*sd).player.combat.hp    = 100;

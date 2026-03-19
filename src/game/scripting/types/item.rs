@@ -97,6 +97,9 @@ pub fn write_str_field(arr: &mut [i8], s: &mlua::String) {
 }
 
 /// Shared getattr for an ItemData record — used by all item type fallbacks.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn item_data_getattr(
     lua: &mlua::Lua,
     d: *const ItemData,
@@ -222,7 +225,7 @@ impl UserData for BItemObject {
             let bi = unsafe { &mut *(this.ptr as *mut BoundItem) };
             match key.as_str() {
                 "id"              => bi.id              = val_to_uint(&val),
-                "amount"          => bi.amount          = val_to_int(&val) as i32,
+                "amount"          => bi.amount          = val_to_int(&val),
                 "dura"            => bi.dura            = val_to_int(&val),
                 "protected"       => bi.protected       = val_to_uint(&val),
                 "owner"           => bi.owner           = val_to_uint(&val),

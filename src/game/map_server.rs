@@ -242,10 +242,8 @@ pub fn for_each_player<F: FnMut(&mut crate::game::pc::MapSessionData)>(mut f: F)
         player_map().values().map(Arc::clone).collect()
     };
     for arc in arcs {
-        // data_ptr() returns raw pointer to legacy data without acquiring any lock.
-        // SAFETY: single-threaded game loop, Arc keeps allocation alive.
-        let ptr: *mut crate::game::pc::MapSessionData = arc.data_ptr();
-        unsafe { f(&mut *ptr); }
+        let mut guard = arc.write();
+        f(&mut guard);
     }
 }
 
@@ -433,6 +431,9 @@ pub fn map_id2entity(id: u32) -> Option<GameEntity> {
 
 /// Floor item lookup — returns raw pointer via read lock on the `Arc<RwLock<FloorItemData>>`.
 /// Prefer `map_id2fl_ref` at new call sites.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_id2fl(id: u32) -> *mut std::ffi::c_void {
     map_id2fl_ref(id).map(|arc| {
         &*arc.read() as *const crate::game::scripting::types::floor::FloorItemData as *mut crate::game::scripting::types::floor::FloorItemData as *mut std::ffi::c_void
@@ -446,6 +447,9 @@ pub fn mob_map_remove(id: u32) {
 
 /// Find a player session by name (case-insensitive).
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_name2sd(name: *const i8) -> *mut MapSessionData {
     use crate::session::{session_exists, session_get_data, session_get_eof, SessionId};
     if name.is_null() { return std::ptr::null_mut(); }
@@ -456,7 +460,7 @@ pub unsafe fn map_name2sd(name: *const i8) -> *mut MapSessionData {
         if session_get_eof(fd) != 0 { continue; }
         let sd = match session_get_data(fd) { Some(a) => a, None => continue };
         if sd.read().player.identity.name.eq_ignore_ascii_case(&target) {
-            return sd.data_ptr();
+            return &mut *sd.write() as *mut MapSessionData;
         }
     }
     std::ptr::null_mut()
@@ -464,11 +468,14 @@ pub unsafe fn map_name2sd(name: *const i8) -> *mut MapSessionData {
 
 /// Find an NPC by name (case-insensitive). Iterates NPC ID range.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_name2npc(name: *const i8) -> *mut std::ffi::c_void {
     use crate::game::npc::{NPC_ID, NPC_START_NUM};
     use std::sync::atomic::Ordering;
     if name.is_null() { return std::ptr::null_mut(); }
-    let mut i = NPC_START_NUM as u32;
+    let mut i = NPC_START_NUM;
     let npc_hi = NPC_ID.load(Ordering::Relaxed);
     while i <= npc_hi {
         if let Some(arc) = map_id2npc_ref(i) {
@@ -485,12 +492,18 @@ pub unsafe fn map_name2npc(name: *const i8) -> *mut std::ffi::c_void {
 /// Reload the map registry for a single map.
 ///
 /// Loads the global player registry from the database.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_loadregistry(id: i32) -> i32 {
     crate::database::map_db::map_loadregistry(id)
 }
 
 /// Read a game-global registry value by name (case-insensitive).
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_readglobalgamereg(reg: *const i8) -> i32 {
     let gr = gamereg();
     if reg.is_null() || gr.registry.is_null() { return 0; }
@@ -505,17 +518,20 @@ pub unsafe fn map_readglobalgamereg(reg: *const i8) -> i32 {
 ///
 /// Called every 1000 ms from the Tokio select! loop.
 /// Must be called on the Lua-owning thread (LocalSet).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_cronjob() {
     let t = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    if t % 60    == 0 { cron("cronJobMin");    }
-    if t % 300   == 0 { cron("cronJob5Min");   }
-    if t % 1800  == 0 { cron("cronJob30Min");  }
-    if t % 3600  == 0 { cron("cronJobHour");   }
-    if t % 86400 == 0 { cron("cronJobDay");    }
+    if t.is_multiple_of(60) { cron("cronJobMin");    }
+    if t.is_multiple_of(300) { cron("cronJob5Min");   }
+    if t.is_multiple_of(1800) { cron("cronJob30Min");  }
+    if t.is_multiple_of(3600) { cron("cronJobHour");   }
+    if t.is_multiple_of(86400) { cron("cronJobDay");    }
     cron("cronJobSec");
 }
 
@@ -534,6 +550,9 @@ fn cron(name: &str) {
 // ---------------------------------------------------------------------------
 
 /// Returns 1 if `sd` is non-null and has an active session.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn isPlayerActive(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
@@ -546,6 +565,9 @@ pub unsafe fn isPlayerActive(sd: *mut MapSessionData) -> i32 {
 }
 
 /// Returns 1 if `sd` has a live session with no EOF flag set.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn isActive(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
@@ -563,6 +585,9 @@ pub unsafe fn isActive(sd: *mut MapSessionData) -> i32 {
 /// Returns `true` if the login Lua hook should be fired (character exists and val != 0).
 /// The caller is responsible for firing the hook AFTER this future completes so that
 /// any DB calls inside the hook do not re-enter DB_RUNTIME (which would deadlock).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn mmo_setonline(id: u32, val: i32) -> bool {
     // Extract all data from raw pointers BEFORE any .await so no raw pointers
     // cross yield points (required for the future to be Send).
@@ -700,6 +725,9 @@ use crate::common::constants::world::{BOARD_CAN_WRITE, BOARD_CAN_DEL};
 //   [len+7] = 0x07  (terminator)
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn nmail_sendmessage(
     sd:      *mut MapSessionData,
     message: *const i8,
@@ -747,6 +775,9 @@ pub unsafe fn nmail_sendmessage(
 //
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn boards_delete(sd: *mut MapSessionData, board: i32) -> i32 {
     if sd.is_null() { return 0; }
 
@@ -788,6 +819,9 @@ pub unsafe fn boards_delete(sd: *mut MapSessionData, board: i32) -> i32 {
 //
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn boards_showposts(
     sd:    *mut MapSessionData,
     board: i32,
@@ -836,7 +870,7 @@ pub unsafe fn boards_showposts(
 
     // Query DB directly instead of sending 0x3009 to char server.
     let rows = blocking_run_async(async move {
-        db_boards::list_posts(get_pool(), board as u32, bcount as u32 * 20, &name).await
+        db_boards::list_posts(get_pool(), board as u32, bcount * 20, &name).await
     });
 
     tracing::debug!("[map] [boards] showposts: board={} flags={} rows={}", board, flags, rows.len());
@@ -893,6 +927,9 @@ pub unsafe fn boards_showposts(
 //
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn boards_readpost(
     sd:    *mut MapSessionData,
     board: i32,
@@ -969,6 +1006,9 @@ pub unsafe fn boards_readpost(
 //
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
     if sd.is_null() { return 0; }
 
@@ -982,7 +1022,7 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
         name_buf[..n].copy_from_slice(&name_bytes[..n]);
         clif_Hacker(
             name_buf.as_mut_ptr() as *mut i8,
-            b"Board hacking: TOPIC HACK\0".as_ptr() as *const i8,
+            c"Board hacking: TOPIC HACK".as_ptr(),
         );
         return 0;
     }
@@ -999,7 +1039,7 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
         name_buf[..n].copy_from_slice(&name_bytes[..n]);
         clif_Hacker(
             name_buf.as_mut_ptr() as *mut i8,
-            b"Board hacking: POST(BODY) HACK\0".as_ptr() as *const i8,
+            c"Board hacking: POST(BODY) HACK".as_ptr(),
         );
         return 0;
     }
@@ -1007,7 +1047,7 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
     if topiclen == 0 {
         nmail_sendmessage(
             sd,
-            b"Post must contain subject.\0".as_ptr() as *const i8,
+            c"Post must contain subject.".as_ptr(),
             6, 0,
         );
         return 0;
@@ -1015,7 +1055,7 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
     if postlen == 0 {
         nmail_sendmessage(
             sd,
-            b"Post must contain a body.\0".as_ptr() as *const i8,
+            c"Post must contain a body.".as_ptr(),
             6, 0,
         );
         return 0;
@@ -1072,6 +1112,9 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
 // code). This function is kept as a noop stub.
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn nmail_read(_sd: *mut MapSessionData, _post: i32) -> i32 {
     0
 }
@@ -1082,6 +1125,9 @@ pub unsafe fn nmail_read(_sd: *mut MapSessionData, _post: i32) -> i32 {
 // Uses sqlx for database access.
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn nmail_luascript(
     sd:     *mut MapSessionData,
     to:     i32,
@@ -1121,6 +1167,9 @@ pub async unsafe fn nmail_luascript(
 // Uses sqlx for database access.
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn nmail_poemscript(
     sd:      *mut MapSessionData,
     topic:   *const i8,
@@ -1151,7 +1200,7 @@ pub async unsafe fn nmail_poemscript(
     if already_submitted {
         nmail_sendmessage(
             sd,
-            b"You have already submitted a poem.\0".as_ptr() as *const i8,
+            c"You have already submitted a poem.".as_ptr(),
             6, 1,
         );
         return 0;
@@ -1190,7 +1239,7 @@ pub async unsafe fn nmail_poemscript(
 
     nmail_sendmessage(
         sd,
-        b"Poem submitted.\0".as_ptr() as *const i8,
+        c"Poem submitted.".as_ptr(),
         6, 1,
     );
     0
@@ -1209,6 +1258,9 @@ pub async unsafe fn nmail_poemscript(
 // Total: 4124 bytes.
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn nmail_sendmailcopy(
     sd:      *mut MapSessionData,
     to_user: *const i8,
@@ -1240,6 +1292,9 @@ pub unsafe fn nmail_sendmailcopy(
 //
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
     if sd.is_null() { return 0; }
     let fd = (*sd).fd;
@@ -1252,7 +1307,7 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
         name_buf[..n].copy_from_slice(&name_bytes[..n]);
         clif_Hacker(
             name_buf.as_mut_ptr() as *mut i8,
-            b"NMAIL: To User\0".as_ptr() as *const i8,
+            c"NMAIL: To User".as_ptr(),
         );
         return 0;
     }
@@ -1264,7 +1319,7 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
         name_buf[..n].copy_from_slice(&name_bytes[..n]);
         clif_Hacker(
             name_buf.as_mut_ptr() as *mut i8,
-            b"NMAIL: Topic\0".as_ptr() as *const i8,
+            c"NMAIL: Topic".as_ptr(),
         );
         return 0;
     }
@@ -1280,7 +1335,7 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
         name_buf[..n].copy_from_slice(&name_bytes[..n]);
         clif_Hacker(
             name_buf.as_mut_ptr() as *mut i8,
-            b"NMAIL: Message\0".as_ptr() as *const i8,
+            c"NMAIL: Message".as_ptr(),
         );
         return 0;
     }
@@ -1319,7 +1374,7 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
             nmail_luascript(sd, tolen as i32, topiclen as i32, messagelen as i32).await;
             nmail_sendmessage(
                 sd,
-                b"LUA script ran!\0".as_ptr() as *const i8,
+                c"LUA script ran!".as_ptr(),
                 6, 1,
             );
             return 0; // only return if we actually handled the Lua mail
@@ -1329,10 +1384,10 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
 
     // Case: "poems" / "poem"
     if to_user_lower == "poems" || to_user_lower == "poem" {
-        if map_readglobalgamereg(b"poemAccept\0".as_ptr() as *const i8) == 0 {
+        if map_readglobalgamereg(c"poemAccept".as_ptr()) == 0 {
             nmail_sendmessage(
                 sd,
-                b"Currently not accepting poem submissions.\0".as_ptr() as *const i8,
+                c"Currently not accepting poem submissions.".as_ptr(),
                 6, 0,
             );
             return 0;
@@ -1347,7 +1402,7 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
         if topiclen == 0 {
             nmail_sendmessage(
                 sd,
-                b"Mail must contain a subject.\0".as_ptr() as *const i8,
+                c"Mail must contain a subject.".as_ptr(),
                 6, 0,
             );
             return 0;
@@ -1355,7 +1410,7 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
         if messagelen == 0 {
             nmail_sendmessage(
                 sd,
-                b"Mail must contain a body.\0".as_ptr() as *const i8,
+                c"Mail must contain a body.".as_ptr(),
                 6, 0,
             );
             return 0;
@@ -1369,7 +1424,7 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
     if topiclen == 0 {
         nmail_sendmessage(
             sd,
-            b"Mail must contain a subject.\0".as_ptr() as *const i8,
+            c"Mail must contain a subject.".as_ptr(),
             6, 0,
         );
         return 0;
@@ -1377,7 +1432,7 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
     if messagelen == 0 {
         nmail_sendmessage(
             sd,
-            b"Mail must contain a body.\0".as_ptr() as *const i8,
+            c"Mail must contain a body.".as_ptr(),
             6, 0,
         );
         return 0;
@@ -1410,6 +1465,9 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
 // Packet layout is identical to nmail_sendmailcopy (0x300F) but uses 0x300D.
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn nmail_sendmail(
     sd:      *mut MapSessionData,
     to_user: *const i8,
@@ -1449,6 +1507,9 @@ pub unsafe fn nmail_sendmail(
 // Uses sqlx for database access.
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn map_changepostcolor(
     board: i32,
     post:  i32,
@@ -1472,6 +1533,9 @@ pub async unsafe fn map_changepostcolor(
 // Uses sqlx for database access.
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn map_getpostcolor(board: i32, post: i32) -> i32 {
     sqlx::query_scalar::<_, Option<i32>>(
             "SELECT `BrdHighlighted` FROM `Boards` WHERE `BrdBnmId` = ? AND `BrdPosition` = ?"
@@ -1689,7 +1753,7 @@ pub async unsafe fn change_time_char(_id: i32, _n: i32) -> i32 {
         let fd = SessionId::from_raw(i);
         if session_exists(fd) {
             if let Some(sd) = session_get_data(fd) {
-                crate::game::map_parse::player_state::clif_sendtime(&*sd);
+                crate::game::map_parse::player_state::clif_sendtime(&sd);
             }
         }
     }
@@ -1838,7 +1902,7 @@ pub unsafe fn object_flag_init() -> i32 {
         path_str
     );
 
-    let fi = libc::fopen(path_cstr.as_ptr(), b"rb\0".as_ptr().cast());
+    let fi = libc::fopen(path_cstr.as_ptr(), c"rb".as_ptr());
     if fi.is_null() {
         tracing::error!(
             "[map] [error] cannot read static object table path={}",
@@ -2092,10 +2156,10 @@ unsafe fn reg_str_eq(arr: &[i8; 64], cstr: *const i8) -> bool {
     if cstr.is_null() {
         return false;
     }
-    for i in 0..64usize {
-        let a = arr[i] as u8;
+    for (i, arr_byte) in arr.iter().enumerate().take(64) {
+        let a = *arr_byte as u8;
         let b = *cstr.add(i) as u8;
-        if a.to_ascii_lowercase() != b.to_ascii_lowercase() {
+        if !a.eq_ignore_ascii_case(&b) {
             return false;
         }
         if a == 0 {
@@ -2109,7 +2173,7 @@ unsafe fn reg_str_eq(arr: &[i8; 64], cstr: *const i8) -> bool {
 unsafe fn copy_cstr_to_reg_str(dest: &mut [i8; 64], src: *const i8) {
     let mut i = 0usize;
     while i < 63 {
-        let b = *src.add(i) as i8;
+        let b = *src.add(i);
         dest[i] = b;
         if b == 0 {
             return;
@@ -2391,6 +2455,9 @@ pub async unsafe fn map_setglobalreg_str(m: i32, reg_name: String, val: i32) -> 
 ///
 /// Updates the in-memory `gamereg` and persists to DB. All parameters are owned/Copy
 /// types so the future is `Send` — safe to `.await` from Lua callback boundaries.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn map_setglobalgamereg_str(reg_name: String, val: i32) -> i32 {
     let save_info: Option<(i32, bool)> = {
         let mut gr = gamereg();
@@ -2754,6 +2821,9 @@ pub async fn map_id2name(id: u32) -> String {
 
 /// Trigger the mapWeather Lua hook when the in-game hour changes.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_weather(_id: i32, _n: i32) -> i32 {
     let ot = old_time.load(Ordering::Relaxed);
     let ct = cur_time.load(Ordering::Relaxed);
@@ -2768,18 +2838,24 @@ pub unsafe fn map_weather(_id: i32, _n: i32) -> i32 {
 
 /// Save all online character sessions to the char server.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_savechars(_none: i32, _nonetoo: i32) -> i32 {
     for x in 0..crate::session::get_fd_max() {
         let fd = SessionId::from_raw(x);
         if !session_exists(fd) { continue; }
         if session_get_eof(fd) != 0 { continue; }
-        if let Some(sd) = session_get_data(fd) { sl_intif_save(sd.data_ptr()); }
+        if let Some(sd) = session_get_data(fd) { sl_intif_save(&mut *sd.write() as *mut MapSessionData); }
     }
     0
 }
 
 /// No-op stub — `map_registrydelete` was commented out in C and has no current callers.
 /// Retained for ABI completeness.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 #[allow(dead_code)]
 pub unsafe fn map_registrydelete(_m: i32, _i: i32) -> i32 {
     0
@@ -2856,11 +2932,10 @@ pub unsafe fn hasCoref(sd: *mut MapSessionData) -> i32 {
         return 1;
     }
     // Container coref: the container player must still be in the ID database.
-    if (*sd).coref_container != 0 {
-        if map_id2sd_pc((*sd).coref_container).is_some() {
+    if (*sd).coref_container != 0
+        && map_id2sd_pc((*sd).coref_container).is_some() {
             return 1;
         }
-    }
     0
 }
 
@@ -3085,13 +3160,12 @@ pub unsafe fn map_reset_timer(v1: i32, v2: i32) -> i32 {
             crate::game::map_parse::chat::clif_broadcast(msg.as_ptr() as *const i8, -1);
             RESET_TIMER_DIFF.store(0, Ordering::Relaxed);
         }
-    } else if remaining > 3_600_000 {
-        if diff >= 3_600_000 {
+    } else if remaining > 3_600_000
+        && diff >= 3_600_000 {
             let msg = format!("Reset in {} hours\0", remaining / 3_600_000);
             crate::game::map_parse::chat::clif_broadcast(msg.as_ptr() as *const i8, -1);
             RESET_TIMER_DIFF.store(0, Ordering::Relaxed);
         }
-    }
 
     0
 }

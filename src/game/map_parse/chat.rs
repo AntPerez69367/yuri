@@ -6,7 +6,7 @@ use crate::session::{
 };
 use crate::game::npc::NpcData;
 use crate::game::pc::{
-    MapSessionData, SdIgnoreList,
+    SdIgnoreList,
     FLAG_ADVICE, FLAG_SHOUT, FLAG_WHISPER,
     OPT_FLAG_STEALTH, U_FLAG_SILENCED,
     MAP_WHISPFAIL,
@@ -14,6 +14,7 @@ use crate::game::pc::{
     map_msg,
 };
 use crate::common::player::spells::MAX_SPELLS;
+use crate::game::pc::MapSessionData;
 use crate::game::player::entity::PlayerEntity;
 
 use super::packet::{
@@ -38,11 +39,13 @@ use crate::database::class_db::{name as classdb_name, chat as classdb_chat};
 use crate::game::gm_command::is_command;
 use crate::database::magic_db;
 use crate::game::client::handlers::clif_Hacker;
+use crate::game::client::BroadcastSrc;
 
 // Alias for the async coroutine freeer (returns () in Rust, was i32 in C -- return unused).
 #[inline]
 unsafe fn sl_async_freeco(pe: &PlayerEntity) {
-    crate::game::scripting::sl_async_freeco(pe.data_ptr()); // TODO(phase6c): migrate
+    let sd_ptr = &mut *pe.write() as *mut MapSessionData;
+    crate::game::scripting::sl_async_freeco(sd_ptr);
 }
 
 /// Dispatch a Lua event with a single entity ID argument.
@@ -87,6 +90,9 @@ fn buf_put_be32(buf: &mut [u8], pos: usize, val: u32) {
 
 /// Send a guide popup packet to a single player.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendguidespecific(pe: &PlayerEntity, guide: i32) -> i32 {
     if !session_alive(pe.fd) { return 0; }
 
@@ -108,6 +114,9 @@ pub unsafe fn clif_sendguidespecific(pe: &PlayerEntity, guide: i32) -> i32 {
 
 /// foreachinarea callback: send a global broadcast to one player.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_broadcast_sub_inner(pe: &PlayerEntity, msg: *const i8) -> i32 {
     if !session_alive(pe.fd) { return 0; }
 
@@ -136,6 +145,9 @@ pub unsafe fn clif_broadcast_sub_inner(pe: &PlayerEntity, msg: *const i8) -> i32
 
 /// foreachinarea callback: send a GM broadcast to one player.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_gmbroadcast_sub_inner(pe: &PlayerEntity, msg: *const i8) -> i32 {
     if !session_alive(pe.fd) { return 0; }
 
@@ -160,6 +172,9 @@ pub unsafe fn clif_gmbroadcast_sub_inner(pe: &PlayerEntity, msg: *const i8) -> i
 
 /// foreachinarea callback: send a broadcast only if the player is a GM.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_broadcasttogm_sub_inner(pe: &PlayerEntity, msg: *const i8) -> i32 {
     if pe.read().player.identity.gm_level != 0 {
         if !session_exists(pe.fd) {
@@ -188,6 +203,9 @@ pub unsafe fn clif_broadcasttogm_sub_inner(pe: &PlayerEntity, msg: *const i8) ->
 
 /// Send a broadcast message to all players on a map (or all maps if m == -1).
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_broadcast(msg: *const i8, m: i32) -> i32 {
     if m == -1 {
         for x in 0..65535usize {
@@ -221,6 +239,9 @@ pub unsafe fn clif_broadcast(msg: *const i8, m: i32) -> i32 {
 
 /// Send a GM broadcast message to all GMs on a map (or all maps if m == -1).
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_gmbroadcast(msg: *const i8, m: i32) -> i32 {
     if m == -1 {
         for x in 0..65535usize {
@@ -254,6 +275,9 @@ pub unsafe fn clif_gmbroadcast(msg: *const i8, m: i32) -> i32 {
 
 /// Send a broadcast message to all GMs on a map (or all maps if m == -1).
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_broadcasttogm(msg: *const i8, m: i32) -> i32 {
     if m == -1 {
         for x in 0..65535usize {
@@ -287,6 +311,9 @@ pub unsafe fn clif_broadcasttogm(msg: *const i8, m: i32) -> i32 {
 
 /// Send a GUI text popup to a single player.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_guitextsd(msg: *const i8, pe: &PlayerEntity) -> i32 {
     if !session_alive(pe.fd) { return 0; }
 
@@ -311,6 +338,9 @@ pub unsafe fn clif_guitextsd(msg: *const i8, pe: &PlayerEntity) -> i32 {
 
 /// foreachinarea callback: send a GUI text popup to one player.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_guitext_inner(pe: &PlayerEntity, msg: *const i8) -> i32 {
     if !session_alive(pe.fd) { return 0; }
 
@@ -335,11 +365,14 @@ pub unsafe fn clif_guitext_inner(pe: &PlayerEntity, msg: *const i8) -> i32 {
 
 /// Handle an emotion packet from the client.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parseemotion(pe: &PlayerEntity) -> i32 {
     use super::packet::rfifob;
     if pe.read().player.combat.state == 0 {
         clif_sendaction_pc(
-            &mut *pe.write(),
+            &mut pe.write(),
             rfifob(pe.fd, 5) as i32 + 11,
             0x4E,
             0,
@@ -354,6 +387,9 @@ pub unsafe fn clif_parseemotion(pe: &PlayerEntity) -> i32 {
 ///
 /// Type 0 = wisp/blue, 3 = mini text, 5 = system, 11 = group/subpath, 12 = clan.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendmsg(
     pe: &PlayerEntity,
     mut msg_type: i32,
@@ -391,6 +427,9 @@ pub unsafe fn clif_sendmsg(
 
 /// Send a mini status-text message to a single player.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendminitext(pe: &PlayerEntity, msg: *const i8) -> i32 {
     if libc_strlen(msg) == 0 { return 0; }
     clif_sendmsg(pe, 3, msg);
@@ -401,6 +440,9 @@ pub unsafe fn clif_sendminitext(pe: &PlayerEntity, msg: *const i8) -> i32 {
 
 /// Deliver an incoming whisper to the destination player.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendwisp(
     pe: &PlayerEntity,
     srcname: *const i8,
@@ -450,6 +492,9 @@ pub unsafe fn clif_sendwisp(
 
 /// Echo a whisper back to the sender (shows "dstname> msg").
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_retrwisp(
     pe: &PlayerEntity,
     dstname: *mut i8,
@@ -473,8 +518,11 @@ pub unsafe fn clif_retrwisp(
 
 /// Tell the player their whisper failed.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_failwisp(pe: &PlayerEntity) -> i32 {
-    clif_sendmsg(pe, 0, map_msg()[MAP_WHISPFAIL].message.as_ptr() as *const i8);
+    clif_sendmsg(pe, 0, map_msg()[MAP_WHISPFAIL].message.as_ptr());
     0
 }
 
@@ -482,6 +530,9 @@ pub unsafe fn clif_failwisp(pe: &PlayerEntity) -> i32 {
 
 /// Send a blue (whisper-style type 0) system message.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendbluemessage(pe: &PlayerEntity, msg: *const i8) -> i32 {
     if !session_alive(pe.fd) { return 0; }
 
@@ -506,6 +557,9 @@ pub unsafe fn clif_sendbluemessage(pe: &PlayerEntity, msg: *const i8) -> i32 {
 
 /// Send a positional sound effect to all nearby clients, given entity fields.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_playsound_entity(id: u32, m: u16, x: u16, y: u16, bl_type: u8, sound: i32) -> i32 {
     let mut buf2 = [0u8; 32];
 
@@ -525,7 +579,7 @@ pub unsafe fn clif_playsound_entity(id: u32, m: u16, x: u16, y: u16, bl_type: u8
     buf_put_be16(&mut buf2, 20, 4);
     buf2[22] = 0;
 
-    clif_send(buf2.as_ptr(), 32, id, m, x, y, bl_type, SAMEAREA);
+    clif_send(buf2.as_ptr(), 32, BroadcastSrc { id, m, x, y, bl_type }, SAMEAREA);
     0
 }
 
@@ -533,6 +587,9 @@ pub unsafe fn clif_playsound_entity(id: u32, m: u16, x: u16, y: u16, bl_type: u8
 
 /// Add a player name to the ignore list (no-op if already present).
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn ignorelist_add(pe: &PlayerEntity, name: *const i8) -> i32 {
     // Check if name is already on the list
     let mut current = pe.read().IgnoreList;
@@ -563,6 +620,9 @@ pub unsafe fn ignorelist_add(pe: &PlayerEntity, name: *const i8) -> i32 {
 ///
 /// Returns 0 on success, 1 if not found, 2 if list is empty.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn ignorelist_remove(pe: &PlayerEntity, name: *const i8) -> i32 {
     if pe.read().IgnoreList.is_null() {
         return 2;
@@ -597,6 +657,9 @@ pub unsafe fn ignorelist_remove(pe: &PlayerEntity, name: *const i8) -> i32 {
 /// Check whether `sd` is ignoring `dst_sd` or vice versa. Returns 1 if
 /// communication is allowed, 0 if blocked.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_isignore(
     pe: &PlayerEntity,
     dst_pe: &PlayerEntity,
@@ -628,6 +691,9 @@ pub unsafe fn clif_isignore(
 
 /// Check whether `sd` is allowed to whisper `dst_sd`.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn canwhisper(
     pe: &PlayerEntity,
     dst_pe: &PlayerEntity,
@@ -638,9 +704,7 @@ pub unsafe fn canwhisper(
     };
     let dst_whisper_flag = dst_pe.read().player.appearance.setting_flags & FLAG_WHISPER;
 
-    if uflags & U_FLAG_SILENCED != 0 {
-        return 0;
-    } else if gm_level == 0 && dst_whisper_flag == 0 {
+    if uflags & U_FLAG_SILENCED != 0 || (gm_level == 0 && dst_whisper_flag == 0) {
         return 0;
     } else if gm_level == 0 {
         return clif_isignore(pe, dst_pe);
@@ -653,6 +717,9 @@ pub unsafe fn canwhisper(
 
 /// Send a party chat message to all group members.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendgroupmessage(
     pe: &PlayerEntity,
     msg: *mut u8,
@@ -700,6 +767,9 @@ pub unsafe fn clif_sendgroupmessage(
 
 /// Send a sub-path (class channel) chat message.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendsubpathmessage(
     pe: &PlayerEntity,
     msg: *mut u8,
@@ -735,11 +805,10 @@ pub unsafe fn clif_sendsubpathmessage(
             let r = tsd.read();
             (r.player.progression.class, r.player.social.subpath_chat)
         };
-        if tsd_class == sd_class && tsd_subpath_chat != 0 {
-            if clif_isignore(pe, tsd.as_ref()) != 0 {
+        if tsd_class == sd_class && tsd_subpath_chat != 0
+            && clif_isignore(pe, tsd.as_ref()) != 0 {
                 clif_sendmsg(tsd.as_ref(), 11, buf2_c.as_ptr());
             }
-        }
     }
     0
 }
@@ -748,6 +817,9 @@ pub unsafe fn clif_sendsubpathmessage(
 
 /// Send a clan chat message to all clan members.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendclanmessage(
     pe: &PlayerEntity,
     msg: *mut u8,
@@ -783,11 +855,10 @@ pub unsafe fn clif_sendclanmessage(
             let r = tsd.read();
             (r.player.social.clan, r.player.social.clan_chat)
         };
-        if tsd_clan == sd_clan && tsd_clan_chat != 0 {
-            if clif_isignore(pe, tsd.as_ref()) != 0 {
+        if tsd_clan == sd_clan && tsd_clan_chat != 0
+            && clif_isignore(pe, tsd.as_ref()) != 0 {
                 clif_sendmsg(tsd.as_ref(), 12, buf2_c.as_ptr());
             }
-        }
     }
     0
 }
@@ -796,6 +867,9 @@ pub unsafe fn clif_sendclanmessage(
 
 /// Send a novice/tutor channel message.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendnovicemessage(
     pe: &PlayerEntity,
     msg: *mut u8,
@@ -842,11 +916,10 @@ pub unsafe fn clif_sendnovicemessage(
             let r = tsd.read();
             (r.player.social.tutor, r.player.identity.gm_level, r.player.social.novice_chat)
         };
-        if (tsd_tutor != 0 || tsd_tgm > 0) && tsd_novice_chat != 0 {
-            if clif_isignore(pe, tsd.as_ref()) != 0 {
+        if (tsd_tutor != 0 || tsd_tgm > 0) && tsd_novice_chat != 0
+            && clif_isignore(pe, tsd.as_ref()) != 0 {
                 clif_sendmsg(tsd.as_ref(), 12, buf2.as_ptr() as *const i8);
             }
-        }
     }
     0
 }
@@ -855,6 +928,9 @@ pub unsafe fn clif_sendnovicemessage(
 
 /// Parse an incoming whisper packet and dispatch it.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parsewisp(pe: &PlayerEntity) -> i32 {
     use super::packet::{rfifob, rfifop, rfiforest, rfifow};
 
@@ -980,13 +1056,13 @@ pub unsafe fn clif_parsewisp(pe: &PlayerEntity) -> i32 {
                     };
                     let dst_name_cstr = std::ffi::CString::new(dst_pe_arc.read().player.identity.name.as_str()).unwrap_or_default();
                     if dst_afk != 0 {
-                        let afk_msg_ptr = dst_pe_arc.read().afkmessage.as_ptr() as *const i8;
+                        let afk_msg_ptr = dst_pe_arc.read().afkmessage.as_ptr();
                         crate::game::scripting::doscript_strings(c"characterLog".as_ptr(), c"whisperLog".as_ptr(), &[dst_name_cstr.as_ptr(), sd_name_cstr.as_ptr(), msg_c]);
 
                         clif_sendwisp(dst_pe_arc.as_ref(), sd_name_cstr.as_ptr(), msg_c);
                         // afk message needs a stable pointer — copy it out
                         let afk_msg_bytes = dst_pe_arc.read().afkmessage;
-                        clif_sendwisp(dst_pe_arc.as_ref(), dst_name_cstr.as_ptr(), afk_msg_bytes.as_ptr() as *const i8);
+                        clif_sendwisp(dst_pe_arc.as_ref(), dst_name_cstr.as_ptr(), afk_msg_bytes.as_ptr());
 
                         if gm_level == 0 && dst_opt_flags & OPT_FLAG_STEALTH != 0 {
                             // don't reveal their presence
@@ -1032,6 +1108,9 @@ pub unsafe fn clif_parsewisp(pe: &PlayerEntity) -> i32 {
 
 /// Broadcast a player say/shout and fire NPC speech callbacks.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendsay(
     pe: &PlayerEntity,
     msg: *mut i8,
@@ -1048,10 +1127,10 @@ pub unsafe fn clif_sendsay(
     }
 
     let skills: Vec<u16> = pe.read().player.spells.skills.clone();
-    for i in 0..MAX_SPELLS {
-        if skills[i] > 0 {
-            let spell = magic_db::search(skills[i] as i32);
-            let yname = crate::game::scripting::carray_to_str(&(*spell).yname);
+    for skill in skills.iter().take(MAX_SPELLS) {
+        if *skill > 0 {
+            let spell = magic_db::search(*skill as i32);
+            let yname = crate::game::scripting::carray_to_str(&spell.yname);
             sl_doscript_simple(yname, Some("on_say"), pe.id);
         }
     }
@@ -1063,6 +1142,9 @@ pub unsafe fn clif_sendsay(
 
 /// Broadcast a player's scripted say and log it; handles language channels.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendscriptsay(
     pe: &PlayerEntity,
     msg: *const i8,
@@ -1080,7 +1162,7 @@ pub unsafe fn clif_sendscriptsay(
         return 0;
     }
 
-    if is_command(pe.data_ptr(), msg, msglen) != 0 { // TODO(phase6c): migrate
+    if is_command(&mut *pe.write() as *mut MapSessionData, msg, msglen) != 0 {
         return 0;
     }
 
@@ -1124,7 +1206,7 @@ pub unsafe fn clif_sendscriptsay(
         buf[12 + pname.len()] = b' ';
         buf[13 + pname.len()..13 + pname.len() + msglen as usize].copy_from_slice(msg_bytes);
 
-        clif_send(buf.as_ptr(), buf_size as i32, pe.id, sd_m, sd_x, sd_y, BL_PC as u8, SAMEAREA);
+        clif_send(buf.as_ptr(), buf_size as i32, BroadcastSrc { id: pe.id, m: sd_m, x: sd_x, y: sd_y, bl_type: BL_PC as u8 }, SAMEAREA);
     } else {
         if !session_exists(pe.fd) {
             return 0;
@@ -1147,7 +1229,7 @@ pub unsafe fn clif_sendscriptsay(
         buf[13 + namelen..13 + namelen + msglen as usize].copy_from_slice(msg_bytes);
 
         let send_target = if say_type == 1 { SAMEMAP } else { SAMEAREA };
-        clif_send(buf.as_ptr(), buf_size as i32, pe.id, sd_m, sd_x, sd_y, BL_PC as u8, send_target);
+        clif_send(buf.as_ptr(), buf_size as i32, BroadcastSrc { id: pe.id, m: sd_m, x: sd_x, y: sd_y, bl_type: BL_PC as u8 }, send_target);
     }
 
     // Copy msg to speech
@@ -1189,6 +1271,9 @@ pub unsafe fn clif_sendscriptsay(
 
 /// foreachinarea callback: fire NPC speech handler if player is nearby.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendnpcsay_inner(nd: *const NpcData, _msg: *const i8, pe: &PlayerEntity) -> i32 {
     if (*nd).subtype != SCRIPT { return 0; }
 
@@ -1205,6 +1290,9 @@ pub unsafe fn clif_sendnpcsay_inner(nd: *const NpcData, _msg: *const i8, pe: &Pl
 
 /// foreachinarea callback: mob speech handler (currently a no-op in C).
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendmobsay_inner(_md: *const MobSpawnData, _msg: *const i8, _pe: &PlayerEntity) -> i32 {
     0
 }
@@ -1213,6 +1301,9 @@ pub unsafe fn clif_sendmobsay_inner(_md: *const MobSpawnData, _msg: *const i8, _
 
 /// foreachinarea callback: fire NPC speech handler (yell range = 20).
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendnpcyell_inner(nd: *const NpcData, _msg: *const i8, pe: &PlayerEntity) -> i32 {
     if (*nd).subtype != SCRIPT { return 0; }
 
@@ -1229,6 +1320,9 @@ pub unsafe fn clif_sendnpcyell_inner(nd: *const NpcData, _msg: *const i8, pe: &P
 
 /// foreachinarea callback: mob yell handler (currently a no-op in C).
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendmobyell_inner(_md: *const MobSpawnData, _msg: *const i8, _pe: &PlayerEntity) -> i32 {
     0
 }
@@ -1237,6 +1331,9 @@ pub unsafe fn clif_sendmobyell_inner(_md: *const MobSpawnData, _msg: *const i8, 
 
 /// Send an NPC/object speech-bubble packet to one player.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_speak_inner(viewer_fd: SessionId, msg: *const i8, speaker_id: u32, speak_type: i32) -> i32 {
     if speaker_id == 0 { return 0; }
 
@@ -1262,6 +1359,9 @@ pub unsafe fn clif_speak_inner(viewer_fd: SessionId, msg: *const i8, speaker_id:
 
 /// Handle an ignore-list add/remove packet from the client.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parseignore(pe: &PlayerEntity) -> i32 {
     use super::packet::rfifob;
 
@@ -1275,13 +1375,13 @@ pub unsafe fn clif_parseignore(pe: &PlayerEntity) -> i32 {
                 // Add
                 let src = super::packet::rfifop(pe.fd, 7);
                 std::ptr::copy_nonoverlapping(src as *const i8, name_buf.as_mut_ptr(), nlen.min(31));
-                ignorelist_add(pe, name_buf.as_ptr() as *const i8);
+                ignorelist_add(pe, name_buf.as_ptr());
             }
             0x03 => {
                 // Remove
                 let src = super::packet::rfifop(pe.fd, 7);
                 std::ptr::copy_nonoverlapping(src as *const i8, name_buf.as_mut_ptr(), nlen.min(31));
-                ignorelist_remove(pe, name_buf.as_ptr() as *const i8);
+                ignorelist_remove(pe, name_buf.as_ptr());
             }
             _ => {}
         }
@@ -1293,6 +1393,9 @@ pub unsafe fn clif_parseignore(pe: &PlayerEntity) -> i32 {
 
 /// Parse an incoming say packet from the client.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parsesay(pe: &PlayerEntity) -> i32 {
     use super::packet::{rfifob, rfifop};
 
@@ -1307,7 +1410,7 @@ pub unsafe fn clif_parsesay(pe: &PlayerEntity) -> i32 {
         return 0;
     }
 
-    if is_command(pe.data_ptr(), msg, rfifob(pe.fd, 6) as i32) != 0 { // TODO(phase6c): migrate
+    if is_command(&mut *pe.write() as *mut MapSessionData, msg, rfifob(pe.fd, 6) as i32) != 0 {
         return 0;
     }
 
@@ -1322,10 +1425,10 @@ pub unsafe fn clif_parsesay(pe: &PlayerEntity) -> i32 {
     }
 
     let skills: Vec<u16> = pe.read().player.spells.skills.clone();
-    for i in 0..MAX_SPELLS {
-        if skills[i] > 0 {
-            let spell = magic_db::search(skills[i] as i32);
-            let yname = crate::game::scripting::carray_to_str(&(*spell).yname);
+    for skill in skills.iter().take(MAX_SPELLS) {
+        if *skill > 0 {
+            let spell = magic_db::search(*skill as i32);
+            let yname = crate::game::scripting::carray_to_str(&spell.yname);
             sl_doscript_simple(yname, Some("on_say"), pe.id);
         }
     }
@@ -1354,7 +1457,7 @@ unsafe fn strcasecmp_cstr(a: *const i8, b: *const i8) -> i32 {
     let b_bytes = b_str.to_bytes();
     if a_bytes.len() != b_bytes.len() { return 1; }
     for (&x, &y) in a_bytes.iter().zip(b_bytes.iter()) {
-        if x.to_ascii_lowercase() != y.to_ascii_lowercase() { return 1; }
+        if !x.eq_ignore_ascii_case(&y) { return 1; }
     }
     0
 }

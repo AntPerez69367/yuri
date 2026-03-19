@@ -239,7 +239,7 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
             }
             mlua::Value::String(ref s) => {
                 let text = s.to_str()?;
-                match crate::database::recipe_db::searchname(&*text) {
+                match crate::database::recipe_db::searchname(&text) {
                     Some(arc) => std::sync::Arc::into_raw(arc) as *mut std::ffi::c_void,
                     None => std::ptr::null_mut(),
                 }
@@ -261,6 +261,9 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
 // ---------------------------------------------------------------------------
 // sl_reload
 // ---------------------------------------------------------------------------
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_reload() -> i32 {
     let lua = sl_state();
     let cfg = crate::config::config();
@@ -272,7 +275,7 @@ pub unsafe fn sl_reload() -> i32 {
 
 fn load_lua_file(lua: &Lua, path: &std::path::Path) -> mlua::Result<()> {
     let src = std::fs::read(path)
-        .map_err(|e| mlua::Error::external(e))?;
+        .map_err(mlua::Error::external)?;
     let name = path.to_string_lossy();
     lua.load(src.as_slice()).set_name(name.as_ref()).eval::<()>()
 }
@@ -311,12 +314,18 @@ fn load_dir_recursive(lua: &Lua, dir: &str) -> mlua::Result<()> {
 // ---------------------------------------------------------------------------
 // sl_fixmem + sl_luasize
 // ---------------------------------------------------------------------------
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_fixmem() {
     if let Ok(gc) = sl_state().globals().get::<mlua::Function>("collectgarbage") {
         let _ = gc.call::<()>("collect");
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_luasize() -> i32 {
     sl_state().globals()
         .get::<mlua::Function>("collectgarbage")
@@ -531,6 +540,9 @@ pub unsafe fn doscript_strings(
     call_lua(root, method, mv) as i32
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_doscript_strings_vec(
     root: *const i8, method: *const i8,
     nargs: i32, args: *const *const i8,
@@ -542,6 +554,9 @@ pub unsafe fn sl_doscript_strings_vec(
     doscript_strings(root, method, slice)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_doscript_stackargs(
     root: *const i8, method: *const i8, _nargs: i32,
 ) -> i32 {
@@ -551,6 +566,9 @@ pub unsafe fn sl_doscript_stackargs(
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_exec_str(user: *mut std::ffi::c_void, code: *const i8) {
     let s = CStr::from_ptr(code).to_string_lossy();
     let lua = sl_state();
@@ -559,14 +577,23 @@ pub unsafe fn sl_exec_str(user: *mut std::ffi::c_void, code: *const i8) {
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_resumemenu(selection: u32, sd: *mut crate::game::pc::MapSessionData) {
     async_coro::resume_menu(selection, sd as *mut std::ffi::c_void)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_resumemenuseq(selection: u32, choice: i32, sd: *mut crate::game::pc::MapSessionData) {
     async_coro::resume_menuseq(selection, choice, sd as *mut std::ffi::c_void)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_resumeinputseq(
     choice: u32,
     input:  *mut i8,
@@ -575,14 +602,23 @@ pub unsafe fn sl_resumeinputseq(
     async_coro::resume_inputseq(choice, input, sd as *mut std::ffi::c_void)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_resumedialog(choice: u32, sd: *mut crate::game::pc::MapSessionData) {
     async_coro::resume_dialog(choice, sd as *mut std::ffi::c_void)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_resumebuy(items: *mut i8, sd: *mut crate::game::pc::MapSessionData) {
     async_coro::resume_buy(items, sd as *mut std::ffi::c_void)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_resumeinput(
     tag:   *mut i8,
     input: *mut i8,
@@ -591,14 +627,23 @@ pub unsafe fn sl_resumeinput(
     async_coro::resume_input(tag, input, sd as *mut std::ffi::c_void)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_resumesell(choice: u32, sd: *mut crate::game::pc::MapSessionData) {
     async_coro::resume_sell(choice, sd as *mut std::ffi::c_void)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_exec(_user: *mut crate::game::pc::MapSessionData, code: *mut i8) {
     sl_exec_str(_user as *mut std::ffi::c_void, code)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_async_freeco(user: *mut crate::game::pc::MapSessionData) {
     thread_registry::cancel(user as usize);
     async_coro::clear_menu_opts(user as *mut std::ffi::c_void);

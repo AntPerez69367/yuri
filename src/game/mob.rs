@@ -281,6 +281,9 @@ pub fn mob_get_new_id() -> u32 {
     MOB_ID.fetch_add(1, Ordering::Relaxed)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_get_free_id() -> u32 {
     let mut x = MOB_ONETIME_START.load(Ordering::Relaxed);
     loop {
@@ -303,6 +306,9 @@ pub unsafe fn mob_get_free_id() -> u32 {
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn free_onetime(mob: *mut MobSpawnData) -> i32 {
     if mob.is_null() {
         return 0;
@@ -342,6 +348,9 @@ unsafe fn in_spawn_window(mob: *const MobSpawnData) -> bool {
         || (s == 25 && e == 25)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_respawn_getstats(mob: *mut MobSpawnData) -> i32 {
     if mob.is_null() {
         return 0;
@@ -419,6 +428,9 @@ async fn mobspawn_fetch(serverid_val: i32) -> Result<Vec<sqlx::mysql::MySqlRow>,
     sqlx::query(&query).fetch_all(pool).await
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn mobspawn_read() -> i32 {
     let serverid_val = crate::config::config().server_id;
     let result = mobspawn_fetch(serverid_val).await;
@@ -526,15 +538,24 @@ pub async unsafe fn mobspawn_read() -> i32 {
 }
 
 // Stubs — no active callers
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mobspawn2_read() -> i32 {
     0
 }
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mobspeech_read() -> i32 {
     0
 }
 
 // ─── Magic timer functions ────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_duratimer(mob: *mut MobSpawnData) -> i32 {
     if mob.is_null() {
         return 0;
@@ -622,6 +643,9 @@ unsafe fn dura_tick(mob: *mut MobSpawnData, event: &str) {
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_secondduratimer(mob: *mut MobSpawnData) -> i32 {
     if mob.is_null() {
         return 0;
@@ -630,6 +654,9 @@ pub unsafe fn mob_secondduratimer(mob: *mut MobSpawnData) -> i32 {
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_thirdduratimer(mob: *mut MobSpawnData) -> i32 {
     if mob.is_null() {
         return 0;
@@ -638,6 +665,9 @@ pub unsafe fn mob_thirdduratimer(mob: *mut MobSpawnData) -> i32 {
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_fourthduratimer(mob: *mut MobSpawnData) -> i32 {
     if mob.is_null() {
         return 0;
@@ -646,6 +676,9 @@ pub unsafe fn mob_fourthduratimer(mob: *mut MobSpawnData) -> i32 {
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_flushmagic(mob: *mut MobSpawnData) -> i32 {
     for x in 0..MAX_MAGIC_TIMERS {
         let id = (*mob).da[x].id as i32;
@@ -677,6 +710,9 @@ pub unsafe fn mob_flushmagic(mob: *mut MobSpawnData) -> i32 {
 
 // ─── Respawn functions ────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_calcstat(mob: *mut MobSpawnData) -> i32 {
     if mob.is_null() || (*mob).data.is_null() {
         return 0;
@@ -731,6 +767,9 @@ pub unsafe fn mob_calcstat(mob: *mut MobSpawnData) -> i32 {
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_respawn_nousers(mob: *mut MobSpawnData) -> i32 {
     if (*mob).m != (*mob).startm {
         mob_warp(
@@ -756,6 +795,9 @@ pub unsafe fn mob_respawn_nousers(mob: *mut MobSpawnData) -> i32 {
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_respawn(mob: *mut MobSpawnData) -> i32 {
     if (*mob).m != (*mob).startm {
         mob_warp(
@@ -781,7 +823,7 @@ pub unsafe fn mob_respawn(mob: *mut MobSpawnData) -> i32 {
             if d.mobtype == 1 {
                 for id in ids {
                     if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                        clif_cmoblook(&*mob, &*sd_arc.read());
+                        clif_cmoblook(&*mob, &sd_arc.read());
                     }
                 }
             } else {
@@ -812,6 +854,9 @@ pub unsafe fn mob_respawn(mob: *mut MobSpawnData) -> i32 {
 }
 
 // mob_warp forward-declared here; full body follows in the movement section.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_warp(mob: *mut MobSpawnData, m: i32, x: i32, y: i32) -> i32 {
     if mob.is_null() {
         return 0;
@@ -834,7 +879,7 @@ pub unsafe fn mob_warp(mob: *mut MobSpawnData, m: i32, x: i32, y: i32) -> i32 {
         if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
             for id in ids {
                 if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_cmoblook(&*mob, &*sd_arc.read());
+                    clif_cmoblook(&*mob, &sd_arc.read());
                 }
             }
         } else {
@@ -848,6 +893,9 @@ pub unsafe fn mob_warp(mob: *mut MobSpawnData, m: i32, x: i32, y: i32) -> i32 {
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn kill_mob(mob: *mut MobSpawnData) -> i32 {
     {
         clif_mob_kill(&mut *mob).await;
@@ -858,6 +906,9 @@ pub async unsafe fn kill_mob(mob: *mut MobSpawnData) -> i32 {
 
 // ─── AI state machine ─────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
     if mob.is_null() {
         return;
@@ -890,16 +941,14 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
     let has_users = ffi_map_is_loaded((*mob).m) && crate::game::block::map_user_count((*mob).m as usize) > 0;
     let subtype2 = (*mob).data.as_ref().map_or(0, |d| d.subtype);
 
-    if !has_users && (*mob).onetime != 0 && subtype2 != 2 {
-        if (*mob).state != MOB_DEAD {
+    if !has_users && (*mob).onetime != 0 && subtype2 != 2
+        && (*mob).state != MOB_DEAD {
             return;
         }
-    }
-    if !has_users && (*mob).onetime == 0 && subtype2 != 4 {
-        if (*mob).state != MOB_DEAD {
+    if !has_users && (*mob).onetime == 0 && subtype2 != 4
+        && (*mob).state != MOB_DEAD {
             return;
         }
-    }
 
     (*mob).time_ = (*mob).time_.wrapping_add(50);
 
@@ -917,8 +966,7 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
             } else {
                 &*(*mob).data
             };
-            if ((*mob).time_ >= data.movetime && (*mob).time_ >= (*mob).newmove as i32)
-                || ((*mob).newmove > 0 && (*mob).time_ >= (*mob).newmove as i32)
+            if ((*mob).newmove > 0 || (*mob).time_ >= data.movetime) && (*mob).time_ >= (*mob).newmove as i32
             {
                 if data.r#type >= 2 {
                     return;
@@ -956,8 +1004,7 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
             } else {
                 &*(*mob).data
             };
-            if ((*mob).time_ >= data.atktime && (*mob).time_ >= (*mob).newatk as i32)
-                || ((*mob).newatk > 0 && (*mob).time_ >= (*mob).newatk as i32)
+            if ((*mob).newatk > 0 || (*mob).time_ >= data.atktime) && (*mob).time_ >= (*mob).newatk as i32
             {
                 if data.r#type >= 2 {
                     return;
@@ -978,8 +1025,7 @@ pub unsafe fn mob_handle_sub(mob: *mut MobSpawnData) {
             } else {
                 &*(*mob).data
             };
-            if ((*mob).time_ >= data.movetime && (*mob).time_ >= (*mob).newmove as i32)
-                || ((*mob).newmove > 0 && (*mob).time_ >= (*mob).newmove as i32)
+            if ((*mob).newmove > 0 || (*mob).time_ >= data.movetime) && (*mob).time_ >= (*mob).newmove as i32
             {
                 if data.r#type >= 2 {
                     return;
@@ -1067,6 +1113,9 @@ unsafe fn dispatch_ai(mob: *mut MobSpawnData, bl_id: u32, event: &str) {
 // ─── mob_trap_look (typed inner callback) ────────────────────────────────────
 
 /// Typed inner: activates NPC trap if mob steps on its cell.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_trap_look_inner(nd: *mut crate::game::npc::NpcData, mob: *mut MobSpawnData, type_: i32, def: *mut i32) -> i32 {
     if nd.is_null() {
         return 0;
@@ -1091,6 +1140,9 @@ pub unsafe fn mob_trap_look_inner(nd: *mut crate::game::npc::NpcData, mob: *mut 
 }
 
 /// Called every 50ms by the game loop.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_timer_spawns() {
     TIMERCHECK.fetch_add(1, Ordering::Relaxed);
 
@@ -1131,16 +1183,16 @@ pub unsafe fn mob_timer_spawns() {
 unsafe fn tick_mob(mob: &mut MobSpawnData) {
     let mob = mob as *mut MobSpawnData;
     let tc = TIMERCHECK.load(Ordering::Relaxed);
-    if tc % 5 == 0 {
+    if tc.is_multiple_of(5) {
         mob_secondduratimer(mob);
     }
-    if tc % 10 == 0 {
+    if tc.is_multiple_of(10) {
         mob_thirdduratimer(mob);
     }
-    if tc % 30 == 0 {
+    if tc.is_multiple_of(30) {
         mob_fourthduratimer(mob);
     }
-    if tc % 20 == 0 {
+    if tc.is_multiple_of(20) {
         mob_duratimer(mob);
     }
     mob_handle_sub(mob);
@@ -1315,7 +1367,7 @@ unsafe fn broadcast_move(
             if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
                 for id in &rect_ids {
                     if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(*id) {
-                        clif_cmoblook(&*mob, &*sd_arc.read());
+                        clif_cmoblook(&*mob, &sd_arc.read());
                     }
                 }
             } else {
@@ -1352,7 +1404,7 @@ unsafe fn broadcast_move(
             let ids = block_grid::ids_in_area(grid, (*mob).x as i32, (*mob).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_mob_move_inner(&*sd_arc, mob);
+                    clif_mob_move_inner(&sd_arc, mob);
                 }
             }
         }
@@ -1406,6 +1458,9 @@ unsafe fn check_pc_collision(moving_mob: *mut MobSpawnData, m: i32, x: i32, y: i
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn move_mob(mob: *mut MobSpawnData) -> i32 {
     let m = (*mob).m as i32;
     let backx = (*mob).x as i32;
@@ -1454,20 +1509,8 @@ pub unsafe fn move_mob(mob: *mut MobSpawnData) -> i32 {
     }
 
     // clamp after collision checks
-    let dx = if dx >= xs {
-        backx
-    } else if dx < 0 {
-        backx
-    } else {
-        dx
-    };
-    let dy = if dy >= ys {
-        backy
-    } else if dy < 0 {
-        backy
-    } else {
-        dy
-    };
+    let dx = if dx >= xs || dx < 0 { backx } else { dx };
+    let dy = if dy >= ys || dy < 0 { backy } else { dy };
 
     if dx != backx || dy != backy {
         (*mob).prev_x = backx as u16;
@@ -1483,6 +1526,9 @@ pub unsafe fn move_mob(mob: *mut MobSpawnData) -> i32 {
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn move_mob_ignore_object(mob: *mut MobSpawnData) -> i32 {
     let m = (*mob).m as i32;
     let backx = (*mob).x as i32;
@@ -1515,20 +1561,8 @@ pub unsafe fn move_mob_ignore_object(mob: *mut MobSpawnData) -> i32 {
         return 0;
     }
 
-    let dx = if dx >= xs {
-        backx
-    } else if dx < 0 {
-        backx
-    } else {
-        dx
-    };
-    let dy = if dy >= ys {
-        backy
-    } else if dy < 0 {
-        backy
-    } else {
-        dy
-    };
+    let dx = if dx >= xs || dx < 0 { backx } else { dx };
+    let dy = if dy >= ys || dy < 0 { backy } else { dy };
 
     if dx != backx || dy != backy {
         (*mob).prev_x = backx as u16;
@@ -1544,6 +1578,9 @@ pub unsafe fn move_mob_ignore_object(mob: *mut MobSpawnData) -> i32 {
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn moveghost_mob(mob: *mut MobSpawnData) -> i32 {
     let m = (*mob).m as i32;
     let backx = (*mob).x as i32;
@@ -1591,20 +1628,8 @@ pub unsafe fn moveghost_mob(mob: *mut MobSpawnData) -> i32 {
         }
     }
 
-    let dx = if dx >= xs {
-        backx
-    } else if dx < 0 {
-        backx
-    } else {
-        dx
-    };
-    let dy = if dy >= ys {
-        backy
-    } else if dy < 0 {
-        backy
-    } else {
-        dy
-    };
+    let dx = if dx >= xs || dx < 0 { backx } else { dx };
+    let dy = if dy >= ys || dy < 0 { backy } else { dy };
 
     if dx != backx || dy != backy {
         (*mob).prev_x = backx as u16;
@@ -1620,6 +1645,9 @@ pub unsafe fn moveghost_mob(mob: *mut MobSpawnData) -> i32 {
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_move2(mob: *mut MobSpawnData, x: i32, y: i32, side: i32) -> i32 {
     if (*mob).canmove != 0 {
         return 1;
@@ -1643,7 +1671,7 @@ pub unsafe fn mob_move2(mob: *mut MobSpawnData, x: i32, y: i32, side: i32) -> i3
             let ids = block_grid::ids_in_area(grid, (*mob).x as i32, (*mob).y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
             for id in ids {
                 if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_mob_move_inner(&*sd_arc, mob);
+                    clif_mob_move_inner(&sd_arc, mob);
                 }
             }
         }
@@ -1655,6 +1683,9 @@ pub unsafe fn mob_move2(mob: *mut MobSpawnData, x: i32, y: i32, side: i32) -> i3
     1
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn move_mob_intent(mob: *mut MobSpawnData, target_x: i32, target_y: i32) -> i32 {
     (*mob).canmove = 0;
     let mx = (*mob).x as i32;
@@ -1687,6 +1718,9 @@ pub unsafe fn move_mob_intent(mob: *mut MobSpawnData, target_x: i32, target_y: i
 
 // ─── Registry ─────────────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_readglobalreg(mob: *mut MobSpawnData, reg: *const i8) -> i32 {
     if mob.is_null() || reg.is_null() {
         return 0;
@@ -1699,6 +1733,9 @@ pub unsafe fn mob_readglobalreg(mob: *mut MobSpawnData, reg: *const i8) -> i32 {
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_setglobalreg(mob: *mut MobSpawnData, reg: *const i8, val: i32) -> i32 {
     if mob.is_null() || reg.is_null() {
         return 1;
@@ -1734,6 +1771,9 @@ pub unsafe fn mob_setglobalreg(mob: *mut MobSpawnData, reg: *const i8, val: i32)
 // ─── Item / drop helpers ──────────────────────────────────────────────────────
 
 /// Typed inner: sets def[0]=1 on first hit (used as a foreachincell "any-present" test).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_thing_yeah_inner(_entity_id: u32, def: *mut i32) -> i32 {
     if !def.is_null() {
         *def = 1;
@@ -1743,6 +1783,9 @@ pub unsafe fn mob_thing_yeah_inner(_entity_id: u32, def: *mut i32) -> i32 {
 
 /// Typed inner: merge item `fl2` into an existing floor-item `fl` if IDs match.
 /// Args: `int* def`, `int id` (unused), `FLOORITEM* fl2`, `USER* sd` (unused).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_addtocurrent_inner(fl: *mut crate::game::scripting::types::floor::FloorItemData, def: *mut i32, _id: i32, fl2: *mut crate::game::scripting::types::floor::FloorItemData, _sd: *mut MapSessionData) -> i32 {
     if fl.is_null() {
         return 0;
@@ -1760,23 +1803,34 @@ pub unsafe fn mob_addtocurrent_inner(fl: *mut crate::game::scripting::types::flo
     0
 }
 
+/// Parameters describing the item being dropped from a mob.
+#[derive(Clone, Copy)]
+pub struct DropItemSpec {
+    pub id:         u32,
+    pub amount:     i32,
+    pub dura:       i32,
+    pub protected_: i32,
+    pub owner:      i32,
+}
+
 /// Drop an item onto the ground at (m, x, y).
 /// Reads `attacker->group_count` and `groups[]` to populate floor-item looters.
+///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_dropitem(
     blockid: u32,
-    id: u32,
-    amount: i32,
-    dura: i32,
-    protected_: i32,
-    owner: i32,
+    item: DropItemSpec,
     m: i32,
     x: i32,
     y: i32,
     sd: *mut MapSessionData,
 ) -> i32 {
+    let DropItemSpec { id, amount, dura, protected_, owner } = item;
     use crate::common::constants::world::MAX_GROUP_MEMBERS;
     use crate::game::scripting::types::floor::FloorItemData;
-    let mob_arc_holder = if blockid >= MOB_START_NUM as u32 && blockid < FLOORITEM_START_NUM as u32 {
+    let mob_arc_holder = if (MOB_START_NUM..FLOORITEM_START_NUM).contains(&blockid) {
         crate::game::map_server::map_id2mob_ref(blockid)
     } else {
         None
@@ -1788,14 +1842,14 @@ pub unsafe fn mob_dropitem(
 
     let mut def: i32 = 0;
     let mut fl = Box::new(unsafe { std::mem::zeroed::<FloorItemData>() });
-    (*fl).m = m as u16;
-    (*fl).x = x as u16;
-    (*fl).y = y as u16;
-    (*fl).data.id = id;
-    (*fl).data.amount = amount;
-    (*fl).data.dura = dura;
-    (*fl).data.protected = protected_ as u32;
-    (*fl).data.owner = owner as u32;
+    fl.m = m as u16;
+    fl.x = x as u16;
+    fl.y = y as u16;
+    fl.data.id = id;
+    fl.data.amount = amount;
+    fl.data.dura = dura;
+    fl.data.protected = protected_ as u32;
+    fl.data.owner = owner as u32;
 
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let def_ptr = &raw mut def;
@@ -1809,7 +1863,7 @@ pub unsafe fn mob_dropitem(
         }
     }
 
-    (*fl).timer = libc::time(std::ptr::null_mut()) as u32;
+    fl.timer = libc::time(std::ptr::null_mut()) as u32;
     // looters is already zeroed by mem::zeroed()
 
     if !mob.is_null() {
@@ -1827,12 +1881,12 @@ pub unsafe fn mob_dropitem(
                     for z in 0..safe_count {
                         let idx = gid * MAX_GROUP_MEMBERS + z;
                         if idx < grp.len() {
-                            (*fl).looters[z] = grp[idx];
+                            fl.looters[z] = grp[idx];
                         }
                     }
                 }
             } else {
-                (*fl).looters[0] = (*attacker).id;
+                fl.looters[0] = (*attacker).id;
             }
         }
     }
@@ -1855,6 +1909,9 @@ pub unsafe fn mob_dropitem(
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mobdb_drops(mob: *mut MobSpawnData, sd: *mut MapSessionData) -> i32 {
     sl_doscript_2("mobDrops", None, (*sd).id, (*mob).id);
     for i in 0..MAX_INVENTORY {
@@ -1862,11 +1919,13 @@ pub unsafe fn mobdb_drops(mob: *mut MobSpawnData, sd: *mut MapSessionData) -> i3
         if slot.id != 0 && slot.amount >= 1 {
             mob_dropitem(
                 (*mob).id,
-                slot.id as u32,
-                slot.amount,
-                slot.dura,
-                slot.protected as i32,
-                slot.owner as i32,
+                DropItemSpec {
+                    id: slot.id,
+                    amount: slot.amount,
+                    dura: slot.dura,
+                    protected_: slot.protected as i32,
+                    owner: slot.owner as i32,
+                },
                 (*mob).m as i32,
                 (*mob).x as i32,
                 (*mob).y as i32,
@@ -1887,6 +1946,9 @@ pub unsafe fn mobdb_drops(mob: *mut MobSpawnData, sd: *mut MapSessionData) -> i3
 /// Typed inner: selects a PC as this mob's target.
 /// Reads `sd->status.dura_aether` to check sneak/cloak/hide, then conditionally
 /// updates `mob->target` based on `sd->status.gm_level` and a random roll.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_find_target_inner(sd: *mut MapSessionData, mob: *mut MobSpawnData) -> i32 {
     use crate::game::pc::PC_DIE;
     if sd.is_null() {
@@ -1955,6 +2017,9 @@ pub unsafe fn mob_find_target_inner(sd: *mut MapSessionData, mob: *mut MobSpawnD
 /// Mob attacks a player (or another mob) by ID.
 /// Reads `sd->uFlags` and `sd->optFlags` to check immortal/stealth before attacking.
 /// Calls scripting hooks `hitCritChance` and `swingDamage`, then sends network damage.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_attack(mob: *mut MobSpawnData, id: i32) -> i32 {
     use crate::game::pc::{OPT_FLAG_STEALTH, SFLAG_HPMP, U_FLAG_IMMORTAL};
     if id < 0 {
@@ -1964,7 +2029,7 @@ pub unsafe fn mob_attack(mob: *mut MobSpawnData, id: i32) -> i32 {
     // Try typed lookups — target is either a PC or another mob.
     let sd_arc = crate::game::map_server::map_id2sd_pc(target);
     let sd: *mut MapSessionData = sd_arc.as_deref()
-        .map(|pe| pe.data_ptr()) // TODO(phase6c): migrate mob_attack off raw ptr
+        .map(|pe| &mut *pe.write() as *mut MapSessionData)
         .unwrap_or(std::ptr::null_mut());
     let tmob: *mut MobSpawnData = if sd.is_null() {
         crate::game::map_server::map_id2mob_ref(target)
@@ -1976,31 +2041,20 @@ pub unsafe fn mob_attack(mob: *mut MobSpawnData, id: i32) -> i32 {
     if sd.is_null() && tmob.is_null() {
         return 0;
     }
-    if !sd.is_null() {
-        if ((*sd).uFlags & U_FLAG_IMMORTAL != 0) || ((*sd).optFlags & OPT_FLAG_STEALTH != 0) {
+    if !sd.is_null()
+        && (((*sd).uFlags & U_FLAG_IMMORTAL != 0) || ((*sd).optFlags & OPT_FLAG_STEALTH != 0)) {
             (*mob).target = 0;
             (*mob).attacker = 0;
             return 0;
         }
-    }
     let target_id = id as u32;
-    if !sd.is_null() {
-        sl_doscript_2("hitCritChance", None, (*mob).id, target_id);
-    } else if !tmob.is_null() {
+    if !sd.is_null() || !tmob.is_null() {
         sl_doscript_2("hitCritChance", None, (*mob).id, target_id);
     }
     if (*mob).critchance != 0 {
         let sound = if !(*mob).data.is_null() { (*(*mob).data).sound } else { 0 };
         clif_sendmob_action(&mut *mob, 1, 20, sound);
-        if !sd.is_null() {
-            sl_doscript_2("swingDamage", None, (*mob).id, target_id);
-            for x in 0..MAX_MAGIC_TIMERS {
-                if (*mob).da[x].id > 0 && (*mob).da[x].duration > 0 {
-                    let yname = magicdb_yname_str((*mob).da[x].id as i32);
-                    sl_doscript_2(&yname, Some("on_hit_while_cast"), (*mob).id, target_id);
-                }
-            }
-        } else if !tmob.is_null() {
+        if !sd.is_null() || !tmob.is_null() {
             sl_doscript_2("swingDamage", None, (*mob).id, target_id);
             for x in 0..MAX_MAGIC_TIMERS {
                 if (*mob).da[x].id > 0 && (*mob).da[x].duration > 0 {
@@ -2030,6 +2084,9 @@ pub unsafe fn mob_attack(mob: *mut MobSpawnData, id: i32) -> i32 {
 
 /// Calculate and set `mob->critchance` based on mob stats vs player stats.
 /// Returns 0 (miss), 1 (normal hit), or 2 (critical hit).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_calc_critical(
     mob: *mut MobSpawnData,
     sd: *mut MapSessionData,
@@ -2045,12 +2102,7 @@ pub unsafe fn mob_calc_critical(
         - ((*sd).player.progression.level as i32 + ((*sd).grace / 2));
     let mut equat = equat - ((*sd).grace / 4) + (*sd).player.progression.level as i32;
     let chance = ((rand::random::<u32>() & 0x00FF_FFFF) % 100) as i32;
-    if equat < 5 {
-        equat = 5;
-    }
-    if equat > 95 {
-        equat = 95;
-    }
+    equat = equat.clamp(5, 95);
     if chance < equat {
         let crit = equat as f32 * 0.33f32;
         if (chance as f32) < crit {
@@ -2065,6 +2117,9 @@ pub unsafe fn mob_calc_critical(
 
 /// Typed inner: check whether an entity blocks mob movement.
 /// Sets `mob->canmove = 1` if the entity occupies the cell and is not a valid ghost/GM.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mob_move_inner_id(entity_id: u32, mob: *mut MobSpawnData) -> i32 {
     use crate::game::pc::PC_DIE;
     if mob.is_null() { return 0; }
@@ -2098,17 +2153,29 @@ pub unsafe fn mob_move_inner_id(entity_id: u32, mob: *mut MobSpawnData) -> i32 {
 
 // ─── mobspawn_onetime ─────────────────────────────────────────────────────────
 
+/// Spawn configuration for one-time mob spawns.
+#[derive(Clone, Copy)]
+pub struct SpawnConfig {
+    pub times:   i32,
+    pub start:   i32,
+    pub end:     i32,
+    pub replace: u32,
+    pub owner:   u32,
+}
+
+/// Spawn `cfg.times` one-time instances of mob `id` at `(m, x, y)`.
+///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn mobspawn_onetime(
     id: u32,
     m: i32,
     x: i32,
     y: i32,
-    times: i32,
-    start: i32,
-    end: i32,
-    replace: u32,
-    owner: u32,
+    cfg: SpawnConfig,
 ) -> Vec<u32> {
+    let SpawnConfig { times, start, end, replace, owner } = cfg;
     const MAX_ONETIME_SPAWNS: i32 = 1024;
     if times <= 0 || times > MAX_ONETIME_SPAWNS {
         return Vec::new();
@@ -2167,6 +2234,9 @@ pub unsafe fn mobspawn_onetime(
 // ─── Mob Lua scripting glue ───────────────────────────────────────────────────
 
 /// Heal mob: fire on_healed Lua event then send the negative-damage health packet.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn sl_mob_addhealth(mob: *mut MobSpawnData, damage: i32) {
     use crate::game::map_parse::combat::clif_send_mob_healthscript;
     if mob.is_null() { return; }
@@ -2185,6 +2255,9 @@ pub async unsafe fn sl_mob_addhealth(mob: *mut MobSpawnData, damage: i32) {
 }
 
 /// Damage mob: set attacker/damage fields then send the health packet.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn sl_mob_removehealth(mob: *mut MobSpawnData, damage: i32, caster_id: u32) {
     use crate::game::map_parse::combat::clif_send_mob_healthscript;
     if mob.is_null() { return; }
@@ -2219,6 +2292,9 @@ pub async unsafe fn sl_mob_removehealth(mob: *mut MobSpawnData, damage: i32, cas
 }
 
 /// Return accumulated threat amount from a specific player on this mob.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_mob_checkthreat(mob: *mut MobSpawnData, player_id: u32) -> i32 {
     if mob.is_null() { return 0; }
     let tsd = map_id2sd_mob(player_id);
@@ -2233,6 +2309,9 @@ pub unsafe fn sl_mob_checkthreat(mob: *mut MobSpawnData, player_id: u32) -> i32 
 }
 
 /// Add individual damage from player to mob's dmgindtable.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_mob_setinddmg(mob: *mut MobSpawnData, player_id: u32, dmg: f32) -> i32 {
     if mob.is_null() { return 0; }
     let sd = map_id2sd_mob(player_id);
@@ -2249,6 +2328,9 @@ pub unsafe fn sl_mob_setinddmg(mob: *mut MobSpawnData, player_id: u32, dmg: f32)
 }
 
 /// Add group damage from player to mob's dmggrptable.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_mob_setgrpdmg(mob: *mut MobSpawnData, player_id: u32, dmg: f32) -> i32 {
     if mob.is_null() { return 0; }
     let sd = map_id2sd_mob(player_id);
@@ -2265,6 +2347,9 @@ pub unsafe fn sl_mob_setgrpdmg(mob: *mut MobSpawnData, player_id: u32, dmg: f32)
 }
 
 /// Call a named event on this mob's custom AI script.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_mob_callbase(mob: *mut MobSpawnData, script: &str) -> i32 {
     if mob.is_null() { return 0; }
     let attacker = (*mob).attacker;
@@ -2279,6 +2364,9 @@ pub unsafe fn sl_mob_callbase(mob: *mut MobSpawnData, script: &str) -> i32 {
 }
 
 /// Return 1 if the mob can step forward in its current direction, 0 if blocked.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_mob_checkmove(mob: *mut MobSpawnData) -> i32 {
     if mob.is_null() { return 0; }
     let m = (*mob).m as i32;
@@ -2302,7 +2390,7 @@ pub unsafe fn sl_mob_checkmove(mob: *mut MobSpawnData) -> i32 {
         let cell_ids = grid.ids_at_tile(dx as u16, dy as u16);
         for id in cell_ids {
             // Skip floor items — they don't block movement
-            if id >= FLOORITEM_START_NUM && id < NPC_START_NUM { continue; }
+            if (FLOORITEM_START_NUM..NPC_START_NUM).contains(&id) { continue; }
             mob_move_inner_id(id, mob);
         }
     }
@@ -2313,6 +2401,9 @@ pub unsafe fn sl_mob_checkmove(mob: *mut MobSpawnData) -> i32 {
 }
 
 /// Set or clear a magic-effect duration slot on the mob.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_mob_setduration(
     mob: *mut MobSpawnData, name: *const i8,
     mut time: i32, caster_id: u32, recast: i32,
@@ -2354,6 +2445,9 @@ pub unsafe fn sl_mob_setduration(
 }
 
 /// Clear magic-effect timers in id range [minid..maxid], firing uncast Lua events.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_mob_flushduration(mob: *mut MobSpawnData, dis: i32, minid: i32, maxid: i32) {
     if mob.is_null() { return; }
     let maxid = if maxid < minid { minid } else { maxid };
@@ -2377,6 +2471,9 @@ pub unsafe fn sl_mob_flushduration(mob: *mut MobSpawnData, dis: i32, minid: i32,
 }
 
 /// Clear magic-effect timers without firing uncast Lua events.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_mob_flushdurationnouncast(mob: *mut MobSpawnData, dis: i32, minid: i32, maxid: i32) {
     if mob.is_null() { return; }
     let maxid = if maxid < minid { minid } else { maxid };

@@ -90,13 +90,25 @@ pub async fn is_name_used(pool: &MySqlPool, name: &str) -> Result<bool> {
     Ok(row.map(|(n,)| n > 0).unwrap_or(false))
 }
 
+/// Parameters for creating a new character.
+pub struct CreateCharParams<'a> {
+    pub name: &'a str,
+    pub pass: &'a str,
+    pub totem: u8,
+    pub sex: u8,
+    pub country: u8,
+    pub face: u16,
+    pub hair: u16,
+    pub face_color: u16,
+    pub hair_color: u16,
+    pub start_m: u32,
+    pub start_x: u32,
+    pub start_y: u32,
+}
+
 /// Create a new character. Returns 0 on success, 1 if name taken, 2 on DB error.
-pub async fn create_char(
-    pool: &MySqlPool,
-    name: &str, pass: &str, totem: u8, sex: u8,
-    country: u8, face: u16, hair: u16, face_color: u16, hair_color: u16,
-    start_m: u32, start_x: u32, start_y: u32,
-) -> i32 {
+pub async fn create_char(pool: &MySqlPool, params: CreateCharParams<'_>) -> i32 {
+    let CreateCharParams { name, pass, totem, sex, country, face, hair, face_color, hair_color, start_m, start_x, start_y } = params;
     match is_name_used(pool, name).await {
         Err(_)       => return 2,
         Ok(true)     => return 1,
@@ -648,7 +660,7 @@ pub async fn save_player(pool: &MySqlPool, player: &PlayerData) -> Result<()> {
     Ok(())
 }
 
-/// Save a character from a raw byte blob back to the DB (thin wrapper for wire compat).
+// Save a character from a raw byte blob back to the DB (thin wrapper for wire compat).
 // ── String helpers ────────────────────────────────────────────────────────────
 
 fn copy_str_to_i8<const N: usize>(dst: &mut [i8; N], src: &str) {

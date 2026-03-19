@@ -215,7 +215,7 @@ impl ServerConfig {
     /// Parse configuration from a YAML string
     ///
     /// Useful for testing
-    pub fn from_str(contents: &str) -> Result<Self> {
+    pub fn from_yaml_str(contents: &str) -> Result<Self> {
         let config: ServerConfig = serde_yaml::from_str(contents)
             .context("Failed to parse YAML")?;
 
@@ -309,13 +309,13 @@ start_point:
 
     #[test]
     fn test_minimal_config() {
-        let config = ServerConfig::from_str(minimal_config()).unwrap();
+        let config = ServerConfig::from_yaml_str(minimal_config()).unwrap();
         assert_eq!(config.start_point, Point::new(0, 1, 1));
     }
 
     #[test]
     fn test_default_values() {
-        let config = ServerConfig::from_str(minimal_config()).unwrap();
+        let config = ServerConfig::from_yaml_str(minimal_config()).unwrap();
 
         // All these should have defaults
         assert_eq!(config.login_port, 2000);
@@ -352,7 +352,7 @@ start_point:
   y: 1
 "#;
 
-        let config = ServerConfig::from_str(config_str).unwrap();
+        let config = ServerConfig::from_yaml_str(config_str).unwrap();
         assert_eq!(config.login_port, 3000);
         assert_eq!(config.char_port, 3005);
         assert_eq!(config.map_port, 3001);
@@ -379,7 +379,7 @@ meta:
   - ItemInfo0
 "#;
 
-        let config = ServerConfig::from_str(config_str).unwrap();
+        let config = ServerConfig::from_yaml_str(config_str).unwrap();
         assert_eq!(config.meta.len(), 3);
         assert_eq!(config.meta[0], "RidableAnimals");
         assert_eq!(config.meta[1], "CharicInfo0");
@@ -407,7 +407,7 @@ town:
   - Town3
 "#;
 
-        let config = ServerConfig::from_str(config_str).unwrap();
+        let config = ServerConfig::from_yaml_str(config_str).unwrap();
         assert_eq!(config.town.len(), 3);
         assert_eq!(config.town[0], "Town1");
         assert_eq!(config.town[2], "Town3");
@@ -418,7 +418,7 @@ town:
         let config_str = r#"
 "#;
 
-        let result = ServerConfig::from_str(config_str);
+        let result = ServerConfig::from_yaml_str(config_str);
         assert!(result.is_err());
 
         let err = result.unwrap_err();
@@ -432,7 +432,7 @@ town:
 login_id: [this is not valid yaml
 "#;
 
-        let result = ServerConfig::from_str(config_str);
+        let result = ServerConfig::from_yaml_str(config_str);
         assert!(result.is_err());
     }
 
@@ -453,7 +453,7 @@ start_point:
   y: 1
 "#;
 
-        let result = ServerConfig::from_str(config_str);
+        let result = ServerConfig::from_yaml_str(config_str);
         assert!(result.is_err());
     }
 
@@ -467,7 +467,7 @@ start_point:
             config_str.push_str(&format!("  - MetaFile{}\n", i));
         }
 
-        let result = ServerConfig::from_str(&config_str);
+        let result = ServerConfig::from_yaml_str(&config_str);
         assert!(result.is_err());
 
         let err_msg = format!("{}", result.unwrap_err());
@@ -491,7 +491,7 @@ start_point:
   y: 1
 "#;
 
-        let result = ServerConfig::from_str(config_str);
+        let result = ServerConfig::from_yaml_str(config_str);
         assert!(result.is_err());
 
         let err_msg = format!("{}", result.unwrap_err());
@@ -546,7 +546,7 @@ town:
   - Town6
 "#;
 
-        let config = ServerConfig::from_str(config_str).unwrap();
+        let config = ServerConfig::from_yaml_str(config_str).unwrap();
 
         // Verify all fields
         assert_eq!(config.xor_key, "TestKey");
@@ -557,7 +557,7 @@ town:
 
     #[test]
     fn test_save_and_load() {
-        let config = ServerConfig::from_str(minimal_config()).unwrap();
+        let config = ServerConfig::from_yaml_str(minimal_config()).unwrap();
 
         let temp_file = std::env::temp_dir().join("test_save_config.yaml");
 

@@ -132,8 +132,8 @@ unsafe fn clif_isignore(src: &PlayerEntity, dst: &PlayerEntity) -> i32 {
 #[inline] unsafe fn clif_postitem(pe: &PlayerEntity) { crate::game::client::handlers::clif_postitem(pe); }
 #[inline] unsafe fn clif_handitem(pe: &PlayerEntity) { crate::game::map_parse::trading::clif_handitem(pe); }
 #[inline] unsafe fn clif_handgold(pe: &PlayerEntity) { crate::game::map_parse::trading::clif_handgold(pe); }
-#[inline] unsafe fn clif_parsemagic(pe: &PlayerEntity) { crate::game::map_parse::combat::clif_parsemagic(&mut *pe.write()); }
-#[inline] unsafe fn clif_parseattack(pe: &PlayerEntity) { crate::game::map_parse::combat::clif_parseattack(&mut *pe.write()); }
+#[inline] unsafe fn clif_parsemagic(pe: &PlayerEntity) { crate::game::map_parse::combat::clif_parsemagic(&mut pe.write()); }
+#[inline] unsafe fn clif_parseattack(pe: &PlayerEntity) { crate::game::map_parse::combat::clif_parseattack(&mut pe.write()); }
 #[inline] unsafe fn clif_sendminitext(pe: &PlayerEntity, msg: *const i8) { crate::game::map_parse::chat::clif_sendminitext(pe, msg); }
 #[inline] unsafe fn clif_parsenpcdialog(pe: &PlayerEntity) { crate::game::map_parse::dialogs::clif_parsenpcdialog(pe); }
 #[inline] unsafe fn clif_handle_menuinput(pe: &PlayerEntity) { crate::game::client::handlers::clif_handle_menuinput(pe); }
@@ -184,22 +184,29 @@ use crate::common::constants::entity::BL_PC_U8;
 
 // ─── clif_send / clif_sendtogm ────────────────────────────────────────────────
 
+/// Source context for broadcast functions: identifies the origin entity and its position.
+#[derive(Clone, Copy)]
+pub struct BroadcastSrc {
+    pub id: u32,
+    pub m: u16,
+    pub x: u16,
+    pub y: u16,
+    pub bl_type: u8,
+}
+
 /// Send `buf[0..len]` to clients matching `send_type`, applying ignore-list filtering.
 ///
 /// # Safety
 ///
 /// - `buf` must point to at least `len` readable bytes.
-/// - When `send_type == SELF`, `src_id` must identify a valid player entity.
+/// - When `send_type == SELF`, `src.id` must identify a valid player entity.
 pub unsafe fn clif_send(
     buf: *const u8,
     len: i32,
-    src_id: u32,
-    m: u16,
-    x: u16,
-    y: u16,
-    bl_type: u8,
+    src: BroadcastSrc,
     send_type: i32,
 ) -> i32 {
+    let BroadcastSrc { id: src_id, m, x, y, bl_type } = src;
     // Source player arc (non-null only when src is BL_PC). Kept alive for full function scope.
     let src_arc = if bl_type == BL_PC_U8 { crate::game::map_server::map_id2sd_pc(src_id) } else { None };
 
@@ -231,7 +238,7 @@ pub unsafe fn clif_send(
                     continue;
                 }
                 if let Some(src_pe) = src_arc.as_deref() {
-                    let dst_pe: &PlayerEntity = &*dst_arc;
+                    let dst_pe: &PlayerEntity = &dst_arc;
                     if !buf.is_null()
                         && *buf.add(3) == 0x0D
                         && clif_isignore(src_pe, dst_pe) == 0
@@ -254,7 +261,7 @@ pub unsafe fn clif_send(
                     continue;
                 }
                 if let Some(src_pe) = src_arc.as_deref() {
-                    let dst_pe: &PlayerEntity = &*dst_arc;
+                    let dst_pe: &PlayerEntity = &dst_arc;
                     if !buf.is_null()
                         && *buf.add(3) == 0x0D
                         && clif_isignore(src_pe, dst_pe) == 0
@@ -266,43 +273,13 @@ pub unsafe fn clif_send(
             }
         }
         AREA | AREA_WOS => {
-            clif_send_area(
-                m as i32,
-                x as i32,
-                y as i32,
-                AREA,
-                send_type,
-                buf,
-                len,
-                src_id,
-                bl_type,
-            );
+            clif_send_area(AREA, send_type, buf, len, BroadcastSrc { id: src_id, m, x, y, bl_type });
         }
         SAMEAREA | SAMEAREA_WOS => {
-            clif_send_area(
-                m as i32,
-                x as i32,
-                y as i32,
-                SAMEAREA,
-                send_type,
-                buf,
-                len,
-                src_id,
-                bl_type,
-            );
+            clif_send_area(SAMEAREA, send_type, buf, len, BroadcastSrc { id: src_id, m, x, y, bl_type });
         }
         CORNER => {
-            clif_send_area(
-                m as i32,
-                x as i32,
-                y as i32,
-                CORNER,
-                send_type,
-                buf,
-                len,
-                src_id,
-                bl_type,
-            );
+            clif_send_area(CORNER, send_type, buf, len, BroadcastSrc { id: src_id, m, x, y, bl_type });
         }
         SELF => {
             if let Some(arc) = crate::game::map_server::map_id2sd_pc(src_id) {
@@ -319,17 +296,14 @@ pub unsafe fn clif_send(
 /// # Safety
 ///
 /// - `buf` must point to at least `len` readable bytes.
-/// - When `send_type == SELF`, `src_id` must identify a valid player entity.
+/// - When `send_type == SELF`, `src.id` must identify a valid player entity.
 pub unsafe fn clif_sendtogm(
     buf: *const u8,
     len: i32,
-    src_id: u32,
-    m: u16,
-    x: u16,
-    y: u16,
-    bl_type: u8,
+    src: BroadcastSrc,
     send_type: i32,
 ) -> i32 {
+    let BroadcastSrc { id: src_id, m, x, y, bl_type } = src;
     match send_type {
         ALL_CLIENT | SAMESRV => {
             for i_fd in get_session_manager().get_all_fds() {
@@ -365,43 +339,13 @@ pub unsafe fn clif_sendtogm(
             }
         }
         AREA | AREA_WOS => {
-            clif_send_area(
-                m as i32,
-                x as i32,
-                y as i32,
-                AREA,
-                send_type,
-                buf,
-                len,
-                src_id,
-                bl_type,
-            );
+            clif_send_area(AREA, send_type, buf, len, BroadcastSrc { id: src_id, m, x, y, bl_type });
         }
         SAMEAREA | SAMEAREA_WOS => {
-            clif_send_area(
-                m as i32,
-                x as i32,
-                y as i32,
-                SAMEAREA,
-                send_type,
-                buf,
-                len,
-                src_id,
-                bl_type,
-            );
+            clif_send_area(SAMEAREA, send_type, buf, len, BroadcastSrc { id: src_id, m, x, y, bl_type });
         }
         CORNER => {
-            clif_send_area(
-                m as i32,
-                x as i32,
-                y as i32,
-                CORNER,
-                send_type,
-                buf,
-                len,
-                src_id,
-                bl_type,
-            );
+            clif_send_area(CORNER, send_type, buf, len, BroadcastSrc { id: src_id, m, x, y, bl_type });
         }
         SELF => {
             if let Some(arc) = crate::game::map_server::map_id2sd_pc(src_id) {
@@ -500,11 +444,10 @@ unsafe fn should_send_to(
         // ── Ignore-list filter (whisper-like packets, opcode 0x0D) ───────────────
         drop(src_sd);
         drop(dst_sd);
-        if len >= 4 && !buf.is_null() && *buf.add(3) == 0x0D {
-            if clif_isignore(src_pe, dst) == 0 {
+        if len >= 4 && !buf.is_null() && *buf.add(3) == 0x0D
+            && clif_isignore(src_pe, dst) == 0 {
                 return false;
             }
-        }
     }
 
     // ── WOS (without self) filter ─────────────────────────────────────────────
@@ -537,16 +480,14 @@ unsafe fn should_send_to(
 ///   The function temporarily mutates `buf[5]` for channel packets and restores it.
 /// - The `map` global and block grid must be initialized.
 unsafe fn send_to_area(
-    m: i32,
-    x: i32,
-    y: i32,
     area: crate::game::block::AreaType,
     buf: *mut u8,
     len: i32,
-    src_id: u32,
-    bl_type: u8,
+    src: BroadcastSrc,
     send_type: i32,
 ) {
+    let BroadcastSrc { id: src_id, m, x, y, bl_type } = src;
+    let (m, x, y) = (m as i32, x as i32, y as i32);
     use crate::game::block_grid;
 
     if buf.is_null() || len <= 0 {
@@ -566,7 +507,7 @@ unsafe fn send_to_area(
     let mut _send_count = 0i32;
     for id in ids {
         let Some(dst_arc) = crate::game::map_server::map_id2sd_pc(id) else { continue; };
-        let dst_pe: &PlayerEntity = &*dst_arc;
+        let dst_pe: &PlayerEntity = &dst_arc;
 
         if !should_send_to(dst_pe, &src_arc, src_id, bl_type, send_type, buf as *const u8, len) {
             continue;
@@ -589,7 +530,7 @@ unsafe fn send_to_area(
                     let v = {
                         let mut guard = dst_pe.write();
                         let sd_ptr: *mut MapSessionData = &mut *guard as *mut MapSessionData;
-                        crate::game::pc::pc_readglobalreg(sd_ptr, reg_cstr.as_ptr() as *const i8)
+                        crate::game::pc::pc_readglobalreg(sd_ptr, reg_cstr.as_ptr())
                     };
                     if v >= 1 {
                         // Temporarily zero out channel byte, write, restore.
@@ -628,7 +569,7 @@ unsafe fn send_to_area(
     }
 }
 
-////
+///
 /// Wrapper around `send_to_area`
 /// same signature as the old C function. `area_type` selects the spatial search
 /// shape (AREA=4, SAMEAREA=6, CORNER=8); `send_type` is the send-type constant
@@ -637,15 +578,11 @@ unsafe fn send_to_area(
 /// # Safety
 /// - `buf` must be a valid, writable pointer to at least `len` bytes.
 pub unsafe fn clif_send_area(
-    m: i32,
-    x: i32,
-    y: i32,
     area_type: i32,
     send_type: i32,
     buf: *const u8,
     len: i32,
-    src_id: u32,
-    bl_type: u8,
+    src: BroadcastSrc,
 ) {
     use crate::game::block::AreaType;
 
@@ -658,7 +595,7 @@ pub unsafe fn clif_send_area(
 
     // Cast away const: send_to_area temporarily mutates buf[5] for channel packets
     // and restores it before returning. The caller's buffer is logically unchanged.
-    send_to_area(m, x, y, area, buf as *mut u8, len, src_id, bl_type, send_type);
+    send_to_area(area, buf as *mut u8, len, src, send_type);
 }
 
 // ─── Dual-login check ─────────────────────────────────────────────────────────
@@ -755,8 +692,8 @@ pub async fn clif_parse(fd: SessionId) -> i32 {
             }
             0x07 => {
                 clif_cancelafk(pe);
-                { let _t = sl_pc_time(&mut *pe.write()); sl_pc_set_time(&mut *pe.write(), _t + 1); }
-                if sl_pc_time(&mut *pe.write()) < 4 {
+                { let _t = sl_pc_time(&mut pe.write()); sl_pc_set_time(&mut pe.write(), _t + 1); }
+                if sl_pc_time(&mut pe.write()) < 4 {
                     clif_parsegetitem(pe);
                 }
             }
@@ -784,30 +721,29 @@ pub async fn clif_parse(fd: SessionId) -> i32 {
             }
             0x0E => {
                 clif_cancelafk(pe);
-                if sl_pc_status_gm_level(&mut *pe.write()) != 0 {
+                if sl_pc_status_gm_level(&mut pe.write()) != 0 {
                     clif_parsesay(pe);
                 } else {
-                    { let _t = sl_pc_chat_timer(&mut *pe.write()); sl_pc_set_chat_timer(&mut *pe.write(), _t + 1); }
-                    if sl_pc_chat_timer(&mut *pe.write()) < 2 && sl_pc_status_mute(&mut *pe.write()) == 0 {
+                    { let _t = sl_pc_chat_timer(&mut pe.write()); sl_pc_set_chat_timer(&mut pe.write(), _t + 1); }
+                    if sl_pc_chat_timer(&mut pe.write()) < 2 && sl_pc_status_mute(&mut pe.write()) == 0 {
                         clif_parsesay(pe);
                     }
                 }
             }
             0x0F => {
                 clif_cancelafk(pe);
-                { let _t = sl_pc_time(&mut *pe.write()); sl_pc_set_time(&mut *pe.write(), _t + 1); }
-                if sl_pc_paralyzed(&mut *pe.write()) == 0 && sl_pc_sleep(&mut *pe.write()) == 1 {
-                    if sl_pc_time(&mut *pe.write()) < 4 {
-                        if sl_map_spell(sl_pc_bl_m(&mut *pe.write())) != 0 || sl_pc_status_gm_level(&mut *pe.write()) != 0 {
+                { let _t = sl_pc_time(&mut pe.write()); sl_pc_set_time(&mut pe.write(), _t + 1); }
+                if sl_pc_paralyzed(&mut pe.write()) == 0 && sl_pc_sleep(&mut pe.write()) == 1
+                    && sl_pc_time(&mut pe.write()) < 4 {
+                        if sl_map_spell(sl_pc_bl_m(&mut pe.write())) != 0 || sl_pc_status_gm_level(&mut pe.write()) != 0 {
                             clif_parsemagic(pe);
                         } else {
                             clif_sendminitext(
                                 pe,
-                                b"That doesn't work here.\0".as_ptr() as *const i8,
+                                c"That doesn't work here.".as_ptr(),
                             );
                         }
                     }
-                }
             }
             0x11 => {
                 clif_cancelafk(pe);
@@ -819,13 +755,13 @@ pub async fn clif_parse(fd: SessionId) -> i32 {
             }
             0x13 => {
                 clif_cancelafk(pe);
-                { let _t = sl_pc_time(&mut *pe.write()); sl_pc_set_time(&mut *pe.write(), _t + 1); }
-                let attacked_val = sl_pc_attacked(&mut *pe.write());
-                let spd_val = sl_pc_attack_speed(&mut *pe.write());
+                { let _t = sl_pc_time(&mut pe.write()); sl_pc_set_time(&mut pe.write(), _t + 1); }
+                let attacked_val = sl_pc_attacked(&mut pe.write());
+                let spd_val = sl_pc_attack_speed(&mut pe.write());
                 let pe_id = pe.id;
                 tracing::debug!("[attack] id={} attacked={} spd={}", pe_id, attacked_val, spd_val);
                 if attacked_val != 1 && spd_val > 0 {
-                    sl_pc_set_attacked(&mut *pe.write(), 1);
+                    sl_pc_set_attacked(&mut pe.write(), 1);
                     let delay = ((spd_val * 1000) / 60) as u32;
                     tracing::debug!("[attack] id={} delay={}ms — entering clif_parseattack", pe_id, delay);
                     timer_insert(
@@ -840,7 +776,7 @@ pub async fn clif_parse(fd: SessionId) -> i32 {
                 clif_cancelafk(pe);
                 let pos = rbyte(fd, 6) as i32;
                 let confirm = rbyte(fd, 5);
-                if item_db::search(sl_pc_inventory_id(&mut *pe.write(), pos - 1)).thrownconfirm == 1 {
+                if item_db::search(sl_pc_inventory_id(&mut pe.write(), pos - 1)).thrownconfirm == 1 {
                     if confirm == 1 { clif_parsethrow(pe); } else { clif_throwconfirm(pe); }
                 } else {
                     clif_parsethrow(pe);
@@ -859,7 +795,7 @@ pub async fn clif_parse(fd: SessionId) -> i32 {
                 clif_parseeatitem(pe);
             }
             0x1B => {
-                if sl_pc_loaded(&mut *pe.write()) != 0 {
+                if sl_pc_loaded(&mut pe.write()) != 0 {
                     clif_changestatus(pe, rbyte(fd, 6));
                 }
             }
@@ -869,21 +805,21 @@ pub async fn clif_parse(fd: SessionId) -> i32 {
             }
             0x1D => {
                 clif_cancelafk(pe);
-                { let _t = sl_pc_time(&mut *pe.write()); sl_pc_set_time(&mut *pe.write(), _t + 1); }
-                if sl_pc_time(&mut *pe.write()) < 4 {
+                { let _t = sl_pc_time(&mut pe.write()); sl_pc_set_time(&mut pe.write(), _t + 1); }
+                if sl_pc_time(&mut pe.write()) < 4 {
                     clif_parseemotion(pe);
                 }
             }
             0x1E => {
                 clif_cancelafk(pe);
-                { let _t = sl_pc_time(&mut *pe.write()); sl_pc_set_time(&mut *pe.write(), _t + 1); }
-                if sl_pc_time(&mut *pe.write()) < 4 {
+                { let _t = sl_pc_time(&mut pe.write()); sl_pc_set_time(&mut pe.write(), _t + 1); }
+                if sl_pc_time(&mut pe.write()) < 4 {
                     clif_parsewield(pe);
                 }
             }
             0x1F => {
                 clif_cancelafk(pe);
-                if sl_pc_time(&mut *pe.write()) < 4 {
+                if sl_pc_time(&mut pe.write()) < 4 {
                     clif_parseunequip(pe);
                 }
             }

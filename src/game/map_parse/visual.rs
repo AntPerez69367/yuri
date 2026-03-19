@@ -28,6 +28,7 @@ use crate::common::constants::entity::player::ITM_TRAPS;
 
 
 use crate::game::client::clif_send;
+use crate::game::client::BroadcastSrc;
 // map_addblock removed — now using map_addblock_id directly
 use crate::game::map_parse::groups::clif_isingroup;
 use crate::game::map_parse::movement::clif_sendchararea;
@@ -41,6 +42,9 @@ use crate::game::map_parse::combat::clif_sendanimations;
 /// Send an object-despawn packet to all nearby clients.
 ///
 /// `is_char_type` should be `true` for PC, MOB, and NPC-with-npctype==1 entities.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_lookgone_ex(id: u32, m: u16, x: u16, y: u16, bl_type: u8, is_char_type: bool) -> i32 {
     let mut buf = [0u8; 16];
 
@@ -70,11 +74,14 @@ pub unsafe fn clif_lookgone_ex(id: u32, m: u16, x: u16, y: u16, bl_type: u8, is_
         buf[8] = id_bytes[3];
     }
 
-    clif_send(buf.as_ptr(), 16, id, m, x, y, bl_type, AREA_WOS);
+    clif_send(buf.as_ptr(), 16, BroadcastSrc { id, m, x, y, bl_type }, AREA_WOS);
     0
 }
 
 /// Convenience: send object-despawn by entity ID, resolving position from entity maps.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_lookgone_by_id(entity_id: u32) -> i32 {
     use crate::game::map_server;
     if let Some(entity) = map_server::map_id2entity(entity_id) {
@@ -109,6 +116,9 @@ pub unsafe fn clif_lookgone_by_id(entity_id: u32) -> i32 {
 ///
 /// Called with `BL_PC` type so `bl` is a `MapSessionData`.
 /// Mirrors `clif_mob_look_start_func` (~line 1426).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_mob_look_start_func_inner(fd: SessionId, look: &mut LookAccum) -> i32 {
     *look = LookAccum::default();
 
@@ -125,6 +135,9 @@ pub unsafe fn clif_mob_look_start_func_inner(fd: SessionId, look: &mut LookAccum
 ///
 /// Flush the accumulated mob-look packet buffer to the client.
 /// Mirrors `clif_mob_look_close_func` (~line 1446).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_mob_look_close_func_inner(fd: SessionId, look: &mut LookAccum) -> i32 {
     if look.count == 0 { return 0; }
 
@@ -154,6 +167,9 @@ unsafe fn look_write_header(fd: SessionId, look: &LookAccum, x: u16, y: u16, id:
 }
 
 /// Append a mob's visual data to the batched mob-look packet.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_object_look_mob(fd: SessionId, look: &mut LookAccum, mob: &MobSpawnData) -> i32 {
     if mob.state == MOB_DEAD || (*mob.data).mobtype == 1 { return 0; }
 
@@ -172,7 +188,7 @@ pub unsafe fn clif_object_look_mob(fd: SessionId, look: &mut LookAccum, mob: &Mo
         let mut n: usize = 0;
         for x in 0..50usize {
             if mob.da[x].duration != 0 && mob.da[x].animation != 0 {
-                wfifow(fd, n + len + 22,     (mob.da[x].animation as u16).swap_bytes());
+                wfifow(fd, n + len + 22,     mob.da[x].animation.swap_bytes());
                 wfifow(fd, n + len + 22 + 2, ((mob.da[x].duration / 1000) as u16).swap_bytes());
                 animlen += 1;
                 n += 4;
@@ -197,6 +213,9 @@ pub unsafe fn clif_object_look_mob(fd: SessionId, look: &mut LookAccum, mob: &Mo
 }
 
 /// Append an NPC's visual data to the batched mob-look packet.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_object_look_npc(fd: SessionId, look: &mut LookAccum, npc: &NpcData) -> i32 {
     if npc.subtype != 0 || npc.npctype == 1 { return 0; }
 
@@ -216,6 +235,9 @@ pub unsafe fn clif_object_look_npc(fd: SessionId, look: &mut LookAccum, npc: &Np
 }
 
 /// Append a floor item's visual data to the batched mob-look packet.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_object_look_item(fd: SessionId, look: &mut LookAccum, viewer_char_id: u32, item: &FloorItemData) -> i32 {
     let mut in_table = false;
     for &spotter in item.data.traps_table.iter() {
@@ -252,14 +274,17 @@ pub unsafe fn clif_object_look_item(fd: SessionId, look: &mut LookAccum, viewer_
 }
 
 /// Dispatch entity look by ID — resolves type and calls the appropriate typed variant.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_object_look_by_id(fd: SessionId, look: &mut LookAccum, viewer_char_id: u32, entity_id: u32) -> i32 {
     use crate::game::map_server::{map_id2mob_ref, map_id2npc_ref, map_id2fl_ref};
     if let Some(arc) = map_id2mob_ref(entity_id) {
-        clif_object_look_mob(fd, look, &*arc.read())
+        clif_object_look_mob(fd, look, &arc.read())
     } else if let Some(arc) = map_id2npc_ref(entity_id) {
-        clif_object_look_npc(fd, look, &*arc.read())
+        clif_object_look_npc(fd, look, &arc.read())
     } else if let Some(arc) = map_id2fl_ref(entity_id) {
-        clif_object_look_item(fd, look, viewer_char_id, &*arc.read())
+        clif_object_look_item(fd, look, viewer_char_id, &arc.read())
     } else {
         0
     }
@@ -280,6 +305,9 @@ unsafe fn look2_write_header(fd: SessionId, x: u16, y: u16, id: u32) {
 }
 
 /// Send a single mob's visual data immediately (not batched).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_object_look2_mob(fd: SessionId, mob: &MobSpawnData) -> i32 {
     if mob.state == MOB_DEAD || (*mob.data).mobtype == 1 { return 0; }
     if !session_exists(fd) { return 0; }
@@ -296,7 +324,7 @@ pub unsafe fn clif_object_look2_mob(fd: SessionId, mob: &MobSpawnData) -> i32 {
         wfifob(fd, 21, 0);
         for x in 0..50usize {
             if mob.da[x].duration != 0 && mob.da[x].animation != 0 {
-                wfifow(fd, nlen + 22, (mob.da[x].animation as u16).swap_bytes());
+                wfifow(fd, nlen + 22, mob.da[x].animation.swap_bytes());
                 wfifow(fd, nlen + 22 + 2, ((mob.da[x].duration / 1000) as u16).swap_bytes());
                 nlen += 4;
             }
@@ -318,6 +346,9 @@ pub unsafe fn clif_object_look2_mob(fd: SessionId, mob: &MobSpawnData) -> i32 {
 }
 
 /// Send a single NPC's visual data immediately (not batched).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_object_look2_npc(fd: SessionId, npc: &NpcData) -> i32 {
     if npc.subtype != 0 || npc.npctype == 1 { return 0; }
     if !session_exists(fd) { return 0; }
@@ -336,6 +367,9 @@ pub unsafe fn clif_object_look2_npc(fd: SessionId, npc: &NpcData) -> i32 {
 }
 
 /// Send a single floor item's visual data immediately (not batched).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_object_look2_item(fd: SessionId, viewer_char_id: u32, item: &FloorItemData) -> i32 {
     let mut in_table = false;
     for &spotter in item.data.traps_table.iter() {
@@ -367,6 +401,9 @@ pub unsafe fn clif_object_look2_item(fd: SessionId, viewer_char_id: u32, item: &
 // ─── Typed appearance wrappers ───────────────────────────────────────────────
 
 /// Send a PC's appearance to a viewer.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_charlook(entity: &MapSessionData, viewer: &MapSessionData) -> i32 {
     clif_charlook_inner(
         entity as *const MapSessionData,
@@ -375,6 +412,9 @@ pub unsafe fn clif_charlook(entity: &MapSessionData, viewer: &MapSessionData) ->
 }
 
 /// Send an NPC's appearance to a viewer.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_cnpclook(npc: &NpcData, viewer: &MapSessionData) -> i32 {
     clif_cnpclook_inner(
         npc as *const NpcData,
@@ -383,6 +423,9 @@ pub unsafe fn clif_cnpclook(npc: &NpcData, viewer: &MapSessionData) -> i32 {
 }
 
 /// Send a mob's appearance to a viewer.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_cmoblook(mob: &MobSpawnData, viewer: &MapSessionData) -> i32 {
     clif_cmoblook_inner(
         mob as *const MobSpawnData,
@@ -395,6 +438,9 @@ pub unsafe fn clif_cmoblook(mob: &MobSpawnData, viewer: &MapSessionData) -> i32 
 /// Send a single-object look packet for a specific entity ID.
 ///
 /// Mirrors `clif_object_look_specific` (~line 1716).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_object_look_specific(sd: *mut MapSessionData, id: u32) -> i32 {
     if sd.is_null() { return 0; }
 
@@ -482,6 +528,9 @@ pub unsafe fn clif_object_look_specific(sd: *mut MapSessionData, id: u32) -> i32
 /// Initialise mob-look accumulation state and reserve send-buffer space.
 ///
 /// Direct call (not callback). Mirrors `clif_mob_look_start` (~line 1813).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_mob_look_start(sd: *mut MapSessionData) -> i32 {
     (*sd).net.look.count = 0;
     (*sd).net.look.len   = 0;
@@ -500,6 +549,9 @@ pub unsafe fn clif_mob_look_start(sd: *mut MapSessionData) -> i32 {
 /// Flush the batched mob-look packet if any entries were accumulated.
 ///
 /// Direct call (not callback). Mirrors `clif_mob_look_close` (~line 1832).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_mob_look_close(sd: *mut MapSessionData) -> i32 {
     if (*sd).net.look.count == 0 { return 0; }
 
@@ -536,8 +588,8 @@ unsafe fn clif_cnpclook_inner(nd: *const NpcData, sd: *const MapSessionData) -> 
     wfifohead((*sd).fd, 512);
     wfifob((*sd).fd, 0, 0xAA);
     wfifob((*sd).fd, 3, 0x33);
-    wfifow((*sd).fd, 5, ((*nd).x as u16).swap_bytes());
-    wfifow((*sd).fd, 7, ((*nd).y as u16).swap_bytes());
+    wfifow((*sd).fd, 5, (*nd).x.swap_bytes());
+    wfifow((*sd).fd, 7, (*nd).y.swap_bytes());
     wfifob((*sd).fd, 9, (*nd).side as u8);
     wfifol((*sd).fd, 10, (*nd).id.swap_bytes());
 
@@ -678,7 +730,7 @@ unsafe fn clif_cnpclook_inner(nd: *const NpcData, sd: *const MapSessionData) -> 
     wfifob((*sd).fd, 58, 0);
 
     // name
-    let name_ptr = (*nd).npc_name.as_ptr() as *const i8;
+    let name_ptr = (*nd).npc_name.as_ptr();
     let name_len = libc_strlen(name_ptr);
 
     if (*nd).state != 2 {
@@ -738,7 +790,7 @@ unsafe fn clif_cnpclook_inner(nd: *const NpcData, sd: *const MapSessionData) -> 
         wfifob((*sd).fd, 57, 128);
         wfifob((*sd).fd, 58, 0);
 
-        let gfx_name_ptr = gfx.name.as_ptr() as *const i8;
+        let gfx_name_ptr = gfx.name.as_ptr();
         let gfx_name_len = libc_strlen(gfx_name_ptr);
         let gfx_name_empty = gfx_name_len == 0 || *gfx_name_ptr == 0;
         if !gfx_name_empty {
@@ -785,8 +837,8 @@ unsafe fn clif_cmoblook_inner(mob: *const MobSpawnData, sd: *const MapSessionDat
     wfifohead((*sd).fd, 512);
     wfifob((*sd).fd, 0, 0xAA);
     wfifob((*sd).fd, 3, 0x33);
-    wfifow((*sd).fd, 5, ((*mob).x as u16).swap_bytes());
-    wfifow((*sd).fd, 7, ((*mob).y as u16).swap_bytes());
+    wfifow((*sd).fd, 5, (*mob).x.swap_bytes());
+    wfifow((*sd).fd, 7, (*mob).y.swap_bytes());
     wfifob((*sd).fd, 9, (*mob).side as u8);
     wfifol((*sd).fd, 10, (*mob).id.swap_bytes());
 
@@ -927,7 +979,7 @@ unsafe fn clif_cmoblook_inner(mob: *const MobSpawnData, sd: *const MapSessionDat
     wfifob((*sd).fd, 58, 0);
 
     // name
-    let name_ptr = (*(*mob).data).name.as_ptr() as *const i8;
+    let name_ptr = (*(*mob).data).name.as_ptr();
     let name_len = libc_strlen(name_ptr);
 
     if (*mob).state != 2 {
@@ -987,7 +1039,7 @@ unsafe fn clif_cmoblook_inner(mob: *const MobSpawnData, sd: *const MapSessionDat
         wfifob((*sd).fd, 57, 128);
         wfifob((*sd).fd, 58, 0);
 
-        let gfx_name_ptr = gfx.name.as_ptr() as *const i8;
+        let gfx_name_ptr = gfx.name.as_ptr();
         let gfx_name_len = libc_strlen(gfx_name_ptr);
         let gfx_name_empty = gfx_name_len == 0 || *gfx_name_ptr == 0;
         if !gfx_name_empty {
@@ -1044,13 +1096,11 @@ unsafe fn clif_charlook_inner(entity: *const MapSessionData, viewer: *const MapS
             && (*slot).show_ghosts != 0
             && (*sd).player.combat.state == 1
             && (*sd).id != (*src_sd).id
-        {
-            if (*src_sd).player.combat.state != 1
+            && (*src_sd).player.combat.state != 1
                 && ((*src_sd).optFlags & crate::game::pc::OPT_FLAG_GHOSTS) == 0
             {
                 return 0;
             }
-        }
     }
 
     if !session_exists((*sd).fd) {
@@ -1060,8 +1110,8 @@ unsafe fn clif_charlook_inner(entity: *const MapSessionData, viewer: *const MapS
     wfifohead((*src_sd).fd, 512);
     wfifob((*src_sd).fd, 0, 0xAA);
     wfifob((*src_sd).fd, 3, 0x33);
-    wfifow((*src_sd).fd, 5, ((*sd).x as u16).swap_bytes());
-    wfifow((*src_sd).fd, 7, ((*sd).y as u16).swap_bytes());
+    wfifow((*src_sd).fd, 5, (*sd).x.swap_bytes());
+    wfifow((*src_sd).fd, 7, (*sd).y.swap_bytes());
     wfifob((*src_sd).fd, 9, (*sd).player.combat.side as u8);
     wfifol((*src_sd).fd, 10, (*sd).player.identity.id.swap_bytes());
 
@@ -1384,7 +1434,7 @@ unsafe fn clif_charlook_inner(entity: *const MapSessionData, viewer: *const MapS
             wfifob((*src_sd).fd, 56, 0);
         }
 
-        let gfx_name_ptr = gfx.name.as_ptr() as *const i8;
+        let gfx_name_ptr = gfx.name.as_ptr();
         let gfx_name_len = libc_strlen(gfx_name_ptr);
         let gfx_name_empty = gfx_name_len == 0 || *gfx_name_ptr == 0;
         let visible = (*sd).player.combat.state != 2 && (*sd).player.combat.state != 5;
@@ -1415,6 +1465,9 @@ unsafe fn clif_charlook_inner(entity: *const MapSessionData, viewer: *const MapS
 /// Add a player to the block grid and send their appearance to nearby clients.
 ///
 /// Thin wrapper — mirrors `clif_spawn` (~line 4075).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_spawn(sd: *mut MapSessionData) -> i32 {
     if crate::game::block::map_addblock_id((*sd).id, (*sd).bl_type, (*sd).m, (*sd).x, (*sd).y) != 0 {
         // printf("Error Spawn\n") — silently ignore in Rust

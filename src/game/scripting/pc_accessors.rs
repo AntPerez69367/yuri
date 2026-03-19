@@ -62,12 +62,12 @@ pub fn sl_pc_status_pkduration(sd: &mut MapSessionData) -> i32{ sd.player.social
 pub fn sl_pc_status_basegrace(sd: &mut MapSessionData) -> i32 { sd.player.combat.base_grace as i32 }
 pub fn sl_pc_status_basemight(sd: &mut MapSessionData) -> i32 { sd.player.combat.base_might as i32 }
 pub fn sl_pc_status_basewill(sd: &mut MapSessionData) -> i32  { sd.player.combat.base_will as i32 }
-pub fn sl_pc_status_basearmor(sd: &mut MapSessionData) -> i32 { sd.player.combat.base_armor as i32 }
+pub fn sl_pc_status_basearmor(sd: &mut MapSessionData) -> i32 { sd.player.combat.base_armor }
 pub fn sl_pc_status_tutor(sd: &mut MapSessionData) -> i32     { sd.player.social.tutor as i32 }
 pub fn sl_pc_status_karma(sd: &mut MapSessionData) -> i32     { sd.player.social.karma as i32 } // truncates float to int; matches C
 pub fn sl_pc_status_alignment(sd: &mut MapSessionData) -> i32 { sd.player.social.alignment as i32 }
-pub fn sl_pc_status_classRank(sd: &mut MapSessionData) -> i32 { sd.player.progression.class_rank as i32 }
-pub fn sl_pc_status_clanRank(sd: &mut MapSessionData) -> i32  { sd.player.progression.clan_rank as i32 }
+pub fn sl_pc_status_classRank(sd: &mut MapSessionData) -> i32 { sd.player.progression.class_rank }
+pub fn sl_pc_status_clanRank(sd: &mut MapSessionData) -> i32  { sd.player.progression.clan_rank }
 pub fn sl_pc_status_novice_chat(sd: &mut MapSessionData) -> i32 { sd.player.social.novice_chat as i32 }
 pub fn sl_pc_status_subpath_chat(sd: &mut MapSessionData) -> i32{ sd.player.social.subpath_chat as i32 }
 pub fn sl_pc_status_clan_chat(sd: &mut MapSessionData) -> i32  { sd.player.social.clan_chat as i32 }
@@ -293,7 +293,7 @@ use crate::game::pc::{
     pc_equipscript, pc_unequipscript,
     pc_loadmagic, pc_checklevel,
     pc_delitem, pc_dropitemmap,
-    pc_isinvenspace,
+    pc_isinvenspace, ItemCustomization,
     pc_additem as pc_additem_acc,
 };
 use crate::game::map_parse::movement::{
@@ -341,14 +341,20 @@ fn map_id2mob_acc(id: u32) -> *mut MobSpawnData {
 
 /// Returns 1 if the account is registered, 0 otherwise.
 /// Delegates to `clif_isregistered` (still in C / map_parse.c).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_actid(sd: &mut MapSessionData) -> i32 {
-    clif_isregistered(sd.player.identity.id as u32)
+    clif_isregistered(sd.player.identity.id)
 }
 
 /// Returns a heap-allocated email string (or NULL).
 /// The pointer is leaked — Lua copies the string immediately, matching C behaviour.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_email(sd: &mut MapSessionData) -> *const i8 {
-    clif_getaccountemail(sd.player.identity.id as u32)
+    clif_getaccountemail(sd.player.identity.id)
 }
 
 /// Returns the interned clan name for this character's clan id.
@@ -568,13 +574,19 @@ unsafe fn bounded_copy(dst: *mut i8, src: *const i8, max_len: usize) {
     while n < max_len - 1 && *src.add(n) != 0 {
         n += 1;
     }
-    std::ptr::copy_nonoverlapping(src as *const i8, dst, n);
+    std::ptr::copy_nonoverlapping(src, dst, n);
     *dst.add(n) = 0;
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_set_gfx_name(sd: &mut MapSessionData, v: *const i8) {
     bounded_copy(sd.gfx.name.as_mut_ptr(), v, sd.gfx.name.len());
 }
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_set_name(sd: &mut MapSessionData, v: *const i8) {
     if !v.is_null() {
         sd.player.identity.name = std::ffi::CStr::from_ptr(v).to_string_lossy().into_owned();
@@ -582,6 +594,9 @@ pub unsafe fn sl_pc_set_name(sd: &mut MapSessionData, v: *const i8) {
         sd.player.identity.name.clear();
     }
 }
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_set_title(sd: &mut MapSessionData, v: *const i8) {
     if !v.is_null() {
         sd.player.identity.title = std::ffi::CStr::from_ptr(v).to_string_lossy().into_owned();
@@ -589,6 +604,9 @@ pub unsafe fn sl_pc_set_title(sd: &mut MapSessionData, v: *const i8) {
         sd.player.identity.title.clear();
     }
 }
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_set_clan_title(sd: &mut MapSessionData, v: *const i8) {
     if !v.is_null() {
         sd.player.social.clan_title = std::ffi::CStr::from_ptr(v).to_string_lossy().into_owned();
@@ -596,6 +614,9 @@ pub unsafe fn sl_pc_set_clan_title(sd: &mut MapSessionData, v: *const i8) {
         sd.player.social.clan_title.clear();
     }
 }
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_set_afkmessage(sd: &mut MapSessionData, v: *const i8) {
     if !v.is_null() {
         sd.player.social.afk_message = std::ffi::CStr::from_ptr(v).to_string_lossy().into_owned();
@@ -603,6 +624,9 @@ pub unsafe fn sl_pc_set_afkmessage(sd: &mut MapSessionData, v: *const i8) {
         sd.player.social.afk_message.clear();
     }
 }
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_set_speech(sd: &mut MapSessionData, v: *const i8) {
     bounded_copy(sd.speech.as_mut_ptr(), v, sd.speech.len());
 }
@@ -628,7 +652,7 @@ pub fn sl_pc_loaded(sd: &mut MapSessionData) -> i32 {
     sd.loaded as i32
 }
 pub fn sl_pc_inventory_id(sd: &mut MapSessionData, pos: i32) -> u32 {
-    sd.player.inventory.inventory[pos as usize].id as u32
+    sd.player.inventory.inventory[pos as usize].id
 }
 
 // ─── Regen overflow accumulators and group membership ────────────────────────
@@ -660,6 +684,9 @@ pub fn sl_pc_group_leader(sd: &mut MapSessionData) -> i32 {
 
 use crate::game::map_server::groups as pc_acc_groups;
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getgroup(sd: &mut MapSessionData, out: *mut u32, max: i32) -> i32 {
     const MAX_MEMBERS: usize = 256;
     let user = &*(sd);
@@ -680,33 +707,51 @@ pub unsafe fn sl_pc_getgroup(sd: &mut MapSessionData, out: *mut u32, max: i32) -
 
 // ── Health ────────────────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_addhealth(sd: &mut MapSessionData, damage: i32) {
     clif_send_pc_healthscript(&mut *sd, -damage, 0);
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_sendstatus(&*arc, SFLAG_HPMP);
+        clif_sendstatus(&arc, SFLAG_HPMP);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_removehealth(sd: &mut MapSessionData, damage: i32, caster: i32) {
     if caster > 0 { sd.attacker = caster as u32; }
     clif_send_pc_healthscript(&mut *sd, damage, 0);
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_sendstatus(&*arc, SFLAG_HPMP);
+        clif_sendstatus(&arc, SFLAG_HPMP);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_freeasync(sd: &mut MapSessionData) {
     sl_async_freeco(sd as *mut MapSessionData);
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_forcesave(sd: &mut MapSessionData) -> i32 {
     sl_intif_save(sd as *mut MapSessionData)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_die(sd: &mut MapSessionData) {
     pc_diescript(sd);
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_resurrect(sd: &mut MapSessionData) {
     pc_res(sd);
 }
@@ -715,15 +760,21 @@ pub fn sl_pc_showhealth(sd: &mut MapSessionData, damage: i32, kind: i32) {
     clif_send_pc_health(&mut *sd, damage, kind);
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_calcstat(sd: &mut MapSessionData) {
     if let Some(arc) = map_id2sd_pc(sd.id) { pc_calcstat(&arc); }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_sendstatus(sd: &mut MapSessionData) {
     pc_requestmp(sd);
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_sendstatus(&*arc, SFLAG_FULLSTATS | SFLAG_HPMP | SFLAG_XPMONEY);
-        clif_sendupdatestatus_onequip(&*arc);
+        clif_sendstatus(&arc, SFLAG_FULLSTATS | SFLAG_HPMP | SFLAG_XPMONEY);
+        clif_sendupdatestatus_onequip(&arc);
     }
 }
 
@@ -733,53 +784,83 @@ pub fn sl_pc_status(sd: &mut MapSessionData) -> i32 {
     )
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_warp(sd: &mut MapSessionData, m: i32, x: i32, y: i32) {
     pc_warp(sd, m, x, y);
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_refresh(sd: &mut MapSessionData) {
     pc_setpos(sd, sd.m as i32, sd.x as i32, sd.y as i32);
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_refreshnoclick(&*arc);
+        clif_refreshnoclick(&arc);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_pickup(sd: &mut MapSessionData, id: u32) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        pc_getitemscript(&*arc, id as i32);
+        pc_getitemscript(&arc, id as i32);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_throwitem(sd: &mut MapSessionData) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_throwitem_script(&*arc);
+        clif_throwitem_script(&arc);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_forcedrop(sd: &mut MapSessionData, id: i32) {
     if let Some(arc) = map_id2sd_pc(sd.id) { pc_dropitemmap(&arc, id, 0); }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_lock(sd: &mut MapSessionData) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_blockmovement(&*arc, 0);
+        clif_blockmovement(&arc, 0);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_unlock(sd: &mut MapSessionData) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_blockmovement(&*arc, 1);
+        clif_blockmovement(&arc, 1);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_swing(sd: &mut MapSessionData) {
     clif_parseattack(&mut *sd);
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_respawn(sd: &mut MapSessionData) {
     clif_spawn(sd);
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_sendhealth(sd: &mut MapSessionData, dmgf: f32, critical: i32) -> i32 {
     let damage = if dmgf > 0.0 { (dmgf + 0.5) as i32 }
                  else if dmgf < 0.0 { (dmgf - 0.5) as i32 }
@@ -791,56 +872,83 @@ pub unsafe fn sl_pc_sendhealth(sd: &mut MapSessionData, dmgf: f32, critical: i32
 
 // ── Movement / UI ─────────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_move(sd: &mut MapSessionData, speed: i32) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_noparsewalk(&*arc, speed as i8);
+        clif_noparsewalk(&arc, speed as i8);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_lookat(_sd: &mut MapSessionData, _id: i32) {
     // clif_parselookat_scriptsub is a no-op stub — nothing to do
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_minirefresh(sd: &mut MapSessionData) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_refreshnoclick(&*arc);
+        clif_refreshnoclick(&arc);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_refreshinventory(sd: &mut MapSessionData) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
         for i in 0..MAX_INVENTORY as i32 {
-            clif_sendadditem(&*arc, i);
+            clif_sendadditem(&arc, i);
         }
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_updateinv(sd: &mut MapSessionData) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        pc_loaditem(&*arc);
+        pc_loaditem(&arc);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_checkinvbod(sd: &mut MapSessionData) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_checkinvbod(&*arc);
+        clif_checkinvbod(&arc);
     }
 }
 
 // ── Equipment ────────────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_equip(sd: &mut MapSessionData) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        pc_equipscript(&*arc);
+        pc_equipscript(&arc);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_takeoff(sd: &mut MapSessionData) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        pc_unequipscript(&*arc);
+        pc_unequipscript(&arc);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_deductarmor(sd: &mut MapSessionData, v: i32) {
     clif_deductarmor(&mut *sd, v);
 }
@@ -849,6 +957,9 @@ pub fn sl_pc_deductweapon(sd: &mut MapSessionData, v: i32) {
     clif_deductweapon(&mut *sd, v);
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_deductdura(sd: &mut MapSessionData, eq: i32, v: i32) {
     clif_deductdura(&mut *sd, eq, v);
 }
@@ -870,6 +981,9 @@ pub fn sl_pc_hasequipped(sd: &mut MapSessionData, item_id: u32) -> i32 {
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_removeitemslot(sd: &mut MapSessionData, slot: i32, amount: i32, kind: i32) {
     if let Some(arc) = map_id2sd_pc(sd.id) { pc_delitem(&arc, slot, amount, kind); }
 }
@@ -878,88 +992,127 @@ pub fn sl_pc_hasitem(sd: &mut MapSessionData, item_id: u32, amount: i32) -> i32 
     let mut found = 0i32;
     for i in 0..MAX_INVENTORY {
         if sd.player.inventory.inventory[i].id == item_id {
-            found += sd.player.inventory.inventory[i].amount as i32;
+            found += sd.player.inventory.inventory[i].amount;
         }
     }
     if found >= amount { found } else { 0 }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_hasspace(sd: &mut MapSessionData, item_id: u32) -> i32 {
-    pc_isinvenspace(sd, item_id as i32, 0, std::ptr::null(), 0, 0, 0, 0)
+    pc_isinvenspace(sd, item_id as i32, 0, ItemCustomization { engrave: std::ptr::null(), custom_look: 0, custom_look_color: 0, custom_icon: 0, custom_icon_color: 0 })
 }
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_checklevel(sd: &mut MapSessionData) {
     pc_checklevel(sd);
 }
 
 // ── Display / UI ──────────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_sendminimap(sd: &mut MapSessionData) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_sendminimap(&*arc);
+        clif_sendminimap(&arc);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_popup(sd: &mut MapSessionData, msg: *const i8) {
     use crate::game::client::visual::clif_popup;
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_popup(&*arc, msg);
+        clif_popup(&arc, msg);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_guitext(sd: &mut MapSessionData, msg: *const i8) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_guitextsd(msg, &*arc);
+        clif_guitextsd(msg, &arc);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_sendminitext(sd: &mut MapSessionData, msg: *const i8) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_sendminitext(&*arc, msg);
+        clif_sendminitext(&arc, msg);
     }
 }
 
 pub fn sl_pc_powerboard(_sd: &mut MapSessionData) { /* stub */ }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_showboard(sd: &mut MapSessionData, id: i32) {
     boards_showposts(sd, id);
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_showpost(sd: &mut MapSessionData, id: i32, post: i32) {
     boards_readpost(sd, id, post);
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_changeview(sd: &mut MapSessionData, x: i32, y: i32) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_sendxychange(&*arc, x, y);
+        clif_sendxychange(&arc, x, y);
     }
 }
 
 // ── Social ────────────────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_speak(sd: &mut MapSessionData, msg: *const i8, len: i32, kind: i32) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_sendscriptsay(&*arc, msg, len, kind);
+        clif_sendscriptsay(&arc, msg, len, kind);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_sendmail(sd: &mut MapSessionData, to: *const i8, topic: *const i8, msg: *const i8) -> i32 {
     nmail_sendmail(sd, to, topic, msg)
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_sendurl(sd: &mut MapSessionData, kind: i32, url: *const i8) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_sendurl(&*arc, kind, url);
+        clif_sendurl(&arc, kind, url);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_swingtarget(sd: &mut MapSessionData, id: i32) {
     if let Some(arc) = crate::game::map_server::map_id2mob_ref(id as u32) {
         clif_mob_damage(sd, &mut *arc.data_ptr());
     } else if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
-        clif_pc_damage(sd, &mut *arc.data_ptr());
+        clif_pc_damage(sd, &mut arc.write());
     }
 }
 
@@ -991,6 +1144,9 @@ pub fn sl_pc_flushallkills(sd: &mut MapSessionData) {
 
 // ── Threat ────────────────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_addthreat(sd: &mut MapSessionData, mob_id: u32, amount: u32) {
     let mob = map_id2mob_acc(mob_id);
     if mob.is_null() { return; }
@@ -1002,6 +1158,9 @@ pub unsafe fn sl_pc_addthreat(sd: &mut MapSessionData, mob_id: u32, amount: u32)
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_setthreat(sd: &mut MapSessionData, mob_id: u32, amount: u32) {
     let mob = map_id2mob_acc(mob_id);
     if mob.is_null() { return; }
@@ -1013,10 +1172,16 @@ pub unsafe fn sl_pc_setthreat(sd: &mut MapSessionData, mob_id: u32, amount: u32)
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_addthreatgeneral(_sd: &mut MapSessionData, _amount: u32) { /* stub */ }
 
 // ── Spell list ────────────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_hasspell(sd: &mut MapSessionData, name: *const i8) -> i32 {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_SPELLS {
@@ -1025,6 +1190,9 @@ pub unsafe fn sl_pc_hasspell(sd: &mut MapSessionData, name: *const i8) -> i32 {
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_addspell(sd: &mut MapSessionData, spell_id: i32) {
     for i in 0..MAX_SPELLS {
         if sd.player.spells.skills[i] == 0 {
@@ -1043,6 +1211,9 @@ pub fn sl_pc_removespell(sd: &mut MapSessionData, spell_id: i32) {
 
 // ── Duration system ───────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_hasduration(sd: &mut MapSessionData, name: *const i8) -> i32 {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
@@ -1051,6 +1222,9 @@ pub unsafe fn sl_pc_hasduration(sd: &mut MapSessionData, name: *const i8) -> i32
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_hasdurationid(sd: &mut MapSessionData, name: *const i8, caster_id: i32) -> i32 {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
@@ -1061,6 +1235,9 @@ pub unsafe fn sl_pc_hasdurationid(sd: &mut MapSessionData, name: *const i8, cast
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getduration(sd: &mut MapSessionData, name: *const i8) -> i32 {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
@@ -1069,6 +1246,9 @@ pub unsafe fn sl_pc_getduration(sd: &mut MapSessionData, name: *const i8) -> i32
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getdurationid(sd: &mut MapSessionData, name: *const i8, caster_id: i32) -> i32 {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
@@ -1080,6 +1260,9 @@ pub unsafe fn sl_pc_getdurationid(sd: &mut MapSessionData, name: *const i8, cast
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_durationamount(sd: &mut MapSessionData, name: *const i8) -> i32 {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     let mut count = 0;
@@ -1089,6 +1272,9 @@ pub unsafe fn sl_pc_durationamount(sd: &mut MapSessionData, name: *const i8) -> 
     count
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_setduration(sd: &mut MapSessionData, name: *const i8, mut time_ms: i32, caster_id: i32, recast: i32) {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return; }
     if time_ms > 0 && time_ms < 1000 { time_ms = 1000; }
@@ -1110,12 +1296,7 @@ pub unsafe fn sl_pc_setduration(sd: &mut MapSessionData, name: *const i8, mut ti
             if da_aether == 0 { sd.player.spells.dura_aether[x].id = 0; }
             return;
         } else if da_id == id as u16 && da_caster == caster_id as u32
-            && da_aether > 0 && da_duration <= 0 {
-            sd.player.spells.dura_aether[x].duration = time_ms;
-            clif_send_duration(&mut *sd, id, time_ms / 1000, map_id2sd_acc(da_caster));
-            return;
-        } else if da_id == id as u16 && da_caster == caster_id as u32
-            && (da_duration > time_ms || recast != 0) && alreadycast {
+            && ((da_aether > 0 && da_duration <= 0) || ((da_duration > time_ms || recast != 0) && alreadycast)) {
             sd.player.spells.dura_aether[x].duration = time_ms;
             clif_send_duration(&mut *sd, id, time_ms / 1000, map_id2sd_acc(da_caster));
             return;
@@ -1129,6 +1310,9 @@ pub unsafe fn sl_pc_setduration(sd: &mut MapSessionData, name: *const i8, mut ti
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_flushduration(sd: &mut MapSessionData, _dispel_level: i32, min_id: i32, max_id: i32) {
     for x in 0..MAX_MAGIC_TIMERS {
         let id = sd.player.spells.dura_aether[x].id as i32;
@@ -1142,10 +1326,16 @@ pub unsafe fn sl_pc_flushduration(sd: &mut MapSessionData, _dispel_level: i32, m
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_flushdurationnouncast(sd: &mut MapSessionData, dispel_level: i32, min_id: i32, max_id: i32) {
     sl_pc_flushduration(sd, dispel_level, min_id, max_id);
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_refreshdurations(sd: &mut MapSessionData) {
     for x in 0..MAX_MAGIC_TIMERS {
         let da = sd.player.spells.dura_aether[x];
@@ -1158,6 +1348,9 @@ pub unsafe fn sl_pc_refreshdurations(sd: &mut MapSessionData) {
 
 // ── Aether system ─────────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_setaether(sd: &mut MapSessionData, name: *const i8, mut time_ms: i32) {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return; }
     if time_ms > 0 && time_ms < 1000 { time_ms = 1000; }
@@ -1183,6 +1376,9 @@ pub unsafe fn sl_pc_setaether(sd: &mut MapSessionData, name: *const i8, mut time
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_hasaether(sd: &mut MapSessionData, name: *const i8) -> i32 {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
@@ -1191,6 +1387,9 @@ pub unsafe fn sl_pc_hasaether(sd: &mut MapSessionData, name: *const i8) -> i32 {
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getaether(sd: &mut MapSessionData, name: *const i8) -> i32 {
     let id = magic_db::id_by_name(cptr_to_str(name)); if id <= 0 { return 0; }
     for i in 0..MAX_MAGIC_TIMERS {
@@ -1199,6 +1398,9 @@ pub unsafe fn sl_pc_getaether(sd: &mut MapSessionData, name: *const i8) -> i32 {
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_flushaether(sd: &mut MapSessionData) {
     for i in 0..MAX_MAGIC_TIMERS {
         if sd.player.spells.dura_aether[i].aether > 0 {
@@ -1233,29 +1435,41 @@ pub fn sl_pc_updatecountry(sd: &mut MapSessionData, country: i32) {
     });
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getcasterid(_sd: &mut MapSessionData, name: *const i8) -> i32 {
     magic_db::id_by_name(cptr_to_str(name))
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_settimer(sd: &mut MapSessionData, kind: i32, length: u32) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_send_timer(&*arc, kind as i8, length);
+        clif_send_timer(&arc, kind as i8, length);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_addtime(sd: &mut MapSessionData, v: i32) {
     sd.disptimertick = sd.disptimertick.wrapping_add(v as u32);
     let (timer_type, timer_tick) = (sd.disptimertype, sd.disptimertick);
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_send_timer(&*arc, timer_type, timer_tick);
+        clif_send_timer(&arc, timer_type, timer_tick);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_removetime(sd: &mut MapSessionData, v: i32) {
     sd.disptimertick = sd.disptimertick.saturating_sub(v as u32);
     let (timer_type, timer_tick) = (sd.disptimertype, sd.disptimertick);
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_send_timer(&*arc, timer_type, timer_tick);
+        clif_send_timer(&arc, timer_type, timer_tick);
     }
 }
 
@@ -1271,6 +1485,9 @@ pub fn sl_pc_setheroshow(sd: &mut MapSessionData, flag: i32) {
 
 // ── Legends ───────────────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_addlegend(
     sd: &mut MapSessionData, text: *const i8, name: *const i8,
     icon: i32, color: i32, tchaid: u32,
@@ -1291,6 +1508,9 @@ pub unsafe fn sl_pc_addlegend(
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_haslegend(sd: &mut MapSessionData, name: *const i8) -> i32 {
     use crate::common::player::legends::MAX_LEGENDS;
     let cmp = if name.is_null() { b"" as &[u8] } else { std::ffi::CStr::from_ptr(name).to_bytes() };
@@ -1304,20 +1524,23 @@ pub unsafe fn sl_pc_haslegend(sd: &mut MapSessionData, name: *const i8) -> i32 {
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_removelegendbyname(sd: &mut MapSessionData, name: *const i8) {
     let legs = &mut sd.player.legends.legends;
     let cmp = if name.is_null() { b"".as_ref() } else { std::ffi::CStr::from_ptr(name).to_bytes() };
     // zero all matching entries
-    for x in 0..MAX_LEGENDS {
-        let leg_name = &legs[x].name;
+    for leg in legs.iter_mut().take(MAX_LEGENDS) {
+        let leg_name = &leg.name;
         if leg_name[0] != 0 {
             let n = std::ffi::CStr::from_ptr(leg_name.as_ptr()).to_bytes();
             if n.eq_ignore_ascii_case(cmp) {
-                legs[x].name[0] = 0;
-                legs[x].text[0] = 0;
-                legs[x].icon = 0;
-                legs[x].color = 0;
-                legs[x].tchaid = 0;
+                leg.name[0] = 0;
+                leg.text[0] = 0;
+                leg.icon = 0;
+                leg.color = 0;
+                leg.tchaid = 0;
             }
         }
     }
@@ -1379,39 +1602,60 @@ pub fn sl_pc_mregenoverflow(sd: &mut MapSessionData) -> i32 {
 
 // ─── sl_user_* accessors ───────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_user_coref(sd: &mut MapSessionData) -> u32 {
     sd.coref
 }
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_user_set_coref(sd: &mut MapSessionData, v: u32) {
     sd.coref = v;
 }
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_user_coref_container(sd: &mut MapSessionData) -> u32 {
     sd.coref_container
 }
 // ─── Mana / gold / time helpers ────────────────────
 
 /// addMagic / addMana — add `amount` to sd->status.mp and send HP/MP status.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_addmagic(sd: &mut MapSessionData, amount: i32) {
     sd.player.combat.mp = (sd.player.combat.mp as i32).wrapping_add(amount) as u32;
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_sendstatus(&*arc, SFLAG_HPMP);
+        clif_sendstatus(&arc, SFLAG_HPMP);
     }
 }
 
 /// addManaExtend — alias for addMagic.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_addmanaextend(sd: &mut MapSessionData, amount: i32) {
     sl_pc_addmagic(sd, amount);
 }
 
 /// addGold — add gold to sd->status.money and send XP/money status.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_addgold(sd: &mut MapSessionData, amount: i32) {
     sd.player.inventory.money = (sd.player.inventory.money as i32).wrapping_add(amount) as u32;
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_sendstatus(&*arc, SFLAG_XPMONEY);
+        clif_sendstatus(&arc, SFLAG_XPMONEY);
     }
 }
 
 /// removeGold — subtract gold (floor at 0) and send XP/money status.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_removegold(sd: &mut MapSessionData, amount: i32) {
     if sd.player.inventory.money < amount as u32 {
         sd.player.inventory.money = 0;
@@ -1419,7 +1663,7 @@ pub unsafe fn sl_pc_removegold(sd: &mut MapSessionData, amount: i32) {
         sd.player.inventory.money -= amount as u32;
     }
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_sendstatus(&*arc, SFLAG_XPMONEY);
+        clif_sendstatus(&arc, SFLAG_XPMONEY);
     }
 }
 
@@ -1433,20 +1677,26 @@ pub fn sl_pc_settimevalues(sd: &mut MapSessionData, newval: u32) {
 }
 
 /// addHealth (extend variant) — heal by amount (negative damage).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_addhealth_extend(sd: &mut MapSessionData, amount: i32) {
     clif_send_pc_healthscript(&mut *sd, -amount, 0);
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_sendstatus(&*arc, SFLAG_HPMP);
+        clif_sendstatus(&arc, SFLAG_HPMP);
     }
 }
 
 /// removeHealth (extend variant) — damage by amount, skipped if dead.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_removehealth_extend(sd: &mut MapSessionData, damage: i32) {
     use crate::game::pc::PC_DIE;
     if sd.player.combat.state != PC_DIE as i8 {
         clif_send_pc_healthscript(&mut *sd, damage, 0);
         if let Some(arc) = map_id2sd_pc(sd.id) {
-            clif_sendstatus(&*arc, SFLAG_HPMP);
+            clif_sendstatus(&arc, SFLAG_HPMP);
         }
     }
 }
@@ -1478,6 +1728,9 @@ pub fn sl_pc_calcrangedhit(_sd: &mut MapSessionData, _bl: *mut std::ffi::c_void)
 // ─── sl_map_spell ──────────────────────────────────
 
 /// Return map[m].spell (1 = spell-disabled), or 0 if map not loaded.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_map_spell(m: i32) -> i32 {
     let ptr = crate::database::map_db::get_map_ptr(m as u16);
     if ptr.is_null() || (*ptr).xs == 0 { return 0; }
@@ -1503,11 +1756,14 @@ pub fn sl_pc_checkbankowners(sd: &mut MapSessionData, slot: i32) -> i32 {
 
 pub fn sl_pc_checkbankengraves(sd: &mut MapSessionData, slot: i32) -> *const i8 {
     if slot < 0 || slot as usize >= MAX_BANK_SLOTS { return c"".as_ptr(); }
-    sd.player.inventory.banks[slot as usize].real_name.as_ptr() as *const i8
+    sd.player.inventory.banks[slot as usize].real_name.as_ptr()
 }
 
 // ─── Bank deposit / withdraw ──────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_bankdeposit(
     sd: &mut MapSessionData, item: u32, amount: u32, owner: u32, engrave: *const i8,
 ) {
@@ -1541,7 +1797,7 @@ pub unsafe fn sl_pc_bankdeposit(
                 b.amount = amount;
                 b.owner = owner;
                 let src = if engrave.is_null() { c"".as_ptr() } else { engrave };
-                libc::strncpy(b.real_name.as_mut_ptr() as *mut i8, src,
+                libc::strncpy(b.real_name.as_mut_ptr(), src,
                               b.real_name.len() - 1);
                 break;
             }
@@ -1549,6 +1805,9 @@ pub unsafe fn sl_pc_bankdeposit(
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_bankwithdraw(
     sd: &mut MapSessionData, item: u32, amount: u32, owner: u32, engrave: *const i8,
 ) {
@@ -1579,6 +1838,9 @@ pub unsafe fn sl_pc_bankwithdraw(
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_bankcheckamount(
     sd: &mut MapSessionData, item: u32, _amount: u32, owner: u32, engrave: *const i8,
 ) -> i32 {
@@ -1605,22 +1867,37 @@ pub unsafe fn sl_pc_bankcheckamount(
 
 // ─── Clan bank — no-ops (SQL-backed; deposit/withdraw handled in scripting.c) ─
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_clanbankdeposit(
     _sd: &mut MapSessionData, _item: u32, _amount: u32, _owner: u32, _engrave: *const i8,
 ) {}
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_clanbankwithdraw(
     _sd: &mut MapSessionData, _item: u32, _amount: u32, _owner: u32, _engrave: *const i8,
 ) {}
 
 // ─── No-op stubs ──────────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getunknownspells(
     _sd: &mut MapSessionData, _out_ids: *mut i32, _max: i32,
 ) -> i32 { 0 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getparcel(_sd: &mut MapSessionData) -> *mut std::ffi::c_void { std::ptr::null_mut() }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getparcellist(
     _sd: &mut MapSessionData, _out: *mut *mut std::ffi::c_void, _max: i32,
 ) -> i32 { 0 }
@@ -1635,20 +1912,29 @@ pub fn sl_pc_killrank(sd: &mut MapSessionData, mob_id: i32) -> i32 {
 
 use crate::game::map_parse::chat::{clif_sendmsg as clif_sendmsg_pc, clif_broadcast as clif_broadcast_pc};
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_gmmsg(sd: &mut MapSessionData, msg: *const i8) {
     if msg.is_null() { return; }
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_sendmsg_pc(&*arc, 0, msg);
+        clif_sendmsg_pc(&arc, 0, msg);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_talkself(sd: &mut MapSessionData, color: i32, msg: *const i8) {
     if msg.is_null() { return; }
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_sendmsg_pc(&*arc, color, msg);
+        clif_sendmsg_pc(&arc, color, msg);
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_broadcast_sd(
     _sd: &mut MapSessionData, msg: *const i8, m: i32,
 ) {
@@ -1658,12 +1944,18 @@ pub unsafe fn sl_pc_broadcast_sd(
 
 // ─── Inventory / equip slot pointers ─────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getinventoryitem(sd: &mut MapSessionData, slot: i32) -> *mut std::ffi::c_void {
     if slot < 0 || slot as usize >= MAX_INVENTORY { return std::ptr::null_mut(); }
     if sd.player.inventory.inventory[slot as usize].id == 0 { return std::ptr::null_mut(); }
     &mut sd.player.inventory.inventory[slot as usize] as *mut _ as *mut std::ffi::c_void
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getequippeditem_sd(sd: &mut MapSessionData, slot: i32) -> *mut std::ffi::c_void {
     if slot < 0 || slot as usize >= MAX_EQUIP { return std::ptr::null_mut(); }
     if sd.player.inventory.equip[slot as usize].id == 0 { return std::ptr::null_mut(); }
@@ -1672,6 +1964,9 @@ pub unsafe fn sl_pc_getequippeditem_sd(sd: &mut MapSessionData, slot: i32) -> *m
 
 // ─── Inventory mutation: add / remove items ───────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_additem(
     sd: &mut MapSessionData,
     id: u32, amount: u32,
@@ -1690,6 +1985,9 @@ pub unsafe fn sl_pc_additem(
     if let Some(arc) = map_id2sd_pc(sd.id) { pc_additem_acc(&arc, &mut fl); }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_removeitem(
     sd: &mut MapSessionData,
     id: u32, mut amount: u32,
@@ -1713,6 +2011,9 @@ pub unsafe fn sl_pc_removeitem(
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_removeitemdura(
     sd: &mut MapSessionData,
     id: u32, mut amount: u32,
@@ -1734,6 +2035,9 @@ pub unsafe fn sl_pc_removeitemdura(
     }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_hasitemdura(
     sd: &mut MapSessionData, id: u32, mut amount: u32,
 ) -> i32 {
@@ -1754,6 +2058,9 @@ pub unsafe fn sl_pc_hasitemdura(
 
 // ─── Spell lists ──────────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getspells(
     sd: &mut MapSessionData, out_ids: *mut i32, max: i32,
 ) -> i32 {
@@ -1769,6 +2076,9 @@ pub unsafe fn sl_pc_getspells(
     count
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getspellnames(
     sd: &mut MapSessionData, out_names: *mut *const i8, max: i32,
 ) -> i32 {
@@ -1784,6 +2094,9 @@ pub unsafe fn sl_pc_getspellnames(
     count
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getalldurations(
     sd: &mut MapSessionData, out_names: *mut *const i8, max: i32,
 ) -> i32 {
@@ -1802,13 +2115,16 @@ pub unsafe fn sl_pc_getalldurations(
 
 // ─── Legends ──────────────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getlegend(
     sd: &mut MapSessionData, name: *const i8,
 ) -> *const i8 {
     if name.is_null() { return std::ptr::null(); }
     for x in 0..MAX_LEGENDS {
         if libc::strcasecmp(sd.player.legends.legends[x].name.as_ptr(), name) == 0 {
-            return sd.player.legends.legends[x].text.as_ptr() as *const i8;
+            return sd.player.legends.legends[x].text.as_ptr();
         }
     }
     std::ptr::null()
@@ -1816,6 +2132,9 @@ pub unsafe fn sl_pc_getlegend(
 
 // ─── Active spell check ───────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_activespells(sd: &mut MapSessionData, name: *const i8) -> i32 {
     if name.is_null() { return 0; }
     let id = magic_db::id_by_name(cptr_to_str(name));
@@ -1828,6 +2147,9 @@ pub unsafe fn sl_pc_activespells(sd: &mut MapSessionData, name: *const i8) -> i3
 
 // ─── Give XP ─────────────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_givexp(sd: &mut MapSessionData, amount: u32) {
     if let Some(arc) = map_id2sd_pc(sd.id) {
         crate::game::pc::pc_givexp(&arc, amount, crate::config_globals::XP_RATE.load(std::sync::atomic::Ordering::Relaxed) as u32);
@@ -1836,20 +2158,29 @@ pub unsafe fn sl_pc_givexp(sd: &mut MapSessionData, amount: u32) {
 
 // ─── Clan bank reads ──────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getclanitems(sd: &mut MapSessionData, slot: i32) -> i32 {
     let clan = crate::database::clan_db::search(sd.player.social.clan as i32);
     if clan.clanbanks.is_null() { return 0; }
-    if slot < 0 || slot >= 255 { return 0; }
+    if !(0..255).contains(&slot) { return 0; }
     (*clan.clanbanks.add(slot as usize)).item_id as i32
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getclanamounts(sd: &mut MapSessionData, slot: i32) -> i32 {
     let clan = crate::database::clan_db::search(sd.player.social.clan as i32);
     if clan.clanbanks.is_null() { return 0; }
-    if slot < 0 || slot >= 255 { return 0; }
+    if !(0..255).contains(&slot) { return 0; }
     (*clan.clanbanks.add(slot as usize)).amount as i32
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_checkclankitemamounts(
     sd: &mut MapSessionData, item: i32, _amount: i32,
 ) -> i32 {
@@ -1865,6 +2196,9 @@ pub unsafe fn sl_pc_checkclankitemamounts(
 
 // ─── Creation packet reads ────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getcreationitems(
     sd: &mut MapSessionData, len: i32, out: *mut u32,
 ) -> i32 {
@@ -1878,11 +2212,14 @@ pub unsafe fn sl_pc_getcreationitems(
     0
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_getcreationamounts(
     sd: &mut MapSessionData, len: i32, item_id: u32,
 ) -> i32 {
     let t = crate::database::item_db::search(item_id).typ as i32;
-    if t < 3 || t > 17 {
+    if !(3..=17).contains(&t) {
         rfifob(sd.fd, len as usize) as i32
     } else {
         1
@@ -1897,11 +2234,17 @@ use crate::game::map_parse::dialogs::{
     clif_buydialog as clif_buydialog_pc, clif_selldialog as clif_selldialog_pc,
 };
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_input_send(sd: &mut MapSessionData, msg: *const i8) {
     let last_click = sd.last_click;
     if let Some(arc) = map_id2sd_pc(sd.id) { clif_input_pc(&arc, last_click as i32, msg, c"".as_ptr()); }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_dialog_send(
     sd: &mut MapSessionData, msg: *const i8, prev: i32, next: i32,
 ) {
@@ -1909,6 +2252,9 @@ pub unsafe fn sl_pc_dialog_send(
     if let Some(arc) = map_id2sd_pc(sd.id) { clif_scriptmes_pc(&arc, last_click as i32, msg, prev, next); }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_dialogseq_send(
     sd: &mut MapSessionData, entries: *const *const i8, n: i32, can_continue: i32,
 ) {
@@ -1941,18 +2287,27 @@ unsafe fn menu_send_1idx(
     if let Some(arc) = map_id2sd_pc(sd.id) { clif_scriptmenuseq_pc(&arc, last_click as i32, msg, buf.as_mut_ptr(), n, 0, 0); }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_menu_send(
     sd: &mut MapSessionData, msg: *const i8, options: *const *const i8, n: i32,
 ) {
     menu_send_1idx(sd, msg, options, n);
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_menuseq_send(
     sd: &mut MapSessionData, msg: *const i8, options: *const *const i8, n: i32,
 ) {
     menu_send_1idx(sd, msg, options, n);
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_menustring_send(
     sd: &mut MapSessionData, msg: *const i8, options: *const *const i8, n: i32,
 ) {
@@ -1963,6 +2318,9 @@ pub fn sl_pc_menustring2_send(
     _sd: &mut MapSessionData, _msg: *const i8, _options: *const *const i8, _n: i32,
 ) {} // no matching clif_ packet
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_buy_send(
     sd: &mut MapSessionData, msg: *const i8,
     items: *const i32, values: *const i32,
@@ -1972,32 +2330,38 @@ pub unsafe fn sl_pc_buy_send(
     if n <= 0 { return; }
     let nu = n as usize;
     let mut ilist: Vec<crate::common::types::Item> = vec![std::mem::zeroed(); nu];
-    for i in 0..nu {
-        ilist[i].id = *items.add(i) as u32;
+    for (i, item) in ilist.iter_mut().enumerate().take(nu) {
+        item.id = *items.add(i) as u32;
         if !displaynames.is_null() && !(*displaynames.add(i)).is_null() {
-            libc::strncpy(ilist[i].real_name.as_mut_ptr(), *displaynames.add(i),
-                          ilist[i].real_name.len() - 1);
+            libc::strncpy(item.real_name.as_mut_ptr(), *displaynames.add(i),
+                          item.real_name.len() - 1);
         }
         if !buytext.is_null() && !(*buytext.add(i)).is_null() {
-            libc::strncpy(ilist[i].buytext.as_mut_ptr() as *mut i8,
-                          *buytext.add(i), ilist[i].buytext.len() - 1);
+            libc::strncpy(item.buytext.as_mut_ptr() as *mut i8,
+                          *buytext.add(i), item.buytext.len() - 1);
         }
     }
     let last_click = sd.last_click;
     if let Some(arc) = map_id2sd_pc(sd.id) { clif_buydialog_pc(&arc, last_click, msg, ilist.as_mut_ptr(), values as *mut i32, n); }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_buydialog_send(
     sd: &mut MapSessionData, msg: *const i8, items: *const i32, n: i32,
 ) {
     if n <= 0 { return; }
     let nu = n as usize;
     let mut ilist: Vec<crate::common::types::Item> = vec![std::mem::zeroed(); nu];
-    for i in 0..nu { ilist[i].id = *items.add(i) as u32; }
+    for (i, item) in ilist.iter_mut().enumerate().take(nu) { item.id = *items.add(i) as u32; }
     let last_click = sd.last_click;
     if let Some(arc) = map_id2sd_pc(sd.id) { clif_buydialog_pc(&arc, last_click, msg, ilist.as_mut_ptr(), std::ptr::null_mut(), n); }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_buyextend_send(
     sd: &mut MapSessionData, msg: *const i8,
     items: *const i32, prices: *const i32,
@@ -2006,7 +2370,7 @@ pub unsafe fn sl_pc_buyextend_send(
     if n <= 0 { return; }
     let nu = n as usize;
     let mut ilist: Vec<crate::common::types::Item> = vec![std::mem::zeroed(); nu];
-    for i in 0..nu { ilist[i].id = *items.add(i) as u32; }
+    for (i, item) in ilist.iter_mut().enumerate().take(nu) { item.id = *items.add(i) as u32; }
     let last_click = sd.last_click;
     if let Some(arc) = map_id2sd_pc(sd.id) { clif_buydialog_pc(&arc, last_click, msg, ilist.as_mut_ptr(), prices as *mut i32, n); }
 }
@@ -2022,9 +2386,12 @@ unsafe fn sell_send_inner(sd: &mut MapSessionData, msg: *const i8, items: *const
         }
     }
     let last_click = sd.last_click;
-    if let Some(arc) = map_id2sd_pc(sd.id) { clif_selldialog_pc(&arc, last_click, msg, slots.as_ptr() as *const i32, slots.len() as i32); }
+    if let Some(arc) = map_id2sd_pc(sd.id) { clif_selldialog_pc(&arc, last_click, msg, slots.as_ptr(), slots.len() as i32); }
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_sell_send(
     sd: &mut MapSessionData, msg: *const i8, items: *const i32, n: i32,
 ) {
@@ -2032,12 +2399,18 @@ pub unsafe fn sl_pc_sell_send(
     sell_send_inner(sd, msg, items, n);
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_sell2_send(
     sd: &mut MapSessionData, msg: *const i8, items: *const i32, n: i32,
 ) {
     sl_pc_sell_send(sd, msg, items, n);
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_sellextend_send(
     sd: &mut MapSessionData, msg: *const i8, items: *const i32, n: i32,
 ) {
@@ -2065,12 +2438,15 @@ use crate::game::pc::pc_unequip as pc_unequip_slot;
 
 // ─── Parcel removal ───────────────────────────────────────────────────────────
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_removeparcel(
     sd: &mut MapSessionData,
-    _sender: i32, _item: u32, _amount: u32,
-    pos: i32, _owner: u32,
-    _engrave: *const i8, _npcflag: i32,
+    pos: i32,
+    spec: crate::game::scripting::map_globals::ParcelSpec,
 ) {
+    let _ = spec; // fields not used in this implementation
     let char_id = sd.player.identity.id;
     let _ = crate::database::blocking_run_async(async move {
         sqlx::query(
@@ -2086,6 +2462,9 @@ pub unsafe fn sl_pc_removeparcel(
 
 /// Record `id` in the player's PvP kill list.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_setpk(sd: &mut MapSessionData, id: i32) {
     let mut exist = -1i32;
     for x in 0..20usize {
@@ -2099,7 +2478,7 @@ pub unsafe fn sl_pc_setpk(sd: &mut MapSessionData, id: i32) {
                 sd.pvp[x][0] = id as u32;
                 sd.pvp[x][1] = libc::time(std::ptr::null_mut()) as u32;
                 if let Some(arc) = map_id2sd_pc(sd.id) {
-                    clif_getchararea(&*arc);
+                    clif_getchararea(&arc);
                 }
                 break;
             }
@@ -2109,6 +2488,9 @@ pub unsafe fn sl_pc_setpk(sd: &mut MapSessionData, id: i32) {
 
 /// Reduce HP without displaying a damage number.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_removehealth_nodmgnum(sd: &mut MapSessionData, damage: i32, type_: i32) {
     use crate::game::pc::PC_DIE;
     if (sd.player.combat.state as i32) != PC_DIE {
@@ -2118,6 +2500,9 @@ pub unsafe fn sl_pc_removehealth_nodmgnum(sd: &mut MapSessionData, damage: i32, 
 
 /// Expire timed items in inventory and equipped slots.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_expireitem(sd: &mut MapSessionData) {
     let t = libc::time(std::ptr::null_mut()) as u32;
     let pe = map_id2sd_pc(sd.id);
@@ -2132,9 +2517,9 @@ pub unsafe fn sl_pc_expireitem(sd: &mut MapSessionData) {
             let name = crate::game::scripting::types::item::fixed_str(&db_item.name);
             let msg = format!("Your {} has expired! Please visit the cash shop to purchase another.", name);
             if let Ok(cmsg) = std::ffi::CString::new(msg) {
-                if let Some(ref arc) = pe { pc_delitem(&**arc, x as i32, 1, 8); }
+                if let Some(ref arc) = pe { pc_delitem(arc, x as i32, 1, 8); }
                 if let Some(ref arc) = pe {
-                    clif_sendminitext(&**arc, cmsg.as_ptr());
+                    clif_sendminitext(arc, cmsg.as_ptr());
                 }
             }
         }
@@ -2157,9 +2542,9 @@ pub unsafe fn sl_pc_expireitem(sd: &mut MapSessionData) {
             let msg = format!("Your {} has expired! Please visit the cash shop to purchase another.", name);
             if let Ok(cmsg) = std::ffi::CString::new(msg) {
                 pc_unequip_slot(sd, x as i32);
-                if eqdel >= 0 { if let Some(ref arc) = pe { pc_delitem(&**arc, eqdel, 1, 8); } }
+                if eqdel >= 0 { if let Some(ref arc) = pe { pc_delitem(arc, eqdel, 1, 8); } }
                 if let Some(ref arc) = pe {
-                    clif_sendminitext(&**arc, cmsg.as_ptr());
+                    clif_sendminitext(arc, cmsg.as_ptr());
                 }
             }
         }
@@ -2168,6 +2553,9 @@ pub unsafe fn sl_pc_expireitem(sd: &mut MapSessionData) {
 
 /// Heal sd by `amount`; triggers `on_healed` Lua hook if attacker is set.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_addhealth2(sd: &mut MapSessionData, amount: i32, _type: i32) {
     if sd.attacker != 0 && amount > 0 {
         crate::game::scripting::doscript_blargs_id(
@@ -2182,6 +2570,6 @@ pub unsafe fn sl_pc_addhealth2(sd: &mut MapSessionData, amount: i32, _type: i32)
     }
     clif_send_pc_healthscript(&mut *sd, -amount, 0);
     if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_sendstatus(&*arc, SFLAG_HPMP);
+        clif_sendstatus(&arc, SFLAG_HPMP);
     }
 }

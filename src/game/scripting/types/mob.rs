@@ -11,7 +11,7 @@ use crate::game::mob::{
 use crate::game::scripting::map_globals::{
     sl_g_sendside, sl_g_delete_bl, sl_g_talk, sl_g_deliddb, sl_g_addpermanentspawn, sl_g_getusers_ids,
 };
-use crate::game::mob::mobspawn_onetime;
+use crate::game::mob::{mobspawn_onetime, SpawnConfig};
 use crate::game::scripting::types::item::fixed_str;
 use crate::game::scripting::types::registry::{GameRegObject, MapRegObject, MobRegObject};
 use crate::game::scripting::types::shared;
@@ -553,10 +553,10 @@ impl UserData for MobObject {
                             };
                             let mob = unsafe { &mut *arc.data_ptr() };
                             let a: Vec<mlua::Value> = args.into_iter().collect();
-                            let talk_type = a.get(1).map(|v| val_to_int(v)).unwrap_or(0);
+                            let talk_type = a.get(1).map(val_to_int).unwrap_or(0);
                             let msg = match a.get(2) {
                                 Some(mlua::Value::String(s)) => {
-                                    String::from_utf8_lossy(&*s.as_bytes()).into_owned()
+                                    String::from_utf8_lossy(&s.as_bytes()).into_owned()
                                 }
                                 _ => String::new(),
                             };
@@ -692,49 +692,49 @@ impl UserData for MobObject {
                 "seeInvis" => data_int!(seeinvis),
                 "isBoss" => data_int!(isboss),
                 "getBlock" =>
-                    return shared::make_getblock_fn(lua),
+                    shared::make_getblock_fn(lua),
                 "getObjectsInCell" | "getAliveObjectsInCell" | "getObjectsInCellWithTraps" =>
-                    return shared::make_cell_query_fn(lua, key.as_str()),
+                    shared::make_cell_query_fn(lua, key.as_str()),
                 "getObjectsInArea" | "getAliveObjectsInArea"
                 | "getObjectsInSameMap" | "getAliveObjectsInSameMap" =>
-                    return shared::make_area_query_fn(lua, key.as_str(), mob_id),
+                    shared::make_area_query_fn(lua, key.as_str(), mob_id),
                 "getObjectsInMap" =>
-                    return shared::make_map_query_fn(lua),
-                "sendAnimation"     => return shared::make_sendanimation_fn(lua, mob_id),
-                "playSound"         => return shared::make_playsound_fn(lua, mob_id),
-                "sendAction"        => return shared::make_sendaction_fn(lua, mob_id),
-                "msg"               => return shared::make_msg_fn(lua, mob_id),
-                "dropItem"          => return shared::make_dropitem_fn(lua, mob_id),
-                "dropItemXY"        => return shared::make_dropitemxy_fn(lua, mob_id),
-                "objectCanMove"     => return shared::make_objectcanmove_fn(lua, mob_id),
-                "objectCanMoveFrom" => return shared::make_objectcanmovefrom_fn(lua, mob_id),
-                "repeatAnimation"   => return shared::make_repeatanimation_fn(lua, mob_id),
-                "selfAnimation"     => return shared::make_selfanimation_fn(lua, mob_id),
-                "selfAnimationXY"   => return shared::make_selfanimationxy_fn(lua, mob_id),
-                "sendParcel"        => return shared::make_sendparcel_fn(lua, mob_id),
-                "throw"             => return shared::make_throwblock_fn(lua, mob_id),
+                    shared::make_map_query_fn(lua),
+                "sendAnimation"     => shared::make_sendanimation_fn(lua, mob_id),
+                "playSound"         => shared::make_playsound_fn(lua, mob_id),
+                "sendAction"        => shared::make_sendaction_fn(lua, mob_id),
+                "msg"               => shared::make_msg_fn(lua, mob_id),
+                "dropItem"          => shared::make_dropitem_fn(lua, mob_id),
+                "dropItemXY"        => shared::make_dropitemxy_fn(lua, mob_id),
+                "objectCanMove"     => shared::make_objectcanmove_fn(lua, mob_id),
+                "objectCanMoveFrom" => shared::make_objectcanmovefrom_fn(lua, mob_id),
+                "repeatAnimation"   => shared::make_repeatanimation_fn(lua, mob_id),
+                "selfAnimation"     => shared::make_selfanimation_fn(lua, mob_id),
+                "selfAnimationXY"   => shared::make_selfanimationxy_fn(lua, mob_id),
+                "sendParcel"        => shared::make_sendparcel_fn(lua, mob_id),
+                "throw"             => shared::make_throwblock_fn(lua, mob_id),
                 "delFromIDDB" => {
-                    return Ok(mlua::Value::Function(lua.create_function(
+                    Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
                             sl_g_deliddb(mob_id);
                             Ok(())
                         }
-                    )?));
+                    )?))
                 }
                 "addPermanentSpawn" => {
-                    return Ok(mlua::Value::Function(lua.create_function(
+                    Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
                             sl_g_addpermanentspawn(mob_id);
                             Ok(())
                         }
-                    )?));
+                    )?))
                 }
                 // spawn(mob_name_or_id, x, y, amount [,m [,owner]])
                 // Spawn behavior for a mob's own map context (mirrors npc:spawn).
                 "spawn" => {
                     // Capture the spawner mob's id to look up its map if needed.
                     let spawner_mob_id = mob_id;
-                    return Ok(mlua::Value::Function(lua.create_function(
+                    Ok(mlua::Value::Function(lua.create_function(
                         move |lua, args: mlua::MultiValue| -> mlua::Result<mlua::Value> {
                             let args: Vec<mlua::Value> = args.into_iter().collect();
                             let spawn_mob_id: u32 = match args.get(1) {
@@ -764,7 +764,7 @@ impl UserData for MobObject {
                             let tbl = lua.create_table()?;
                             if amount <= 0 { return Ok(mlua::Value::Table(tbl)); }
                             let spawned = unsafe {
-                                mobspawn_onetime(spawn_mob_id, m, x, y, amount, 0, 0, 0, owner)
+                                mobspawn_onetime(spawn_mob_id, m, x, y, SpawnConfig { times: amount, start: 0, end: 0, replace: 0, owner })
                             };
                             if spawned.is_empty() { return Ok(mlua::Value::Table(tbl)); }
                             for (i, spawned_id) in spawned.into_iter().enumerate() {
@@ -772,11 +772,11 @@ impl UserData for MobObject {
                             }
                             Ok(mlua::Value::Table(tbl))
                         }
-                    )?));
+                    )?))
                 }
                 // getUsers() — returns all online players.
                 "getUsers" => {
-                    return Ok(mlua::Value::Function(lua.create_function(
+                    Ok(mlua::Value::Function(lua.create_function(
                         |lua, _: mlua::MultiValue| {
                             const MAX: usize = 4096;
                             let ids = sl_g_getusers_ids();
@@ -787,7 +787,7 @@ impl UserData for MobObject {
                             }
                             Ok(tbl)
                         },
-                    )?));
+                    )?))
                 }
                 _ => {
                     if let Ok(tbl) = lua.globals().get::<mlua::Table>("Mob") {

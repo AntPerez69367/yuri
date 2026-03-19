@@ -7,6 +7,7 @@ use super::{LoginState, LGN_ERRPASS, LGN_ERRUSER};
 use super::packet::{read_client_packet, build_message, build_version_ok, build_version_patch};
 use crate::network::crypt::tk_crypt_static;
 
+#[derive(Default)]
 struct SessionData {
     name: String,
     pass: String,
@@ -19,15 +20,6 @@ struct SessionData {
     face_color: u8,
 }
 
-impl Default for SessionData {
-    fn default() -> Self {
-        Self {
-            name: String::new(), pass: String::new(),
-            face: 0, sex: 0, country: 0, totem: 0,
-            hair: 0, hair_color: 0, face_color: 0,
-        }
-    }
-}
 
 pub fn is_valid_name(s: &str) -> bool {
     s.len() >= 3 && s.len() <= 12 && s.chars().all(|c| c.is_ascii_alphabetic())
@@ -199,14 +191,13 @@ async fn dispatch_login(
                 return;
             }
         }
-        if state.config.require_reg != 0 {
-            if super::db::get_account_for_char(pool, &name).await == 0 {
+        if state.config.require_reg != 0
+            && super::db::get_account_for_char(pool, &name).await == 0 {
                 let _ = stream.write_all(&build_message(0x03,
                     "You must attach your character to an account to play.\n\nPlease visit www.website.com to attach your character to an account.",
                     xk)).await;
                 return;
             }
-        }
     }
 
     sd.name = name.clone();
@@ -349,11 +340,14 @@ async fn dispatch_create_char(
     let pool = &state.world.as_ref().unwrap().db;
     let cfg = &state.config;
     let res = crate::servers::char::db::create_char(
-        pool, &sd.name, &sd.pass,
-        sd.totem, sd.sex % 2, sd.country,
-        sd.face as u16, sd.hair as u16,
-        sd.face_color as u16, sd.hair_color as u16,
-        cfg.start_point.m as u32, cfg.start_point.x as u32, cfg.start_point.y as u32,
+        pool,
+        crate::servers::char::db::CreateCharParams {
+            name: &sd.name, pass: &sd.pass,
+            totem: sd.totem, sex: sd.sex % 2, country: sd.country,
+            face: sd.face as u16, hair: sd.hair as u16,
+            face_color: sd.face_color as u16, hair_color: sd.hair_color as u16,
+            start_m: cfg.start_point.m as u32, start_x: cfg.start_point.x as u32, start_y: cfg.start_point.y as u32,
+        },
     ).await;
     if res == 0 {
         let _ = stream.write_all(&build_message(0x00, &state.messages.0[super::LGN_NEWCHAR], xk)).await;
@@ -382,7 +376,7 @@ async fn dispatch_change_pass(
     let new_off = old_off + 1 + old_pass_len;
     if pkt.len() <= new_off { return; }
     let new_pass_len = pkt[new_off] as usize;
-    if new_pass_len > 8 || new_pass_len < 3 { return; }
+    if !(3..=8).contains(&new_pass_len) { return; }
 
     let name = std::str::from_utf8(&pkt[6..6 + name_len]).unwrap_or("").trim_end_matches('\0');
     if !is_valid_name(name) {

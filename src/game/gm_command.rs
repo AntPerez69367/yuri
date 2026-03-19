@@ -307,7 +307,7 @@ fn command_hair(sd: &mut MapSessionData, line: &str) -> i32 {
 fn command_checkdupes(sd: &mut MapSessionData, _line: &str) -> i32 {
     let reporter_id = sd.id;
     crate::game::map_server::for_each_player(|tsd| {
-        let n = unsafe { pc_readglobalreg(tsd as *mut MapSessionData, c"goldbardupe".as_ptr() as *const i8) };
+        let n = unsafe { pc_readglobalreg(tsd as *mut MapSessionData, c"goldbardupe".as_ptr()) };
         if n != 0 {
             let name_str = tsd.player.identity.name.as_str();
             let msg = format!("{} gold bar {} times", name_str, n);
@@ -324,7 +324,7 @@ fn command_checkdupes(sd: &mut MapSessionData, _line: &str) -> i32 {
 fn command_checkwpe(sd: &mut MapSessionData, _line: &str) -> i32 {
     let reporter_id = sd.id;
     crate::game::map_server::for_each_player(|tsd| {
-        let n = unsafe { pc_readglobalreg(tsd as *mut MapSessionData, c"WPEtimes".as_ptr() as *const i8) };
+        let n = unsafe { pc_readglobalreg(tsd as *mut MapSessionData, c"WPEtimes".as_ptr()) };
         if n != 0 {
             let name_str = tsd.player.identity.name.as_str();
             let msg = format!("{} WPE attempt {} times", name_str, n);
@@ -1207,6 +1207,9 @@ unsafe fn dispatch(sd: *mut MapSessionData, p: *const i8, len: i32, log: bool) -
     1
 }
 
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn is_command(sd: *mut MapSessionData, p: *const i8, len: i32) -> i32 {
     dispatch(sd, p, len, true)
 }

@@ -302,6 +302,6 @@ mod layout_tests {
     const EXPECTED_SIZE: usize = 164792;
     #[test]
     fn map_session_data_size() {
-        assert_eq!(mem::size_of::<MapSessionData>(), EXPECTED_SIZE);
+        assert_eq!(std::mem::size_of::<MapSessionData>(), EXPECTED_SIZE);
     }
 }

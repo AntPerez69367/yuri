@@ -1,8 +1,7 @@
-/// metan_cli — generates binary .metan metadata files from the item database
-///
-/// Meta file CLI utility.
-/// Connects to MySQL via sqlx (same pool used by item_db/class_db),
-/// loads itemdb + classdb, queries the Items table, and writes .metan files.
+//! metan_cli — generates binary .metan metadata files from the item database
+//!
+//! Meta file CLI utility. Connects to MySQL via sqlx (same pool used by item_db/class_db),
+//! loads itemdb + classdb, queries the Items table, and writes .metan files.
 
 use anyhow::{Context, Result};
 use sqlx::mysql::MySqlPoolOptions;
@@ -54,8 +53,7 @@ fn output_meta(filename: &str, num: usize, list: &[u32]) -> Result<()> {
     let size_field: u16 = swap16(offset as u16);
     w.write_all(&size_field.to_ne_bytes())?;
 
-    for x in base..base + offset {
-        let id = list[x];
+    for id in list.iter().copied().skip(base).take(offset) {
 
         // name (u8-length-prefixed)
         let db = item_db::search(id);

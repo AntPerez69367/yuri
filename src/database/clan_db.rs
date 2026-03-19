@@ -127,7 +127,7 @@ pub fn name(id: i32) -> *const i8 {
     let map = db().lock().unwrap();
     match map.get(&id) {
         Some(c) => c.name.as_ptr(),
-        None => b"??\0".as_ptr() as *const i8,
+        None => c"??".as_ptr(),
     }
 }
 

@@ -6,9 +6,9 @@ use crate::database::map_db::get_map_ptr;
 use crate::game::npc::{NpcData, npc_move, npc_warp};
 use crate::game::scripting::map_globals::{
     sl_g_sendside, sl_g_sendanimxy, sl_g_talk, sl_g_deliddb, sl_g_addpermanentspawn,
-    sl_g_getusers_ids, sl_g_addnpc,
+    sl_g_getusers_ids, sl_g_addnpc, NpcSpawnConfig,
 };
-use crate::game::mob::mobspawn_onetime;
+use crate::game::mob::{mobspawn_onetime, SpawnConfig};
 use crate::game::scripting::types::mob::MobObject;
 use crate::game::scripting::types::registry::{GameRegObject, MapRegObject, NpcRegObject};
 use crate::game::scripting::types::shared;
@@ -23,7 +23,7 @@ pub struct NpcObject { pub id: u32 }
 
 unsafe fn npc_map(nd: *const NpcData) -> *mut MapData {
     if nd.is_null() { return std::ptr::null_mut(); }
-    if (nd as usize) % std::mem::align_of::<NpcData>() != 0 { return std::ptr::null_mut(); }
+    if !(nd as usize).is_multiple_of(std::mem::align_of::<NpcData>()) { return std::ptr::null_mut(); }
     get_map_ptr((*nd).m)
 }
 
@@ -135,7 +135,7 @@ impl UserData for NpcObject {
                             let talk_type = a.get(1).map(val_to_int).unwrap_or(0);
                             let msg = match a.get(2) {
                                 Some(mlua::Value::String(s)) => {
-                                    String::from_utf8_lossy(&*s.as_bytes()).into_owned()
+                                    String::from_utf8_lossy(&s.as_bytes()).into_owned()
                                 }
                                 _ => String::new(),
                             };
@@ -239,7 +239,7 @@ impl UserData for NpcObject {
                             let tbl = lua.create_table()?;
                             if amount <= 0 { return Ok(mlua::Value::Table(tbl)); }
                             let spawned = unsafe {
-                                mobspawn_onetime(mob_id, m, x, y, amount, 0, 0, 0, owner)
+                                mobspawn_onetime(mob_id, m, x, y, SpawnConfig { times: amount, start: 0, end: 0, replace: 0, owner })
                             };
                             if spawned.is_empty() { return Ok(mlua::Value::Table(tbl)); }
                             for (i, spawn_id) in spawned.into_iter().enumerate() {
@@ -275,9 +275,15 @@ impl UserData for NpcObject {
                             unsafe {
                                 sl_g_addnpc(
                                     cname.as_ptr(),
-                                    vi(2), vi(3), vi(4), vi(5),
-                                    vi(6), vi(7), vi(8), vi(9),
-                                    cyname.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+                                    vi(2), vi(3), vi(4),
+                                    NpcSpawnConfig {
+                                        subtype: vi(5),
+                                        timer: vi(6),
+                                        duration: vi(7),
+                                        owner: vi(8),
+                                        movetime: vi(9),
+                                        npc_yname: cyname.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
+                                    },
                                 );
                             }
                             Ok(())

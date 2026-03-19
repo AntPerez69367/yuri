@@ -272,6 +272,9 @@ unsafe fn write_npc_gfx_look(fd: SessionId, nd: *const NpcData, base_off: usize)
 // ─── clif_closeit ─────────────────────────────────────────────────────────────
 
 /// Send a close-dialog packet to the client.  Mirrors `clif_closeit` in
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_closeit(pe: &PlayerEntity) -> i32 {
     let fd = pe.fd;
 
@@ -292,7 +295,7 @@ pub unsafe fn clif_closeit(pe: &PlayerEntity) -> i32 {
     wfifow(fd, 11, swap16(9));
     // copy xor_key (up to 9 chars + null) into WFIFOP(sd->fd, 13)
     let xor_bytes = cfg.xor_key.as_bytes();
-    let dst = wfifop(fd, 13) as *mut u8;
+    let dst = wfifop(fd, 13);
     let xor_len = xor_bytes.len().min(9);
     std::ptr::copy_nonoverlapping(xor_bytes.as_ptr(), dst, xor_len);
     *dst.add(xor_len) = 0;
@@ -317,6 +320,9 @@ pub unsafe fn clif_closeit(pe: &PlayerEntity) -> i32 {
 // ─── clif_sendtowns ───────────────────────────────────────────────────────────
 
 /// Send town list dialog.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendtowns(pe: &PlayerEntity) -> i32 {
     let fd = pe.fd;
 
@@ -341,7 +347,7 @@ pub unsafe fn clif_sendtowns(pe: &PlayerEntity) -> i32 {
         let name_len = town_bytes.len();
         wfifob(fd, len + 10, x as u8);
         wfifob(fd, len + 11, name_len as u8);
-        let dst = wfifop(fd, len + 12) as *mut u8;
+        let dst = wfifop(fd, len + 12);
         std::ptr::copy_nonoverlapping(town_bytes.as_ptr(), dst, name_len);
         *dst.add(name_len) = 0;
         len += name_len + 2;
@@ -355,6 +361,9 @@ pub unsafe fn clif_sendtowns(pe: &PlayerEntity) -> i32 {
 // ─── clif_send_timer ──────────────────────────────────────────────────────────
 
 /// Send a countdown timer packet.  Mirrors `clif_send_timer` in
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_send_timer(
     pe: &PlayerEntity,
     timer_type: i8,
@@ -378,6 +387,9 @@ pub unsafe fn clif_send_timer(
 // ─── clif_parsenpcdialog ──────────────────────────────────────────────────────
 
 /// Parse an NPC dialog response packet.  Mirrors `clif_parsenpcdialog` in
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parsenpcdialog(pe: &PlayerEntity) -> i32 {
     let fd = pe.fd;
     let npc_choice = rfifob(fd, 13) as u32;
@@ -385,30 +397,26 @@ pub unsafe fn clif_parsenpcdialog(pe: &PlayerEntity) -> i32 {
     match rfifob(fd, 5) {
         0x01 => {
             // Dialog
-            // TODO(phase6c): migrate sl_resumedialog
-            sl_resumedialog(npc_choice, pe.data_ptr());
+            sl_resumedialog(npc_choice, &mut *pe.write() as *mut MapSessionData);
         }
         0x02 => {
             // Special menu
             let npc_menu = rfifob(fd, 15) as i32;
-            // TODO(phase6c): migrate sl_resumemenuseq
-            sl_resumemenuseq(npc_choice, npc_menu, pe.data_ptr());
+            sl_resumemenuseq(npc_choice, npc_menu, &mut *pe.write() as *mut MapSessionData);
         }
         0x04 => {
             // inputSeq returned input
             if rfifob(fd, 13) != 0x02 {
-                // TODO(phase6c): migrate sl_async_freeco
-                sl_async_freeco(pe.data_ptr());
+                sl_async_freeco(&mut *pe.write() as *mut MapSessionData);
                 return 1;
             }
             let input_len = rfifob(fd, 15) as usize;
             let mut input = [0u8; 100];
             copy_rfifo_bytes(&mut input, rfifop(fd, 16), input_len);
-            // TODO(phase6c): migrate sl_resumeinputseq
             sl_resumeinputseq(
                 npc_choice,
                 input.as_mut_ptr() as *mut i8,
-                pe.data_ptr(),
+                &mut *pe.write() as *mut MapSessionData,
             );
         }
         _ => {}
@@ -420,6 +428,9 @@ pub unsafe fn clif_parsenpcdialog(pe: &PlayerEntity) -> i32 {
 // ─── clif_scriptmes ───────────────────────────────────────────────────────────
 
 /// Send NPC dialog text.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_scriptmes(
     pe: &PlayerEntity,
     id: i32,
@@ -430,7 +441,7 @@ pub unsafe fn clif_scriptmes(
     let fd       = pe.fd;
     let graphic_id = pe.read().npc_g;
     let color    = pe.read().npc_gc;
-    let nd       = map_id2npc_local(id as u32) as *mut NpcData;
+    let nd       = map_id2npc_local(id as u32);
     let dialog_type = pe.read().dialogtype;
 
     if !nd.is_null() {
@@ -522,6 +533,9 @@ pub unsafe fn clif_scriptmes(
 
 /// Send NPC dialog menu.
 /// (Note: as of C source, this function appears not to be called anywhere.)
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_scriptmenu(
     pe: &PlayerEntity,
     id: i32,
@@ -532,7 +546,7 @@ pub unsafe fn clif_scriptmenu(
     let fd      = pe.fd;
     let graphic = pe.read().npc_g;
     let color   = pe.read().npc_gc;
-    let nd      = map_id2npc_local(id as u32) as *mut NpcData;
+    let nd      = map_id2npc_local(id as u32);
     let dialog_type = pe.read().dialogtype;
 
     if !nd.is_null() {
@@ -651,6 +665,9 @@ pub unsafe fn clif_scriptmenu(
 // ─── clif_scriptmenuseq ───────────────────────────────────────────────────────
 
 /// Send sequential NPC menu dialog.  Mirrors `clif_scriptmenuseq` in
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_scriptmenuseq(
     pe: &PlayerEntity,
     id: i32,
@@ -663,7 +680,7 @@ pub unsafe fn clif_scriptmenuseq(
     let fd         = pe.fd;
     let graphic_id = pe.read().npc_g;
     let color      = pe.read().npc_gc;
-    let nd         = map_id2npc_local(id as u32) as *mut NpcData;
+    let nd         = map_id2npc_local(id as u32);
     let dialog_type = pe.read().dialogtype;
 
     if !nd.is_null() {
@@ -850,22 +867,32 @@ pub unsafe fn clif_scriptmenuseq(
 
 // ─── clif_inputseq ────────────────────────────────────────────────────────────
 
-/// Send sequential NPC input dialog.  Mirrors `clif_inputseq` in
+/// Dialog content pointers passed to `clif_inputseq`.
+pub struct DialogContent {
+    pub dialog:   *const i8,
+    pub dialog2:  *const i8,
+    pub dialog3:  *const i8,
+    pub menu:     *mut *const i8,
+    pub size:     i32,
+    pub previous: i32,
+    pub next:     i32,
+}
+
+/// Send sequential NPC input dialog.
+///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_inputseq(
-    pe: &PlayerEntity,
-    id: i32,
-    dialog: *const i8,
-    dialog2: *const i8,
-    dialog3: *const i8,
-    menu: *mut *const i8,
-    size: i32,
-    previous: i32,
-    next: i32,
+    pe:      &PlayerEntity,
+    id:      i32,
+    content: DialogContent,
 ) -> i32 {
+    let DialogContent { dialog, dialog2, dialog3, menu, size, previous, next } = content;
     let fd         = pe.fd;
     let graphic_id = pe.read().npc_g;
     let color      = pe.read().npc_gc;
-    let nd         = map_id2npc_local(id as u32) as *mut NpcData;
+    let nd         = map_id2npc_local(id as u32);
 
     if !nd.is_null() {
         (*nd).lastaction = libc::time(std::ptr::null_mut()) as u32;
@@ -937,6 +964,9 @@ pub unsafe fn clif_inputseq(
 // ─── clif_handle_clickgetinfo ─────────────────────────────────────────────────
 
 /// Handle a click/getinfo request from the client.  Mirrors
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn clif_handle_clickgetinfo(pe: &PlayerEntity) -> i32 {
     let fd = pe.fd;
 
@@ -948,10 +978,10 @@ pub async unsafe fn clif_handle_clickgetinfo(pe: &PlayerEntity) -> i32 {
             // subpath chat toggle
             if pe.read().player.social.subpath_chat == 0 {
                 pe.write().player.social.subpath_chat = 1;
-                clif_sendminitext(pe, b"Subpath Chat: ON\0".as_ptr() as *const i8);
+                clif_sendminitext(pe, c"Subpath Chat: ON".as_ptr());
             } else {
                 pe.write().player.social.subpath_chat = 0;
-                clif_sendminitext(pe, b"Subpath Chat: OFF\0".as_ptr() as *const i8);
+                clif_sendminitext(pe, c"Subpath Chat: OFF".as_ptr());
             }
             return 0;
         }
@@ -976,14 +1006,12 @@ pub async unsafe fn clif_handle_clickgetinfo(pe: &PlayerEntity) -> i32 {
             if pos.m == pe_m
                 && (pe_x as i32 - tsd_ref.x as i32).abs() <= 21
                 && (pe_y as i32 - tsd_ref.y as i32).abs() <= 21
-            {
-                if pe_gm_level != 0
+                && (pe_gm_level != 0
                     || (tsd_ref.optFlags & 64 == 0      // !optFlag_noclick
-                        && tsd_ref.optFlags & 32 == 0)  // !optFlag_stealth
+                        && tsd_ref.optFlags & 32 == 0))  // !optFlag_stealth
                 {
                     sl_doscript_coro("onClick", None, pe.id);
                 }
-            }
         }
         clif_clickonplayer(pe, target_id).await;
     } else if bl_type == BL_NPC {
@@ -1003,15 +1031,14 @@ pub async unsafe fn clif_handle_clickgetinfo(pe: &PlayerEntity) -> i32 {
 
         if same_map_or_f1 {
             pe.write().last_click = target_id;
-            // TODO(phase6c): migrate sl_async_freeco
-            sl_async_freeco(pe.data_ptr());
+            sl_async_freeco(&mut *pe.write() as *mut MapSessionData);
 
             if pe.read().player.social.karma <= -3.0f32 {
                 let nd_name = nd.name.as_ptr();
-                let is_f1npc = libc::strcmp(nd_name, b"f1npc\0".as_ptr() as *const i8) == 0;
-                let is_totem = libc::strcmp(nd_name, b"totem_npc\0".as_ptr() as *const i8) == 0;
+                let is_f1npc = libc::strcmp(nd_name, c"f1npc".as_ptr()) == 0;
+                let is_totem = libc::strcmp(nd_name, c"totem_npc".as_ptr()) == 0;
                 if !is_f1npc && !is_totem {
-                    clif_scriptmes(pe, target_id as i32, b"Go away scum!\0".as_ptr() as *const i8, 0, 0);
+                    clif_scriptmes(pe, target_id as i32, c"Go away scum!".as_ptr(), 0, 0);
                     return 0;
                 }
             }
@@ -1035,8 +1062,7 @@ pub async unsafe fn clif_handle_clickgetinfo(pe: &PlayerEntity) -> i32 {
             && (pe_y as i32 - pos.y as i32).abs() <= radius
         {
             pe.write().last_click = target_id;
-            // TODO(phase6c): migrate sl_async_freeco
-            sl_async_freeco(pe.data_ptr());
+            sl_async_freeco(&mut *pe.write() as *mut MapSessionData);
             sl_doscript_coro_2("onLook", None, pe.id, target_id);
             if !mob.data.is_null() {
                 sl_doscript_coro_2(crate::game::scripting::carray_to_str(&(*mob.data).yname), Some("click"), pe.id, target_id);
@@ -1050,6 +1076,9 @@ pub async unsafe fn clif_handle_clickgetinfo(pe: &PlayerEntity) -> i32 {
 // ─── clif_buydialog ───────────────────────────────────────────────────────────
 
 /// Send NPC buy dialog.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_buydialog(
     pe: &PlayerEntity,
     id: u32,
@@ -1121,14 +1150,14 @@ pub unsafe fn clif_buydialog(
                 libc::snprintf(
                     name_buf.as_mut_ptr() as *mut i8,
                     64,
-                    b"%s\0".as_ptr() as *const i8,
+                    c"%s".as_ptr(),
                     it.real_name.as_ptr(),
                 );
             } else {
                 libc::snprintf(
                     name_buf.as_mut_ptr() as *mut i8,
                     64,
-                    b"%s\0".as_ptr() as *const i8,
+                    c"%s".as_ptr(),
                     item.name.as_ptr(),
                 );
             }
@@ -1137,7 +1166,7 @@ pub unsafe fn clif_buydialog(
                 libc::snprintf(
                     name_buf.as_mut_ptr().add(cur_len) as *mut i8,
                     64usize.saturating_sub(cur_len),
-                    b" - BONDED\0".as_ptr() as *const i8,
+                    c" - BONDED".as_ptr(),
                 );
             }
 
@@ -1182,7 +1211,7 @@ pub unsafe fn clif_buydialog(
         wfifoset(fd, encrypt(fd) as usize);
     } else {
         // graphic == 0: show NPC equip look
-        let nd = map_id2npc_local(id) as *mut NpcData;
+        let nd = map_id2npc_local(id);
         if nd.is_null() {
             // item points into caller's Vec — do not free here.
             return 0;
@@ -1236,7 +1265,7 @@ pub unsafe fn clif_buydialog(
                 libc::snprintf(
                     name_buf.as_mut_ptr().add(cur_len) as *mut i8,
                     64usize.saturating_sub(cur_len),
-                    b" - BONDED\0".as_ptr() as *const i8,
+                    c" - BONDED".as_ptr(),
                 );
             }
 
@@ -1286,6 +1315,9 @@ pub unsafe fn clif_buydialog(
 // ─── clif_parsebuy ────────────────────────────────────────────────────────────
 
 /// Parse a buy response packet.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parsebuy(pe: &PlayerEntity) -> i32 {
     let fd = pe.fd;
     let item_name_len = rfifob(fd, 12) as usize;
@@ -1296,8 +1328,7 @@ pub unsafe fn clif_parsebuy(pe: &PlayerEntity) -> i32 {
         item_name_len,
     );
     if itemname[0] != 0 {
-        // TODO(phase6c): migrate sl_resumebuy
-        sl_resumebuy(itemname.as_mut_ptr() as *mut i8, pe.data_ptr());
+        sl_resumebuy(itemname.as_mut_ptr() as *mut i8, &mut *pe.write() as *mut MapSessionData);
     }
     0
 }
@@ -1305,6 +1336,9 @@ pub unsafe fn clif_parsebuy(pe: &PlayerEntity) -> i32 {
 // ─── clif_selldialog ─────────────────────────────────────────────────────────
 
 /// Send NPC sell dialog.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_selldialog(
     pe: &PlayerEntity,
     id: u32,
@@ -1360,7 +1394,7 @@ pub unsafe fn clif_selldialog(
         wfifow(fd, 1, swap16((len + 17) as u16));
         wfifoset(fd, encrypt(fd) as usize);
     } else {
-        let nd = map_id2npc_local(id) as *mut NpcData;
+        let nd = map_id2npc_local(id);
         if nd.is_null() { return 0; }
         write_npc_equip_look(fd, nd, 11);
 
@@ -1392,16 +1426,21 @@ pub unsafe fn clif_selldialog(
 // ─── clif_parsesell ───────────────────────────────────────────────────────────
 
 /// Parse a sell response packet.  Mirrors `clif_parsesell` in
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parsesell(pe: &PlayerEntity) -> i32 {
     let fd = pe.fd;
-    // TODO(phase6c): migrate sl_resumesell
-    sl_resumesell(rfifob(fd, 12) as u32, pe.data_ptr());
+    sl_resumesell(rfifob(fd, 12) as u32, &mut *pe.write() as *mut MapSessionData);
     0
 }
 
 // ─── clif_input ───────────────────────────────────────────────────────────────
 
 /// Send NPC input dialog.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_input(
     pe: &PlayerEntity,
     id: i32,
@@ -1411,7 +1450,7 @@ pub unsafe fn clif_input(
     let fd      = pe.fd;
     let graphic = pe.read().npc_g;
     let color   = pe.read().npc_gc;
-    let nd      = map_id2npc_local(id as u32) as *mut NpcData;
+    let nd      = map_id2npc_local(id as u32);
     let dialog_type = pe.read().dialogtype;
 
     if !nd.is_null() {
@@ -1526,6 +1565,9 @@ pub unsafe fn clif_input(
 // ─── clif_parseinput ─────────────────────────────────────────────────────────
 
 /// Parse an input response packet.  Mirrors `clif_parseinput` in
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parseinput(pe: &PlayerEntity) -> i32 {
     let fd = pe.fd;
     let mut output  = [0u8; 256];
@@ -1545,11 +1587,10 @@ pub unsafe fn clif_parseinput(pe: &PlayerEntity) -> i32 {
         inp_len,
     );
 
-    // TODO(phase6c): migrate sl_resumeinput
     sl_resumeinput(
         output.as_mut_ptr() as *mut i8,
         output2.as_mut_ptr() as *mut i8,
-        pe.data_ptr(),
+        &mut *pe.write() as *mut MapSessionData,
     );
     0
 }

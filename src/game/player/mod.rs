@@ -50,7 +50,7 @@ pub use systems::{
     pc_readnpcintreg, pc_setnpcintreg,
     pc_readquestreg, pc_setquestreg,
     // Items
-    pc_isinvenspace, pc_isinvenitemspace,
+    pc_isinvenspace, pc_isinvenitemspace, ItemCustomization,
     pc_dropitemfull, pc_addtocurrent2_inner, pc_addtocurrent_inner,
     pc_additem, pc_additemnolog, pc_delitem, pc_dropitemmap,
     pc_changeitem, pc_useitem, pc_runfloor_sub,

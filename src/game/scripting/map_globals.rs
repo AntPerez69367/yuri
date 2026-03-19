@@ -8,6 +8,7 @@ use crate::session::{session_exists, session_get_data, session_get_eof, SessionI
 use crate::game::block::{map_is_loaded, AreaType};
 use crate::game::block_grid;
 use crate::game::client::visual::clif_sendweather;
+use crate::game::client::BroadcastSrc;
 use crate::game::map_server::{entity_position, map_deliddb, map_id2sd_pc, map_readglobalreg, map_setglobalreg};
 use crate::game::player::{MapSessionData, prelude::*};
 use crate::game::map_parse::chat::{clif_sendmsg, clif_playsound_entity, clif_speak_inner};
@@ -21,14 +22,31 @@ use crate::game::block::map_addblock_id;
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 
+/// Item/parcel fields shared by send-parcel and remove-parcel operations.
+#[derive(Clone, Copy)]
+pub struct ParcelSpec {
+    pub sender:  i32,
+    pub item:    i32,
+    pub amount:  i32,
+    pub owner:   i32,
+    pub engrave: *const i8,
+    pub npcflag: i32,
+}
+
 /// Thin wrapper around `map_is_loaded` for code that still holds a `i32` map index.
 /// Called from `src/game/map_char.rs`.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_map_isloaded(m: i32) -> i32 {
     map_is_loaded(m) as i32
 }
 
 /// Extract `bl.m` from a `USER*` (= `MapSessionData*`) and call `map_readglobalreg`.
 /// before Rust knew the `MapSessionData` layout.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_readglobalreg_sd(sd: *mut MapSessionData, attrname: *const i8) -> i32 {
     map_readglobalreg((*sd).m as i32, attrname)
 }
@@ -38,6 +56,9 @@ pub unsafe fn map_readglobalreg_sd(sd: *mut MapSessionData, attrname: *const i8)
 /// Note: callers from Lua boundaries should use `map_setglobalreg_str` directly with
 /// the extracted `m` index to avoid non-Send futures. This function is kept for callers
 /// that already have an async context and a raw `attrname` pointer.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn map_setglobalreg_sd(sd: *mut MapSessionData, attrname: *const i8, val: i32) -> i32 {
     let m = (*sd).m as i32;
     map_setglobalreg(m, attrname, val).await
@@ -45,6 +66,9 @@ pub async unsafe fn map_setglobalreg_sd(sd: *mut MapSessionData, attrname: *cons
 
 /// Set weather on all maps matching `region`/`indoor`, broadcasting to sessions on each map.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn sl_g_setweather(region: u8, indoor: u8, weather: u8) {
     let t = libc::time(std::ptr::null_mut()) as u32;
     for x in 0..65535u16 {
@@ -76,7 +100,7 @@ pub async unsafe fn sl_g_setweather(region: u8, indoor: u8, weather: u8) {
                 if !session_exists(sid) { continue; }
                 if session_get_eof(sid) != 0 { continue; }
                 if let Some(tpe) = session_get_data(sid) {
-                    if tpe.read().m == x { clif_sendweather(&*tpe); }
+                    if tpe.read().m == x { clif_sendweather(&tpe); }
                 }
             }
         }
@@ -85,6 +109,9 @@ pub async unsafe fn sl_g_setweather(region: u8, indoor: u8, weather: u8) {
 
 /// Set weather on a single map, broadcasting to sessions on that map.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn sl_g_setweatherm(m: i32, weather: u8) {
     // Read initial state synchronously — no raw ptr refs cross the await.
     let timer_before = {
@@ -112,7 +139,7 @@ pub async unsafe fn sl_g_setweatherm(m: i32, weather: u8) {
         if !session_exists(sid) { continue; }
         if session_get_eof(sid) != 0 { continue; }
         if let Some(tpe) = session_get_data(sid) {
-            if tpe.read().m == m as u16 { clif_sendweather(&*tpe); }
+            if tpe.read().m == m as u16 { clif_sendweather(&tpe); }
         }
     }
 }
@@ -130,6 +157,9 @@ pub fn sl_g_getusers_ids() -> Vec<u32> {
 
 /// Return `map[m].pvp`, or 0 if the map slot is not loaded.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_g_getmappvp(m: i32) -> i32 {
     let ptr = get_map_ptr(m as u16);
     if ptr.is_null() || (*ptr).xs == 0 { return 0; }
@@ -139,6 +169,9 @@ pub unsafe fn sl_g_getmappvp(m: i32) -> i32 {
 /// Copy `map[m].title` into `buf` (null-terminated, at most `buflen` bytes including NUL).
 ///
 /// Returns 1 on success, 0 if the map is not loaded or args are invalid.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_g_getmaptitle(m: i32, buf: *mut i8, buflen: i32) -> i32 {
     if buf.is_null() || buflen <= 0 { return 0; }
     let ptr = get_map_ptr(m as u16);
@@ -159,10 +192,13 @@ pub unsafe fn sl_g_getmaptitle(m: i32, buf: *mut i8, buflen: i32) -> i32 {
 /// Send a colored message to a specific player by ID.
 ///
 /// `target == 0` is a no-op (area broadcast not implemented here).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_g_msg(_entity_id: u32, color: i32, msg: *const i8, target: i32) {
     if msg.is_null() || target == 0 { return; }
     if let Some(arc) = map_id2sd_pc(target as u32) {
-        clif_sendmsg(&*arc, color, msg);
+        clif_sendmsg(&arc, color, msg);
     }
 }
 
@@ -211,17 +247,17 @@ pub fn sl_g_sendside(entity_id: u32) {
     match bl_type as i32 {
         crate::game::mob::BL_PC => {
             if let Some(arc) = map_id2sd_pc(entity_id) {
-                unsafe { clif_sendside_pc(&*arc.read()); }
+                unsafe { clif_sendside_pc(&arc.read()); }
             }
         }
         crate::game::mob::BL_MOB => {
             if let Some(arc) = crate::game::map_server::map_id2mob_ref(entity_id) {
-                unsafe { clif_sendside_mob(&*arc.read()); }
+                unsafe { clif_sendside_mob(&arc.read()); }
             }
         }
         crate::game::mob::BL_NPC => {
             if let Some(arc) = crate::game::map_server::map_id2npc_ref(entity_id) {
-                unsafe { clif_sendside_npc(&*arc.read()); }
+                unsafe { clif_sendside_npc(&arc.read()); }
             }
         }
         _ => {}
@@ -268,7 +304,7 @@ pub fn sl_g_sendaction(entity_id: u32, action: i32, speed: i32) {
     buf[10] = 0x00;
     buf[11] = speed as u8;
     buf[12] = 0x00;
-    unsafe { clif_send(buf.as_ptr(), 32, entity_id, pos.m, pos.x, pos.y, bl_type, 6); } // SAMEAREA
+    unsafe { clif_send(buf.as_ptr(), 32, BroadcastSrc { id: entity_id, m: pos.m, x: pos.x, y: pos.y, bl_type }, 6); } // SAMEAREA
 }
 
 /// Send a throw animation packet from the entity's position toward (x, y).
@@ -295,11 +331,14 @@ pub fn sl_g_throwblock(
     buf[22..24].copy_from_slice(&(y as u16).to_be_bytes());
     // buf[24..28] = 0, buf[29] = 0
     buf[28]      = action as u8;
-    unsafe { clif_send(buf.as_ptr(), 30, entity_id, pos.m, pos.x, pos.y, bl_type, 6 /* SAMEAREA */); }
+    unsafe { clif_send(buf.as_ptr(), 30, BroadcastSrc { id: entity_id, m: pos.m, x: pos.x, y: pos.y, bl_type }, 6 /* SAMEAREA */); }
 }
 
 /// Drop an item at the entity's position.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_g_dropitem(entity_id: u32, item_id: i32, amount: i32, owner: i32) {
     let Some((pos, _)) = entity_position(entity_id) else { return; };
     let id = item_id as u32;
@@ -310,13 +349,17 @@ pub unsafe fn sl_g_dropitem(entity_id: u32, item_id: i32, amount: i32, owner: i3
     };
     let db = crate::database::item_db::search(id);
     crate::game::mob::mob_dropitem(
-        entity_id, id, amount, db.dura, db.protected, 0,
+        entity_id,
+        crate::game::mob::DropItemSpec { id, amount, dura: db.dura, protected_: db.protected, owner: 0 },
         pos.m as i32, pos.x as i32, pos.y as i32, sd,
     );
 }
 
 /// Drop an item at a specific map coordinate, ignoring the entity's position.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_g_dropitemxy(
     _entity_id: u32,
     item_id: i32, amount: i32,
@@ -330,17 +373,24 @@ pub unsafe fn sl_g_dropitemxy(
         std::ptr::null_mut()
     };
     let db = crate::database::item_db::search(id);
-    crate::game::mob::mob_dropitem(0, id, amount, db.dura, db.protected, 0, m, x, y, sd);
+    crate::game::mob::mob_dropitem(
+        0,
+        crate::game::mob::DropItemSpec { id, amount, dura: db.dura, protected_: db.protected, owner: 0 },
+        m, x, y, sd,
+    );
 }
 
 /// Insert a parcel into the Parcels table, assigning the next available slot.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_g_sendparcel(
     _entity_id: u32,
-    receiver: i32, sender: i32,
-    item: i32, amount: i32, owner: i32,
-    engrave: *const i8, npcflag: i32,
+    receiver: i32,
+    spec: ParcelSpec,
 ) {
+    let ParcelSpec { sender, item, amount, owner, engrave, npcflag } = spec;
     let engrave_str: String = if engrave.is_null() {
         String::new()
     } else {
@@ -386,6 +436,9 @@ pub unsafe fn sl_g_sendparcel(
 
 /// Broadcast a spell/skill animation to all PCs in AREA around the entity.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_g_sendanimation(entity_id: u32, anim: i32, times: i32) {
     let Some((pos, _)) = entity_position(entity_id) else { return; };
     if let Some(grid) = block_grid::get_grid(pos.m as usize) {
@@ -402,6 +455,9 @@ pub unsafe fn sl_g_sendanimation(entity_id: u32, anim: i32, times: i32) {
 
 /// Broadcast an animation at position (x, y) to all PCs in AREA around the entity.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_g_sendanimxy(
     entity_id: u32,
     anim: i32,
@@ -419,7 +475,7 @@ pub unsafe fn sl_g_sendanimxy(
         for id in ids {
             if let Some(arc) = map_id2sd_pc(id) {
                 let pc = &*arc.read();
-                clif_sendanimation_xy_inner(&*pc, anim, times, x, y);
+                clif_sendanimation_xy_inner(pc, anim, times, x, y);
             }
         }
     }
@@ -428,6 +484,9 @@ pub unsafe fn sl_g_sendanimxy(
 /// Broadcast a repeating animation to all PCs in AREA around the entity.
 ///
 /// `duration` is in milliseconds; divided by 1000 before sending on the wire.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_g_repeatanimation(entity_id: u32, anim: i32, duration: i32) {
     let Some((pos, _)) = entity_position(entity_id) else { return; };
     let wire_dur = if duration > 0 { duration / 1000 } else { duration };
@@ -447,6 +506,9 @@ pub unsafe fn sl_g_repeatanimation(entity_id: u32, anim: i32, duration: i32) {
 ///
 /// Resolves the target's map/cell via `map_id2sd`, then broadcasts to that
 /// Sends a self-animation to all players in the exact cell.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_g_selfanimation(
     entity_id: u32,
     target_id: i32,
@@ -471,6 +533,9 @@ pub unsafe fn sl_g_selfanimation(
 ///
 /// Resolves the target's map/cell, then broadcasts the XY animation to that
 /// Sends a self-animation at the specified (x,y) to players in the exact cell.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_g_selfanimationxy(
     _entity_id: u32,
     target_id: i32,
@@ -487,7 +552,7 @@ pub unsafe fn sl_g_selfanimationxy(
         for id in cell_ids {
             if let Some(arc) = map_id2sd_pc(id) {
                 let pc = arc.read();
-                clif_sendanimation_xy_inner(&*pc, anim, times, x, y);
+                clif_sendanimation_xy_inner(&pc, anim, times, x, y);
             }
         }
     }
@@ -495,6 +560,9 @@ pub unsafe fn sl_g_selfanimationxy(
 
 /// Send a talk/speech packet from `bl` to all PCs in AREA.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_g_talk(entity_id: u32, talk_type: i32, msg: *const i8) {
     if msg.is_null() { return; }
     let Some((pos, _)) = entity_position(entity_id) else { return; };
@@ -515,13 +583,16 @@ pub unsafe fn sl_g_talk(entity_id: u32, talk_type: i32, msg: *const i8) {
 /// Iterates every fd slot, finds live sessions, and calls `send_metalist`
 /// for each.  `send_metalist` is still in C (map_parse.c); called via FFI.
 ///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_g_sendmeta() {
     for i in 0..crate::session::get_fd_max() {
         let sid = SessionId::from_raw(i);
         if !session_exists(sid) { continue; }
         if session_get_eof(sid) != 0 { continue; }
         if let Some(tpe) = session_get_data(sid) {
-            send_metalist(tpe.data_ptr()); // TODO(phase6c): migrate send_metalist to &PlayerEntity
+            send_metalist(&mut *tpe.write() as *mut MapSessionData);
         }
     }
 }
@@ -530,8 +601,7 @@ pub unsafe fn sl_g_sendmeta() {
 ///
 /// Builds a 30-byte packet once and calls `clif_send` once with SAMEAREA — it
 /// internally iterates all nearby PCs.  The previous implementation wrapped
-/// `clif_send(..., SAMEAREA)` inside `foreach_in_area(..., SameArea, ...)`,
-/// causing N² delivers (each of the N nearby players received the packet N
+/// `clif_send(..., SAMEAREA)` inside `foreach_in_area(..., BroadcastSrc { id: SameArea, m: ...)`, x: /// causing N² delivers (each of the N nearby players received the packet N
 /// times instead of once).
 ///
 /// Packet layout (big-endian wire format):
@@ -551,17 +621,27 @@ pub unsafe fn sl_g_sendmeta() {
 ///   [28]   action
 ///   [29]   0             padding
 ///
+/// Visual parameters for the throw animation packet.
+#[derive(Clone, Copy)]
+pub struct ThrowVisuals {
+    pub x2:     i32,
+    pub y2:     i32,
+    pub icon:   i32,
+    pub color:  i32,
+    pub action: i32,
+}
+
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_g_throw(
     id: i32,
     m: i32,
     x: i32,
     y: i32,
-    x2: i32,
-    y2: i32,
-    icon: i32,
-    color: i32,
-    action: i32,
+    vis: ThrowVisuals,
 ) {
+    let ThrowVisuals { x2, y2, icon, color, action } = vis;
     let mut buf = [0u8; 30];
     buf[0]      = 0xAA;
     buf[1..3].copy_from_slice(&0x001Bu16.to_be_bytes());
@@ -578,28 +658,39 @@ pub unsafe fn sl_g_throw(
     // buf[24..28] = 0, buf[29] = 0
     buf[28]     = action as u8;
 
-    clif_send(buf.as_ptr(), 30, id as u32, m as u16, x as u16, y as u16, 0, 6 /* SAMEAREA */);
+    clif_send(buf.as_ptr(), 30, BroadcastSrc { id: id as u32, m: m as u16, x: x as u16, y: y as u16, bl_type: 0 }, 6 /* SAMEAREA */);
 }
 
 /// Allocate and register a scripted temporary NPC.
 ///
 /// Allocates a zeroed `NpcData`, fills all fields from the arguments,
 /// registers it in the block grid and ID database, then fires the `on_spawn`
+/// Configuration for spawning a temporary NPC via script.
+#[derive(Clone, Copy)]
+pub struct NpcSpawnConfig {
+    pub subtype:   i32,
+    pub timer:     i32,
+    pub duration:  i32,
+    pub owner:     i32,
+    pub movetime:  i32,
+    pub npc_yname: *const i8,
+}
+
 /// Handles the Lua event to dynamically add an NPC to the map.
 ///
 /// `npc_yname` may be null; defaults to `"nothing"` in that case.
+///
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_g_addnpc(
-    name:     *const i8,
-    m:        i32,
-    x:        i32,
-    y:        i32,
-    subtype:  i32,
-    timer:    i32,
-    duration: i32,
-    owner:    i32,
-    movetime: i32,
-    npc_yname: *const i8,
+    name: *const i8,
+    m:    i32,
+    x:    i32,
+    y:    i32,
+    cfg:  NpcSpawnConfig,
 ) {
+    let NpcSpawnConfig { subtype, timer, duration, owner, movetime, npc_yname } = cfg;
     use crate::game::npc::{NpcData, BL_NPC, npc_get_new_npctempid};
     use crate::game::map_server::map_addiddb_npc;
 
@@ -681,31 +772,41 @@ pub unsafe fn sl_g_addnpc(
 /// After loading, calls `map_loadregistry` and broadcasts `sl_updatepeople`
 /// to all PCs on the map so their client receives updated map metadata.
 ///
+/// Map attribute settings applied by `sl_g_setmap`.
+#[derive(Clone, Copy)]
+pub struct MapSettings {
+    pub title:       *const i8,
+    pub bgm:         i32,
+    pub bgmtype:     i32,
+    pub pvp:         i32,
+    pub spell:       i32,
+    pub light:       u8,
+    pub weather:     i32,
+    pub sweeptime:   i32,
+    pub cantalk:     i32,
+    pub show_ghosts: i32,
+    pub region:      i32,
+    pub indoor:      i32,
+    pub warpout:     i32,
+    pub bind:        i32,
+    pub reqlvl:      i32,
+    pub reqvita:     i32,
+    pub reqmana:     i32,
+}
+
 /// # Safety
+///
 /// The `map` global must have been initialised via `map_init` +
 /// `map_initblock`. `m` must be a valid index in `0..MAP_SLOTS`.  `mapfile`
 /// must be a valid null-terminated C string pointing to a readable file.
 pub unsafe fn sl_g_setmap(
-    m: i32,
+    m:       i32,
     mapfile: *const i8,
-    title: *const i8,
-    bgm: i32,
-    bgmtype: i32,
-    pvp: i32,
-    spell: i32,
-    light: u8,
-    weather: i32,
-    sweeptime: i32,
-    cantalk: i32,
-    show_ghosts: i32,
-    region: i32,
-    indoor: i32,
-    warpout: i32,
-    bind: i32,
-    reqlvl: i32,
-    reqvita: i32,
-    reqmana: i32,
+    cfg:     MapSettings,
 ) -> i32 {
+    let MapSettings { title, bgm, bgmtype, pvp, spell, light, weather, sweeptime,
+                      cantalk, show_ghosts, region, indoor, warpout, bind,
+                      reqlvl, reqvita, reqmana } = cfg;
     use crate::database::map_db::{GlobalReg, parse_map_file};
     use crate::database::map_db::map_loadregistry;
 
@@ -789,8 +890,8 @@ pub unsafe fn sl_g_setmap(
     slot.map  = std::mem::replace(&mut tiles.map,  std::ptr::null_mut());
 
     // ── Block grid dimensions ───────────────────────────────────────────────
-    let new_bxs = ((tiles.xs as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as u16;
-    let new_bys = ((tiles.ys as usize + BLOCK_SIZE - 1) / BLOCK_SIZE) as u16;
+    let new_bxs = (tiles.xs as usize).div_ceil(BLOCK_SIZE) as u16;
+    let new_bys = (tiles.ys as usize).div_ceil(BLOCK_SIZE) as u16;
     slot.bxs = new_bxs;
     slot.bys = new_bys;
     let new_block_count = new_bxs as usize * new_bys as usize;
@@ -833,7 +934,7 @@ pub unsafe fn sl_g_setmap(
                     let y = (sd.y as i32).max(VIEW_OY).min(slot.ys as i32 - (VIEW_H - VIEW_OY));
                     (x, y)
                 };
-                crate::game::map_parse::movement::clif_sendmapdata(&*arc, m, px - VIEW_OX, py - VIEW_OY, VIEW_W, VIEW_H, 0);
+                crate::game::map_parse::movement::clif_sendmapdata(&arc, m, px - VIEW_OX, py - VIEW_OY, VIEW_W, VIEW_H, 0);
             }
         }
     }

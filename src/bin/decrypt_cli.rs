@@ -1,8 +1,7 @@
-/// decrypt_cli — packet decryption test tool
-///
-/// Packet decryption CLI utility.
-/// Uses the pure-Rust crypt functions in yuri::network::crypt directly
-
+//! decrypt_cli — packet decryption test tool
+//!
+//! Packet decryption CLI utility.
+//! Uses the pure-Rust crypt functions in yuri::network::crypt directly.
 
 use yuri::network::crypt::{populate_table, generate_key2, tk_crypt_dynamic};
 

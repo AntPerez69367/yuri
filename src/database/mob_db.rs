@@ -67,6 +67,33 @@ async fn load_mobs() -> Result<usize, sqlx::Error> {
     .await?;
 
     let count = rows.len();
+
+    // Collect equipment data before acquiring the lock (to avoid holding a
+    // MutexGuard across an .await point).
+    struct EquipEntry { slot: usize, look: u32, color: u32 }
+    let mut equip_by_mob: Vec<(u32, Vec<EquipEntry>)> = Vec::new();
+    for row in &rows {
+        let id: u32 = row.try_get(0)?;
+        let mobtype = row.try_get::<u32, _>(28).unwrap_or(0) as u8;
+        if mobtype == 1 {
+            let eq_rows = sqlx::query(
+                "SELECT `MeqLook`, `MeqColor`, `MeqSlot` \
+                 FROM `MobEquipment` WHERE `MeqMobId` = ? LIMIT 14",
+            )
+            .bind(id)
+            .fetch_all(pool)
+            .await?;
+
+            let equip: Vec<EquipEntry> = eq_rows.iter().map(|eq| EquipEntry {
+                slot:  eq.try_get::<u8, _>(2).unwrap_or(0) as usize,
+                look:  eq.try_get::<u32, _>(0).unwrap_or(0),
+                color: eq.try_get::<u32, _>(1).unwrap_or(0),
+            }).collect();
+            equip_by_mob.push((id, equip));
+        }
+    }
+
+    // Now acquire the lock without holding it across any await.
     let mut map = MOB_DB.get().unwrap().lock().unwrap();
 
     for row in &rows {
@@ -108,22 +135,16 @@ async fn load_mobs() -> Result<usize, sqlx::Error> {
         m.mark       = row.try_get::<u32, _>(32).unwrap_or(0) as u8;
         m.isnpc      = row.try_get::<u32, _>(33).unwrap_or(0) as u8;
         m.isboss     = row.try_get::<u32, _>(34).unwrap_or(0) as u8;
+    }
 
-        if m.mobtype == 1 {
-            let eq_rows = sqlx::query(
-                "SELECT `MeqLook`, `MeqColor`, `MeqSlot` \
-                 FROM `MobEquipment` WHERE `MeqMobId` = ? LIMIT 14",
-            )
-            .bind(id)
-            .fetch_all(pool)
-            .await?;
-
-            for eq in &eq_rows {
-                let slot = eq.try_get::<u8, _>(2).unwrap_or(0) as usize;
-                if slot < MAX_EQUIP {
-                    m.equip[slot].id     = eq.try_get::<u32, _>(0).unwrap_or(0);
-                    m.equip[slot].amount = 1;
-                    m.equip[slot].custom = eq.try_get::<u32, _>(1).unwrap_or(0);
+    for (id, equip) in equip_by_mob {
+        if let Some(entry) = map.get_mut(&id) {
+            let m = Arc::get_mut(entry).expect("exclusive during init");
+            for eq in equip {
+                if eq.slot < MAX_EQUIP {
+                    m.equip[eq.slot].id     = eq.look;
+                    m.equip[eq.slot].amount = 1;
+                    m.equip[eq.slot].custom = eq.color;
                 }
             }
         }

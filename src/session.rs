@@ -13,8 +13,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 
-use crate::common::traits::LegacyEntity;
-use crate::game::pc::MapSessionData;
 use crate::game::player::PlayerEntity;
 
 /// Opaque session identifier. Wraps an internal `i32` counter that is
@@ -554,7 +552,7 @@ impl Session {
             });
         }
 
-        let available = self.wdata.len().checked_sub(self.wdata_size).unwrap_or(0);
+        let available = self.wdata.len().saturating_sub(self.wdata_size);
         if new_size > self.wdata.len() {
             return Err(SessionError::WriteCommitTooLarge {
                 fd: self.fd,

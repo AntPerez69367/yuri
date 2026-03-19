@@ -56,8 +56,8 @@ pub struct BlockGrid {
 impl BlockGrid {
     /// Create a new grid for a map with dimensions `xs * ys` tiles.
     pub fn new(xs: u16, ys: u16) -> Self {
-        let bxs = (xs as usize + BLOCK_SIZE - 1) / BLOCK_SIZE;
-        let bys = (ys as usize + BLOCK_SIZE - 1) / BLOCK_SIZE;
+        let bxs = (xs as usize).div_ceil(BLOCK_SIZE);
+        let bys = (ys as usize).div_ceil(BLOCK_SIZE);
         let cell_count = bxs * bys;
         Self {
             cells: vec![Vec::new(); cell_count],

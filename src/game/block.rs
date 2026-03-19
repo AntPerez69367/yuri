@@ -90,6 +90,9 @@ pub fn is_alive_id(id: u32) -> bool {
 
 /// Initialize the block grid for all loaded map slots.
 /// Allocates warp arrays and creates safe block grids.
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_initblock() {
     crate::game::block_grid::init_grids();
     if map_ptr().is_null() { return; }
@@ -111,6 +114,9 @@ fn alloc_ptr_array<T>(len: usize) -> *mut *mut T {
 }
 
 /// Free block grid arrays for all map slots (no-op, matches C).
+/// # Safety
+///
+/// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_termblock() {}
 
 // ─── map_addblock ───────────────────────────────────────────────────────────

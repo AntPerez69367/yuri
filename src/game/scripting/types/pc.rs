@@ -103,16 +103,21 @@ fn cstring_ptrs(v: &[CString]) -> Vec<*const i8> {
 
 
 impl PcObject {
-    /// Get raw pointer to the session data, or null if the session no longer exists.
-    /// Used in method bodies as a drop-in for the old `this.sd_ptr()` field.
-    ///
-    /// SAFETY: The game server is single-threaded. The Arc keeps the allocation alive,
-    /// and the RwLock guard is momentarily acquired to obtain the pointer. No concurrent
-    /// mutation is possible because all Lua scripts run on the same LocalSet thread.
+    /// Execute a closure with a write guard on the player's session data.
+    /// Returns `default` if the player is no longer online.
     #[inline]
-    fn sd_ptr(&self) -> *mut crate::game::pc::MapSessionData {
+    fn with_sd<R, F: FnOnce(&mut crate::game::pc::MapSessionData) -> R>(&self, default: R, f: F) -> R {
+        match crate::game::map_server::map_id2sd_pc(self.id) {
+            Some(pe) => f(&mut pe.write()),
+            None => default,
+        }
+    }
+
+    /// Raw pointer to session data — only for interop with functions that require `*mut c_void`.
+    #[inline]
+    fn sd_ptr_raw(&self) -> *mut crate::game::pc::MapSessionData {
         crate::game::map_server::map_id2sd_pc(self.id)
-            .map(|arc| arc.data_ptr())
+            .map(|arc| &mut *arc.write() as *mut crate::game::pc::MapSessionData)
             .unwrap_or(std::ptr::null_mut())
     }
 }
@@ -125,8 +130,8 @@ impl UserData for PcObject {
                 Some(arc) => arc,
                 None => return Ok(mlua::Value::Nil),
             };
-            let sd = unsafe { &mut *arc.data_ptr() };
-            let sd_ptr = sd as *mut crate::game::pc::MapSessionData;
+            let mut guard = arc.write();
+            let sd = &mut *guard;
             let entity_id = this.id;
             macro_rules! int_ {
                 ($f:expr) => {
@@ -368,30 +373,30 @@ impl UserData for PcObject {
                         sl_pc_getgroup(sd, ids.as_mut_ptr(), MAX_MEMBERS as i32)
                     };
                     let t = lua.create_table()?;
-                    for i in 0..n.max(0) as usize {
-                        t.raw_set(i + 1, ids[i] as i64)?;
+                    for (i, id) in ids.iter().enumerate().take(n.max(0) as usize) {
+                        t.raw_set(i + 1, *id as i64)?;
                     }
-                    return Ok(mlua::Value::Table(t));
+                    Ok(mlua::Value::Table(t))
                 }
                 // Alias: docs use "spouse", implementation uses "partner"
                 "spouse"          => int_!(sl_pc_status_partner),
                 // Alias: docs use "ac", implementation uses "armor"
                 "ac"              => int_!(sl_pc_armor),
                 // Registry sub-objects — mirroring pcl_init from scripting.c.
-                "registry" => return lua.pack(RegObject { ptr: sd_ptr as *mut std::ffi::c_void }),
-                "registryString" => return lua.pack(RegStringObject { ptr: sd_ptr as *mut std::ffi::c_void }),
-                "quest" => return lua.pack(QuestRegObject { ptr: sd_ptr as *mut std::ffi::c_void }),
-                "npc" => return lua.pack(NpcRegObject { ptr: sd_ptr as *mut std::ffi::c_void }),
-                "mapRegistry" => return lua.pack(MapRegObject { ptr: sd_ptr as *mut std::ffi::c_void }),
+                "registry" => lua.pack(RegObject { ptr: sd as *mut _ as *mut std::ffi::c_void }),
+                "registryString" => lua.pack(RegStringObject { ptr: sd as *mut _ as *mut std::ffi::c_void }),
+                "quest" => lua.pack(QuestRegObject { ptr: sd as *mut _ as *mut std::ffi::c_void }),
+                "npc" => lua.pack(NpcRegObject { ptr: sd as *mut _ as *mut std::ffi::c_void }),
+                "mapRegistry" => lua.pack(MapRegObject { ptr: sd as *mut _ as *mut std::ffi::c_void }),
                 "gameRegistry" => {
-                    return lua.pack(GameRegObject {
+                    lua.pack(GameRegObject {
                         ptr: std::ptr::null_mut(),
                     })
                 }
 
                 // getUsers() → table of all online PcObjects.
                 "getUsers" => {
-                    return Ok(mlua::Value::Function(lua.create_function(
+                    Ok(mlua::Value::Function(lua.create_function(
                         |lua, _: mlua::MultiValue| {
                             let ids = sl_g_getusers_ids();
                             let tbl = lua.create_table()?;
@@ -401,62 +406,62 @@ impl UserData for PcObject {
                             }
                             Ok(tbl)
                         },
-                    )?));
+                    )?))
                 }
                 "getBlock" => {
-                    return shared::make_getblock_fn(lua)
+                    shared::make_getblock_fn(lua)
                 }
                 "getObjectsInCell" | "getAliveObjectsInCell" | "getObjectsInCellWithTraps" => {
-                    return shared::make_cell_query_fn(lua, key.as_str())
+                    shared::make_cell_query_fn(lua, key.as_str())
                 }
                 "getObjectsInArea" | "getAliveObjectsInArea"
                 | "getObjectsInSameMap" | "getAliveObjectsInSameMap" => {
-                    return shared::make_area_query_fn(lua, key.as_str(), entity_id)
+                    shared::make_area_query_fn(lua, key.as_str(), entity_id)
                 }
                 "getPK" => {
                     let capture_id = this.id;
-                    return Ok(mlua::Value::Function(lua.create_function(
+                    Ok(mlua::Value::Function(lua.create_function(
                         move |_lua, (_this, id): (mlua::AnyUserData, i32)| {
                             let arc = match crate::game::map_server::map_id2sd_pc(capture_id) {
                                 Some(arc) => arc,
                                 None => return Ok(false),
                             };
-                            let sd = unsafe { &mut *arc.data_ptr() };
-                            Ok(sl_pc_getpk(sd, id) != 0)
+                            let mut guard = arc.write();
+                            Ok(sl_pc_getpk(&mut guard, id) != 0)
                         },
-                    )?));
+                    )?))
                 }
-                "getObjectsInMap" => return shared::make_map_query_fn(lua),
-                "sendAnimation"     => return shared::make_sendanimation_fn(lua, entity_id),
-                "playSound"         => return shared::make_playsound_fn(lua, entity_id),
-                "sendAction"        => return shared::make_sendaction_fn(lua, entity_id),
-                "msg"               => return shared::make_msg_fn(lua, entity_id),
-                "dropItem"          => return shared::make_dropitem_fn(lua, entity_id),
-                "dropItemXY"        => return shared::make_dropitemxy_fn(lua, entity_id),
-                "objectCanMove"     => return shared::make_objectcanmove_fn(lua, entity_id),
-                "objectCanMoveFrom" => return shared::make_objectcanmovefrom_fn(lua, entity_id),
-                "repeatAnimation"   => return shared::make_repeatanimation_fn(lua, entity_id),
-                "selfAnimation"     => return shared::make_selfanimation_fn(lua, entity_id),
-                "selfAnimationXY"   => return shared::make_selfanimationxy_fn(lua, entity_id),
-                "sendParcel"        => return shared::make_sendparcel_fn(lua, entity_id),
-                "throw"             => return shared::make_throwblock_fn(lua, entity_id),
+                "getObjectsInMap" => shared::make_map_query_fn(lua),
+                "sendAnimation"     => shared::make_sendanimation_fn(lua, entity_id),
+                "playSound"         => shared::make_playsound_fn(lua, entity_id),
+                "sendAction"        => shared::make_sendaction_fn(lua, entity_id),
+                "msg"               => shared::make_msg_fn(lua, entity_id),
+                "dropItem"          => shared::make_dropitem_fn(lua, entity_id),
+                "dropItemXY"        => shared::make_dropitemxy_fn(lua, entity_id),
+                "objectCanMove"     => shared::make_objectcanmove_fn(lua, entity_id),
+                "objectCanMoveFrom" => shared::make_objectcanmovefrom_fn(lua, entity_id),
+                "repeatAnimation"   => shared::make_repeatanimation_fn(lua, entity_id),
+                "selfAnimation"     => shared::make_selfanimation_fn(lua, entity_id),
+                "selfAnimationXY"   => shared::make_selfanimationxy_fn(lua, entity_id),
+                "sendParcel"        => shared::make_sendparcel_fn(lua, entity_id),
+                "throw"             => shared::make_throwblock_fn(lua, entity_id),
                 "delFromIDDB" => {
                     let capture_id = this.id;
-                    return Ok(mlua::Value::Function(lua.create_function(
+                    Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
                             sl_g_deliddb(capture_id);
                             Ok(())
                         }
-                    )?));
+                    )?))
                 }
                 "addPermanentSpawn" => {
                     let capture_id = this.id;
-                    return Ok(mlua::Value::Function(lua.create_function(
+                    Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
                             sl_g_addpermanentspawn(capture_id);
                             Ok(())
                         }
-                    )?));
+                    )?))
                 }
                 _ => {
                     // Delegate to the global Player table for Lua-defined methods (e.g. Player.regen).
@@ -481,7 +486,8 @@ impl UserData for PcObject {
                     Some(arc) => arc,
                     None => return Ok(()),
                 };
-                let sd = unsafe { &mut *arc.data_ptr() };
+                let mut guard = arc.write();
+                let sd = &mut *guard;
                 let v = val_to_int(&val);
                 match key.as_str() {
                     "actionTime" => sl_pc_set_time(sd, v),
@@ -671,243 +677,196 @@ impl UserData for PcObject {
 
         // ── Named methods — health/combat ─────────────────────────────────────
         methods.add_method("addHealth", |_, this, damage: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_addhealth(&mut *sd, damage) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_addhealth(sd, damage) }); Ok(())
         });
-        methods.add_method(
-            "removeHealth",
-            |_, this, (damage, caster): (i32, i32)| {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_removehealth(&mut *sd, damage, caster) } } else { Default::default() } };
-                Ok(())
-            },
-        );
+        methods.add_method("removeHealth", |_, this, (damage, caster): (i32, i32)| {
+            this.with_sd((), |sd| unsafe { sl_pc_removehealth(sd, damage, caster) }); Ok(())
+        });
         methods.add_method("die", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_die(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_die(sd) }); Ok(())
         });
         methods.add_method("resurrect", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_resurrect(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_resurrect(sd) }); Ok(())
         });
         methods.add_method("showHealth", |_, this, (damage, typ): (i32, i32)| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_showhealth(&mut *sd, damage, typ) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| sl_pc_showhealth(sd, damage, typ)); Ok(())
         });
         methods.add_method("freeAsync", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_freeasync(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_freeasync(sd) }); Ok(())
         });
         methods.add_method("forceSave", |_, this, ()| {
-            Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_forcesave(&mut *sd) } } else { Default::default() } })
+            this.with_sd((), |sd| unsafe { sl_pc_forcesave(sd); }); Ok(())
         });
         methods.add_method("calcStat", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_calcstat(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_calcstat(sd) }); Ok(())
         });
         methods.add_method("sendStatus", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_sendstatus(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_sendstatus(sd) }); Ok(())
         });
         methods.add_method("status", |_, this, ()| {
-            Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_status(&mut *sd) } } else { Default::default() } })
+            this.with_sd((), |sd| { sl_pc_status(sd); }); Ok(())
         });
         methods.add_method("warp", |_, this, (m, x, y): (i32, i32, i32)| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_warp(&mut *sd, m, x, y) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_warp(sd, m, x, y) }); Ok(())
         });
         methods.add_method("refresh", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_refresh(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_refresh(sd) }); Ok(())
         });
         methods.add_method("pickUp", |_, this, id: u32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_pickup(&mut *sd, id) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_pickup(sd, id) }); Ok(())
         });
         methods.add_method("throwItem", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_throwitem(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_throwitem(sd) }); Ok(())
         });
         methods.add_method("forceDrop", |_, this, id: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_forcedrop(&mut *sd, id) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_forcedrop(sd, id) }); Ok(())
         });
         methods.add_method("lock", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_lock(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_lock(sd) }); Ok(())
         });
         methods.add_method("unlock", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_unlock(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_unlock(sd) }); Ok(())
         });
         methods.add_method("swing", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_swing(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_swing(sd) }); Ok(())
         });
         methods.add_method("respawn", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_respawn(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_respawn(sd) }); Ok(())
         });
         methods.add_method("sendHealth", |_, this, (dmg, crit): (f32, i32)| {
-            Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_sendhealth(&mut *sd, dmg, crit) } } else { 0 } })
+            Ok(this.with_sd(0, |sd| unsafe { sl_pc_sendhealth(sd, dmg, crit) }))
         });
 
         // ── Movement ──────────────────────────────────────────────────────────
         methods.add_method("move", |_, this, speed: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_move(&mut *sd, speed) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_move(sd, speed) }); Ok(())
         });
         methods.add_method("lookAt", |_, this, id: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_lookat(&mut *sd, id) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_lookat(sd, id) }); Ok(())
         });
         methods.add_method("miniRefresh", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_minirefresh(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_minirefresh(sd) }); Ok(())
         });
         methods.add_method("refreshInventory", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_refreshinventory(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_refreshinventory(sd) }); Ok(())
         });
         methods.add_method("updateInv", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_updateinv(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_updateinv(sd) }); Ok(())
         });
         methods.add_method("checkInvBod", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_checkinvbod(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_checkinvbod(sd) }); Ok(())
         });
 
         // ── Equipment ────────────────────────────────────────────────────────
         methods.add_method("equip", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_equip(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_equip(sd) }); Ok(())
         });
         methods.add_method("takeOff", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_takeoff(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_takeoff(sd) }); Ok(())
         });
         methods.add_method("deductArmor", |_, this, v: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_deductarmor(&mut *sd, v) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_deductarmor(sd, v) }); Ok(())
         });
         methods.add_method("deductWeapon", |_, this, v: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_deductweapon(&mut *sd, v) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| sl_pc_deductweapon(sd, v)); Ok(())
         });
         methods.add_method("deductDura", |_, this, (eq, v): (i32, i32)| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_deductdura(&mut *sd, eq, v) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_deductdura(sd, eq, v) }); Ok(())
         });
         methods.add_method("deductDuraEquip", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_deductduraequip(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), sl_pc_deductduraequip); Ok(())
         });
         methods.add_method("deductDuraInv", |_, this, (slot, v): (i32, i32)| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_deductdurainv(&mut *sd, slot, v) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| sl_pc_deductdurainv(sd, slot, v)); Ok(())
         });
         methods.add_method("hasEquipped", |_, this, id: u32| {
-            Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_hasequipped(&mut *sd, id) } } else { Default::default() } } != 0)
+            Ok(this.with_sd(0, |sd| sl_pc_hasequipped(sd, id)) != 0)
         });
-        methods.add_method(
-            "removeItemSlot",
-            |_, this, (slot, amount, typ): (i32, i32, i32)| {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_removeitemslot(&mut *sd, slot, amount, typ) } } else { Default::default() } };
-                Ok(())
-            },
-        );
+        methods.add_method("removeItemSlot", |_, this, (slot, amount, typ): (i32, i32, i32)| {
+            this.with_sd((), |sd| unsafe { sl_pc_removeitemslot(sd, slot, amount, typ) }); Ok(())
+        });
         methods.add_method("hasItem", |_, this, (id, amount): (u32, i32)| {
-            Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_hasitem(&mut *sd, id, amount) } } else { Default::default() } } != 0)
+            Ok(this.with_sd(0, |sd| sl_pc_hasitem(sd, id, amount)) != 0)
         });
         methods.add_method("hasSpace", |_, this, id: u32| {
-            Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_hasspace(&mut *sd, id) } } else { Default::default() } } != 0)
+            Ok(this.with_sd(0, |sd| unsafe { sl_pc_hasspace(sd, id) }) != 0)
         });
 
         // ── Stats ────────────────────────────────────────────────────────────
         methods.add_method("checkLevel", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_checklevel(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_checklevel(sd) }); Ok(())
         });
 
         // ── UI / display ─────────────────────────────────────────────────────
         methods.add_method("sendMiniMap", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_sendminimap(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_sendminimap(sd) }); Ok(())
         });
         methods.add_method("setMiniMapToggle", |_, this, flag: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_setminimaptoggle(&mut *sd, flag) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| sl_pc_setminimaptoggle(sd, flag)); Ok(())
         });
         methods.add_method("popup", |_, this, msg: String| {
             if let Ok(cs) = CString::new(msg.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_popup(&mut *sd, cs.as_ptr()) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_popup(sd, cs.as_ptr()) });
             }
             Ok(())
         });
         methods.add_method("popUp", |_, this, msg: String| {
             if let Ok(cs) = CString::new(msg.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_popup(&mut *sd, cs.as_ptr()) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_popup(sd, cs.as_ptr()) });
             }
             Ok(())
         });
         methods.add_method("guiText", |_, this, msg: String| {
             if let Ok(cs) = CString::new(msg.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_guitext(&mut *sd, cs.as_ptr()) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_guitext(sd, cs.as_ptr()) });
             }
             Ok(())
         });
         methods.add_method("sendMiniText", |_, this, msg: String| {
             if let Ok(cs) = CString::new(msg.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_sendminitext(&mut *sd, cs.as_ptr()) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_sendminitext(sd, cs.as_ptr()) });
             }
             Ok(())
         });
         methods.add_method("sendMinitext", |_, this, msg: String| {
             if let Ok(cs) = CString::new(msg.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_sendminitext(&mut *sd, cs.as_ptr()) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_sendminitext(sd, cs.as_ptr()) });
             }
             Ok(())
         });
         methods.add_method("powerBoard", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_powerboard(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), sl_pc_powerboard); Ok(())
         });
         methods.add_method("showBoard", |_, this, id: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_showboard(&mut *sd, id) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_showboard(sd, id) }); Ok(())
         });
         methods.add_method("showPost", |_, this, (id, post): (i32, i32)| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_showpost(&mut *sd, id, post) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_showpost(sd, id, post) }); Ok(())
         });
         methods.add_method("changeView", |_, this, (x, y): (i32, i32)| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_changeview(&mut *sd, x, y) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_changeview(sd, x, y) }); Ok(())
         });
 
         // ── Social / network ─────────────────────────────────────────────────
         methods.add_method("speak", |_, this, (msg, typ): (String, i32)| {
             if let Ok(cs) = CString::new(msg.as_bytes()) {
                 let len = cs.as_bytes().len() as i32;
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_speak(&mut *sd, cs.as_ptr(), len, typ) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_speak(sd, cs.as_ptr(), len, typ) });
             }
             Ok(())
         });
-        methods.add_method(
-            "sendMail",
-            |_, this, (to, topic, msg): (String, String, String)| {
-                let to_cs = CString::new(to.as_bytes()).ok();
-                let topic_cs = CString::new(topic.as_bytes()).ok();
-                let msg_cs = CString::new(msg.as_bytes()).ok();
-                if let (Some(t), Some(s), Some(m)) = (to_cs, topic_cs, msg_cs) {
-                    { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_sendmail(&mut *sd, t.as_ptr(), s.as_ptr(), m.as_ptr()) } } else { Default::default() } };
-                }
-                Ok(())
-            },
-        );
+        methods.add_method("sendMail", |_, this, (to, topic, msg): (String, String, String)| {
+            let to_cs = CString::new(to.as_bytes()).ok();
+            let topic_cs = CString::new(topic.as_bytes()).ok();
+            let msg_cs = CString::new(msg.as_bytes()).ok();
+            if let (Some(t), Some(s), Some(m)) = (to_cs, topic_cs, msg_cs) {
+                this.with_sd((), |sd| unsafe { sl_pc_sendmail(sd, t.as_ptr(), s.as_ptr(), m.as_ptr()); });
+            }
+            Ok(())
+        });
         methods.add_method("sendUrl", |_, this, (typ, url): (i32, String)| {
             if let Ok(cs) = CString::new(url.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_sendurl(&mut *sd, typ, cs.as_ptr()) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_sendurl(sd, typ, cs.as_ptr()) });
             }
             Ok(())
         });
@@ -934,314 +893,259 @@ impl UserData for PcObject {
                 Some(arc) => arc,
                 None => return Ok(()),
             };
-            let sd = unsafe { &mut *arc.data_ptr() };
-            unsafe { sl_pc_swingtarget(sd, target_id) };
+            let mut guard = arc.write();
+            unsafe { sl_pc_swingtarget(&mut guard, target_id) };
             Ok(())
         });
 
         // ── Kill registry ─────────────────────────────────────────────────────
         methods.add_method("killCount", |_, this, mob_id: i32| {
-            Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_killcount(&mut *sd, mob_id) } } else { 0 } })
+            Ok(this.with_sd(0, |sd| sl_pc_killcount(sd, mob_id)))
         });
-        methods.add_method(
-            "setKillCount",
-            |_, this, (mob_id, amount): (i32, i32)| {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_setkillcount(&mut *sd, mob_id, amount) } } else { Default::default() } };
-                Ok(())
-            },
-        );
+        methods.add_method("setKillCount", |_, this, (mob_id, amount): (i32, i32)| {
+            this.with_sd((), |sd| sl_pc_setkillcount(sd, mob_id, amount)); Ok(())
+        });
         methods.add_method("flushKills", |_, this, mob_id: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_flushkills(&mut *sd, mob_id) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| sl_pc_flushkills(sd, mob_id)); Ok(())
         });
         methods.add_method("flushAllKills", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_flushallkills(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), sl_pc_flushallkills); Ok(())
         });
 
         // ── Threat ───────────────────────────────────────────────────────────
-        methods.add_method(
-            "addThreat",
-            |_, this, (mob_id, amount): (u32, u32)| {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_addthreat(&mut *sd, mob_id, amount) } } else { Default::default() } };
-                Ok(())
-            },
-        );
-        methods.add_method(
-            "setThreat",
-            |_, this, (mob_id, amount): (u32, u32)| {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_setthreat(&mut *sd, mob_id, amount) } } else { Default::default() } };
-                Ok(())
-            },
-        );
+        methods.add_method("addThreat", |_, this, (mob_id, amount): (u32, u32)| {
+            this.with_sd((), |sd| unsafe { sl_pc_addthreat(sd, mob_id, amount) }); Ok(())
+        });
+        methods.add_method("setThreat", |_, this, (mob_id, amount): (u32, u32)| {
+            this.with_sd((), |sd| unsafe { sl_pc_setthreat(sd, mob_id, amount) }); Ok(())
+        });
         methods.add_method("addThreatGeneral", |_, this, amount: u32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_addthreatgeneral(&mut *sd, amount) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_addthreatgeneral(sd, amount) }); Ok(())
         });
 
         // ── Spell list ───────────────────────────────────────────────────────
         methods.add_method("hasSpell", |_, this, name: String| {
             let cs = CString::new(name.as_bytes()).ok();
-            Ok(cs.map_or(0, |c| { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_hasspell(&mut *sd, c.as_ptr()) } } else { Default::default() } }) != 0)
+            Ok(cs.map_or(0, |c| this.with_sd(0, |sd| unsafe { sl_pc_hasspell(sd, c.as_ptr()) })) != 0)
         });
         methods.add_method("addSpell", |_, this, spell_id: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_addspell(&mut *sd, spell_id) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_addspell(sd, spell_id) }); Ok(())
         });
         methods.add_method("removeSpell", |_, this, spell_id: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_removespell(&mut *sd, spell_id) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| sl_pc_removespell(sd, spell_id)); Ok(())
         });
 
         // ── Duration system ──────────────────────────────────────────────────
         methods.add_method("hasDuration", |_, this, name: String| {
             let cs = CString::new(name.as_bytes()).ok();
-            Ok(cs.map_or(0, |c| { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_hasduration(&mut *sd, c.as_ptr()) } } else { Default::default() } }) != 0)
+            Ok(cs.map_or(0, |c| this.with_sd(0, |sd| unsafe { sl_pc_hasduration(sd, c.as_ptr()) })) != 0)
         });
-        methods.add_method(
-            "hasDurationId",
-            |_, this, (name, caster): (String, i32)| {
-                let cs = CString::new(name.as_bytes()).ok();
-                Ok(cs.map_or(0, |c| { let sd = this.sd_ptr(); if sd.is_null() { 0 } else { unsafe { sl_pc_hasdurationid(&mut *sd, c.as_ptr(), caster) } } }) != 0)
-            },
-        );
-        methods.add_method(
-            "hasDurationID",
-            |_, this, (name, caster): (String, i32)| {
-                let cs = CString::new(name.as_bytes()).ok();
-                Ok(cs.map_or(0, |c| { let sd = this.sd_ptr(); if sd.is_null() { 0 } else { unsafe { sl_pc_hasdurationid(&mut *sd, c.as_ptr(), caster) } } }) != 0)
-            },
-        );
+        methods.add_method("hasDurationId", |_, this, (name, caster): (String, i32)| {
+            let cs = CString::new(name.as_bytes()).ok();
+            Ok(cs.map_or(0, |c| this.with_sd(0, |sd| unsafe { sl_pc_hasdurationid(sd, c.as_ptr(), caster) })) != 0)
+        });
+        methods.add_method("hasDurationID", |_, this, (name, caster): (String, i32)| {
+            let cs = CString::new(name.as_bytes()).ok();
+            Ok(cs.map_or(0, |c| this.with_sd(0, |sd| unsafe { sl_pc_hasdurationid(sd, c.as_ptr(), caster) })) != 0)
+        });
         methods.add_method("getDuration", |_, this, name: String| {
             let cs = CString::new(name.as_bytes()).ok();
-            Ok(cs.map_or(0, |c| { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getduration(&mut *sd, c.as_ptr()) } } else { Default::default() } }))
+            Ok(cs.map_or(0, |c| this.with_sd(0, |sd| unsafe { sl_pc_getduration(sd, c.as_ptr()) })))
         });
-        methods.add_method(
-            "getDurationId",
-            |_, this, (name, caster): (String, i32)| {
-                let cs = CString::new(name.as_bytes()).ok();
-                Ok(cs.map_or(0, |c| { let sd = this.sd_ptr(); if sd.is_null() { 0 } else { unsafe { sl_pc_getdurationid(&mut *sd, c.as_ptr(), caster) } } }))
-            },
-        );
-        methods.add_method(
-            "getDurationID",
-            |_, this, (name, caster): (String, i32)| {
-                let cs = CString::new(name.as_bytes()).ok();
-                Ok(cs.map_or(0, |c| { let sd = this.sd_ptr(); if sd.is_null() { 0 } else { unsafe { sl_pc_getdurationid(&mut *sd, c.as_ptr(), caster) } } }))
-            },
-        );
+        methods.add_method("getDurationId", |_, this, (name, caster): (String, i32)| {
+            let cs = CString::new(name.as_bytes()).ok();
+            Ok(cs.map_or(0, |c| this.with_sd(0, |sd| unsafe { sl_pc_getdurationid(sd, c.as_ptr(), caster) })))
+        });
+        methods.add_method("getDurationID", |_, this, (name, caster): (String, i32)| {
+            let cs = CString::new(name.as_bytes()).ok();
+            Ok(cs.map_or(0, |c| this.with_sd(0, |sd| unsafe { sl_pc_getdurationid(sd, c.as_ptr(), caster) })))
+        });
         methods.add_method("durationAmount", |_, this, name: String| {
             let cs = CString::new(name.as_bytes()).ok();
-            Ok(cs.map_or(0, |c| { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_durationamount(&mut *sd, c.as_ptr()) } } else { Default::default() } }))
+            Ok(cs.map_or(0, |c| this.with_sd(0, |sd| unsafe { sl_pc_durationamount(sd, c.as_ptr()) })))
         });
-        methods.add_method(
-            "setDuration",
-            |_, this, (name, time_ms, caster, recast): (String, i32, Option<i32>, Option<i32>)| {
-                if let Ok(cs) = CString::new(name.as_bytes()) {
-                    { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_setduration(&mut *sd, cs.as_ptr(), time_ms, caster.unwrap_or(0), recast.unwrap_or(0)) } } else { Default::default() } };
-                }
-                Ok(())
-            },
-        );
-        methods.add_method(
-            "flushDuration",
-            |_, this, (level, min_id, max_id): (i32, Option<i32>, Option<i32>)| {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_flushduration(&mut *sd, level, min_id.unwrap_or(0), max_id.unwrap_or(i32::MAX)) } } else { Default::default() } };
-                Ok(())
-            },
-        );
-        methods.add_method(
-            "flushDurationNoUncast",
-            |_, this, (level, min_id, max_id): (i32, Option<i32>, Option<i32>)| {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_flushdurationnouncast(&mut *sd, level, min_id.unwrap_or(0), max_id.unwrap_or(i32::MAX)) } } else { Default::default() } };
-                Ok(())
-            },
-        );
-        methods.add_method("refreshDurations", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_refreshdurations(&mut *sd) } } else { Default::default() } };
+        methods.add_method("setDuration", |_, this, (name, time_ms, caster, recast): (String, i32, Option<i32>, Option<i32>)| {
+            if let Ok(cs) = CString::new(name.as_bytes()) {
+                this.with_sd((), |sd| unsafe { sl_pc_setduration(sd, cs.as_ptr(), time_ms, caster.unwrap_or(0), recast.unwrap_or(0)) });
+            }
             Ok(())
+        });
+        methods.add_method("flushDuration", |_, this, (level, min_id, max_id): (i32, Option<i32>, Option<i32>)| {
+            this.with_sd((), |sd| unsafe { sl_pc_flushduration(sd, level, min_id.unwrap_or(0), max_id.unwrap_or(i32::MAX)) }); Ok(())
+        });
+        methods.add_method("flushDurationNoUncast", |_, this, (level, min_id, max_id): (i32, Option<i32>, Option<i32>)| {
+            this.with_sd((), |sd| unsafe { sl_pc_flushdurationnouncast(sd, level, min_id.unwrap_or(0), max_id.unwrap_or(i32::MAX)) }); Ok(())
+        });
+        methods.add_method("refreshDurations", |_, this, ()| {
+            this.with_sd((), |sd| unsafe { sl_pc_refreshdurations(sd) }); Ok(())
         });
 
         // ── Aether system ────────────────────────────────────────────────────
         methods.add_method("setAether", |_, this, (name, time_ms): (String, i32)| {
             if let Ok(cs) = CString::new(name.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_setaether(&mut *sd, cs.as_ptr(), time_ms) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_setaether(sd, cs.as_ptr(), time_ms) });
             }
             Ok(())
         });
         methods.add_method("hasAether", |_, this, name: String| {
             let cs = CString::new(name.as_bytes()).ok();
-            Ok(cs.map_or(0, |c| { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_hasaether(&mut *sd, c.as_ptr()) } } else { Default::default() } }) != 0)
+            Ok(cs.map_or(0, |c| this.with_sd(0, |sd| unsafe { sl_pc_hasaether(sd, c.as_ptr()) })) != 0)
         });
         methods.add_method("getAether", |_, this, name: String| {
             let cs = CString::new(name.as_bytes()).ok();
-            Ok(cs.map_or(0, |c| { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getaether(&mut *sd, c.as_ptr()) } } else { Default::default() } }))
+            Ok(cs.map_or(0, |c| this.with_sd(0, |sd| unsafe { sl_pc_getaether(sd, c.as_ptr()) })))
         });
         methods.add_method("flushAether", |_, this, ()| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_flushaether(&mut *sd) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_flushaether(sd) }); Ok(())
         });
 
         // ── Clan / path ──────────────────────────────────────────────────────
         methods.add_method("addClan", |_, this, name: String| {
             if let Ok(cs) = CString::new(name.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_addclan(&mut *sd, cs.as_ptr()) } } else { Default::default() } };
+                this.with_sd((), |sd| sl_pc_addclan(sd, cs.as_ptr()));
             }
             Ok(())
         });
         methods.add_method("updatePath", |_, this, (path, mark): (i32, i32)| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_updatepath(&mut *sd, path, mark) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| sl_pc_updatepath(sd, path, mark)); Ok(())
         });
         methods.add_method("updateCountry", |_, this, country: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_updatecountry(&mut *sd, country) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| sl_pc_updatecountry(sd, country)); Ok(())
         });
 
         // ── Misc ─────────────────────────────────────────────────────────────
         methods.add_method("getCasterId", |_, this, name: String| {
             let cs = CString::new(name.as_bytes()).ok();
-            Ok(cs.map_or(0, |c| { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getcasterid(&mut *sd, c.as_ptr()) } } else { Default::default() } }))
+            Ok(cs.map_or(0, |c| this.with_sd(0, |sd| unsafe { sl_pc_getcasterid(sd, c.as_ptr()) })))
         });
         methods.add_method("getCasterID", |_, this, name: String| {
             let cs = CString::new(name.as_bytes()).ok();
-            Ok(cs.map_or(0, |c| { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getcasterid(&mut *sd, c.as_ptr()) } } else { Default::default() } }))
+            Ok(cs.map_or(0, |c| this.with_sd(0, |sd| unsafe { sl_pc_getcasterid(sd, c.as_ptr()) })))
         });
         methods.add_method("setTimer", |_, this, (typ, length): (i32, i32)| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_settimer(&mut *sd, typ, length as u32) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_settimer(sd, typ, length as u32) }); Ok(())
         });
         methods.add_method("addTime", |_, this, v: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_addtime(&mut *sd, v) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_addtime(sd, v) }); Ok(())
         });
         methods.add_method("removeTime", |_, this, v: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_removetime(&mut *sd, v) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_removetime(sd, v) }); Ok(())
         });
         methods.add_method("setHeroShow", |_, this, flag: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_setheroshow(&mut *sd, flag) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| sl_pc_setheroshow(sd, flag)); Ok(())
         });
 
         // ── Legends ──────────────────────────────────────────────────────────
-        methods.add_method(
-            "addLegend",
-            |_, this, (text, name, icon, color, tchaid): (String, String, i32, i32, u32)| {
-                let t = CString::new(text.as_bytes()).ok();
-                let n = CString::new(name.as_bytes()).ok();
-                if let (Some(tc), Some(nc)) = (t, n) {
-                    unsafe {
-                        { let sd = this.sd_ptr(); if !sd.is_null() { sl_pc_addlegend(&mut *sd, tc.as_ptr(), nc.as_ptr(), icon, color, tchaid) } }
-                    };
-                }
-                Ok(())
-            },
-        );
+        methods.add_method("addLegend", |_, this, (text, name, icon, color, tchaid): (String, String, i32, i32, u32)| {
+            let t = CString::new(text.as_bytes()).ok();
+            let n = CString::new(name.as_bytes()).ok();
+            if let (Some(tc), Some(nc)) = (t, n) {
+                this.with_sd((), |sd| unsafe { sl_pc_addlegend(sd, tc.as_ptr(), nc.as_ptr(), icon, color, tchaid) });
+            }
+            Ok(())
+        });
         methods.add_method("hasLegend", |_, this, name: String| {
             let cs = CString::new(name.as_bytes()).ok();
-            Ok(cs.map_or(0, |c| { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_haslegend(&mut *sd, c.as_ptr()) } } else { Default::default() } }) != 0)
+            Ok(cs.map_or(0, |c| this.with_sd(0, |sd| unsafe { sl_pc_haslegend(sd, c.as_ptr()) })) != 0)
         });
         methods.add_method("removeLegendByName", |_, this, name: String| {
             if let Ok(cs) = CString::new(name.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_removelegendbyname(&mut *sd, cs.as_ptr()) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_removelegendbyname(sd, cs.as_ptr()) });
             }
             Ok(())
         });
         methods.add_method("removeLegendbyName", |_, this, name: String| {
             if let Ok(cs) = CString::new(name.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_removelegendbyname(&mut *sd, cs.as_ptr()) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_removelegendbyname(sd, cs.as_ptr()) });
             }
             Ok(())
         });
         methods.add_method("removeLegendByColor", |_, this, color: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_removelegendbycolor(&mut *sd, color) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| sl_pc_removelegendbycolor(sd, color)); Ok(())
         });
         methods.add_method("removeLegendbyColor", |_, this, color: i32| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_removelegendbycolor(&mut *sd, color) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| sl_pc_removelegendbycolor(sd, color)); Ok(())
         });
 
         // ── Inventory ────────────────────────────────────────────────────────────
         methods.add_method("addItem", |_, this, (id, amount, dura, owner, engrave): (i32, i32, i32, i32, String)| {
             if let Ok(cs) = CString::new(engrave.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_additem(&mut *sd, id as u32, amount as u32, dura, owner as u32, cs.as_ptr()) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_additem(sd, id as u32, amount as u32, dura, owner as u32, cs.as_ptr()) });
             }
             Ok(())
         });
         methods.add_method("getInventoryItem", |lua, this, slot: i32| {
-            if slot < 0 || slot >= 52 { return Ok(mlua::Value::Nil); }
-            let ptr = { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getinventoryitem(&mut *sd, slot) } } else { Default::default() } };
+            if !(0..52).contains(&slot) { return Ok(mlua::Value::Nil); }
+            let ptr = this.with_sd(std::ptr::null_mut(), |sd| unsafe { sl_pc_getinventoryitem(sd, slot) });
             if ptr.is_null() { return Ok(mlua::Value::Nil); }
             Ok(mlua::Value::UserData(lua.create_userdata(
                 crate::game::scripting::types::item::BItemObject { ptr }
             )?))
         });
         methods.add_method("getEquippedItem", |lua, this, slot: i32| {
-            if slot < 0 || slot >= 15 { return Ok(mlua::Value::Nil); }
-            let ptr = { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getequippeditem_sd(&mut *sd, slot) } } else { Default::default() } };
+            if !(0..15).contains(&slot) { return Ok(mlua::Value::Nil); }
+            let ptr = this.with_sd(std::ptr::null_mut(), |sd| unsafe { sl_pc_getequippeditem_sd(sd, slot) });
             if ptr.is_null() { return Ok(mlua::Value::Nil); }
             Ok(mlua::Value::UserData(lua.create_userdata(
                 crate::game::scripting::types::item::BItemObject { ptr }
             )?))
         });
         methods.add_method("removeItem", |_, this, (id, amount, typ): (i32, i32, i32)| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_removeitem(&mut *sd, id as u32, amount as u32, typ, 0, std::ptr::null()) } } else { Default::default() } }; Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_removeitem(sd, id as u32, amount as u32, typ, 0, std::ptr::null()) }); Ok(())
         });
         methods.add_method("removeItemDura", |_, this, (id, typ): (i32, i32)| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_removeitemdura(&mut *sd, id as u32, 1, typ) } } else { Default::default() } }; Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_removeitemdura(sd, id as u32, 1, typ) }); Ok(())
         });
         methods.add_method("hasItemDura", |_, this, (id, amount): (i32, i32)| {
-            Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_hasitemdura(&mut *sd, id as u32, amount as u32) } } else { Default::default() } } != 0)
+            Ok(this.with_sd(0, |sd| unsafe { sl_pc_hasitemdura(sd, id as u32, amount as u32) }) != 0)
         });
 
         // ── Bank ─────────────────────────────────────────────────────────────────
         methods.add_method("checkBankItems", |_, this, slot: i32| {
-            if slot < 0 || slot >= 255 { return Ok(0i32); }
-            Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_checkbankitems(&mut *sd, slot) } } else { 0 } })
+            if !(0..255).contains(&slot) { return Ok(0i32); }
+            Ok(this.with_sd(0, |sd| sl_pc_checkbankitems(sd, slot)))
         });
         methods.add_method("checkBankAmounts", |_, this, slot: i32| {
-            if slot < 0 || slot >= 255 { return Ok(0i32); }
-            Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_checkbankamounts(&mut *sd, slot) } } else { 0 } })
+            if !(0..255).contains(&slot) { return Ok(0i32); }
+            Ok(this.with_sd(0, |sd| sl_pc_checkbankamounts(sd, slot)))
         });
         methods.add_method("checkBankOwners", |_, this, slot: i32| {
-            if slot < 0 || slot >= 255 { return Ok(0i32); }
-            Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_checkbankowners(&mut *sd, slot) } } else { 0 } })
+            if !(0..255).contains(&slot) { return Ok(0i32); }
+            Ok(this.with_sd(0, |sd| sl_pc_checkbankowners(sd, slot)))
         });
         methods.add_method("checkBankEngraves", |lua, this, slot: i32| {
-            if slot < 0 || slot >= 255 { return Ok(mlua::Value::Nil); }
-            unsafe { { let sd = this.sd_ptr(); if sd.is_null() { return Ok(mlua::Value::Nil); } cstr_to_lua(lua, sl_pc_checkbankengraves(&mut *sd, slot)) } }
+            if !(0..255).contains(&slot) { return Ok(mlua::Value::Nil); }
+            this.with_sd(Ok(mlua::Value::Nil), |sd| unsafe { cstr_to_lua(lua, sl_pc_checkbankengraves(sd, slot)) })
         });
         methods.add_method("bankDeposit", |_, this, (item, amount, owner, engrave): (i32, i32, i32, String)| {
             if let Ok(cs) = CString::new(engrave.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_bankdeposit(&mut *sd, item as u32, amount as u32, owner as u32, cs.as_ptr()) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_bankdeposit(sd, item as u32, amount as u32, owner as u32, cs.as_ptr()) });
             }
             Ok(())
         });
         methods.add_method("bankWithdraw", |_, this, (item, amount, owner, engrave): (i32, i32, i32, String)| {
             if let Ok(cs) = CString::new(engrave.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_bankwithdraw(&mut *sd, item as u32, amount as u32, owner as u32, cs.as_ptr()) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_bankwithdraw(sd, item as u32, amount as u32, owner as u32, cs.as_ptr()) });
             }
             Ok(())
         });
         methods.add_method("bankCheckAmount", |_, this, (item, amount, owner, engrave): (i32, i32, i32, String)| {
             let cs = CString::new(engrave.as_bytes()).ok();
-            Ok(cs.map_or(0, |c| { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_bankcheckamount(&mut *sd, item as u32, amount as u32, owner as u32, c.as_ptr()) } } else { Default::default() } }))
+            Ok(cs.map_or(0, |c| this.with_sd(0, |sd| unsafe { sl_pc_bankcheckamount(sd, item as u32, amount as u32, owner as u32, c.as_ptr()) })))
         });
 
         // ── Clan bank ────────────────────────────────────────────────────────────
-        methods.add_method("getClanItems",         |_, this, slot: i32| Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getclanitems(&mut *sd, slot) } } else { 0 } }));
-        methods.add_method("getClanAmounts",       |_, this, slot: i32| Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getclanamounts(&mut *sd, slot) } } else { 0 } }));
-        methods.add_method("clanBankDeposit",      |_, this, (item, amount): (i32, i32)| { { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_clanbankdeposit(&mut *sd, item as u32, amount as u32, 0, std::ptr::null()) } } else { Default::default() } }; Ok(()) });
-        methods.add_method("clanBankWithdraw",     |_, this, (item, amount): (i32, i32)| { { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_clanbankwithdraw(&mut *sd, item as u32, amount as u32, 0, std::ptr::null()) } } else { Default::default() } }; Ok(()) });
-        methods.add_method("checkClanItemAmounts", |_, this, (item, amount): (i32, i32)| Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_checkclankitemamounts(&mut *sd, item, amount) } } else { 0 } }));
+        methods.add_method("getClanItems",         |_, this, slot: i32| Ok(this.with_sd(0, |sd| unsafe { sl_pc_getclanitems(sd, slot) })));
+        methods.add_method("getClanAmounts",       |_, this, slot: i32| Ok(this.with_sd(0, |sd| unsafe { sl_pc_getclanamounts(sd, slot) })));
+        methods.add_method("clanBankDeposit",      |_, this, (item, amount): (i32, i32)| { this.with_sd((), |sd| unsafe { sl_pc_clanbankdeposit(sd, item as u32, amount as u32, 0, std::ptr::null()) }); Ok(()) });
+        methods.add_method("clanBankWithdraw",     |_, this, (item, amount): (i32, i32)| { this.with_sd((), |sd| unsafe { sl_pc_clanbankwithdraw(sd, item as u32, amount as u32, 0, std::ptr::null()) }); Ok(()) });
+        methods.add_method("checkClanItemAmounts", |_, this, (item, amount): (i32, i32)| Ok(this.with_sd(0, |sd| unsafe { sl_pc_checkclankitemamounts(sd, item, amount) })));
 
         // ── Spell lists ──────────────────────────────────────────────────────────
         methods.add_method("getAllDurations", |lua, this, ()| {
             const MAX: usize = 200;
             let mut ptrs: Vec<*const i8> = vec![std::ptr::null(); MAX];
-            let count = { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getalldurations(&mut *sd, ptrs.as_mut_ptr(), MAX as i32) } } else { Default::default() } } as usize;
+            let count = this.with_sd(0, |sd| unsafe { sl_pc_getalldurations(sd, ptrs.as_mut_ptr(), MAX as i32) }) as usize;
             let tbl = lua.create_table()?;
             for (i, &p) in ptrs[..count].iter().enumerate() {
                 if !p.is_null() {
@@ -1254,7 +1158,7 @@ impl UserData for PcObject {
         methods.add_method("getSpells", |lua, this, ()| {
             const MAX: usize = 52;
             let mut ids: Vec<i32> = vec![0; MAX];
-            let count = { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getspells(&mut *sd, ids.as_mut_ptr(), MAX as i32) } } else { Default::default() } } as usize;
+            let count = this.with_sd(0, |sd| unsafe { sl_pc_getspells(sd, ids.as_mut_ptr(), MAX as i32) }) as usize;
             let tbl = lua.create_table()?;
             for (i, &id) in ids[..count].iter().enumerate() { tbl.raw_set(i + 1, id as i64)?; }
             Ok(tbl)
@@ -1262,7 +1166,7 @@ impl UserData for PcObject {
         methods.add_method("getSpellName", |lua, this, ()| {
             const MAX: usize = 52;
             let mut ptrs: Vec<*const i8> = vec![std::ptr::null(); MAX];
-            let count = { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getspellnames(&mut *sd, ptrs.as_mut_ptr(), MAX as i32) } } else { Default::default() } } as usize;
+            let count = this.with_sd(0, |sd| unsafe { sl_pc_getspellnames(sd, ptrs.as_mut_ptr(), MAX as i32) }) as usize;
             let tbl = lua.create_table()?;
             for (i, &p) in ptrs[..count].iter().enumerate() {
                 if !p.is_null() {
@@ -1275,7 +1179,7 @@ impl UserData for PcObject {
         methods.add_method("getUnknownSpells", |lua, this, ()| {
             const MAX: usize = 52;
             let mut ids: Vec<i32> = vec![0; MAX];
-            let count = { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getunknownspells(&mut *sd, ids.as_mut_ptr(), MAX as i32) } } else { Default::default() } } as usize;
+            let count = this.with_sd(0, |sd| unsafe { sl_pc_getunknownspells(sd, ids.as_mut_ptr(), MAX as i32) }) as usize;
             let tbl = lua.create_table()?;
             for (i, &id) in ids[..count].iter().enumerate() { tbl.raw_set(i + 1, id as i64)?; }
             Ok(tbl)
@@ -1284,83 +1188,83 @@ impl UserData for PcObject {
         // ── Legends ──────────────────────────────────────────────────────────────
         methods.add_method("getLegend", |lua, this, name: String| {
             let cs = CString::new(name.as_bytes()).ok();
-            let p = cs.map_or(std::ptr::null(), |c| { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getlegend(&mut *sd, c.as_ptr()) } } else { Default::default() } });
+            let p = cs.map_or(std::ptr::null(), |c| this.with_sd(std::ptr::null(), |sd| unsafe { sl_pc_getlegend(sd, c.as_ptr()) }));
             unsafe { cstr_to_lua(lua, p) }
         });
 
         // ── Combat ───────────────────────────────────────────────────────────────
-        methods.add_method("giveXP",        |_, this, amount: i32| { { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_givexp(&mut *sd, amount as u32) } } else { Default::default() } }; Ok(()) });
+        methods.add_method("giveXP",        |_, this, amount: i32| { this.with_sd((), |sd| unsafe { sl_pc_givexp(sd, amount as u32) }); Ok(()) });
         methods.add_method("updateState",   |_, this, ()| { if let Some(arc) = crate::game::map_server::map_id2sd_pc(this.id) { unsafe { broadcast_update_state(&arc) } }; Ok(()) });
-        methods.add_method("addMagic",      |_, this, amount: i32| { { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_addmagic(&mut *sd, amount) } } else { Default::default() } }; Ok(()) });
-        methods.add_method("addManaExtend", |_, this, amount: i32| { { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_addmanaextend(&mut *sd, amount) } } else { Default::default() } }; Ok(()) });
-        methods.add_method("setTimeValues", |_, this, newval: i32| { { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_settimevalues(&mut *sd, newval as u32) } } else { Default::default() } }; Ok(()) });
-        methods.add_method("setPK",         |_, this, id: i32| { { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_setpk(&mut *sd, id) } } else { Default::default() } }; Ok(()) });
+        methods.add_method("addMagic",      |_, this, amount: i32| { this.with_sd((), |sd| unsafe { sl_pc_addmagic(sd, amount) }); Ok(()) });
+        methods.add_method("addManaExtend", |_, this, amount: i32| { this.with_sd((), |sd| unsafe { sl_pc_addmanaextend(sd, amount) }); Ok(()) });
+        methods.add_method("setTimeValues", |_, this, newval: i32| { this.with_sd((), |sd| sl_pc_settimevalues(sd, newval as u32)); Ok(()) });
+        methods.add_method("setPK",         |_, this, id: i32| { this.with_sd((), |sd| unsafe { sl_pc_setpk(sd, id) }); Ok(()) });
         methods.add_method("activeSpells",  |_, this, name: String| {
             let cs = CString::new(name.as_bytes()).ok();
-            Ok(cs.map_or(0, |c| { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_activespells(&mut *sd, c.as_ptr()) } } else { Default::default() } }) != 0)
+            Ok(cs.map_or(0, |c| this.with_sd(0, |sd| unsafe { sl_pc_activespells(sd, c.as_ptr()) })) != 0)
         });
         methods.add_method("getEquippedDura", |_, this, (id, slot): (i32, i32)| {
-            Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getequippeddura(&mut *sd, id as u32, slot) } } else { 0 } })
+            Ok(this.with_sd(0, |sd| sl_pc_getequippeddura(sd, id as u32, slot)))
         });
         methods.add_method("addHealthExtend", |_, this, (dmg, _sleep, _deduct, _ac, _ds, _print): (i32, i32, i32, i32, i32, i32)| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_addhealth_extend(&mut *sd, dmg) } } else { Default::default() } }; Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_addhealth_extend(sd, dmg) }); Ok(())
         });
         methods.add_method("removeHealthExtend", |_, this, (dmg, _sleep, _deduct, _ac, _ds, _print): (i32, i32, i32, i32, i32, i32)| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_removehealth_extend(&mut *sd, dmg) } } else { Default::default() } }; Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_removehealth_extend(sd, dmg) }); Ok(())
         });
         methods.add_method("addHealth2", |_, this, (amount, typ): (i32, i32)| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_addhealth2(&mut *sd, amount, typ) } } else { Default::default() } }; Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_addhealth2(sd, amount, typ) }); Ok(())
         });
         methods.add_method("removeHealthWithoutDamageNumbers", |_, this, (dmg, typ): (i32, i32)| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_removehealth_nodmgnum(&mut *sd, dmg, typ) } } else { Default::default() } }; Ok(())
+            this.with_sd((), |sd| unsafe { sl_pc_removehealth_nodmgnum(sd, dmg, typ) }); Ok(())
         });
 
         // ── Economy ──────────────────────────────────────────────────────────────
-        methods.add_method("addGold",    |_, this, amount: i32| { { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_addgold(&mut *sd, amount) } } else { Default::default() } }; Ok(()) });
-        methods.add_method("removeGold", |_, this, amount: i32| { { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_removegold(&mut *sd, amount) } } else { Default::default() } }; Ok(()) });
+        methods.add_method("addGold",    |_, this, amount: i32| { this.with_sd((), |sd| unsafe { sl_pc_addgold(sd, amount) }); Ok(()) });
+        methods.add_method("removeGold", |_, this, amount: i32| { this.with_sd((), |sd| unsafe { sl_pc_removegold(sd, amount) }); Ok(()) });
         methods.add_method("logBuySell", |_, this, (item, amount, gold, flag): (i32, i32, i32, i32)| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_logbuysell(&mut *sd, item as u32, amount as u32, gold as u32, flag) } } else { Default::default() } }; Ok(())
+            this.with_sd((), |sd| sl_pc_logbuysell(sd, item as u32, amount as u32, gold as u32, flag)); Ok(())
         });
 
         // ── Ranged ───────────────────────────────────────────────────────────────
-        methods.add_method("calcThrow", |_, this, ()| { { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_calcthrow(&mut *sd) } } else { Default::default() } }; Ok(()) });
+        methods.add_method("calcThrow", |_, this, ()| { this.with_sd((), sl_pc_calcthrow); Ok(()) });
         methods.add_method("calcRangedDamage", |_, this, bl: mlua::AnyUserData| {
             let bl_ptr = extract_bl_ptr(&bl);
             if bl_ptr.is_null() {
                 return Err(mlua::Error::external("calcRangedDamage: bl pointer is null"));
             }
-            Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_calcrangeddamage(&mut *sd, bl_ptr) } } else { 0 } })
+            Ok(this.with_sd(0, |sd| sl_pc_calcrangeddamage(sd, bl_ptr)))
         });
         methods.add_method("calcRangedHit", |_, this, bl: mlua::AnyUserData| {
             let bl_ptr = extract_bl_ptr(&bl);
             if bl_ptr.is_null() {
                 return Err(mlua::Error::external("calcRangedHit: bl pointer is null"));
             }
-            Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_calcrangedhit(&mut *sd, bl_ptr) } } else { 0 } })
+            Ok(this.with_sd(0, |sd| sl_pc_calcrangedhit(sd, bl_ptr)))
         });
 
         // ── Misc ─────────────────────────────────────────────────────────────────
         methods.add_method("talkSelf", |_, this, (color, msg): (i32, String)| {
             if let Ok(cs) = CString::new(msg.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_talkself(&mut *sd, color, cs.as_ptr()) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_talkself(sd, color, cs.as_ptr()) });
             }
             Ok(())
         });
         methods.add_method("gmMsg", |_, this, msg: String| {
             if let Ok(cs) = CString::new(msg.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_gmmsg(&mut *sd, cs.as_ptr()) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_gmmsg(sd, cs.as_ptr()) });
             }
             Ok(())
         });
         methods.add_method("broadcast", |_, this, (msg, m): (String, i32)| {
             if let Ok(cs) = CString::new(msg.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_broadcast_sd(&mut *sd, cs.as_ptr(), m) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_broadcast_sd(sd, cs.as_ptr(), m) });
             }
             Ok(())
         });
-        methods.add_method("killRank", |_, this, mob_id: i32| Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_killrank(&mut *sd, mob_id) } } else { 0 } }));
+        methods.add_method("killRank", |_, this, mob_id: i32| Ok(this.with_sd(0, |sd| sl_pc_killrank(sd, mob_id))));
         methods.add_method("getParcel", |lua, this, ()| {
-            let ptr = { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getparcel(&mut *sd) } } else { Default::default() } };
+            let ptr = this.with_sd(std::ptr::null_mut(), |sd| unsafe { sl_pc_getparcel(sd) });
             if ptr.is_null() { return Ok(mlua::Value::Nil); }
             Ok(mlua::Value::UserData(lua.create_userdata(
                 crate::game::scripting::types::item::ParcelObject { ptr }
@@ -1369,7 +1273,7 @@ impl UserData for PcObject {
         methods.add_method("getParcelList", |lua, this, ()| {
             const MAX: usize = 64;
             let mut ptrs: Vec<*mut std::ffi::c_void> = vec![std::ptr::null_mut(); MAX];
-            let count = { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getparcellist(&mut *sd, ptrs.as_mut_ptr(), MAX as i32) } } else { Default::default() } } as usize;
+            let count = this.with_sd(0, |sd| unsafe { sl_pc_getparcellist(sd, ptrs.as_mut_ptr(), MAX as i32) }) as usize;
             let tbl = lua.create_table()?;
             for (i, &p) in ptrs[..count].iter().enumerate() {
                 if !p.is_null() {
@@ -1382,30 +1286,28 @@ impl UserData for PcObject {
         });
         methods.add_method("removeParcel", |_, this, (sender, item, amount, pos, owner, engrave, npcflag): (i32, i32, i32, i32, i32, String, i32)| {
             if let Ok(cs) = CString::new(engrave.as_bytes()) {
-                { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_removeparcel(&mut *sd, sender, item as u32, amount as u32, pos, owner as u32, cs.as_ptr(), npcflag) } } else { Default::default() } };
+                this.with_sd((), |sd| unsafe { sl_pc_removeparcel(sd, pos, crate::game::scripting::map_globals::ParcelSpec { sender, item, amount, owner, engrave: cs.as_ptr(), npcflag }) });
             }
             Ok(())
         });
-        methods.add_method("expireItem", |_, this, ()| { { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_expireitem(&mut *sd) } } else { Default::default() } }; Ok(()) });
+        methods.add_method("expireItem", |_, this, ()| { this.with_sd((), |sd| unsafe { sl_pc_expireitem(sd) }); Ok(()) });
         methods.add_method("addGuide", |_, this, _guide: String| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_addguide(&mut *sd, 0) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| sl_pc_addguide(sd, 0)); Ok(())
         });
         methods.add_method("delGuide", |_, this, _guide: String| {
-            { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_delguide(&mut *sd, 0) } } else { Default::default() } };
-            Ok(())
+            this.with_sd((), |sd| sl_pc_delguide(sd, 0)); Ok(())
         });
         methods.add_method("mapSelection", |_, _this, _: mlua::MultiValue| Ok(mlua::Value::Nil));
         methods.add_method("getCreationItems", |lua, this, len: i32| {
             let max = (len.max(0) as usize).min(52);
             let mut out: Vec<u32> = vec![0; max.max(1)];
-            let count = { let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getcreationitems(&mut *sd, len, out.as_mut_ptr()) } } else { Default::default() } } as usize;
+            let count = this.with_sd(0, |sd| unsafe { sl_pc_getcreationitems(sd, len, out.as_mut_ptr()) }) as usize;
             let tbl = lua.create_table()?;
             for (i, &v) in out[..count.min(max)].iter().enumerate() { tbl.raw_set(i + 1, v as i64)?; }
             Ok(tbl)
         });
         methods.add_method("getCreationAmounts", |_, this, (len, item_id): (i32, i32)| {
-            Ok({ let sd = this.sd_ptr(); if !sd.is_null() { unsafe { sl_pc_getcreationamounts(&mut *sd, len, item_id as u32) } } else { 0 } })
+            Ok(this.with_sd(0, |sd| unsafe { sl_pc_getcreationamounts(sd, len, item_id as u32) }))
         });
 
         // ── Coroutine-based NPC interaction methods ─────────────────────────
@@ -1419,10 +1321,8 @@ impl UserData for PcObject {
         // thread_registry::resume().
 
         methods.add_method("_input_send", |_, this, msg: String| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
-            unsafe { sl_pc_input_send(&mut *sd, cs.as_ptr()); }
+            this.with_sd((), |sd| unsafe { sl_pc_input_send(sd, cs.as_ptr()) });
             Ok(())
         });
 
@@ -1433,10 +1333,6 @@ impl UserData for PcObject {
         });
 
         methods.add_method("_dialog_send", |_, this, (msg, opts_tbl): (String, mlua::Table)| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
-            // The options table contains strings like "previous", "next", "quit".
-            // Parse them into prev/next flags for the dialog packet.
             let mut has_prev = 0i32;
             let mut has_next = 0i32;
             let len = opts_tbl.raw_len();
@@ -1450,14 +1346,12 @@ impl UserData for PcObject {
                 }
             }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
-            unsafe { sl_pc_dialog_send(&mut *sd, cs.as_ptr(), has_prev, has_next); }
+            this.with_sd((), |sd| unsafe { sl_pc_dialog_send(sd, cs.as_ptr(), has_prev, has_next) });
             Ok(())
         });
 
         methods.add_method("_dialogSeq_send", |lua, this, args: mlua::MultiValue| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
-            let entries_tbl: mlua::Table = args.get(0)
+            let entries_tbl: mlua::Table = args.front()
                 .and_then(|v| lua.unpack::<mlua::Table>(v.clone()).ok())
                 .unwrap_or_else(|| lua.create_table().unwrap());
             let can_continue = args.get(1)
@@ -1470,66 +1364,56 @@ impl UserData for PcObject {
                 .unwrap_or(false);
             let strs = lua_table_to_cstrings_from(&entries_tbl, 2).unwrap_or_default();
             let ptrs = cstring_ptrs(&strs);
-            unsafe { sl_pc_dialogseq_send(&mut *sd, ptrs.as_ptr(), ptrs.len() as i32, can_continue as i32); }
+            this.with_sd((), |sd| unsafe { sl_pc_dialogseq_send(sd, ptrs.as_ptr(), ptrs.len() as i32, can_continue as i32) });
             Ok(())
         });
 
         methods.add_method("_menu_send", |_, this, (msg, opts_tbl): (String, mlua::Table)| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let strs = lua_table_to_cstrings(&opts_tbl).unwrap_or_default();
             let ptrs = cstring_ptrs(&strs);
-            unsafe { sl_pc_menu_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32); }
+            this.with_sd((), |sd| unsafe { sl_pc_menu_send(sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32) });
             Ok(())
         });
 
         methods.add_method("_menuSeq_send", |_, this, (msg, opts_tbl): (String, mlua::Table)| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let strs = lua_table_to_cstrings(&opts_tbl).unwrap_or_default();
             let ptrs = cstring_ptrs(&strs);
-            unsafe { sl_pc_menuseq_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32); }
+            this.with_sd((), |sd| unsafe { sl_pc_menuseq_send(sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32) });
             Ok(())
         });
 
         methods.add_method("_menuString_send", |_, this, (msg, opts_tbl): (String, mlua::Table)| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let strs = lua_table_to_cstrings(&opts_tbl).unwrap_or_default();
             let strings: Vec<String> = strs.iter()
                 .map(|c| c.to_str().unwrap_or("").to_owned())
                 .collect();
             let ptrs = cstring_ptrs(&strs);
-            unsafe {
-                sl_pc_menustring_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
+            this.with_sd((), |sd| unsafe {
+                sl_pc_menustring_send(sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
                 crate::game::scripting::async_coro::store_menu_opts(sd as *const _ as *mut std::ffi::c_void, strings);
-            }
+            });
             Ok(())
         });
 
         methods.add_method("_menuString2_send", |_, this, (msg, opts_tbl): (String, mlua::Table)| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let strs = lua_table_to_cstrings(&opts_tbl).unwrap_or_default();
             let strings: Vec<String> = strs.iter()
                 .map(|c| c.to_str().unwrap_or("").to_owned())
                 .collect();
             let ptrs = cstring_ptrs(&strs);
-            unsafe {
-                sl_pc_menustring2_send(&mut *sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
+            this.with_sd((), |sd| {
+                sl_pc_menustring2_send(sd, cs.as_ptr(), ptrs.as_ptr(), ptrs.len() as i32);
                 crate::game::scripting::async_coro::store_menu_opts(sd as *const _ as *mut std::ffi::c_void, strings);
-            }
+            });
             Ok(())
         });
 
         methods.add_method("_buy_send", |_, this, (msg, items_tbl, values_tbl, dn_tbl, bt_tbl):
             (String, mlua::Table, mlua::Table, mlua::Table, mlua::Table)| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let items  = lua_table_to_ints(&items_tbl).unwrap_or_default();
             let values = lua_table_to_ints(&values_tbl).unwrap_or_default();
@@ -1537,140 +1421,100 @@ impl UserData for PcObject {
             let bt     = lua_table_to_cstrings(&bt_tbl).unwrap_or_default();
             let dn_p = cstring_ptrs(&dn);
             let bt_p = cstring_ptrs(&bt);
-            unsafe {
-                sl_pc_buy_send(&mut *sd, cs.as_ptr(),
+            this.with_sd((), |sd| unsafe {
+                sl_pc_buy_send(sd, cs.as_ptr(),
                     items.as_ptr(), values.as_ptr(),
                     dn_p.as_ptr(), bt_p.as_ptr(), items.len() as i32);
-            }
+            });
             Ok(())
         });
 
         methods.add_method("_buyDialog_send", |_, this, (msg, items_tbl): (String, mlua::Table)| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let items = lua_table_to_ints(&items_tbl).unwrap_or_default();
-            unsafe { sl_pc_buydialog_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
+            this.with_sd((), |sd| unsafe { sl_pc_buydialog_send(sd, cs.as_ptr(), items.as_ptr(), items.len() as i32) });
             Ok(())
         });
 
         methods.add_method("_buyExtend_send", |_, this, (msg, items_tbl, prices_tbl, max_tbl):
             (String, mlua::Table, mlua::Table, mlua::Table)| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let items  = lua_table_to_ints(&items_tbl).unwrap_or_default();
             let prices = lua_table_to_ints(&prices_tbl).unwrap_or_default();
             let maxs   = lua_table_to_ints(&max_tbl).unwrap_or_default();
-            unsafe {
-                sl_pc_buyextend_send(&mut *sd, cs.as_ptr(),
+            this.with_sd((), |sd| unsafe {
+                sl_pc_buyextend_send(sd, cs.as_ptr(),
                     items.as_ptr(), prices.as_ptr(), maxs.as_ptr(), items.len() as i32);
-            }
+            });
             Ok(())
         });
 
         methods.add_method("_sell_send", |_, this, (msg, items_tbl): (String, mlua::Table)| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let items = lua_table_to_ints(&items_tbl).unwrap_or_default();
-            unsafe { sl_pc_sell_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
+            this.with_sd((), |sd| unsafe { sl_pc_sell_send(sd, cs.as_ptr(), items.as_ptr(), items.len() as i32) });
             Ok(())
         });
 
         methods.add_method("_sell2_send", |_, this, (msg, items_tbl): (String, mlua::Table)| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let items = lua_table_to_ints(&items_tbl).unwrap_or_default();
-            unsafe { sl_pc_sell2_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
+            this.with_sd((), |sd| unsafe { sl_pc_sell2_send(sd, cs.as_ptr(), items.as_ptr(), items.len() as i32) });
             Ok(())
         });
 
         methods.add_method("_sellExtend_send", |_, this, (msg, items_tbl): (String, mlua::Table)| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
             let items = lua_table_to_ints(&items_tbl).unwrap_or_default();
-            unsafe { sl_pc_sellextend_send(&mut *sd, cs.as_ptr(), items.as_ptr(), items.len() as i32); }
+            this.with_sd((), |sd| unsafe { sl_pc_sellextend_send(sd, cs.as_ptr(), items.as_ptr(), items.len() as i32) });
             Ok(())
         });
 
         methods.add_method("_showBank_send", |_, this, msg: String| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
-            unsafe { sl_pc_showbank_send(&mut *sd, cs.as_ptr()); }
+            this.with_sd((), |sd| sl_pc_showbank_send(sd, cs.as_ptr()));
             Ok(())
         });
 
         methods.add_method("_showBankAdd_send", |_, this, ()| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
-            unsafe { sl_pc_showbankadd_send(&mut *sd); }
-            Ok(())
+            this.with_sd((), sl_pc_showbankadd_send); Ok(())
         });
 
         methods.add_method("_bankAddMoney_send", |_, this, ()| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
-            unsafe { sl_pc_bankaddmoney_send(&mut *sd); }
-            Ok(())
+            this.with_sd((), sl_pc_bankaddmoney_send); Ok(())
         });
 
         methods.add_method("_bankWithdrawMoney_send", |_, this, ()| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
-            unsafe { sl_pc_bankwithdrawmoney_send(&mut *sd); }
-            Ok(())
+            this.with_sd((), sl_pc_bankwithdrawmoney_send); Ok(())
         });
 
         methods.add_method("_clanShowBank_send", |_, this, msg: String| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
             let cs = CString::new(msg.as_bytes()).map_err(mlua::Error::external)?;
-            unsafe { sl_pc_clanshowbank_send(&mut *sd, cs.as_ptr()); }
+            this.with_sd((), |sd| sl_pc_clanshowbank_send(sd, cs.as_ptr()));
             Ok(())
         });
 
         methods.add_method("_clanShowBankAdd_send", |_, this, ()| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
-            unsafe { sl_pc_clanshowbankadd_send(&mut *sd); }
-            Ok(())
+            this.with_sd((), sl_pc_clanshowbankadd_send); Ok(())
         });
 
         methods.add_method("_clanBankAddMoney_send", |_, this, ()| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
-            unsafe { sl_pc_clanbankaddmoney_send(&mut *sd); }
-            Ok(())
+            this.with_sd((), sl_pc_clanbankaddmoney_send); Ok(())
         });
 
         methods.add_method("_clanBankWithdrawMoney_send", |_, this, ()| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
-            unsafe { sl_pc_clanbankwithdrawmoney_send(&mut *sd); }
-            Ok(())
+            this.with_sd((), sl_pc_clanbankwithdrawmoney_send); Ok(())
         });
 
         methods.add_method("_clanViewBank_send", |_, this, ()| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
-            unsafe { sl_pc_clanviewbank_send(&mut *sd); }
-            Ok(())
+            this.with_sd((), sl_pc_clanviewbank_send); Ok(())
         });
 
         methods.add_method("_repairExtend_send", |_, this, ()| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
-            unsafe { sl_pc_repairextend_send(&mut *sd); }
-            Ok(())
+            this.with_sd((), sl_pc_repairextend_send); Ok(())
         });
 
         methods.add_method("_repairAll_send", |_, this, npc_bl: mlua::AnyUserData| {
-            let sd = this.sd_ptr();
-            if sd.is_null() { return Ok(()); }
             let npc_ptr = if let Ok(npc) = npc_bl.borrow::<crate::game::scripting::types::npc::NpcObject>() {
                 crate::game::map_server::map_id2npc_ref(npc.id)
                     .map(|arc| arc.data_ptr() as *mut std::ffi::c_void)
@@ -1678,14 +1522,14 @@ impl UserData for PcObject {
             } else {
                 std::ptr::null_mut()
             };
-            unsafe { sl_pc_repairall_send(&mut *sd, npc_ptr); }
+            this.with_sd((), |sd| sl_pc_repairall_send(sd, npc_ptr));
             Ok(())
         });
     }
 }
 
 fn extract_bl_ptr(ud: &mlua::AnyUserData) -> *mut std::ffi::c_void {
-    if let Ok(pc) = ud.borrow::<PcObject>() { return pc.sd_ptr() as *mut std::ffi::c_void; }
+    if let Ok(pc) = ud.borrow::<PcObject>() { return pc.sd_ptr_raw() as *mut std::ffi::c_void; }
     if let Ok(mob) = ud.borrow::<crate::game::scripting::types::mob::MobObject>() {
         return crate::game::map_server::map_id2mob_ref(mob.id)
             .map(|arc| arc.data_ptr() as *mut std::ffi::c_void)
