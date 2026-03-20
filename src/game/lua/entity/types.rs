@@ -5,7 +5,7 @@ pub enum EntityType {
     Player,
     Mob,
     Npc,
-    Item
+    Item,
 }
 
 impl Display for EntityType {
@@ -13,7 +13,7 @@ impl Display for EntityType {
         match self {
             EntityType::Player => write!(f, "Player"),
             EntityType::Mob => write!(f, "Mob"),
-            EntityType::Npc => write!(f, "Npc"),
+            EntityType::Npc => write!(f, "NPC"),
             EntityType::Item => write!(f, "Item"),
         }
     }
