@@ -2,6 +2,8 @@
 
 #![allow(non_snake_case, dead_code)]
 
+use std::sync::Arc;
+
 use parking_lot::RwLock;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -16,6 +18,7 @@ pub use crate::common::constants::entity::npc::{F1_NPC, NPCT_START_NUM, NPC_STAR
 pub use crate::common::constants::entity::player::MAX_GLOBALNPCREG;
 pub use crate::common::constants::entity::{BL_MOB, BL_NPC, BL_PC};
 use crate::database::map_db::{get_map_ptr, map_is_loaded};
+use crate::game::util::carray_to_str;
 use crate::database::map_db::{WarpList, BLOCK_SIZE};
 use crate::database::{blocking_run_async, get_pool};
 
@@ -36,6 +39,10 @@ pub struct NpcEntity {
     // level -1: Atomic Snapshot
     pub id: u32,
     pub pos_atomic: AtomicU64,
+
+    // level 0: Identity
+    pub name: String,
+    pub npc_name: String,
 
     // level 1: Legacy
     pub legacy: RwLock<NpcData>,
@@ -205,13 +212,8 @@ pub unsafe fn npc_get_new_npcid() -> u32 {
 /// Returns an available temp NPC ID.
 ///
 /// Scans from `NPCT_START_NUM` upward for a free slot, bumping
-/// `NPCTEMP_ID` when the high-water mark is reached.  Mirrors
-/// `npc_get_new_npctempid` in `npc.c`.
-///
-/// # Safety
-///
-/// Same requirements as [`npc_get_new_npcid`].
-pub unsafe fn npc_get_new_npctempid() -> u32 {
+/// `NPCTEMP_ID` when the high-water mark is reached.
+pub fn npc_get_new_npctempid() -> u32 {
     let mut x = NPCT_START_NUM;
     loop {
         let cur = NPCTEMP_ID.load(Ordering::Relaxed);
@@ -395,6 +397,7 @@ pub unsafe fn npc_warp(nd: *mut NpcData, m: i32, x: i32, y: i32) -> i32 {
 /// `block_list` is passed.
 ///
 ///
+// TODO: dead code — npc_tick_and_dispatch replaced these three functions
 /// # Safety
 ///
 /// `nd` must be a valid, aligned, non-null pointer to a live `NpcData`.
@@ -483,7 +486,7 @@ pub unsafe fn npc_duration(nd: *mut NpcData) -> i32 {
 /// (holding an NpcEntity write guard across `sl_doscript_*` causes a
 /// self-deadlock when the Lua method reads the same NpcEntity).
 unsafe fn npc_tick_and_dispatch(entity: &NpcEntity) {
-    type Ev = Option<(String, u32, u32)>; // (name, id, owner)
+    type Ev = Option<(u32, u32)>; // (id, owner)
 
     let (action_ev, move_ev, dur_ev): (Ev, Ev, Ev) = {
         let nd = &mut *entity.write();
@@ -492,11 +495,7 @@ unsafe fn npc_tick_and_dispatch(entity: &NpcEntity) {
             nd.time = nd.time.wrapping_add(100);
             if nd.time >= nd.actiontime {
                 nd.time = 0;
-                Some((
-                    crate::game::scripting::carray_to_str(&nd.name).to_owned(),
-                    nd.id,
-                    nd.owner,
-                ))
+                Some((nd.id, nd.owner))
             } else {
                 None
             }
@@ -508,11 +507,7 @@ unsafe fn npc_tick_and_dispatch(entity: &NpcEntity) {
             nd.movetimer = nd.movetimer.wrapping_add(100);
             if nd.movetimer >= nd.movetime {
                 nd.movetimer = 0;
-                Some((
-                    crate::game::scripting::carray_to_str(&nd.name).to_owned(),
-                    nd.id,
-                    nd.owner,
-                ))
+                Some((nd.id, nd.owner))
             } else {
                 None
             }
@@ -524,11 +519,7 @@ unsafe fn npc_tick_and_dispatch(entity: &NpcEntity) {
             nd.duratime = nd.duratime.wrapping_add(100);
             if nd.duratime >= nd.duration {
                 nd.duratime = 0;
-                Some((
-                    crate::game::scripting::carray_to_str(&nd.name).to_owned(),
-                    nd.id,
-                    nd.owner,
-                ))
+                Some((nd.id, nd.owner))
             } else {
                 None
             }
@@ -539,25 +530,27 @@ unsafe fn npc_tick_and_dispatch(entity: &NpcEntity) {
         (action_ev, move_ev, dur_ev)
     }; // write lock dropped here — safe to call Lua below
 
-    if let Some((name, id, owner)) = action_ev {
+    let name = &entity.name;
+
+    if let Some((id, owner)) = action_ev {
         if owner != 0 {
-            sl_doscript_2(&name, Some("action"), id, owner);
+            sl_doscript_2(name, Some("action"), id, owner);
         } else {
-            sl_doscript_simple(&name, Some("action"), id);
+            sl_doscript_simple(name, Some("action"), id);
         }
     }
-    if let Some((name, id, owner)) = move_ev {
+    if let Some((id, owner)) = move_ev {
         if owner != 0 {
-            sl_doscript_2(&name, Some("move"), id, owner);
+            sl_doscript_2(name, Some("move"), id, owner);
         } else {
-            sl_doscript_simple(&name, Some("move"), id);
+            sl_doscript_simple(name, Some("move"), id);
         }
     }
-    if let Some((name, id, owner)) = dur_ev {
+    if let Some((id, owner)) = dur_ev {
         if owner != 0 {
-            sl_doscript_2(&name, Some("endAction"), id, owner);
+            sl_doscript_2(name, Some("endAction"), id, owner);
         } else {
-            sl_doscript_simple(&name, Some("endAction"), id);
+            sl_doscript_simple(name, Some("endAction"), id);
         }
     }
 }
@@ -905,12 +898,19 @@ pub async unsafe fn npc_init_async() -> i32 {
             }
         }
 
-        // New NPCs: transfer Box ownership to NPC_MAP first — this moves data
-        // into Arc<RwLock>, freeing the original allocation.
+        // New NPCs: wrap in NpcEntity and insert into NPC_MAP.
         if is_new_alloc {
             let id = (*nd).id;
-            crate::game::map_server::map_addiddb_npc(id, Box::from_raw(nd));
-            // nd is dangling after this; get the live pointer from the Arc.
+            let npc_data = *Box::from_raw(nd);
+            let entity = Arc::new(NpcEntity {
+                id,
+                pos_atomic: AtomicU64::new(Point::new(npc_data.m, npc_data.x, npc_data.y).to_u64()),
+                name: carray_to_str(&npc_data.name).to_owned(),
+                npc_name: carray_to_str(&npc_data.npc_name).to_owned(),
+                legacy: RwLock::new(npc_data),
+            });
+            crate::game::map_server::map_addiddb_npc(id, entity);
+            // nd is dangling after from_raw; get the live pointer from the Arc.
             nd = crate::game::map_server::map_id2npc_ref(id)
                 .expect("npc just inserted")
                 .legacy
@@ -1410,6 +1410,7 @@ mod tests {
 
 // npc_init, warp_init, and npc_runtimers are on the original function definitions above.
 
+// TODO: dead code — remove npc_action_ffi, npc_movetime_ffi, npc_duration_ffi
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
@@ -1487,9 +1488,3 @@ pub unsafe fn npc_warp_add_ffi(f: *const i8) -> i32 {
     npc_warp_add(f)
 }
 
-/// # Safety
-///
-/// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn npc_get_new_npctempid_ffi() -> u32 {
-    npc_get_new_npctempid()
-}

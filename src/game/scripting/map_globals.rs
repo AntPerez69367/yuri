@@ -1,5 +1,6 @@
 //! Global scripting helpers.
 
+use crate::common::types::Point;
 use crate::database::map_db::get_map_ptr;
 use crate::database::map_db::{WarpList, BLOCK_SIZE, MAX_MAPREG};
 use crate::game::block::map_addblock_id;
@@ -872,24 +873,18 @@ pub unsafe fn sl_g_throw(id: i32, m: i32, x: i32, y: i32, vis: ThrowVisuals) {
 /// Allocates a zeroed `NpcData`, fills all fields from the arguments,
 /// registers it in the block grid and ID database, then fires the `on_spawn`
 /// Configuration for spawning a temporary NPC via script.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct NpcSpawnConfig {
     pub subtype: i32,
     pub timer: i32,
     pub duration: i32,
     pub owner: i32,
     pub movetime: i32,
-    pub npc_yname: *const i8,
+    pub npc_yname: Option<String>,
 }
 
-/// Handles the Lua event to dynamically add an NPC to the map.
-///
-/// `npc_yname` may be null; defaults to `"nothing"` in that case.
-///
-/// # Safety
-///
-/// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn sl_g_addnpc(name: *const i8, m: i32, x: i32, y: i32, cfg: NpcSpawnConfig) {
+/// Dynamically adds an NPC to the map and fires its `on_spawn` event.
+pub fn sl_g_addnpc(name: &str, pos: Point, cfg: NpcSpawnConfig) {
     let NpcSpawnConfig {
         subtype,
         timer,
@@ -898,81 +893,40 @@ pub unsafe fn sl_g_addnpc(name: *const i8, m: i32, x: i32, y: i32, cfg: NpcSpawn
         movetime,
         npc_yname,
     } = cfg;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicU64;
+    use parking_lot::RwLock;
     use crate::game::map_server::map_addiddb_npc;
-    use crate::game::npc::{npc_get_new_npctempid, NpcData, BL_NPC};
+    use crate::game::npc::{npc_get_new_npctempid, NpcData, NpcEntity, BL_NPC};
+    use crate::game::util::str_to_carray;
 
-    // CALLOC — allocate zeroed NpcData on the heap.
-    let layout = std::alloc::Layout::new::<NpcData>();
-    let raw = std::alloc::alloc_zeroed(layout) as *mut NpcData;
-    if raw.is_null() {
-        return;
-    }
+    let yname = npc_yname.as_deref().unwrap_or("nothing");
 
-    // Fill name fields (bounded copy, no overflow).
-    // If name is null, (*raw).name remains zeroed ("\0"), which doscript_blargs
-    // treats as an empty event name — Lua will receive an empty string root.
-    if !name.is_null() {
-        let src = std::ffi::CStr::from_ptr(name).to_bytes();
-        let dst = &mut (*raw).name;
-        let n = src.len().min(dst.len() - 1);
-        for i in 0..n {
-            dst[i] = src[i] as i8;
-        }
-        dst[n] = 0;
-    }
-    let yname: &[u8] = if npc_yname.is_null() {
-        b"nothing"
-    } else {
-        std::ffi::CStr::from_ptr(npc_yname).to_bytes()
-    };
-    {
-        let dst = &mut (*raw).npc_name;
-        let n = yname.len().min(dst.len() - 1);
-        for i in 0..n {
-            dst[i] = yname[i] as i8;
-        }
-        dst[n] = 0;
-    }
+    let mut nd: NpcData = unsafe { std::mem::zeroed() };
+    str_to_carray(name, &mut nd.name);
+    str_to_carray(yname, &mut nd.npc_name);
+    nd.bl_type = BL_NPC as u8;
+    nd.subtype = subtype as u8;
+    nd.m = pos.m;
+    nd.x = pos.x;
+    nd.y = pos.y;
+    nd.id = npc_get_new_npctempid();
+    nd.actiontime = timer as u32;
+    nd.duration = duration as u32;
+    nd.owner = owner as u32;
+    nd.movetime = movetime as u32;
 
-    // Fill entity header fields.
-    (*raw).bl_type = BL_NPC as u8;
-    (*raw).subtype = subtype as u8;
-    (*raw).m = m as u16;
-    (*raw).x = x as u16;
-    (*raw).y = y as u16;
-    (*raw).graphic_id = 0;
-    (*raw).graphic_color = 0;
-    (*raw).id = npc_get_new_npctempid();
-
-    // NpcData-specific fields.
-    (*raw).actiontime = timer as u32;
-    (*raw).duration = duration as u32;
-    (*raw).owner = owner as u32;
-    (*raw).movetime = movetime as u32;
-
-    // Insert into NPC_MAP first — this moves the data into Arc<RwLock>,
-    // freeing the original allocation. `raw` is dangling after this.
-    let id = (*raw).id;
-    map_addiddb_npc(id, Box::from_raw(raw));
-    // Get values from the Arc before any Lua call.
-    let arc = crate::game::map_server::map_id2npc_ref(id).expect("npc just inserted");
-    let (npc_id, bl_type, npc_m, npc_x, npc_y, npc_name, spawn_id) = {
-        let npc = arc.read();
-        (
-            npc.id,
-            npc.bl_type,
-            npc.m,
-            npc.x,
-            npc.y,
-            crate::game::scripting::carray_to_str(&npc.name).to_owned(),
-            npc.id,
-        )
-    };
-    map_addblock_id(npc_id, bl_type, npc_m, npc_x, npc_y);
-
-    // Fire on_spawn Lua event: npc.on_spawn(nd).
-    // Guard is dropped before the Lua call to avoid holding the lock across Lua dispatch.
-    dispatch(&npc_name, Some("on_spawn"), &[spawn_id]);
+    let id = nd.id;
+    let entity = Arc::new(NpcEntity {
+        id,
+        pos_atomic: AtomicU64::new(pos.to_u64()),
+        name: name.to_owned(),
+        npc_name: yname.to_owned(),
+        legacy: RwLock::new(nd),
+    });
+    map_addiddb_npc(id, entity);
+    map_addblock_id(id, BL_NPC as u8, pos.m, pos.x, pos.y);
+    dispatch(name, Some("on_spawn"), &[id]);
 }
 
 // ─── sl_g_setmap ─────────────────────────────────────────────────────────────

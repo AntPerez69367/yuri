@@ -1,6 +1,7 @@
 use std::ffi::CString;
 use mlua::{MetaMethod, UserData, UserDataMethods};
 
+use crate::common::types::Point;
 use crate::database::map_db::MapData;
 use crate::database::map_db::get_map_ptr;
 use crate::common::traits::LegacyEntity;
@@ -275,24 +276,18 @@ impl UserData for NpcObject {
                                 Some(mlua::Value::String(s)) => s.to_str().ok().map(|s| s.to_owned()),
                                 _ => None,
                             }};
-                            let cname  = CString::new(name).map_err(mlua::Error::external)?;
-                            let yname  = vs(10);
-                            let cyname = yname.as_deref()
-                                .and_then(|s| CString::new(s).ok());
-                            unsafe {
-                                sl_g_addnpc(
-                                    cname.as_ptr(),
-                                    vi(2), vi(3), vi(4),
-                                    NpcSpawnConfig {
-                                        subtype: vi(5),
-                                        timer: vi(6),
-                                        duration: vi(7),
-                                        owner: vi(8),
-                                        movetime: vi(9),
-                                        npc_yname: cyname.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
-                                    },
-                                );
-                            }
+                            sl_g_addnpc(
+                                &name,
+                                Point { m: vi(2) as u16, x: vi(3) as u16, y: vi(4) as u16 },
+                                NpcSpawnConfig {
+                                    subtype: vi(5),
+                                    timer: vi(6),
+                                    duration: vi(7),
+                                    owner: vi(8),
+                                    movetime: vi(9),
+                                    npc_yname: vs(10),
+                                },
+                            );
                             Ok(())
                         }
                     )?));
