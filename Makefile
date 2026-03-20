@@ -28,6 +28,10 @@ metan_cli:
 	@cp target/$(RUST_PROFILE)/metan_cli bin/metan_cli
 	@ln -sf metan_cli bin/metan
 
+.PHONY: docs
+docs:
+	@cargo run --bin lua_doc_gen
+
 clean:
 	@rm -rf ./bin/*
 
