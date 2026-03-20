@@ -30,7 +30,7 @@ pub struct MagicData {
 unsafe impl Send for MagicData {}
 unsafe impl Sync for MagicData {}
 
-static MAGIC_DB: OnceLock<Mutex<HashMap<i32, Arc<MagicData>>>> = OnceLock::new();
+pub(crate) static MAGIC_DB: OnceLock<Mutex<HashMap<i32, Arc<MagicData>>>> = OnceLock::new();
 
 fn db() -> &'static Mutex<HashMap<i32, Arc<MagicData>>> {
     MAGIC_DB.get().expect("[magic_db] not initialized")
@@ -48,7 +48,7 @@ fn make_default(id: i32) -> MagicData {
     m
 }
 
-async fn load_magic() -> Result<usize, sqlx::Error> {
+pub(crate) async fn load_magic() -> Result<usize, sqlx::Error> {
     let pool = get_pool();
     let rows = sqlx::query(
         "SELECT SplId, SplDescription, SplIdentifier, SplType, \

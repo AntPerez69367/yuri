@@ -19,7 +19,7 @@ use crate::common::constants::entity::player::{
     OPT_FLAG_GHOSTS, OPT_FLAG_STEALTH, U_FLAG_IMMORTAL, U_FLAG_SILENCED, U_FLAG_UNPHYSICAL,
 };
 
-use crate::config_globals::{D_RATE, XP_RATE};
+use crate::config::{D_RATE, XP_RATE};
 use crate::game::mob::{MOB_ONETIME_MAX, MOB_ONETIME_START, MOB_SPAWN_MAX, MOB_SPAWN_START};
 
 use crate::database::get_pool;

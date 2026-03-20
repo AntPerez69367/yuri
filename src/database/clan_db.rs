@@ -39,7 +39,7 @@ unsafe impl Sync for ClanBank {}
 unsafe impl Send for ClanData {}
 unsafe impl Sync for ClanData {}
 
-static CLAN_DB: OnceLock<Mutex<HashMap<i32, Arc<ClanData>>>> = OnceLock::new();
+pub(crate) static CLAN_DB: OnceLock<Mutex<HashMap<i32, Arc<ClanData>>>> = OnceLock::new();
 
 fn db() -> &'static Mutex<HashMap<i32, Arc<ClanData>>> {
     CLAN_DB.get().expect("[clan_db] not initialized")
@@ -58,7 +58,7 @@ fn make_default(id: i32) -> ClanData {
     c
 }
 
-async fn load_clans() -> Result<usize, sqlx::Error> {
+pub(crate) async fn load_clans() -> Result<usize, sqlx::Error> {
     let pool = get_pool();
     let rows = sqlx::query("SELECT ClnId, ClnName FROM Clans")
         .fetch_all(pool)

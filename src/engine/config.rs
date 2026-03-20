@@ -10,6 +10,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::AtomicI32;
+use std::sync::OnceLock;
 
 /// Maximum number of meta files that can be loaded
 pub const META_MAX: usize = 20;
@@ -18,6 +20,17 @@ pub const META_MAX: usize = 20;
 pub const TOWN_MAX: usize = 255;
 
 pub use crate::common::types::Point;
+
+// ─── Globals ───────────────────────────────────────────────────────────────
+
+/// Experience rate multiplier -- written at startup and by GM /xprate command.
+pub static XP_RATE: AtomicI32 = AtomicI32::new(0);
+
+/// Drop rate multiplier -- written at startup and by GM /drate command.
+pub static D_RATE: AtomicI32 = AtomicI32::new(0);
+
+/// Global config instance.
+static CONFIG: OnceLock<ServerConfig> = OnceLock::new();
 
 /// Main server configuration
 ///
@@ -573,12 +586,7 @@ town:
     }
 }
 
-// ─── Public API exports ────────────────────────────────────────────────────
-
-use std::sync::OnceLock;
-
-/// Global config instance
-static CONFIG: OnceLock<ServerConfig> = OnceLock::new();
+// ─── Public API ────────────────────────────────────────────────────────────
 
 /// Public accessor for the loaded config -- used by game modules (e.g. scripting).
 pub fn config() -> &'static ServerConfig {
@@ -596,7 +604,6 @@ pub fn config_read(file_path: &str) -> i32 {
             }
 
             // Initialise runtime-mutable rate atomics from the loaded config.
-            use crate::config_globals::{XP_RATE, D_RATE};
             use std::sync::atomic::Ordering;
             let cfg = config();
             XP_RATE.store(cfg.xprate, Ordering::Relaxed);

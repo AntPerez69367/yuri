@@ -1,23 +1,17 @@
 use anyhow::{Context, Result};
 use sqlx::mysql::MySqlPoolOptions;
-use std::ffi::CString;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use yuri::config::ServerConfig;
-use yuri::core::{core_init, set_termfunc};
-use yuri::database::{board_db, clan_db, class_db, item_db, magic_db, mob_db, recipe_db};
+use yuri::engine::{core_init, set_termfunc};
 use yuri::game::block::map_initblock;
 use yuri::game::client::visual::clif_timeout;
 use yuri::game::lua::dispatch::dispatch;
-use yuri::game::map_server::map_initiddb;
-use yuri::game::map_server::{lang_read, map_do_term, map_loadgameregistry};
+use yuri::game::map_server::{lang_read, map_do_term, map_initiddb, map_loadgameregistry};
 use yuri::game::mob::mobspawn_read;
 use yuri::game::scripting::sl_init;
 use yuri::servers::login::{parse_lang_file, LoginState};
 use yuri::session::{get_session_manager, make_listen_port, sync_callback};
 use yuri::world::{KickRequest, WorldState};
-
-pub fn db_init() {}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -54,33 +48,27 @@ async fn main() -> Result<()> {
         i += 1;
     }
 
-    let config: ServerConfig = {
-        let content = std::fs::read_to_string(&conf_file)
-            .with_context(|| format!("Cannot read config: {}", conf_file))?;
-        ServerConfig::from_yaml_str(&content)
-            .with_context(|| format!("Cannot parse config: {}", conf_file))?
-    };
-
-    // Load config into global CONFIG static (for game code that reads it).
+    // Load config into global CONFIG static.
     if yuri::config::config_read(&conf_file) != 0 {
         anyhow::bail!("config_read failed for {}", conf_file);
     }
+    let config = yuri::config::config();
 
-    // Load lang strings for map server
+    // Load lang strings for map server.
     {
-        let clang = CString::new(lang_file.as_str()).unwrap();
+        let clang = std::ffi::CString::new(lang_file.as_str()).unwrap();
         unsafe {
             lang_read(clang.as_ptr());
         }
     }
 
-    // Load login messages
+    // Load login messages.
     let lang_content = std::fs::read_to_string(&lang_file).unwrap_or_default();
     let messages = parse_lang_file(&lang_content)?;
 
     tracing::info!("[world] World Server Starting...");
 
-    // Shared DB pool — increased max_connections for combined workload.
+    // ── Database ──────────────────────────────────────────────────────
     let pool = {
         let db_url =
             std::env::var("DATABASE_URL").context("DATABASE_URL environment variable not set")?;
@@ -93,16 +81,15 @@ async fn main() -> Result<()> {
 
     yuri::database::set_pool(pool.clone()).context("Failed to register DB pool")?;
 
-    // Reset online flags
+    // Reset online flags.
     sqlx::query("UPDATE `Character` SET `ChaOnline` = 0 WHERE `ChaOnline` = 1")
         .execute(&pool)
         .await
         .ok();
 
-    // Create kick channel (login listener → LocalSet)
+    // ── World state ──────────────────────────────────────────────────
     let (kick_tx, kick_rx) = mpsc::channel::<KickRequest>(64);
 
-    // Build WorldState
     let world = Arc::new(WorldState {
         db: pool.clone(),
         config: config.clone(),
@@ -114,65 +101,51 @@ async fn main() -> Result<()> {
 
     yuri::world::set_world(Arc::clone(&world));
 
-    // ── Map server blocking init ──────────────────────────────────────
-    {
-        let maps_dir = config.maps_dir.clone();
-        let data_dir = config.data_dir.clone();
-        let serverid = config.server_id;
-        let map_port = config.map_port;
-
-        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            if unsafe { yuri::database::map_db::map_init(&maps_dir, serverid) } != 0 {
-                anyhow::bail!("map_init failed");
-            }
-
-            unsafe {
-                map_initblock();
-                map_initiddb();
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async {
-                        yuri::game::npc::npc_init_async().await;
-                        yuri::game::npc::warp_init_async().await;
-                    })
-                });
-                item_db::init();
-                recipe_db::init();
-                mob_db::init();
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(mobspawn_read())
-                });
-                magic_db::init();
-                class_db::init(&data_dir);
-                clan_db::init();
-                board_db::init();
-                yuri::game::map_server::object_flag_init();
-                sl_init();
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(map_loadgameregistry())
-                });
-                {
-                    let manager = get_session_manager();
-                    let mut cbs = manager.default_callbacks.lock().unwrap();
-                    cbs.parse = Some(std::sync::Arc::new(
-                        |fd: yuri::session::SessionId| -> yuri::session::CallbackFuture {
-                            Box::pin(yuri::game::client::clif_parse(fd))
-                        },
-                    ));
-                    cbs.timeout = Some(sync_callback(clif_timeout));
-                }
-                make_listen_port(map_port as i32);
-
-                dispatch("startup", None, &[]);
-
-                set_termfunc(Some(map_do_term));
-            }
-            Ok(())
-        })
-        .await
-        .context("Init thread panicked")??;
+    // ── Map init (sync, requires game thread) ────────────────────────
+    unsafe {
+        if yuri::database::map_db::map_init(&config.maps_dir, config.server_id) != 0 {
+            anyhow::bail!("map_init failed");
+        }
+        map_initblock();
+        map_initiddb();
     }
 
-    // ── Login listener (general tokio runtime) ────────────────────────
+    // ── Async DB loads (parallel) ────────────────────────────────────
+    let (npc_res, warp_res) = tokio::join!(
+        async { unsafe { yuri::game::npc::npc_init_async().await } },
+        async { unsafe { yuri::game::npc::warp_init_async().await } },
+    );
+    if npc_res != 0 { anyhow::bail!("npc_init_async failed"); }
+    if warp_res != 0 { anyhow::bail!("warp_init_async failed"); }
+
+    yuri::database::initialize().await?;
+
+    unsafe { mobspawn_read().await };
+
+    // ── Game state init (sync, after DB) ─────────────────────────────
+    unsafe {
+        yuri::game::map_server::object_flag_init();
+        sl_init();
+    }
+    unsafe { map_loadgameregistry().await };
+
+    // ── Network ──────────────────────────────────────────────────────
+    {
+        let manager = get_session_manager();
+        let mut cbs = manager.default_callbacks.lock().unwrap();
+        cbs.parse = Some(std::sync::Arc::new(
+            |fd: yuri::session::SessionId| -> yuri::session::CallbackFuture {
+                Box::pin(yuri::game::client::clif_parse(fd))
+            },
+        ));
+        cbs.timeout = Some(sync_callback(clif_timeout));
+    }
+    make_listen_port(config.map_port as i32);
+
+    dispatch("startup", None, &[]);
+    unsafe { set_termfunc(Some(map_do_term)) };
+
+    // ── Login listener ───────────────────────────────────────────────
     {
         let w = Arc::clone(&world);
         let bind = format!("{}:{}", config.login_ip, config.login_port);
@@ -188,7 +161,7 @@ async fn main() -> Result<()> {
         });
     }
 
-    // ── Auth expiry timer (every 30s) ─────────────────────────────────
+    // ── Auth expiry timer ────────────────────────────────────────────
     {
         let w = Arc::clone(&world);
         tokio::spawn(async move {
@@ -209,7 +182,7 @@ async fn main() -> Result<()> {
         config.map_port
     );
 
-    // ── Deadlock detector ─────────────────────────────────────────────
+    // ── Deadlock detector ────────────────────────────────────────────
     std::thread::spawn(|| loop {
         std::thread::sleep(std::time::Duration::from_secs(5));
         let deadlocks = parking_lot::deadlock::check_deadlock();
@@ -232,15 +205,13 @@ async fn main() -> Result<()> {
         }
     });
 
-    // ── LocalSet: kick drain + map session loop ───────────────────────
+    // ── LocalSet: kick drain + game loop ─────────────────────────────
     let local = tokio::task::LocalSet::new();
 
-    // Kick request drain task
     {
         let mut kick_rx = kick_rx;
         local.spawn_local(async move {
             while let Some(req) = kick_rx.recv().await {
-                // Find the session for this char_id and kick it
                 if let Some(arc) = yuri::game::map_server::map_id2sd_pc(req.char_id) {
                     let fd = arc.fd;
                     yuri::session::session_set_eof(fd, 12);
@@ -255,15 +226,13 @@ async fn main() -> Result<()> {
     }
 
     local
-        .run_until(yuri::session::run_async_server(world.config.map_port))
+        .run_until(yuri::engine::game_loop::run_game_loop(config.map_port))
         .await
-        .map_err(|e| anyhow::anyhow!("session loop error: {}", e))?;
+        .map_err(|e| anyhow::anyhow!("game loop error: {}", e))?;
 
     tracing::info!("[world] Shutting down...");
     unsafe {
         set_termfunc(None);
-    }
-    unsafe {
         map_do_term();
     }
     Ok(())

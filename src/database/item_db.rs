@@ -77,7 +77,7 @@ pub struct ItemData {
 unsafe impl Send for ItemData {}
 unsafe impl Sync for ItemData {}
 
-static ITEM_DB: OnceLock<Mutex<HashMap<u32, Arc<ItemData>>>> = OnceLock::new();
+pub(crate) static ITEM_DB: OnceLock<Mutex<HashMap<u32, Arc<ItemData>>>> = OnceLock::new();
 
 fn db() -> &'static Mutex<HashMap<u32, Arc<ItemData>>> {
     ITEM_DB.get().expect("[item_db] not initialized")
@@ -156,7 +156,7 @@ fn make_default(id: u32) -> ItemData {
     item
 }
 
-async fn load_items() -> Result<usize, sqlx::Error> {
+pub(crate) async fn load_items() -> Result<usize, sqlx::Error> {
     let pool = get_pool();
     let rows = sqlx::query(
         "SELECT ItmId, ItmDescription, ItmIdentifier, ItmMark, \

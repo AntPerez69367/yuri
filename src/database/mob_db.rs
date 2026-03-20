@@ -34,7 +34,7 @@ pub struct MobDbData {
 unsafe impl Send for MobDbData {}
 unsafe impl Sync for MobDbData {}
 
-static MOB_DB: OnceLock<Mutex<HashMap<u32, Arc<MobDbData>>>> = OnceLock::new();
+pub(crate) static MOB_DB: OnceLock<Mutex<HashMap<u32, Arc<MobDbData>>>> = OnceLock::new();
 
 fn db() -> &'static Mutex<HashMap<u32, Arc<MobDbData>>> {
     MOB_DB.get().expect("[mob_db] not initialized")
@@ -50,7 +50,7 @@ fn make_default(id: u32) -> Arc<MobDbData> {
     m
 }
 
-async fn load_mobs() -> Result<usize, sqlx::Error> {
+pub(crate) async fn load_mobs() -> Result<usize, sqlx::Error> {
     let pool = get_pool();
     let rows = sqlx::query(
         "SELECT `MobId`, `MobDescription`, `MobIdentifier`, \

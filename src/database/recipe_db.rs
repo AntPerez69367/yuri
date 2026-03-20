@@ -28,7 +28,7 @@ pub struct RecipeData {
 unsafe impl Send for RecipeData {}
 unsafe impl Sync for RecipeData {}
 
-static RECIPE_DB: OnceLock<Mutex<HashMap<u32, Arc<RecipeData>>>> = OnceLock::new();
+pub(crate) static RECIPE_DB: OnceLock<Mutex<HashMap<u32, Arc<RecipeData>>>> = OnceLock::new();
 
 fn db() -> &'static Mutex<HashMap<u32, Arc<RecipeData>>> {
     RECIPE_DB.get().expect("[recipe_db] not initialized")
@@ -58,7 +58,7 @@ fn make_default(id: u32) -> RecipeData {
     r
 }
 
-async fn load_recipes() -> Result<usize, sqlx::Error> {
+pub(crate) async fn load_recipes() -> Result<usize, sqlx::Error> {
     let pool = get_pool();
     let rows = sqlx::query(
         "SELECT RecId, RecIdentifier, RecDescription, \

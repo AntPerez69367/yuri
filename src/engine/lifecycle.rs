@@ -1,35 +1,25 @@
-//! Core server functionality (replaces core.c)
-//!
-//! This module provides:
-//! - Server lifecycle management
-//! - Signal handling
-//! - Core constants and utilities
-//! - Termination callback system
+//! Server lifecycle — state management, signals, and shutdown.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// Server tick rate in nanoseconds (10ms = 10,000,000 ns)
-/// This controls how fast the main server loop runs
 pub const SERVER_TICK_RATE_NS: u64 = 10_000_000;
 
 /// Server tick rate as a Duration for convenience
 pub const SERVER_TICK_RATE: Duration = Duration::from_nanos(SERVER_TICK_RATE_NS);
 
 /// Type alias for termination callback functions
-/// These are called when the server receives SIGTERM/SIGINT
 pub type TermFunc = Box<dyn Fn() + Send + 'static>;
 
 /// Global server state
 pub struct ServerState {
-    /// Flag indicating if shutdown has been requested
     pub shutdown_requested: bool,
-    /// Optional termination callback
     pub term_func: Option<TermFunc>,
 }
 
 impl ServerState {
-    /// Create a new ServerState
     pub fn new() -> Self {
         ServerState {
             shutdown_requested: false,
@@ -37,17 +27,14 @@ impl ServerState {
         }
     }
 
-    /// Request server shutdown
     pub fn request_shutdown(&mut self) {
         self.shutdown_requested = true;
     }
 
-    /// Check if shutdown has been requested
     pub fn should_shutdown(&self) -> bool {
         self.shutdown_requested
     }
 
-    /// Set the termination callback function
     pub fn set_term_func<F>(&mut self, func: F)
     where
         F: Fn() + Send + 'static,
@@ -55,7 +42,6 @@ impl ServerState {
         self.term_func = Some(Box::new(func));
     }
 
-    /// Call the termination function if set
     pub fn call_term_func(&self) {
         if let Some(ref func) = self.term_func {
             func();
@@ -70,7 +56,6 @@ impl Default for ServerState {
 }
 
 /// Thread-safe global server state
-/// This allows signal handlers and other threads to access server state
 pub type SharedServerState = Arc<Mutex<ServerState>>;
 
 /// Create a new shared server state
@@ -81,16 +66,12 @@ pub fn create_server_state() -> SharedServerState {
 /// Signal types that can trigger server shutdown
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Signal {
-    /// SIGINT (Ctrl+C)
     Interrupt,
-    /// SIGTERM (graceful shutdown)
     Terminate,
-    /// SIGPIPE (broken pipe - usually ignored)
     Pipe,
 }
 
 impl Signal {
-    /// Convert a libc signal number to our Signal enum
     pub fn from_signal_num(signum: libc::c_int) -> Option<Self> {
         match signum {
             libc::SIGINT => Some(Signal::Interrupt),
@@ -100,10 +81,74 @@ impl Signal {
         }
     }
 
-    /// Check if this signal should trigger shutdown
     pub fn should_shutdown(&self) -> bool {
         matches!(self, Signal::Interrupt | Signal::Terminate)
     }
+}
+
+// ─── Global state ──────────────────────────────────────────────────────────
+
+static GLOBAL_SERVER_STATE: Mutex<Option<SharedServerState>> = Mutex::new(None);
+static SHUTDOWN_PENDING: AtomicBool = AtomicBool::new(false);
+
+pub fn core_init() {
+    let state = create_server_state();
+    *GLOBAL_SERVER_STATE.lock().unwrap() = Some(state);
+}
+
+pub fn core_cleanup() {
+    *GLOBAL_SERVER_STATE.lock().unwrap() = None;
+}
+
+/// # Safety
+/// The callback function pointer must be valid for the lifetime of the server
+pub unsafe fn set_termfunc(func: Option<unsafe fn()>) {
+    if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
+        let mut state = state_lock.lock().unwrap();
+        if let Some(f) = func {
+            state.set_term_func(move || unsafe { f(); });
+        } else {
+            state.term_func = None;
+        }
+    }
+}
+
+/// # Safety
+/// Should only be called from signal handlers
+pub unsafe fn handle_signal(signum: i32) {
+    if let Some(signal) = Signal::from_signal_num(signum) {
+        if signal.should_shutdown() {
+            SHUTDOWN_PENDING.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
+pub fn request_shutdown() {
+    if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
+        let mut state = state_lock.lock().unwrap();
+        state.request_shutdown();
+    }
+}
+
+pub fn should_shutdown() -> bool {
+    if SHUTDOWN_PENDING.load(Ordering::SeqCst) {
+        tracing::info!("[engine] Processing shutdown signal");
+        if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
+            let mut state = state_lock.lock().unwrap();
+            state.call_term_func();
+            state.request_shutdown();
+        }
+        SHUTDOWN_PENDING.store(false, Ordering::SeqCst);
+    }
+    if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
+        let state = state_lock.lock().unwrap();
+        if state.should_shutdown() { return true; }
+    }
+    false
+}
+
+pub fn get_tick_rate_ns() -> u64 {
+    SERVER_TICK_RATE_NS
 }
 
 #[cfg(test)]
@@ -121,7 +166,6 @@ mod tests {
     fn test_server_state_shutdown() {
         let mut state = ServerState::new();
         assert!(!state.should_shutdown());
-
         state.request_shutdown();
         assert!(state.should_shutdown());
     }
@@ -161,13 +205,11 @@ mod tests {
     #[test]
     fn test_shared_server_state() {
         let state = create_server_state();
-
         {
             let mut s = state.lock().unwrap();
             assert!(!s.should_shutdown());
             s.request_shutdown();
         }
-
         {
             let s = state.lock().unwrap();
             assert!(s.should_shutdown());
@@ -180,82 +222,4 @@ mod tests {
         assert_eq!(SERVER_TICK_RATE, Duration::from_nanos(10_000_000));
         assert_eq!(SERVER_TICK_RATE, Duration::from_millis(10));
     }
-}
-
-
-use std::sync::atomic::{AtomicBool, Ordering};
-
-/// Global server state accessible from C
-static GLOBAL_SERVER_STATE: Mutex<Option<SharedServerState>> = Mutex::new(None);
-
-/// Atomic flag set by signal handler, checked by main loop
-static SHUTDOWN_PENDING: AtomicBool = AtomicBool::new(false);
-
-/// Initialize the global server state
-pub fn core_init() {
-    let state = crate::core::create_server_state();
-    *GLOBAL_SERVER_STATE.lock().unwrap() = Some(state);
-}
-
-/// Clean up the global server state
-pub fn core_cleanup() {
-    *GLOBAL_SERVER_STATE.lock().unwrap() = None;
-}
-
-/// Set the termination function callback
-///
-/// # Safety
-/// The callback function pointer must be valid for the lifetime of the server
-pub unsafe fn set_termfunc(func: Option<unsafe fn()>) {
-    if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
-        let mut state = state_lock.lock().unwrap();
-        if let Some(f) = func {
-            state.set_term_func(move || unsafe { f(); });
-        } else {
-            state.term_func = None;
-        }
-    }
-}
-
-/// Handle a signal.
-///
-/// # Safety
-/// Should only be called from signal handlers
-pub unsafe fn handle_signal(signum: i32) {
-    if let Some(signal) = Signal::from_signal_num(signum) {
-        if signal.should_shutdown() {
-            SHUTDOWN_PENDING.store(true, Ordering::SeqCst);
-        }
-    }
-}
-
-/// Request server shutdown
-pub fn request_shutdown() {
-    if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
-        let mut state = state_lock.lock().unwrap();
-        state.request_shutdown();
-    }
-}
-
-/// Check if server shutdown has been requested.
-pub fn should_shutdown() -> bool {
-    if SHUTDOWN_PENDING.load(Ordering::SeqCst) {
-        tracing::info!("[core] [signal] Processing shutdown signal");
-        if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
-            let mut state = state_lock.lock().unwrap();
-            state.call_term_func();
-            state.request_shutdown();
-        }
-        SHUTDOWN_PENDING.store(false, Ordering::SeqCst);
-    }
-    if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
-        let state = state_lock.lock().unwrap();
-        if state.should_shutdown() { return true; }
-    }
-    false
-}
-
-/// Get the server tick rate in nanoseconds
-pub fn get_tick_rate_ns() -> u64 {
-    SERVER_TICK_RATE_NS
 }

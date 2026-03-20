@@ -1,7 +1,7 @@
 //! Map server lifecycle — shutdown, reload, and countdown timer.
 
 use crate::common::traits::LegacyEntity;
-use crate::core::request_shutdown;
+use crate::engine::request_shutdown;
 use crate::game::entity_store::{map_id2sd_pc, map_termiddb};
 use crate::game::floor_items::map_clritem;
 use crate::game::map_char::intif_save_impl::sl_intif_save;

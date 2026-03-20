@@ -3119,7 +3119,7 @@ pub unsafe fn sl_pc_givexp(sd: &mut MapSessionData, amount: u32) {
         crate::game::pc::pc_givexp(
             &arc,
             amount,
-            crate::config_globals::XP_RATE.load(std::sync::atomic::Ordering::Relaxed) as u32,
+            crate::config::XP_RATE.load(std::sync::atomic::Ordering::Relaxed) as u32,
         );
     }
 }

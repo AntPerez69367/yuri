@@ -25,7 +25,7 @@ unsafe impl Sync for ClassData {}
 
 // Issue 2: Arc<ClassData> instead of Box so cloned references keep data alive
 // after term() clears the HashMap.
-static CLASS_DB: OnceLock<Mutex<HashMap<u32, Arc<ClassData>>>> = OnceLock::new();
+pub(crate) static CLASS_DB: OnceLock<Mutex<HashMap<u32, Arc<ClassData>>>> = OnceLock::new();
 
 fn db() -> &'static Mutex<HashMap<u32, Arc<ClassData>>> {
     CLASS_DB.get().expect("[class_db] not initialized")
@@ -44,7 +44,7 @@ fn make_default(id: u32) -> Arc<ClassData> {
     Arc::new(c)
 }
 
-async fn load_classes() -> Result<usize, sqlx::Error> {
+pub(crate) async fn load_classes() -> Result<usize, sqlx::Error> {
     let pool = get_pool();
     let rows = sqlx::query(
         "SELECT PthId, PthType, PthChat, PthIcon, \
@@ -75,10 +75,8 @@ async fn load_classes() -> Result<usize, sqlx::Error> {
     Ok(count)
 }
 
-fn load_leveldb(data_dir: &str) -> Result<usize, std::io::Error> {
-    // Issue 4: use PathBuf::join so a missing trailing separator is handled
-    // correctly (e.g. "data" + "tnl_exp.csv" → "data/tnl_exp.csv", not
-    // "datatnl_exp.csv").
+pub(crate) fn load_leveldb() -> Result<usize, std::io::Error> {
+    let data_dir = &crate::config::config().data_dir;
     let path = PathBuf::from(data_dir).join("tnl_exp.csv");
     let contents = fs::read_to_string(&path)
         .map_err(|e| { tracing::error!("Can't read level db ({}): {e}", path.display()); e })?;
@@ -104,7 +102,7 @@ fn load_leveldb(data_dir: &str) -> Result<usize, std::io::Error> {
     Ok(count)
 }
 
-pub fn init(data_dir: &str) -> i32 {
+pub fn init() -> i32 {
     let lock = CLASS_DB.get_or_init(|| Mutex::new(HashMap::new()));
     lock.lock().unwrap().clear();
 
@@ -113,7 +111,7 @@ pub fn init(data_dir: &str) -> i32 {
         Err(e) => { tracing::error!("[class_db] load failed: {e}"); return -1; }
     }
 
-    match load_leveldb(data_dir) {
+    match load_leveldb() {
         Ok(n) => tracing::info!("[leveldb] read done count={n}"),
         Err(_) => return -1,
     }

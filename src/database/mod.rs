@@ -153,3 +153,68 @@ pub fn db_connect(url: &str) -> i32 {
         }
     }
 }
+
+/// Initialize all database tables concurrently.
+///
+/// Loads item, recipe, mob, magic, class, clan, and board databases in
+/// parallel using `tokio::join!`. The class_db leveldb CSV is loaded
+/// synchronously after its DB query completes.
+///
+/// Must be called after `set_pool()` and after the global config is loaded.
+pub async fn initialize() -> anyhow::Result<()> {
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    // Initialize all OnceLock statics before the parallel load.
+    item_db::ITEM_DB.get_or_init(|| Mutex::new(HashMap::new()));
+    recipe_db::RECIPE_DB.get_or_init(|| Mutex::new(HashMap::new()));
+    mob_db::MOB_DB.get_or_init(|| Mutex::new(HashMap::new()));
+    magic_db::MAGIC_DB.get_or_init(|| Mutex::new(HashMap::new()));
+    class_db::CLASS_DB.get_or_init(|| Mutex::new(HashMap::new()));
+    clan_db::CLAN_DB.get_or_init(|| Mutex::new(HashMap::new()));
+    board_db::BOARD_DB.get_or_init(|| Mutex::new(HashMap::new()));
+    board_db::BN_DB.get_or_init(|| Mutex::new(HashMap::new()));
+
+    // Run all DB queries concurrently.
+    let (items, recipes, mobs, magic, classes, clans, boards, bn) = tokio::join!(
+        item_db::load_items(),
+        recipe_db::load_recipes(),
+        mob_db::load_mobs(),
+        magic_db::load_magic(),
+        class_db::load_classes(),
+        clan_db::load_clans(),
+        board_db::load_boards(),
+        board_db::load_bn(),
+    );
+
+    // Log results, bail on first error.
+    let items = items.map_err(|e| anyhow::anyhow!("[item_db] {e}"))?;
+    tracing::info!("[item_db] read done count={items}");
+
+    let recipes = recipes.map_err(|e| anyhow::anyhow!("[recipe_db] {e}"))?;
+    tracing::info!("[recipe_db] read done count={recipes}");
+
+    let mobs = mobs.map_err(|e| anyhow::anyhow!("[mob_db] {e}"))?;
+    tracing::info!("[mob_db] read done count={mobs}");
+
+    let magic = magic.map_err(|e| anyhow::anyhow!("[magic_db] {e}"))?;
+    tracing::info!("[magic_db] read done count={magic}");
+
+    let classes = classes.map_err(|e| anyhow::anyhow!("[class_db] {e}"))?;
+    tracing::info!("[class_db] read done count={classes}");
+
+    let clans = clans.map_err(|e| anyhow::anyhow!("[clan_db] {e}"))?;
+    tracing::info!("[clan_db] read done count={clans}");
+
+    let boards = boards.map_err(|e| anyhow::anyhow!("[board_db] {e}"))?;
+    tracing::info!("[board_db] read done count={boards}");
+
+    bn.map_err(|e| anyhow::anyhow!("[bn_db] {e}"))?;
+
+    // class_db leveldb (CSV file) depends on the DB load above.
+    let levels = class_db::load_leveldb()
+        .map_err(|e| anyhow::anyhow!("[leveldb] {e}"))?;
+    tracing::info!("[leveldb] read done count={levels}");
+
+    Ok(())
+}

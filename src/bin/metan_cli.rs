@@ -188,10 +188,9 @@ async fn main() -> Result<()> {
     // item_db::init() and class_db::init() call blocking_run() internally,
     // which panics when called from inside a tokio runtime context.
     // Offload to a blocking thread via spawn_blocking.
-    let data_dir = config.data_dir.clone();
     tokio::task::spawn_blocking(move || {
         item_db::init();
-        class_db::init(&data_dir);
+        class_db::init();
     })
     .await
     .context("DB init thread panicked")?;

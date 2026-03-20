@@ -833,7 +833,7 @@ pub async unsafe fn clif_accept2(fd: SessionId, name: *mut i8, name_len: i32) ->
         session_set_eof(fd, 11);
         return 0;
     }
-    if crate::core::should_shutdown() {
+    if crate::engine::should_shutdown() {
         session_set_eof(fd, 1);
         return 0;
     }

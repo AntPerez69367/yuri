@@ -25,8 +25,8 @@ unsafe impl Sync for BoardData {}
 unsafe impl Send for BnData {}
 unsafe impl Sync for BnData {}
 
-static BOARD_DB: OnceLock<Mutex<HashMap<i32, Arc<BoardData>>>> = OnceLock::new();
-static BN_DB: OnceLock<Mutex<HashMap<i32, Arc<BnData>>>> = OnceLock::new();
+pub(crate) static BOARD_DB: OnceLock<Mutex<HashMap<i32, Arc<BoardData>>>> = OnceLock::new();
+pub(crate) static BN_DB: OnceLock<Mutex<HashMap<i32, Arc<BnData>>>> = OnceLock::new();
 
 fn board_db() -> &'static Mutex<HashMap<i32, Arc<BoardData>>> {
     BOARD_DB.get().expect("[board_db] not initialized")
@@ -51,7 +51,7 @@ fn make_default_bn(id: i32) -> BnData {
     b
 }
 
-async fn load_boards() -> Result<usize, sqlx::Error> {
+pub(crate) async fn load_boards() -> Result<usize, sqlx::Error> {
     let pool = get_pool();
     let rows = sqlx::query(
         "SELECT BnmId, BnmDescription, BnmLevel, BnmGMLevel, \
@@ -80,7 +80,7 @@ async fn load_boards() -> Result<usize, sqlx::Error> {
     Ok(count)
 }
 
-async fn load_bn() -> Result<usize, sqlx::Error> {
+pub(crate) async fn load_bn() -> Result<usize, sqlx::Error> {
     let pool = get_pool();
     let rows = sqlx::query("SELECT BtlId, BtlDescription FROM BoardTitles")
         .fetch_all(pool)
