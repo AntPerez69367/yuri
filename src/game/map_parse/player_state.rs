@@ -6,23 +6,32 @@
 
 use std::ptr;
 
+use crate::common::player::legends::MAX_LEGENDS;
 use crate::database::map_db::raw_map_ptr;
-use crate::session::{SessionId, session_exists};
 use crate::game::pc::{
     MapSessionData,
     // Setting-flags constants (from mmo.h)
-    FLAG_ADVICE, FLAG_EXCHANGE, FLAG_FASTMOVE, FLAG_GROUP, FLAG_HELM,
-    FLAG_MAGIC, FLAG_REALM, FLAG_SOUND, FLAG_WEATHER,
+    FLAG_ADVICE,
+    FLAG_EXCHANGE,
+    FLAG_FASTMOVE,
+    FLAG_GROUP,
+    FLAG_HELM,
+    FLAG_MAGIC,
+    FLAG_REALM,
+    FLAG_SOUND,
+    FLAG_WEATHER,
     // SFLAG_* constants (from map_server.h)
-    SFLAG_ALWAYSON, SFLAG_FULLSTATS, SFLAG_GMON, SFLAG_HPMP, SFLAG_XPMONEY,
+    SFLAG_ALWAYSON,
+    SFLAG_FULLSTATS,
+    SFLAG_GMON,
+    SFLAG_HPMP,
+    SFLAG_XPMONEY,
 };
 use crate::game::player::entity::PlayerEntity;
 use crate::game::player::prelude::*;
-use crate::common::player::legends::MAX_LEGENDS;
+use crate::session::{session_exists, SessionId};
 
-use super::packet::{
-    encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow,
-};
+use super::packet::{encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow};
 
 // Constants not in packet.rs — defined locally (from map_server.h / map_parse.h).
 const OUT_STATUS: u8 = 0x08; // packet id for clif_sendstatus
@@ -34,20 +43,31 @@ const OUT_STATUS: u8 = 0x08; // packet id for clif_sendstatus
 ///
 /// Returns a pointer into `buf` containing the result, or `src` unchanged if
 /// `orig` is not found.
-unsafe fn replace_str_local(src: *const i8, orig: &[u8], rep: *const i8, buf: &mut [u8; 4096]) -> *const i8 {
+unsafe fn replace_str_local(
+    src: *const i8,
+    orig: &[u8],
+    rep: *const i8,
+    buf: &mut [u8; 4096],
+) -> *const i8 {
     let orig_bytes = match orig.iter().position(|&b| b == 0) {
         Some(n) => &orig[..n],
         None => orig,
     };
     let p = libc::strstr(src, orig_bytes.as_ptr() as *const i8);
-    if p.is_null() { return src; }
+    if p.is_null() {
+        return src;
+    }
     let prefix_len = (p as usize).saturating_sub(src as usize);
     let rep_len = libc::strlen(rep);
     let tail = p.add(orig_bytes.len());
     std::ptr::copy_nonoverlapping(src as *const u8, buf.as_mut_ptr(), prefix_len.min(4095));
     let after_prefix = prefix_len.min(4095);
     let copy_rep = rep_len.min(4095 - after_prefix);
-    std::ptr::copy_nonoverlapping(rep as *const u8, buf.as_mut_ptr().add(after_prefix), copy_rep);
+    std::ptr::copy_nonoverlapping(
+        rep as *const u8,
+        buf.as_mut_ptr().add(after_prefix),
+        copy_rep,
+    );
     let after_rep = after_prefix + copy_rep;
     let tail_len = libc::strlen(tail).min(4095 - after_rep);
     std::ptr::copy_nonoverlapping(tail as *const u8, buf.as_mut_ptr().add(after_rep), tail_len);
@@ -55,24 +75,23 @@ unsafe fn replace_str_local(src: *const i8, orig: &[u8], rep: *const i8, buf: &m
     buf.as_ptr() as *const i8
 }
 
-
-use crate::game::map_server::{cur_time, cur_year};
-use crate::database::class_db::name as classdb_name;
 use crate::database::clan_db;
+use crate::database::class_db::name as classdb_name;
 use crate::database::item_db;
 use crate::game::client::handlers::clif_getName;
 use crate::game::client::visual::{
-    clif_sendweather, clif_destroyold, clif_getLevelTNL, clif_getXPBarPercent,
+    clif_destroyold, clif_getLevelTNL, clif_getXPBarPercent, clif_sendweather,
 };
-use crate::game::map_parse::movement::clif_sendchararea;
-use crate::game::map_parse::groups::{clif_grouphealth_update, clif_leavegroup};
 use crate::game::map_parse::chat::clif_sendminitext;
+use crate::game::map_parse::groups::{clif_grouphealth_update, clif_leavegroup};
+use crate::game::map_parse::movement::clif_sendchararea;
+use crate::game::map_server::{CURRENT_TIME, CURRENT_YEAR};
 use crate::network::crypt::crypt_set_packet_indexes;
 
 use crate::game::block::AreaType;
 use crate::game::block_grid;
 use crate::game::map_parse::visual::{
-    clif_object_look_by_id, clif_mob_look_start_func_inner, clif_mob_look_close_func_inner,
+    clif_mob_look_close_func_inner, clif_mob_look_start_func_inner, clif_object_look_by_id,
     load_visible_entities,
 };
 
@@ -107,7 +126,9 @@ pub unsafe fn clif_sendack(pe: &PlayerEntity) -> i32 {
     // Write big-endian size 0x0006 at [1..2]
     {
         let p = wfifop(fd, 1) as *mut u16;
-        if !p.is_null() { p.write_unaligned(0x0006_u16.to_be()); }
+        if !p.is_null() {
+            p.write_unaligned(0x0006_u16.to_be());
+        }
     }
     wfifoset(fd, encrypt(fd) as usize);
     0
@@ -149,7 +170,9 @@ pub unsafe fn clif_screensaver(pe: &PlayerEntity, screen: i32) -> i32 {
     // big-endian size 0x0004
     {
         let p = wfifop(fd, 1) as *mut u16;
-        if !p.is_null() { p.write_unaligned(0x0004_u16.to_be()); }
+        if !p.is_null() {
+            p.write_unaligned(0x0004_u16.to_be());
+        }
     }
     wfifob(fd, 3, 0x5A);
     wfifob(fd, 4, 0x03);
@@ -168,8 +191,8 @@ pub unsafe fn clif_screensaver(pe: &PlayerEntity, screen: i32) -> i32 {
 ///   [1..2] = 0x00 0x04  (size = 4)
 ///   [3]    = 0x20  (packet id)
 ///   [4]    = 0x03
-///   [5]    = cur_time
-///   [6]    = cur_year
+///   [5]    = CURRENT_TIME
+///   [6]    = CURRENT_YEAR
 ///
 /// # Safety
 ///
@@ -185,8 +208,16 @@ pub unsafe fn clif_sendtime(pe: &PlayerEntity) -> i32 {
     wfifob(fd, 2, 0x04);
     wfifob(fd, 3, 0x20);
     wfifob(fd, 4, 0x03);
-    wfifob(fd, 5, cur_time.load(std::sync::atomic::Ordering::Relaxed) as u8);
-    wfifob(fd, 6, cur_year.load(std::sync::atomic::Ordering::Relaxed) as u8);
+    wfifob(
+        fd,
+        5,
+        CURRENT_TIME.load(std::sync::atomic::Ordering::Relaxed) as u8,
+    );
+    wfifob(
+        fd,
+        6,
+        CURRENT_YEAR.load(std::sync::atomic::Ordering::Relaxed) as u8,
+    );
     wfifoset(fd, encrypt(fd) as usize);
     0
 }
@@ -276,10 +307,18 @@ pub unsafe fn clif_sendmapinfo(pe: &PlayerEntity) -> i32 {
     wfifow(fd, 7, md.xs.swap_bytes());
     wfifow(fd, 9, md.ys.swap_bytes());
     // spell/weather flag at [11]
-    let spell_flag: u8 = if setting_flags & FLAG_WEATHER != 0 { 4 } else { 5 };
+    let spell_flag: u8 = if setting_flags & FLAG_WEATHER != 0 {
+        4
+    } else {
+        5
+    };
     wfifob(fd, 11, spell_flag);
     // realm flag at [12]
-    let realm_flag: u8 = if setting_flags & FLAG_REALM != 0 { 0x01 } else { 0x00 };
+    let realm_flag: u8 = if setting_flags & FLAG_REALM != 0 {
+        0x01
+    } else {
+        0x00
+    };
     wfifob(fd, 12, realm_flag);
     // title length at [13], then title bytes at [14..14+len]
     wfifob(fd, 13, len);
@@ -295,7 +334,9 @@ pub unsafe fn clif_sendmapinfo(pe: &PlayerEntity) -> i32 {
     // big-endian packet size at [1..2]: 18 + title_len
     {
         let p = wfifop(fd, 1) as *mut u16;
-        if !p.is_null() { p.write_unaligned(((18 + title_len) as u16).to_be()); }
+        if !p.is_null() {
+            p.write_unaligned(((18 + title_len) as u16).to_be());
+        }
     }
     wfifoset(fd, encrypt(fd) as usize);
 
@@ -415,18 +456,26 @@ pub unsafe fn clif_sendxynoclick(pe: &PlayerEntity) -> i32 {
     wfifow(fd, 7, (y as u16).swap_bytes());
 
     let vx: u16 = if md.xs as i32 >= 16 {
-        if x < 8 { x as u16 }
-        else if x >= md.xs as i32 - 8 { (x - md.xs as i32 + 17) as u16 }
-        else { 8 }
+        if x < 8 {
+            x as u16
+        } else if x >= md.xs as i32 - 8 {
+            (x - md.xs as i32 + 17) as u16
+        } else {
+            8
+        }
     } else {
         ((16 - md.xs as i32) / 2 + x) as u16
     };
     wfifow(fd, 9, vx.swap_bytes());
 
     let vy: u16 = if md.ys as i32 >= 14 {
-        if y < 7 { y as u16 }
-        else if y >= md.ys as i32 - 7 { (y - md.ys as i32 + 15) as u16 }
-        else { 7 }
+        if y < 7 {
+            y as u16
+        } else if y >= md.ys as i32 - 7 {
+            (y - md.ys as i32 + 15) as u16
+        } else {
+            7
+        }
     } else {
         ((14 - md.ys as i32) / 2 + y) as u16
     };
@@ -530,10 +579,10 @@ pub unsafe fn clif_sendstatus(pe: &PlayerEntity, flags: i32) -> i32 {
 
     if f & SFLAG_FULLSTATS != 0 {
         let sd = pe.read();
-        wfifob(fd, 6,  0);                           // Unknown
-        wfifob(fd, 7,  sd.player.progression.country as u8);  // Nation
-        wfifob(fd, 8,  sd.player.progression.totem);          // Totem
-        wfifob(fd, 9,  0);                           // Unknown
+        wfifob(fd, 6, 0); // Unknown
+        wfifob(fd, 7, sd.player.progression.country as u8); // Nation
+        wfifob(fd, 8, sd.player.progression.totem); // Totem
+        wfifob(fd, 9, 0); // Unknown
         wfifob(fd, 10, sd.player.progression.level);
         wfifol(fd, 11, sd.max_hp.swap_bytes());
         wfifol(fd, 15, sd.max_mp.swap_bytes());
@@ -558,14 +607,14 @@ pub unsafe fn clif_sendstatus(pe: &PlayerEntity, flags: i32) -> i32 {
 
     if f & SFLAG_HPMP != 0 {
         let sd = pe.read();
-        wfifol(fd, len + 6,  sd.player.combat.hp.swap_bytes());
+        wfifol(fd, len + 6, sd.player.combat.hp.swap_bytes());
         wfifol(fd, len + 10, sd.player.combat.mp.swap_bytes());
         len += 8;
     }
 
     if f & SFLAG_XPMONEY != 0 {
         let sd = pe.read();
-        wfifol(fd, len + 6,  sd.player.progression.exp.swap_bytes());
+        wfifol(fd, len + 6, sd.player.progression.exp.swap_bytes());
         wfifol(fd, len + 10, sd.player.inventory.money.swap_bytes());
         wfifob(fd, len + 14, percentage as u8);
         len += 9;
@@ -573,21 +622,27 @@ pub unsafe fn clif_sendstatus(pe: &PlayerEntity, flags: i32) -> i32 {
 
     {
         let sd = pe.read();
-        wfifob(fd, len + 6,  sd.drunk as u8);
-        wfifob(fd, len + 7,  sd.blind as u8);
-        wfifob(fd, len + 8,  0);
-        wfifob(fd, len + 9,  0); // hear self/others
+        wfifob(fd, len + 6, sd.drunk as u8);
+        wfifob(fd, len + 7, sd.blind as u8);
+        wfifob(fd, len + 8, 0);
+        wfifob(fd, len + 9, 0); // hear self/others
         wfifob(fd, len + 10, 0);
         wfifob(fd, len + 11, sd.flags as u8); // 1=New parcel, 16=new Message
-        wfifob(fd, len + 12, 0);              // nothing
-        wfifol(fd, len + 13, sd.player.appearance.setting_flags.swap_bytes());
+        wfifob(fd, len + 12, 0); // nothing
+        wfifol(
+            fd,
+            len + 13,
+            sd.player.appearance.setting_flags.swap_bytes(),
+        );
     }
     len += 11;
 
     // Write big-endian packet size at [1..2]: len + 3
     {
         let p = wfifop(fd, 1) as *mut u16;
-        if !p.is_null() { p.write_unaligned(((len + 3) as u16).to_be()); }
+        if !p.is_null() {
+            p.write_unaligned(((len + 3) as u16).to_be());
+        }
     }
     wfifoset(fd, encrypt(fd) as usize);
 
@@ -617,13 +672,13 @@ pub unsafe fn clif_sendoptions(pe: &PlayerEntity) -> i32 {
     wfifow(fd, 1, 9_u16.swap_bytes()); // SWAP16(9)
     wfifob(fd, 3, 0x23);
     wfifob(fd, 4, 0x03);
-    wfifob(fd, 5,  if sf & FLAG_WEATHER  != 0 { 1 } else { 0 }); // Weather
-    wfifob(fd, 6,  if sf & FLAG_MAGIC    != 0 { 1 } else { 0 }); // Magic
-    wfifob(fd, 7,  if sf & FLAG_ADVICE   != 0 { 1 } else { 0 }); // Advice
-    wfifob(fd, 8,  if sf & FLAG_FASTMOVE != 0 { 1 } else { 0 });
-    wfifob(fd, 9,  if sf & FLAG_SOUND    != 0 { 1 } else { 0 }); // Sound
-    wfifob(fd, 10, if sf & FLAG_HELM     != 0 { 1 } else { 0 }); // Helm
-    wfifob(fd, 11, if sf & FLAG_REALM    != 0 { 1 } else { 0 }); // Realm
+    wfifob(fd, 5, if sf & FLAG_WEATHER != 0 { 1 } else { 0 }); // Weather
+    wfifob(fd, 6, if sf & FLAG_MAGIC != 0 { 1 } else { 0 }); // Magic
+    wfifob(fd, 7, if sf & FLAG_ADVICE != 0 { 1 } else { 0 }); // Advice
+    wfifob(fd, 8, if sf & FLAG_FASTMOVE != 0 { 1 } else { 0 });
+    wfifob(fd, 9, if sf & FLAG_SOUND != 0 { 1 } else { 0 }); // Sound
+    wfifob(fd, 10, if sf & FLAG_HELM != 0 { 1 } else { 0 }); // Helm
+    wfifob(fd, 11, if sf & FLAG_REALM != 0 { 1 } else { 0 }); // Realm
     wfifoset(fd, encrypt(fd) as usize);
     0
 }
@@ -664,7 +719,7 @@ pub unsafe fn clif_mystatus(pe: &PlayerEntity) -> i32 {
         let sd = pe.read();
         classdb_name(
             sd.player.progression.class as i32,
-            sd.player.progression.mark  as i32,
+            sd.player.progression.mark as i32,
         )
     };
 
@@ -679,8 +734,8 @@ pub unsafe fn clif_mystatus(pe: &PlayerEntity) -> i32 {
     {
         let sd = pe.read();
         wfifob(fd, 5, sd.armor as u8);
-        wfifob(fd, 6, sd.dam   as u8);
-        wfifob(fd, 7, sd.hit   as u8);
+        wfifob(fd, 6, sd.dam as u8);
+        wfifob(fd, 7, sd.hit as u8);
     }
 
     // `len` accumulates the variable portion starting at offset 8.
@@ -709,7 +764,12 @@ pub unsafe fn clif_mystatus(pe: &PlayerEntity) -> i32 {
     if clan_title_len > 0 {
         let sd = pe.read();
         wfifob(fd, 8 + len, clan_title_len as u8);
-        copy_cstr_to_wfifo(fd, 9 + len, sd.player.social.clan_title.as_ptr(), clan_title_len);
+        copy_cstr_to_wfifo(
+            fd,
+            9 + len,
+            sd.player.social.clan_title.as_ptr(),
+            clan_title_len,
+        );
         len += clan_title_len + 1;
     } else {
         wfifob(fd, 8 + len, 0);
@@ -741,7 +801,11 @@ pub unsafe fn clif_mystatus(pe: &PlayerEntity) -> i32 {
             }
             let pname_bytes = pname.as_bytes();
             let pname_len = pname_bytes.len().min(118);
-            ptr::copy_nonoverlapping(pname_bytes.as_ptr() as *const i8, buf.as_mut_ptr().add(prefix.len()), pname_len);
+            ptr::copy_nonoverlapping(
+                pname_bytes.as_ptr() as *const i8,
+                buf.as_mut_ptr().add(prefix.len()),
+                pname_len,
+            );
         }
         let buf_len = cstr_len(buf.as_ptr() as *const u8);
         wfifob(fd, 8 + len, buf_len as u8);
@@ -779,14 +843,28 @@ pub unsafe fn clif_mystatus(pe: &PlayerEntity) -> i32 {
 
     // ── Equipment (14 slots) ──────────────────────────────────────────────────
     for x in 0..14usize {
-        let (eq_id, eq_custom_icon, eq_custom_icon_color, eq_real_name_nonempty, eq_real_name_ptr,
-             eq_dura, eq_protected) = {
+        let (
+            eq_id,
+            eq_custom_icon,
+            eq_custom_icon_color,
+            eq_real_name_nonempty,
+            eq_real_name_ptr,
+            eq_dura,
+            eq_protected,
+        ) = {
             let sd = pe.read();
             let eq = &sd.player.inventory.equip[x];
             let nonempty = !eq.real_name.is_empty() && eq.real_name[0] != 0;
             let real_name_ptr = eq.real_name.as_ptr() as usize; // store as usize to avoid lifetime issue
-            (eq.id, eq.custom_icon, eq.custom_icon_color, nonempty, real_name_ptr,
-             eq.dura, eq.protected)
+            (
+                eq.id,
+                eq.custom_icon,
+                eq.custom_icon_color,
+                nonempty,
+                real_name_ptr,
+                eq.dura,
+                eq.protected,
+            )
         };
         if eq_id > 0 {
             let eq_item = item_db::search(eq_id);
@@ -827,7 +905,11 @@ pub unsafe fn clif_mystatus(pe: &PlayerEntity) -> i32 {
             // Dura (u32 BE) + protection byte
             wfifol(fd, 8 + len, (eq_dura as u32).swap_bytes());
             let db_prot = eq_item.protected as u32;
-            let prot_byte: u8 = if eq_protected >= db_prot { eq_protected as u8 } else { db_prot as u8 };
+            let prot_byte: u8 = if eq_protected >= db_prot {
+                eq_protected as u8
+            } else {
+                db_prot as u8
+            };
             wfifob(fd, 12 + len, prot_byte);
             len += 5;
         } else {
@@ -836,7 +918,7 @@ pub unsafe fn clif_mystatus(pe: &PlayerEntity) -> i32 {
             //           wfifol[13]=0, wfifob[14]=0 (overlaps the l above — C bug,
             //           writes 0 again), then len += 10.
             // Span used: offsets 8..16 (9 bytes), advance 10 (offset 17 left at 0).
-            wfifow(fd, 8  + len, 0);
+            wfifow(fd, 8 + len, 0);
             wfifob(fd, 10 + len, 0);
             wfifob(fd, 11 + len, 0);
             wfifob(fd, 12 + len, 0);
@@ -848,7 +930,7 @@ pub unsafe fn clif_mystatus(pe: &PlayerEntity) -> i32 {
 
     // ── Exchange + group flags ────────────────────────────────────────────────
     wfifob(fd, 8 + len, if sf & FLAG_EXCHANGE != 0 { 1 } else { 0 });
-    wfifob(fd, 9 + len, if sf & FLAG_GROUP    != 0 { 1 } else { 0 });
+    wfifob(fd, 9 + len, if sf & FLAG_GROUP != 0 { 1 } else { 0 });
     len += 1;
 
     // ── Legends ───────────────────────────────────────────────────────────────
@@ -860,29 +942,42 @@ pub unsafe fn clif_mystatus(pe: &PlayerEntity) -> i32 {
             count += 1;
         }
     }
-    wfifob(fd, 8  + len, 0);
-    wfifow(fd, 9  + len, count.swap_bytes());
+    wfifob(fd, 8 + len, 0);
+    wfifow(fd, 9 + len, count.swap_bytes());
     len += 3;
 
     for x in 0..MAX_LEGENDS {
         let (text_first, name_first, tchaid, icon, color, text_ptr_usize, text_len_val) = {
             let sd = pe.read();
             let lg = &sd.player.legends.legends[x];
-            (lg.text[0], lg.name[0], lg.tchaid, lg.icon, lg.color,
-             lg.text.as_ptr() as usize, cstr_len(lg.text.as_ptr() as *const u8))
+            (
+                lg.text[0],
+                lg.name[0],
+                lg.tchaid,
+                lg.icon,
+                lg.color,
+                lg.text.as_ptr() as usize,
+                cstr_len(lg.text.as_ptr() as *const u8),
+            )
         };
-        if text_first == 0 || name_first == 0 { continue; }
+        if text_first == 0 || name_first == 0 {
+            continue;
+        }
 
         wfifob(fd, 8 + len, icon as u8);
         wfifob(fd, 9 + len, color as u8);
 
         if tchaid > 0 {
             let char_name = clif_getName(tchaid);
-            let text_ptr  = text_ptr_usize as *const i8;
+            let text_ptr = text_ptr_usize as *const i8;
             let mut repl_buf = [0u8; 4096];
-            let buff      = replace_str_local(text_ptr, b"$player\0", char_name, &mut repl_buf);
-            let buff_ptr  = buff as *const u8;
-            let buff_len  = if buff.is_null() { 0 } else { cstr_len(buff_ptr) };
+            let buff = replace_str_local(text_ptr, b"$player\0", char_name, &mut repl_buf);
+            let buff_ptr = buff as *const u8;
+            let buff_len = if buff.is_null() {
+                0
+            } else {
+                cstr_len(buff_ptr)
+            };
             wfifob(fd, 10 + len, buff_len as u8);
             copy_cstr_to_wfifo(fd, 11 + len, buff_ptr, buff_len);
             len += buff_len + 3;
@@ -896,7 +991,9 @@ pub unsafe fn clif_mystatus(pe: &PlayerEntity) -> i32 {
     // ── Write big-endian packet size at [1..2] ────────────────────────────────
     {
         let p = wfifop(fd, 1) as *mut u16;
-        if !p.is_null() { p.write_unaligned(((len + 5) as u16).to_be()); }
+        if !p.is_null() {
+            p.write_unaligned(((len + 5) as u16).to_be());
+        }
     }
     wfifoset(fd, encrypt(fd) as usize);
     0
@@ -915,7 +1012,14 @@ pub fn clif_getchararea(pe: &PlayerEntity) -> i32 {
     let (m, x, y) = (pos.m as i32, pos.x as i32, pos.y as i32);
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(m as usize) };
-        let ids = block_grid::ids_in_area(grid, x, y, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
+        let ids = block_grid::ids_in_area(
+            grid,
+            x,
+            y,
+            AreaType::SameArea,
+            slot.xs as i32,
+            slot.ys as i32,
+        );
         load_visible_entities(pe, &ids);
     }
     0
@@ -941,12 +1045,24 @@ pub unsafe fn clif_refresh(pe: &PlayerEntity) -> i32 {
         let fd = pe.fd;
         let (m, x, y, player_id) = {
             let sd = pe.read();
-            (sd.m as usize, sd.x as i32, sd.y as i32, sd.player.identity.id)
+            (
+                sd.m as usize,
+                sd.x as i32,
+                sd.y as i32,
+                sd.player.identity.id,
+            )
         };
         clif_mob_look_start_func_inner(fd, &mut net.look);
         if let Some(grid) = block_grid::get_grid(m) {
             let slot = &*crate::database::map_db::raw_map_ptr().add(m);
-            let ids = block_grid::ids_in_area(grid, x, y, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
+            let ids = block_grid::ids_in_area(
+                grid,
+                x,
+                y,
+                AreaType::SameArea,
+                slot.xs as i32,
+                slot.ys as i32,
+            );
             for id in ids {
                 clif_object_look_by_id(fd, &mut net.look, player_id, id);
             }
@@ -1026,20 +1142,24 @@ pub unsafe fn clif_sendminimap(pe: &PlayerEntity) -> i32 {
 /// Return the length of a null-terminated byte string (does not count the NUL).
 #[inline]
 unsafe fn cstr_len(ptr: *const u8) -> usize {
-    if ptr.is_null() { return 0; }
+    if ptr.is_null() {
+        return 0;
+    }
     let mut n = 0usize;
-    while *ptr.add(n) != 0 { n += 1; }
+    while *ptr.add(n) != 0 {
+        n += 1;
+    }
     n
 }
 
 /// Copy `len` bytes from `src` into the WFIFO buffer at `pos`.
 #[inline]
 unsafe fn copy_cstr_to_wfifo(fd: SessionId, pos: usize, src: *const u8, len: usize) {
-    if len == 0 || src.is_null() { return; }
+    if len == 0 || src.is_null() {
+        return;
+    }
     let dst = wfifop(fd, pos);
     if !dst.is_null() {
         ptr::copy_nonoverlapping(src, dst, len);
     }
 }
-
-

@@ -10,7 +10,9 @@ use crate::common::constants::entity::{BL_ALL, BL_ITEM, BL_MOB, BL_NPC, BL_PC};
 use crate::database::get_pool;
 use crate::database::map_db::get_map_ptr;
 use crate::game::map_parse::chat::{clif_broadcast, clif_gmbroadcast};
-use crate::game::map_server::{cur_day, cur_season, cur_time, cur_year, map_changepostcolor};
+use crate::game::map_server::{
+    map_changepostcolor, CURRENT_DAY, CURRENT_SEASON, CURRENT_TIME, CURRENT_YEAR,
+};
 use crate::game::scripting::map_globals::{
     sl_g_sendmeta, sl_g_setmap, sl_g_throw, MapSettings, ThrowVisuals,
 };
@@ -71,28 +73,30 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
 
     g.set(
         "curYear",
-        lua.create_function(
-            |_, ()| Ok(cur_year.load(std::sync::atomic::Ordering::Relaxed) as i64),
-        )?,
+        lua.create_function(|_, ()| {
+            Ok(CURRENT_YEAR.load(std::sync::atomic::Ordering::Relaxed) as i64)
+        })?,
     )?;
 
     g.set(
         "curSeason",
         lua.create_function(|_, ()| {
-            Ok(cur_season.load(std::sync::atomic::Ordering::Relaxed) as i64)
+            Ok(CURRENT_SEASON.load(std::sync::atomic::Ordering::Relaxed) as i64)
         })?,
     )?;
 
     g.set(
         "curDay",
-        lua.create_function(|_, ()| Ok(cur_day.load(std::sync::atomic::Ordering::Relaxed) as i64))?,
+        lua.create_function(|_, ()| {
+            Ok(CURRENT_DAY.load(std::sync::atomic::Ordering::Relaxed) as i64)
+        })?,
     )?;
 
     g.set(
         "curTime",
-        lua.create_function(
-            |_, ()| Ok(cur_time.load(std::sync::atomic::Ordering::Relaxed) as i64),
-        )?,
+        lua.create_function(|_, ()| {
+            Ok(CURRENT_TIME.load(std::sync::atomic::Ordering::Relaxed) as i64)
+        })?,
     )?;
 
     g.set(

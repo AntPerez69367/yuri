@@ -1,6 +1,7 @@
 pub mod acl;
 pub mod crypt;
 pub mod ddos;
+pub mod globals;
 pub mod throttle;
 
 use anyhow::{bail, Result};

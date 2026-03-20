@@ -25,7 +25,7 @@ use crate::common::constants::entity::player::{
 
 // ---------------------------------------------------------------------------
 
-use crate::game::map_server::{map_fd, map_id2sd_pc};
+use crate::game::map_server::{map_id2sd_pc, MAP_FD};
 
 use crate::game::client::visual::broadcast_update_state;
 use crate::game::map_parse::visual::clif_spawn;
@@ -54,7 +54,7 @@ pub fn intif_install_player(fd: i32, player: PlayerData) -> i32 {
 
 unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
     let sid = SessionId::from_raw(fd);
-    if fd == map_fd.load(std::sync::atomic::Ordering::Relaxed) {
+    if fd == MAP_FD.load(std::sync::atomic::Ordering::Relaxed) {
         return 0;
     }
 

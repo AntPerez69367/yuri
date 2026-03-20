@@ -220,7 +220,7 @@ fn ai_script_name(data: &MobDbData) -> &str {
         _ => crate::game::scripting::carray_to_str(&data.yname),
     }
 }
-use crate::game::map_server::cur_time;
+use crate::game::map_server::CURRENT_TIME;
 use crate::game::time_util::gettick;
 
 // groups[256][256] flat array — defined in map_server.rs as
@@ -353,7 +353,7 @@ pub unsafe fn free_onetime(mob: *mut MobSpawnData) -> i32 {
 unsafe fn in_spawn_window(mob: *const MobSpawnData) -> bool {
     let s = (*mob).start as i32;
     let e = (*mob).end as i32;
-    let ct = cur_time.load(Ordering::Relaxed);
+    let ct = CURRENT_TIME.load(Ordering::Relaxed);
     (s < e && ct >= s && ct <= e)
         || (s > e && (ct >= s || ct <= e))
         || (s == e && ct == s && ct == e)

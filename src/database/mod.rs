@@ -29,6 +29,7 @@ use tokio::runtime::Runtime;
 
 pub mod board_db;
 pub mod boards;
+pub mod character;
 pub mod clan_db;
 pub mod class_db;
 pub mod item_db;

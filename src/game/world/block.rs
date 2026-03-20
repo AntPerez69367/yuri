@@ -12,7 +12,9 @@
 
 use crate::common::traits::LegacyEntity;
 use crate::database::map_db::MAP_SLOTS;
+use crate::game::entity_store::map_id2sd_pc;
 use crate::game::mob::MOB_DEAD;
+use crate::game::pc::U_FLAG_UNPHYSICAL;
 
 /// Returns the live map pointer (delegates to `map_db::raw_map_ptr()`).
 #[inline(always)]
@@ -157,5 +159,50 @@ pub fn map_moveblock_id(id: u32, m: u16, old_x: u16, old_y: u16, new_x: u16, new
 /// Return the number of players on map `m`, using the block grid's user_count.
 pub fn map_user_count(m: usize) -> i32 {
     crate::game::block_grid::get_grid(m).map(|g| g.user_count).unwrap_or(0)
+}
+
+/// Returns 1 if the cell `(x, y)` on map `m` is passable, 0 otherwise.
+///
+/// The `pass` tile array stores the char-ID of the player occupying each cell
+/// (non-zero means occupied). A cell with a player is treated as blocked unless
+/// that player has `uFlag_unphysical` set.
+///
+/// # Safety
+/// `m` must be a valid loaded map index. `x` and `y` must be within bounds.
+pub unsafe fn map_canmove(m: i32, x: i32, y: i32) -> i32 {
+    let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
+    let pass_val = *slot.pass.add(x as usize + y as usize * slot.xs as usize);
+
+    if pass_val != 0 {
+        let blocked = match map_id2sd_pc(pass_val as u32) {
+            None => true,
+            Some(arc) => (arc.read().uFlags & U_FLAG_UNPHYSICAL) == 0,
+        };
+        if blocked {
+            return 1;
+        }
+    }
+
+    0
+}
+
+/// Returns 1 if the player `sd` has an active co-reference or is contained
+/// inside another player that is still in the ID database.  Returns 0 otherwise.
+///
+/// # Safety
+/// `sd` must be a valid non-null pointer to a `MapSessionData` that is
+/// currently registered in the game world.  Must be called on the game thread.
+#[allow(non_snake_case)]
+pub unsafe fn hasCoref(sd: *mut crate::game::pc::MapSessionData) -> i32 {
+    if sd.is_null() {
+        return 0;
+    }
+    if (*sd).coref != 0 {
+        return 1;
+    }
+    if (*sd).coref_container != 0 && map_id2sd_pc((*sd).coref_container).is_some() {
+        return 1;
+    }
+    0
 }
 

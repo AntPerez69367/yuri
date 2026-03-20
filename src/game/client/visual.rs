@@ -939,7 +939,7 @@ pub unsafe fn clif_sendurl(pe: &PlayerEntity, ty: i32, url: *const i8) -> i32 {
 ///
 ///
 /// Guard checks (matching C source):
-/// - If `fd == char_fd` → return 0 (never time out the char-server link).
+/// - If `fd == CHAR_FD` → return 0 (never time out the char-server link).
 /// - If `fd <= 1` → return 0 (reserved / stdin / stdout fds).
 /// - If session does not exist → return 0.
 /// - If `session_get_data(fd)` is null → set eof=12 then return 0.
@@ -951,7 +951,7 @@ pub unsafe fn clif_sendurl(pe: &PlayerEntity, ty: i32, url: *const i8) -> i32 {
 /// Safe to call with any fd value. No struct dereferences occur before `sd_ptr` is
 /// verified non-null. All pointer dereferences follow their respective null checks.
 pub unsafe fn clif_timeout(fd: SessionId) -> i32 {
-    if fd.raw() == crate::game::map_server::char_fd.load(std::sync::atomic::Ordering::Relaxed) {
+    if fd.raw() == crate::game::map_server::CHAR_FD.load(std::sync::atomic::Ordering::Relaxed) {
         return 0;
     }
     if fd.raw() <= 1 {

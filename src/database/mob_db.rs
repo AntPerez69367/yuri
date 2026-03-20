@@ -206,3 +206,44 @@ pub fn find_id(name: &str) -> i32 {
     match searchname(name) { Some(m) => m.id as i32, None => 0 }
 }
 
+/// Record the mob's last-death timestamp in the `Spawns<serverid>` DB table.
+///
+/// # Safety
+/// `p` must be a valid non-null pointer to a `MobSpawnData` struct.
+/// Must be called on the game thread after the DB pool is initialised.
+pub async unsafe fn map_lastdeath_mob(p: *mut crate::game::mob::MobSpawnData) -> i32 {
+    if p.is_null() {
+        return 0;
+    }
+
+    let (last_death, startx, starty, map_id, mob_id, sid) = {
+        let last_death = (*p).last_death;
+        let startx = (*p).startx as i32;
+        let starty = (*p).starty as i32;
+        let map_id = (*p).m as i32;
+        let mob_id = (*p).id as i32;
+        let sid = crate::config::config().server_id;
+        (last_death, startx, starty, map_id, mob_id, sid)
+    };
+
+    let sql = format!(
+        "UPDATE `Spawns{sid}` \
+         SET SpnLastDeath = ? \
+         WHERE SpnX = ? AND SpnY = ? AND SpnMapId = ? AND SpnId = ?",
+    );
+
+    if let Err(e) = sqlx::query(&sql)
+        .bind(last_death)
+        .bind(startx)
+        .bind(starty)
+        .bind(map_id)
+        .bind(mob_id)
+        .execute(get_pool())
+        .await
+    {
+        tracing::error!("[map] map_lastdeath_mob failed: {e:#}");
+    }
+
+    0
+}
+
