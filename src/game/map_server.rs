@@ -2,37 +2,34 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_snake_case)]
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use parking_lot::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::common::traits::LegacyEntity;
 use crate::database::get_pool;
 use crate::database::{blocking_run_async, boards as db_boards};
+use crate::game::lua::coroutine::purge_player;
 use crate::game::npc::NpcEntity;
-use crate::game::pc::{
-    MapSessionData, PlayerEntity, FLAG_MAIL,
-    U_FLAG_UNPHYSICAL,
-};
+use crate::game::pc::{MapSessionData, PlayerEntity, FLAG_MAIL, U_FLAG_UNPHYSICAL};
 use crate::servers::map::packet::ClientPacket;
-
 
 use crate::game::map_parse::packet::{rfifob, rfifop, wfifohead, wfifop, wfifoset};
 
-use crate::session::{
-    session_exists, session_get_eof, session_get_client_ip,
-    session_set_eof, session_get_data, SessionId,
-};
-use crate::network::crypt::encrypt;
-use crate::database::board_db;
-use crate::session::{session_call_parse, get_session_manager};
-use crate::game::scripting::sl_exec;
 use crate::common::types::Point;
-use std::sync::atomic::AtomicU64;
 use crate::core::request_shutdown;
+use crate::database::board_db;
 use crate::game::map_char::intif_save_impl::sl_intif_save;
+use crate::game::scripting::sl_exec;
+use crate::network::crypt::encrypt;
+use crate::session::{get_session_manager, session_call_parse};
+use crate::session::{
+    session_exists, session_get_client_ip, session_get_data, session_get_eof, session_set_eof,
+    SessionId,
+};
+use std::sync::atomic::AtomicU64;
 
 // ---------------------------------------------------------------------------
 // In-game time globals.
@@ -73,10 +70,15 @@ static USERLIST: OnceLock<Mutex<UserlistData>> = OnceLock::new();
 
 #[inline]
 pub fn userlist() -> std::sync::MutexGuard<'static, UserlistData> {
-    USERLIST.get_or_init(|| Mutex::new(UserlistData {
-        user_count: 0,
-        user: [0u32; 10000],
-    })).lock().unwrap_or_else(|e| e.into_inner())
+    USERLIST
+        .get_or_init(|| {
+            Mutex::new(UserlistData {
+                user_count: 0,
+                user: [0u32; 10000],
+            })
+        })
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 /// Authentication-attempt counter.
@@ -97,7 +99,10 @@ static OBJECT_SLOTS: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
 
 #[inline]
 fn object_slots() -> std::sync::MutexGuard<'static, Vec<u8>> {
-    OBJECT_SLOTS.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap_or_else(|e| e.into_inner())
+    OBJECT_SLOTS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 /// Free all floor item ID slots.
@@ -156,7 +161,9 @@ pub unsafe fn map_additem(fl: *mut crate::game::scripting::types::floor::FloorIt
         tracing::error!("map_additem: floor item capacity exceeded ({MAX_FLOORITEM})");
         // Drop the Box to avoid leaking the allocation — caller transferred
         // ownership to us via Box::into_raw, so we must reclaim it on all paths.
-        unsafe { drop(Box::from_raw(fl)); }
+        unsafe {
+            drop(Box::from_raw(fl));
+        }
         return;
     }
 
@@ -170,7 +177,7 @@ pub unsafe fn map_additem(fl: *mut crate::game::scripting::types::floor::FloorIt
     drop(slots); // release lock before calling map_addiddb_item / map_addblock
 
     let id = (i as u32).wrapping_add(crate::game::mob::FLOORITEM_START_NUM);
-    (*fl).id      = id;
+    (*fl).id = id;
     (*fl).bl_type = crate::game::mob::BL_ITEM as u8;
     // Take ownership of the Box<FloorItemData> into ITEM_MAP.
     let item_box = Box::from_raw(fl);
@@ -215,35 +222,51 @@ pub unsafe fn map_setmapip(id: i32, ip: u32, port: u16) -> i32 {
 // access patterns and is ready for future multi-threading.
 
 static PLAYER_MAP: OnceLock<Mutex<HashMap<u32, Arc<PlayerEntity>>>> = OnceLock::new();
-static MOB_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<crate::game::mob::MobSpawnData>>>>> = OnceLock::new();
+static MOB_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<crate::game::mob::MobSpawnData>>>>> =
+    OnceLock::new();
 static NPC_MAP: OnceLock<Mutex<HashMap<u32, Arc<NpcEntity>>>> = OnceLock::new();
-static ITEM_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<crate::game::scripting::types::floor::FloorItemData>>>>> = OnceLock::new();
+static ITEM_MAP: OnceLock<
+    Mutex<HashMap<u32, Arc<RwLock<crate::game::scripting::types::floor::FloorItemData>>>>,
+> = OnceLock::new();
 
 #[inline]
 fn player_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<PlayerEntity>>> {
-    PLAYER_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
+    PLAYER_MAP
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 #[inline]
-fn mob_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<RwLock<crate::game::mob::MobSpawnData>>>> {
-    MOB_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
+fn mob_map(
+) -> std::sync::MutexGuard<'static, HashMap<u32, Arc<RwLock<crate::game::mob::MobSpawnData>>>> {
+    MOB_MAP
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 #[inline]
 fn npc_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<NpcEntity>>> {
-    NPC_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
+    NPC_MAP
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 #[inline]
-fn item_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<RwLock<crate::game::scripting::types::floor::FloorItemData>>>> {
-    ITEM_MAP.get_or_init(|| Mutex::new(HashMap::new())).lock().unwrap_or_else(|e| e.into_inner())
+fn item_map() -> std::sync::MutexGuard<
+    'static,
+    HashMap<u32, Arc<RwLock<crate::game::scripting::types::floor::FloorItemData>>>,
+> {
+    ITEM_MAP
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
-
 
 /// Iterate all online players safely. Collects Arc handles under the lock,
 /// then releases the lock and iterates — eliminating any risk of dangling
 /// pointers if a player is removed mid-iteration (Arc keeps data alive).
 pub fn for_each_player<F: FnMut(&mut crate::game::pc::MapSessionData)>(mut f: F) {
-    let arcs: Vec<Arc<PlayerEntity>> = {
-        player_map().values().map(Arc::clone).collect()
-    };
+    let arcs: Vec<Arc<PlayerEntity>> = { player_map().values().map(Arc::clone).collect() };
     for arc in arcs {
         let mut guard = arc.write();
         f(&mut guard);
@@ -261,7 +284,7 @@ pub fn map_termiddb() {
 /// Return position and entity type for any entity ID, using typed lookups.
 pub fn entity_position(id: u32) -> Option<(crate::common::types::Point, u8)> {
     use crate::common::types::Point;
-    use crate::game::mob::{MOB_START_NUM, FLOORITEM_START_NUM, NPC_START_NUM};
+    use crate::game::mob::{FLOORITEM_START_NUM, MOB_START_NUM, NPC_START_NUM};
     if id < MOB_START_NUM {
         if let Some(arc) = map_id2sd_pc(id) {
             let sd = arc.read();
@@ -303,7 +326,11 @@ unsafe fn box_into_arc_rwlock<T>(b: Box<T>) -> Arc<RwLock<T>> {
 }
 
 /// Insert a player — takes ownership of the Box, wrapping it in Arc<RwLock>.
-pub fn map_addiddb_player(id: u32, fd: crate::session::SessionId, sd: Box<crate::game::pc::MapSessionData>) {
+pub fn map_addiddb_player(
+    id: u32,
+    fd: crate::session::SessionId,
+    sd: Box<crate::game::pc::MapSessionData>,
+) {
     let name = sd.player.identity.name.clone();
     let gm_level = sd.player.identity.gm_level;
     let arc = Arc::from(PlayerEntity::new(id, fd, name, gm_level, sd));
@@ -317,7 +344,6 @@ pub fn map_addiddb_mob(id: u32, mob: Box<crate::game::mob::MobSpawnData>) {
 
 /// Insert an NPC — takes ownership of the Box, wrapping it in Arc<NpcEntity>.
 pub fn map_addiddb_npc(id: u32, npc: Box<crate::game::npc::NpcData>) {
-
     let pos = Point::new(npc.m, npc.x, npc.y).to_u64();
     let entity = Arc::new(NpcEntity {
         id: npc.id,
@@ -338,9 +364,12 @@ pub fn map_addiddb_item(id: u32, item: Box<crate::game::scripting::types::floor:
 /// reference, but any existing Arc holders keep the data alive until they
 /// are also dropped.
 pub fn map_deliddb(id: u32) {
-    use crate::game::mob::{MOB_START_NUM, FLOORITEM_START_NUM, NPC_START_NUM};
-    if id == 0 { return; }
+    use crate::game::mob::{FLOORITEM_START_NUM, MOB_START_NUM, NPC_START_NUM};
+    if id == 0 {
+        return;
+    }
     if id < MOB_START_NUM {
+        purge_player(id);
         player_map().remove(&id);
     } else if id >= NPC_START_NUM {
         npc_map().remove(&id);
@@ -384,7 +413,9 @@ pub fn map_id2npc_ref(id: u32) -> Option<Arc<NpcEntity>> {
 /// Typed lookup — returns `Arc<RwLock<FloorItemData>>` if id is a floor item.
 #[must_use]
 #[inline]
-pub fn map_id2fl_ref(id: u32) -> Option<Arc<RwLock<crate::game::scripting::types::floor::FloorItemData>>> {
+pub fn map_id2fl_ref(
+    id: u32,
+) -> Option<Arc<RwLock<crate::game::scripting::types::floor::FloorItemData>>> {
     let map = item_map();
     map.get(&id).cloned()
 }
@@ -426,7 +457,7 @@ impl<T> EntityLock<T> for Option<Arc<RwLock<T>>> {
 /// Returns None if the id is not registered in any typed map.
 #[must_use]
 pub fn map_id2entity(id: u32) -> Option<GameEntity> {
-    use crate::game::mob::{MOB_START_NUM, FLOORITEM_START_NUM, NPC_START_NUM};
+    use crate::game::mob::{FLOORITEM_START_NUM, MOB_START_NUM, NPC_START_NUM};
     if id < MOB_START_NUM {
         return map_id2sd_pc(id).map(GameEntity::Player);
     }
@@ -446,9 +477,13 @@ pub fn map_id2entity(id: u32) -> Option<GameEntity> {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_id2fl(id: u32) -> *mut std::ffi::c_void {
-    map_id2fl_ref(id).map(|arc| {
-        &*arc.read() as *const crate::game::scripting::types::floor::FloorItemData as *mut crate::game::scripting::types::floor::FloorItemData as *mut std::ffi::c_void
-    }).unwrap_or(std::ptr::null_mut())
+    map_id2fl_ref(id)
+        .map(|arc| {
+            &*arc.read() as *const crate::game::scripting::types::floor::FloorItemData
+                as *mut crate::game::scripting::types::floor::FloorItemData
+                as *mut std::ffi::c_void
+        })
+        .unwrap_or(std::ptr::null_mut())
 }
 
 /// Remove a mob from MOB_MAP (called from free_onetime).
@@ -463,13 +498,22 @@ pub fn mob_map_remove(id: u32) {
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_name2sd(name: *const i8) -> *mut MapSessionData {
     use crate::session::{session_exists, session_get_data, session_get_eof, SessionId};
-    if name.is_null() { return std::ptr::null_mut(); }
+    if name.is_null() {
+        return std::ptr::null_mut();
+    }
     let target = std::ffi::CStr::from_ptr(name).to_string_lossy();
     for i in 0..crate::session::get_fd_max() {
         let fd = SessionId::from_raw(i);
-        if !session_exists(fd) { continue; }
-        if session_get_eof(fd) != 0 { continue; }
-        let sd = match session_get_data(fd) { Some(a) => a, None => continue };
+        if !session_exists(fd) {
+            continue;
+        }
+        if session_get_eof(fd) != 0 {
+            continue;
+        }
+        let sd = match session_get_data(fd) {
+            Some(a) => a,
+            None => continue,
+        };
         if sd.read().player.identity.name.eq_ignore_ascii_case(&target) {
             return &mut *sd.write() as *mut MapSessionData;
         }
@@ -485,14 +529,17 @@ pub unsafe fn map_name2sd(name: *const i8) -> *mut MapSessionData {
 pub unsafe fn map_name2npc(name: *const i8) -> *mut std::ffi::c_void {
     use crate::game::npc::{NPC_ID, NPC_START_NUM};
     use std::sync::atomic::Ordering;
-    if name.is_null() { return std::ptr::null_mut(); }
+    if name.is_null() {
+        return std::ptr::null_mut();
+    }
     let mut i = NPC_START_NUM;
     let npc_hi = NPC_ID.load(Ordering::Relaxed);
     while i <= npc_hi {
         if let Some(arc) = map_id2npc_ref(i) {
             let nd = arc.read();
             if libc::strcasecmp(nd.npc_name.as_ptr(), name) == 0 {
-                return &*nd as *const crate::game::npc::NpcData as *mut crate::game::npc::NpcData as *mut std::ffi::c_void;
+                return &*nd as *const crate::game::npc::NpcData as *mut crate::game::npc::NpcData
+                    as *mut std::ffi::c_void;
             }
         }
         i += 1;
@@ -517,10 +564,14 @@ pub unsafe fn map_loadregistry(id: i32) -> i32 {
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_readglobalgamereg(reg: *const i8) -> i32 {
     let gr = gamereg();
-    if reg.is_null() || gr.registry.is_null() { return 0; }
+    if reg.is_null() || gr.registry.is_null() {
+        return 0;
+    }
     for i in 0..gr.registry_num as usize {
         let entry = &*gr.registry.add(i);
-        if reg_str_eq(&entry.str, reg) { return entry.val; }
+        if reg_str_eq(&entry.str, reg) {
+            return entry.val;
+        }
     }
     0
 }
@@ -538,11 +589,21 @@ pub unsafe fn map_cronjob() {
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
-    if t.is_multiple_of(60) { cron("cronJobMin");    }
-    if t.is_multiple_of(300) { cron("cronJob5Min");   }
-    if t.is_multiple_of(1800) { cron("cronJob30Min");  }
-    if t.is_multiple_of(3600) { cron("cronJobHour");   }
-    if t.is_multiple_of(86400) { cron("cronJobDay");    }
+    if t.is_multiple_of(60) {
+        cron("cronJobMin");
+    }
+    if t.is_multiple_of(300) {
+        cron("cronJob5Min");
+    }
+    if t.is_multiple_of(1800) {
+        cron("cronJob30Min");
+    }
+    if t.is_multiple_of(3600) {
+        cron("cronJobHour");
+    }
+    if t.is_multiple_of(86400) {
+        cron("cronJobDay");
+    }
     cron("cronJobSec");
 }
 
@@ -565,11 +626,18 @@ fn cron(name: &str) {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn isPlayerActive(sd: *mut MapSessionData) -> i32 {
-    if sd.is_null() { return 0; }
+    if sd.is_null() {
+        return 0;
+    }
     let fd = (*sd).fd;
-    if fd.raw() == 0 { return 0; }
+    if fd.raw() == 0 {
+        return 0;
+    }
     if !session_exists(fd) {
-        tracing::warn!("[map] isPlayerActive: player exists but session does not ({})", (*sd).player.identity.name);
+        tracing::warn!(
+            "[map] isPlayerActive: player exists but session does not ({})",
+            (*sd).player.identity.name
+        );
         return 0;
     }
     1
@@ -580,10 +648,16 @@ pub unsafe fn isPlayerActive(sd: *mut MapSessionData) -> i32 {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn isActive(sd: *mut MapSessionData) -> i32 {
-    if sd.is_null() { return 0; }
+    if sd.is_null() {
+        return 0;
+    }
     let fd = (*sd).fd;
-    if !session_exists(fd) { return 0; }
-    if session_get_eof(fd) != 0 { return 0; }
+    if !session_exists(fd) {
+        return 0;
+    }
+    if session_get_eof(fd) != 0 {
+        return 0;
+    }
     1
 }
 
@@ -603,7 +677,9 @@ pub async unsafe fn mmo_setonline(id: u32, val: i32) -> bool {
     // Extract all data from raw pointers BEFORE any .await so no raw pointers
     // cross yield points (required for the future to be Send).
     let addr = {
-        let Some(arc) = map_id2sd_pc(id) else { return false; };
+        let Some(arc) = map_id2sd_pc(id) else {
+            return false;
+        };
         let sd = arc.read();
         let fd = sd.fd;
         // session_get_client_ip returns IP in network byte order (sin_addr.s_addr).
@@ -619,24 +695,23 @@ pub async unsafe fn mmo_setonline(id: u32, val: i32) -> bool {
 
     // Check character exists.
     let pool = get_pool();
-    let exists: bool = sqlx::query_scalar::<_, i64>(
-            "SELECT COUNT(*) FROM `Character` WHERE `ChaId` = ?"
-        )
-        .bind(id)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0) > 0;
+    let exists: bool =
+        sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM `Character` WHERE `ChaId` = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(0)
+            > 0;
 
     // Update online status + last IP regardless of whether character was found in SELECT.
     let pool = get_pool();
-    let _ = sqlx::query(
-            "UPDATE `Character` SET `ChaOnline` = ?, `ChaLastIP` = ? WHERE `ChaId` = ?"
-        )
-        .bind(val)
-        .bind(&addr)
-        .bind(id)
-        .execute(pool)
-        .await;
+    let _ =
+        sqlx::query("UPDATE `Character` SET `ChaOnline` = ?, `ChaLastIP` = ? WHERE `ChaId` = ?")
+            .bind(val)
+            .bind(&addr)
+            .bind(id)
+            .execute(pool)
+            .await;
 
     exists && val != 0
 }
@@ -644,7 +719,6 @@ pub async unsafe fn mmo_setonline(id: u32, val: i32) -> bool {
 // ---------------------------------------------------------------------------
 // Block grid helpers — map_canmove, map_addmob
 // ---------------------------------------------------------------------------
-
 
 /// Returns 1 if the cell `(x, y)` on map `m` is passable, 0 otherwise.
 ///
@@ -682,16 +756,16 @@ pub unsafe fn map_canmove(m: i32, x: i32, y: i32) -> i32 {
 /// # Safety
 /// `sd` must be a valid, non-null `MapSessionData` pointer.
 pub async unsafe fn map_addmob(
-    sd:      *mut MapSessionData,
-    id:      u32,
-    start:   i32,
-    end:     i32,
+    sd: *mut MapSessionData,
+    id: u32,
+    start: i32,
+    end: i32,
     replace: u32,
 ) -> i32 {
-    let m     = (*sd).m  as i32;
-    let x     = (*sd).x  as i32;
-    let y     = (*sd).y  as i32;
-    let sid   = crate::config::config().server_id;
+    let m = (*sd).m as i32;
+    let x = (*sd).x as i32;
+    let y = (*sd).y as i32;
+    let sid = crate::config::config().server_id;
 
     let sql = format!(
         "INSERT INTO `Spawns{sid}` \
@@ -718,8 +792,7 @@ pub async unsafe fn map_addmob(
 // Board / N-Mail packet constants
 // ---------------------------------------------------------------------------
 
-use crate::common::constants::world::{BOARD_CAN_WRITE, BOARD_CAN_DEL};
-
+use crate::common::constants::world::{BOARD_CAN_DEL, BOARD_CAN_WRITE};
 
 // ---------------------------------------------------------------------------
 // nmail_sendmessage — sends a notification message packet to the player's fd.
@@ -740,12 +813,14 @@ use crate::common::constants::world::{BOARD_CAN_WRITE, BOARD_CAN_DEL};
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn nmail_sendmessage(
-    sd:      *mut MapSessionData,
+    sd: *mut MapSessionData,
     message: *const i8,
-    other:   i32,
-    r#type:  i32,
+    other: i32,
+    r#type: i32,
 ) -> i32 {
-    if isPlayerActive(sd) == 0 { return 0; }
+    if isPlayerActive(sd) == 0 {
+        return 0;
+    }
 
     let fd = (*sd).fd;
     if !session_exists(fd) {
@@ -756,7 +831,9 @@ pub unsafe fn nmail_sendmessage(
 
     wfifohead(fd, 65535 + 3);
     let p0 = wfifop(fd, 0);
-    if p0.is_null() { return 0; }
+    if p0.is_null() {
+        return 0;
+    }
 
     *p0 = 0xAA_u8;
     *wfifop(fd, 3) = 0x31_u8;
@@ -766,13 +843,9 @@ pub unsafe fn nmail_sendmessage(
     *wfifop(fd, 7) = msg_len as u8;
     // copy message bytes (replicating C strcpy, without the null — it is overwritten by the sentinel).
     // C does: len = strlen(message); len++ — effective length is N+1.
-    std::ptr::copy_nonoverlapping(
-        message as *const u8,
-        wfifop(fd, 8),
-        msg_len,
-    );
+    std::ptr::copy_nonoverlapping(message as *const u8, wfifop(fd, 8), msg_len);
     *wfifop(fd, msg_len + 8) = 0x07_u8; // 0x07 sentinel at [8+N] (matches C: strcpy null is overwritten)
-    // big-endian packet length field at [1..2]: (N+1) + 5 = N + 6
+                                        // big-endian packet length field at [1..2]: (N+1) + 5 = N + 6
     let size_be = ((msg_len as u16) + 6).to_be();
     (wfifop(fd, 1) as *mut u16).write_unaligned(size_be);
 
@@ -790,12 +863,16 @@ pub unsafe fn nmail_sendmessage(
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn boards_delete(sd: *mut MapSessionData, board: i32) -> i32 {
-    if sd.is_null() { return 0; }
+    if sd.is_null() {
+        return 0;
+    }
 
     // Read the post id from the player's recv buffer (big-endian u16 at offset 8).
     let post = {
         let p = rfifop((*sd).fd, 8) as *const u16;
-        if p.is_null() { return 0; }
+        if p.is_null() {
+            return 0;
+        }
         u16::from_be(p.read_unaligned()) as i32
     };
 
@@ -811,7 +888,8 @@ pub unsafe fn boards_delete(sd: *mut MapSessionData, board: i32) -> i32 {
             &name,
             gm_level,
             can_delete,
-        ).await
+        )
+        .await
     });
 
     // Format client response (matches 0x3808 handler).
@@ -833,20 +911,19 @@ pub unsafe fn boards_delete(sd: *mut MapSessionData, board: i32) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn boards_showposts(
-    sd:    *mut MapSessionData,
-    board: i32,
-) -> i32 {
-    if sd.is_null() { return 0; }
+pub unsafe fn boards_showposts(sd: *mut MapSessionData, board: i32) -> i32 {
+    if sd.is_null() {
+        return 0;
+    }
 
     (*sd).board_canwrite = 0;
-    (*sd).board_candel   = 0;
-    (*sd).boardnameval   = 0;
+    (*sd).board_candel = 0;
+    (*sd).boardnameval = 0;
 
     if board == 0 {
         // Board 0 == NMail — always writable/deletable
         (*sd).board_canwrite = 1;
-        (*sd).board_candel   = 1;
+        (*sd).board_candel = 1;
     } else {
         (*sd).board = board;
         let bd = &*board_db::search(board);
@@ -858,7 +935,7 @@ pub unsafe fn boards_showposts(
         }
         if (*sd).player.identity.gm_level == 99 {
             (*sd).board_canwrite = 1;
-            (*sd).board_candel   = 1;
+            (*sd).board_candel = 1;
         }
     }
 
@@ -884,13 +961,30 @@ pub unsafe fn boards_showposts(
         db_boards::list_posts(get_pool(), board as u32, bcount * 20, &name).await
     });
 
-    tracing::debug!("[map] [boards] showposts: board={} flags={} rows={}", board, flags, rows.len());
+    tracing::debug!(
+        "[map] [boards] showposts: board={} flags={} rows={}",
+        board,
+        flags,
+        rows.len()
+    );
 
     // Compute flags1/flags2 (matches char server's 0x3009 handler).
     let flags1: u8 = if popup != 0 && board != 0 {
-        if flags == 6 { 6 } else if flags & BOARD_CAN_WRITE == 0 { 0 } else { 2 }
+        if flags == 6 {
+            6
+        } else if flags & BOARD_CAN_WRITE == 0 {
+            0
+        } else {
+            2
+        }
     } else {
-        if flags == 6 { 6 } else if flags & BOARD_CAN_WRITE == 0 { 1 } else { 3 }
+        if flags == 6 {
+            6
+        } else if flags & BOARD_CAN_WRITE == 0 {
+            1
+        } else {
+            3
+        }
     };
     let flags2: u8 = if board == 0 { 4 } else { 2 };
 
@@ -925,7 +1019,11 @@ pub unsafe fn boards_showposts(
         }
     }
 
-    tracing::debug!("[map] [boards] showposts: sending client packet fd={} buf_len={}", fd, pkt_out.buf.len());
+    tracing::debug!(
+        "[map] [boards] showposts: sending client packet fd={} buf_len={}",
+        fd,
+        pkt_out.buf.len()
+    );
     pkt_out.send(fd);
 
     // Advance pagination counter.
@@ -941,11 +1039,7 @@ pub unsafe fn boards_showposts(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn boards_readpost(
-    sd:    *mut MapSessionData,
-    board: i32,
-    post:  i32,
-) -> i32 {
+pub unsafe fn boards_readpost(sd: *mut MapSessionData, board: i32, post: i32) -> i32 {
     if board != 0 {
         (*sd).board = board;
         let bd = &*board_db::search(board);
@@ -957,13 +1051,17 @@ pub unsafe fn boards_readpost(
         }
         if (*sd).player.identity.gm_level == 99 {
             (*sd).board_canwrite = 1;
-            (*sd).board_candel   = 1;
+            (*sd).board_candel = 1;
         }
     }
 
     let mut flags: i32 = 0;
-    if (*sd).board_canwrite != 0 { flags |= BOARD_CAN_WRITE; }
-    if (*sd).board_candel   != 0 { flags |= BOARD_CAN_DEL;   }
+    if (*sd).board_canwrite != 0 {
+        flags |= BOARD_CAN_WRITE;
+    }
+    if (*sd).board_candel != 0 {
+        flags |= BOARD_CAN_DEL;
+    }
 
     let fd = (*sd).fd;
     let name = (*sd).player.identity.name.clone();
@@ -992,7 +1090,11 @@ pub unsafe fn boards_readpost(
     // Build client response (matches 0x380F handler in packet.rs).
     // post_type and buttons are computed by the char server's 0x300A handler:
     let post_type: u8 = if board == 0 { 5 } else { 3 };
-    let buttons: u8 = if board == 0 || (flags & BOARD_CAN_WRITE) != 0 { 3 } else { 1 };
+    let buttons: u8 = if board == 0 || (flags & BOARD_CAN_WRITE) != 0 {
+        3
+    } else {
+        1
+    };
 
     let mut pkt_out = ClientPacket::board(post_type);
     // Overwrite [4] — C code does NOT set [4]=3 for readpost.
@@ -1006,7 +1108,11 @@ pub unsafe fn boards_readpost(
     pkt_out.put_str(&content.topic);
     pkt_out.put_str_u16_be(&content.body);
 
-    tracing::debug!("[map] [boards] readpost: sending client packet fd={} buf_len={}", fd, pkt_out.buf.len());
+    tracing::debug!(
+        "[map] [boards] readpost: sending client packet fd={} buf_len={}",
+        fd,
+        pkt_out.buf.len()
+    );
     pkt_out.send(fd);
     0
 }
@@ -1021,7 +1127,9 @@ pub unsafe fn boards_readpost(
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
-    if sd.is_null() { return 0; }
+    if sd.is_null() {
+        return 0;
+    }
 
     let fd = (*sd).fd;
 
@@ -1040,7 +1148,9 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
 
     let postlen = {
         let p = rfifop(fd, topiclen + 9) as *const u16;
-        if p.is_null() { return 0; }
+        if p.is_null() {
+            return 0;
+        }
         u16::from_be(p.read_unaligned()) as usize
     };
     if postlen > 4000 {
@@ -1056,35 +1166,19 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
     }
 
     if topiclen == 0 {
-        nmail_sendmessage(
-            sd,
-            c"Post must contain subject.".as_ptr(),
-            6, 0,
-        );
+        nmail_sendmessage(sd, c"Post must contain subject.".as_ptr(), 6, 0);
         return 0;
     }
     if postlen == 0 {
-        nmail_sendmessage(
-            sd,
-            c"Post must contain a body.".as_ptr(),
-            6, 0,
-        );
+        nmail_sendmessage(sd, c"Post must contain a body.".as_ptr(), 6, 0);
         return 0;
     }
 
     // Extract topic and post body from the recv buffer.
     let mut topic_buf = [0u8; 53];
     let mut post_buf = [0u8; 4001];
-    std::ptr::copy_nonoverlapping(
-        rfifop(fd, 9),
-        topic_buf.as_mut_ptr(),
-        topiclen,
-    );
-    std::ptr::copy_nonoverlapping(
-        rfifop(fd, topiclen + 11),
-        post_buf.as_mut_ptr(),
-        postlen,
-    );
+    std::ptr::copy_nonoverlapping(rfifop(fd, 9), topic_buf.as_mut_ptr(), topiclen);
+    std::ptr::copy_nonoverlapping(rfifop(fd, topiclen + 11), post_buf.as_mut_ptr(), postlen);
 
     let name = (*sd).player.identity.name.clone();
     let mut nval = (*sd).boardnameval as i32;
@@ -1092,19 +1186,17 @@ pub unsafe fn boards_post(sd: *mut MapSessionData, board: i32) -> i32 {
         nval = 1;
     }
 
-    let topic_str = std::str::from_utf8(&topic_buf[..topiclen]).unwrap_or("").to_owned();
-    let post_str = std::str::from_utf8(&post_buf[..postlen]).unwrap_or("").to_owned();
+    let topic_str = std::str::from_utf8(&topic_buf[..topiclen])
+        .unwrap_or("")
+        .to_owned();
+    let post_str = std::str::from_utf8(&post_buf[..postlen])
+        .unwrap_or("")
+        .to_owned();
 
     // Call DB directly instead of sending 0x300C to char server.
     let result = blocking_run_async(async move {
-        db_boards::create_board_post(
-            get_pool(),
-            board as u32,
-            nval,
-            &name,
-            &topic_str,
-            &post_str,
-        ).await
+        db_boards::create_board_post(get_pool(), board as u32, nval, &name, &topic_str, &post_str)
+            .await
     });
 
     // Format client response (matches 0x380B handler).
@@ -1139,12 +1231,7 @@ pub unsafe fn nmail_read(_sd: *mut MapSessionData, _post: i32) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub async unsafe fn nmail_luascript(
-    sd:     *mut MapSessionData,
-    to:     i32,
-    topic:  i32,
-    msg:    i32,
-) -> i32 {
+pub async unsafe fn nmail_luascript(sd: *mut MapSessionData, to: i32, topic: i32, msg: i32) -> i32 {
     let fd = (*sd).fd;
     let mut message = [0i8; 4000];
 
@@ -1156,7 +1243,9 @@ pub async unsafe fn nmail_luascript(
 
     let cha_name = (*sd).player.identity.name.clone();
     let body = std::ffi::CStr::from_ptr(message.as_ptr())
-        .to_str().unwrap_or("").to_owned();
+        .to_str()
+        .unwrap_or("")
+        .to_owned();
 
     let ok = sqlx::query(
             "INSERT INTO `Mail` (`MalChaName`, `MalChaNameDestination`, `MalBody`) VALUES (?, 'Lua', ?)"
@@ -1166,7 +1255,9 @@ pub async unsafe fn nmail_luascript(
         .execute(get_pool())
         .await
         .is_ok();
-    if !ok { return 0; }
+    if !ok {
+        return 0;
+    }
 
     sl_exec(sd, message.as_mut_ptr());
     0
@@ -1182,8 +1273,8 @@ pub async unsafe fn nmail_luascript(
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn nmail_poemscript(
-    sd:      *mut MapSessionData,
-    topic:   *const i8,
+    sd: *mut MapSessionData,
+    topic: *const i8,
     message: *const i8,
 ) -> i32 {
     use chrono::Datelike as _;
@@ -1191,48 +1282,48 @@ pub async unsafe fn nmail_poemscript(
     // Use chrono::Local::now() to match C's localtime(&t) behaviour.
     // month0() is 0-based (January = 0), matching C's tm_mon.
     // day()   is 1-based (1..=31),      matching C's tm_mday.
-    let now   = chrono::Local::now();
+    let now = chrono::Local::now();
     let month = now.month0() as i32;
-    let day   = now.day()    as i32;
+    let day = now.day() as i32;
 
     let char_id = (*sd).player.identity.id as i32;
 
     // Check whether the player already submitted a poem this cycle.
     let already_submitted = sqlx::query_scalar::<_, Option<u32>>(
-            "SELECT `BrdId` FROM `Boards` WHERE `BrdBnmId` = '19' AND `BrdChaId` = ? LIMIT 1"
-        )
-        .bind(char_id)
-        .fetch_optional(get_pool())
-        .await
-        .ok()
-        .flatten()
-        .is_some();
+        "SELECT `BrdId` FROM `Boards` WHERE `BrdBnmId` = '19' AND `BrdChaId` = ? LIMIT 1",
+    )
+    .bind(char_id)
+    .fetch_optional(get_pool())
+    .await
+    .ok()
+    .flatten()
+    .is_some();
 
     if already_submitted {
-        nmail_sendmessage(
-            sd,
-            c"You have already submitted a poem.".as_ptr(),
-            6, 1,
-        );
+        nmail_sendmessage(sd, c"You have already submitted a poem.".as_ptr(), 6, 1);
         return 0;
     }
 
     // topic and message are *const i8 passed by C caller — convert to owned Strings.
     let topic_str = std::ffi::CStr::from_ptr(topic)
-        .to_str().unwrap_or("").to_owned();
+        .to_str()
+        .unwrap_or("")
+        .to_owned();
     let message_str = std::ffi::CStr::from_ptr(message)
-        .to_str().unwrap_or("").to_owned();
+        .to_str()
+        .unwrap_or("")
+        .to_owned();
 
     // Find the current maximum board position.
     let boardpos: u32 = sqlx::query_scalar::<_, Option<u32>>(
-            "SELECT MAX(`BrdPosition`) FROM `Boards` WHERE `BrdBnmId` = '19'"
-        )
-        .fetch_optional(get_pool())
-        .await
-        .ok()
-        .flatten()
-        .flatten()
-        .unwrap_or(0);
+        "SELECT MAX(`BrdPosition`) FROM `Boards` WHERE `BrdBnmId` = '19'",
+    )
+    .fetch_optional(get_pool())
+    .await
+    .ok()
+    .flatten()
+    .flatten()
+    .unwrap_or(0);
 
     let ok = sqlx::query(
             "INSERT INTO `Boards` (`BrdBnmId`, `BrdChaName`, `BrdChaId`, `BrdTopic`, `BrdPost`, `BrdMonth`, `BrdDay`, `BrdPosition`) VALUES ('19', 'Anonymous', ?, ?, ?, ?, ?, ?)"
@@ -1246,13 +1337,11 @@ pub async unsafe fn nmail_poemscript(
         .execute(get_pool())
         .await
         .is_ok();
-    if !ok { return 1; }
+    if !ok {
+        return 1;
+    }
 
-    nmail_sendmessage(
-        sd,
-        c"Poem submitted.".as_ptr(),
-        6, 1,
-    );
+    nmail_sendmessage(sd, c"Poem submitted.".as_ptr(), 6, 1);
     0
 }
 
@@ -1273,22 +1362,25 @@ pub async unsafe fn nmail_poemscript(
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn nmail_sendmailcopy(
-    sd:      *mut MapSessionData,
+    sd: *mut MapSessionData,
     to_user: *const i8,
-    topic:   *const i8,
+    topic: *const i8,
     message: *const i8,
 ) -> i32 {
-    if libc_strlen(to_user) > 16
-        || libc_strlen(topic) > 52
-        || libc_strlen(message) > 4000
-    {
+    if libc_strlen(to_user) > 16 || libc_strlen(topic) > 52 || libc_strlen(message) > 4000 {
         return 0;
     }
 
     let from = (*sd).player.identity.name.clone();
-    let to_str = std::ffi::CStr::from_ptr(to_user).to_string_lossy().into_owned();
-    let topic_str = std::ffi::CStr::from_ptr(topic).to_string_lossy().into_owned();
-    let msg_str = std::ffi::CStr::from_ptr(message).to_string_lossy().into_owned();
+    let to_str = std::ffi::CStr::from_ptr(to_user)
+        .to_string_lossy()
+        .into_owned();
+    let topic_str = std::ffi::CStr::from_ptr(topic)
+        .to_string_lossy()
+        .into_owned();
+    let msg_str = std::ffi::CStr::from_ptr(message)
+        .to_string_lossy()
+        .into_owned();
 
     // Call DB directly instead of sending 0x300F to char server.
     // No client response for copy-to-self mail.
@@ -1307,7 +1399,9 @@ pub unsafe fn nmail_sendmailcopy(
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
-    if sd.is_null() { return 0; }
+    if sd.is_null() {
+        return 0;
+    }
     let fd = (*sd).fd;
 
     let tolen = rfifob(fd, 8) as usize;
@@ -1316,10 +1410,7 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
         let name_bytes = (*sd).player.identity.name.as_bytes();
         let n = name_bytes.len().min(15);
         name_buf[..n].copy_from_slice(&name_bytes[..n]);
-        clif_Hacker(
-            name_buf.as_mut_ptr() as *mut i8,
-            c"NMAIL: To User".as_ptr(),
-        );
+        clif_Hacker(name_buf.as_mut_ptr() as *mut i8, c"NMAIL: To User".as_ptr());
         return 0;
     }
     let topiclen = rfifob(fd, tolen + 9) as usize;
@@ -1328,15 +1419,14 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
         let name_bytes = (*sd).player.identity.name.as_bytes();
         let n = name_bytes.len().min(15);
         name_buf[..n].copy_from_slice(&name_bytes[..n]);
-        clif_Hacker(
-            name_buf.as_mut_ptr() as *mut i8,
-            c"NMAIL: Topic".as_ptr(),
-        );
+        clif_Hacker(name_buf.as_mut_ptr() as *mut i8, c"NMAIL: Topic".as_ptr());
         return 0;
     }
     let messagelen = {
         let p = rfifop(fd, tolen + topiclen + 10) as *const u16;
-        if p.is_null() { return 0; }
+        if p.is_null() {
+            return 0;
+        }
         u16::from_be(p.read_unaligned()) as usize
     };
     if messagelen > 4000 {
@@ -1344,28 +1434,24 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
         let name_bytes = (*sd).player.identity.name.as_bytes();
         let n = name_bytes.len().min(15);
         name_buf[..n].copy_from_slice(&name_bytes[..n]);
-        clif_Hacker(
-            name_buf.as_mut_ptr() as *mut i8,
-            c"NMAIL: Message".as_ptr(),
-        );
+        clif_Hacker(name_buf.as_mut_ptr() as *mut i8, c"NMAIL: Message".as_ptr());
         return 0;
     }
 
-    let mut to_user  = [0i8; 52];
-    let mut topic    = [0i8; 52];
-    let mut message  = [0i8; 4000];
+    let mut to_user = [0i8; 52];
+    let mut topic = [0i8; 52];
+    let mut message = [0i8; 4000];
 
-    std::ptr::copy_nonoverlapping(
-        rfifop(fd, 9) as *const i8,
-        to_user.as_mut_ptr(), tolen,
-    );
+    std::ptr::copy_nonoverlapping(rfifop(fd, 9) as *const i8, to_user.as_mut_ptr(), tolen);
     std::ptr::copy_nonoverlapping(
         rfifop(fd, tolen + 10) as *const i8,
-        topic.as_mut_ptr(), topiclen,
+        topic.as_mut_ptr(),
+        topiclen,
     );
     std::ptr::copy_nonoverlapping(
         rfifop(fd, topiclen + tolen + 12) as *const i8,
-        message.as_mut_ptr(), messagelen,
+        message.as_mut_ptr(),
+        messagelen,
     );
     let send_copy = rfifob(fd, topiclen + tolen + 12 + messagelen) as i32;
 
@@ -1383,11 +1469,7 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
         sl_doscript_simple("canRunLuaMail", None, (*sd).id);
         if (*sd).player.identity.gm_level == 99 || (*sd).luaexec != 0 {
             nmail_luascript(sd, tolen as i32, topiclen as i32, messagelen as i32).await;
-            nmail_sendmessage(
-                sd,
-                c"LUA script ran!".as_ptr(),
-                6, 1,
-            );
+            nmail_sendmessage(sd, c"LUA script ran!".as_ptr(), 6, 1);
             return 0; // only return if we actually handled the Lua mail
         }
         // permission denied — fall through to poems/standard mail
@@ -1399,7 +1481,8 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
             nmail_sendmessage(
                 sd,
                 c"Currently not accepting poem submissions.".as_ptr(),
-                6, 0,
+                6,
+                0,
             );
             return 0;
         }
@@ -1411,19 +1494,11 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
         );
 
         if topiclen == 0 {
-            nmail_sendmessage(
-                sd,
-                c"Mail must contain a subject.".as_ptr(),
-                6, 0,
-            );
+            nmail_sendmessage(sd, c"Mail must contain a subject.".as_ptr(), 6, 0);
             return 0;
         }
         if messagelen == 0 {
-            nmail_sendmessage(
-                sd,
-                c"Mail must contain a body.".as_ptr(),
-                6, 0,
-            );
+            nmail_sendmessage(sd, c"Mail must contain a body.".as_ptr(), 6, 0);
             return 0;
         }
 
@@ -1433,19 +1508,11 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
 
     // Standard mail
     if topiclen == 0 {
-        nmail_sendmessage(
-            sd,
-            c"Mail must contain a subject.".as_ptr(),
-            6, 0,
-        );
+        nmail_sendmessage(sd, c"Mail must contain a subject.".as_ptr(), 6, 0);
         return 0;
     }
     if messagelen == 0 {
-        nmail_sendmessage(
-            sd,
-            c"Mail must contain a body.".as_ptr(),
-            6, 0,
-        );
+        nmail_sendmessage(sd, c"Mail must contain a body.".as_ptr(), 6, 0);
         return 0;
     }
 
@@ -1458,7 +1525,8 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
         let mut a_topic = format!("[To {}] {}", to_str, tp_str);
         a_topic.truncate(51);
         let a_topic_c = std::ffi::CString::new(a_topic).unwrap_or_default();
-        let self_name_c = std::ffi::CString::new((*sd).player.identity.name.as_str()).unwrap_or_default();
+        let self_name_c =
+            std::ffi::CString::new((*sd).player.identity.name.as_str()).unwrap_or_default();
         nmail_sendmailcopy(
             sd,
             self_name_c.as_ptr(),
@@ -1480,22 +1548,25 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn nmail_sendmail(
-    sd:      *mut MapSessionData,
+    sd: *mut MapSessionData,
     to_user: *const i8,
-    topic:   *const i8,
+    topic: *const i8,
     message: *const i8,
 ) -> i32 {
-    if libc_strlen(to_user) > 16
-        || libc_strlen(topic) > 52
-        || libc_strlen(message) > 4000
-    {
+    if libc_strlen(to_user) > 16 || libc_strlen(topic) > 52 || libc_strlen(message) > 4000 {
         return 0;
     }
 
     let from = (*sd).player.identity.name.clone();
-    let to_str = std::ffi::CStr::from_ptr(to_user).to_string_lossy().into_owned();
-    let topic_str = std::ffi::CStr::from_ptr(topic).to_string_lossy().into_owned();
-    let msg_str = std::ffi::CStr::from_ptr(message).to_string_lossy().into_owned();
+    let to_str = std::ffi::CStr::from_ptr(to_user)
+        .to_string_lossy()
+        .into_owned();
+    let topic_str = std::ffi::CStr::from_ptr(topic)
+        .to_string_lossy()
+        .into_owned();
+    let msg_str = std::ffi::CStr::from_ptr(message)
+        .to_string_lossy()
+        .into_owned();
 
     // Call DB directly instead of sending 0x300D to char server.
     let result = blocking_run_async(async move {
@@ -1521,20 +1592,16 @@ pub unsafe fn nmail_sendmail(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub async unsafe fn map_changepostcolor(
-    board: i32,
-    post:  i32,
-    color: i32,
-) -> i32 {
+pub async unsafe fn map_changepostcolor(board: i32, post: i32, color: i32) -> i32 {
     sqlx::query(
-            "UPDATE `Boards` SET `BrdHighlighted` = ? WHERE `BrdBnmId` = ? AND `BrdPosition` = ?"
-        )
-        .bind(color)
-        .bind(board)
-        .bind(post)
-        .execute(get_pool())
-        .await
-        .ok();
+        "UPDATE `Boards` SET `BrdHighlighted` = ? WHERE `BrdBnmId` = ? AND `BrdPosition` = ?",
+    )
+    .bind(color)
+    .bind(board)
+    .bind(post)
+    .execute(get_pool())
+    .await
+    .ok();
     0
 }
 
@@ -1549,16 +1616,16 @@ pub async unsafe fn map_changepostcolor(
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn map_getpostcolor(board: i32, post: i32) -> i32 {
     sqlx::query_scalar::<_, Option<i32>>(
-            "SELECT `BrdHighlighted` FROM `Boards` WHERE `BrdBnmId` = ? AND `BrdPosition` = ?"
-        )
-        .bind(board)
-        .bind(post)
-        .fetch_optional(get_pool())
-        .await
-        .ok()
-        .flatten()
-        .flatten()
-        .unwrap_or(0)
+        "SELECT `BrdHighlighted` FROM `Boards` WHERE `BrdBnmId` = ? AND `BrdPosition` = ?",
+    )
+    .bind(board)
+    .bind(post)
+    .fetch_optional(get_pool())
+    .await
+    .ok()
+    .flatten()
+    .flatten()
+    .unwrap_or(0)
 }
 
 // ---------------------------------------------------------------------------
@@ -1568,7 +1635,9 @@ pub async unsafe fn map_getpostcolor(board: i32, post: i32) -> i32 {
 
 #[inline]
 unsafe fn libc_strlen(s: *const i8) -> usize {
-    if s.is_null() { return 0; }
+    if s.is_null() {
+        return 0;
+    }
     std::ffi::CStr::from_ptr(s).to_bytes().len()
 }
 
@@ -1595,7 +1664,7 @@ pub const MSG_MAX: usize = 30;
 #[repr(C)]
 pub struct MapMsgData {
     pub message: [i8; 256],
-    pub len:     i32,
+    pub len: i32,
 }
 
 /// The global language message table.
@@ -1612,7 +1681,10 @@ static MAP_MSG: OnceLock<Box<[MapMsgData; MSG_MAX]>> = OnceLock::new();
 #[inline]
 pub fn map_msg() -> &'static [MapMsgData; MSG_MAX] {
     MAP_MSG.get_or_init(|| {
-        const ZERO: MapMsgData = MapMsgData { message: [0; 256], len: 0 };
+        const ZERO: MapMsgData = MapMsgData {
+            message: [0; 256],
+            len: 0,
+        };
         Box::new([ZERO; MSG_MAX])
     })
 }
@@ -1621,36 +1693,36 @@ pub fn map_msg() -> &'static [MapMsgData; MSG_MAX] {
 ///
 /// Default message database used when no lang file is loaded.
 static LANG_KEY_MAP: &[(&str, usize)] = &[
-    ("MAP_WHISPFAIL",  0),
-    ("MAP_ERRGHOST",   1),
+    ("MAP_WHISPFAIL", 0),
+    ("MAP_ERRGHOST", 1),
     ("MAP_ERRITMLEVEL", 2),
     ("MAP_ERRITMMIGHT", 3),
     ("MAP_ERRITMGRACE", 4),
-    ("MAP_ERRITMWILL",  5),
-    ("MAP_ERRITMSEX",   6),
-    ("MAP_ERRITMFULL",  7),
-    ("MAP_ERRITMMAX",   8),
-    ("MAP_ERRITMPATH",  9),
-    ("MAP_ERRITMMARK",  10),
-    ("MAP_ERRITM2H",    11),
-    ("MAP_ERRMOUNT",    12),
-    ("MAP_EQHELM",      13),
-    ("MAP_EQWEAP",      14),
-    ("MAP_EQARMOR",     15),
-    ("MAP_EQSHIELD",    16),
-    ("MAP_EQLEFT",      17),
-    ("MAP_EQRIGHT",     18),
-    ("MAP_EQSUBLEFT",   19),
-    ("MAP_EQSUBRIGHT",  20),
-    ("MAP_EQFACEACC",   21),
-    ("MAP_EQCROWN",     22),
-    ("MAP_EQMANTLE",    23),
-    ("MAP_EQNECKLACE",  24),
-    ("MAP_EQBOOTS",     25),
-    ("MAP_EQCOAT",      26),
-    ("MAP_ERRVITA",     27),
-    ("MAP_ERRMANA",     28),
-    ("MAP_ERRSUMMON",   29),
+    ("MAP_ERRITMWILL", 5),
+    ("MAP_ERRITMSEX", 6),
+    ("MAP_ERRITMFULL", 7),
+    ("MAP_ERRITMMAX", 8),
+    ("MAP_ERRITMPATH", 9),
+    ("MAP_ERRITMMARK", 10),
+    ("MAP_ERRITM2H", 11),
+    ("MAP_ERRMOUNT", 12),
+    ("MAP_EQHELM", 13),
+    ("MAP_EQWEAP", 14),
+    ("MAP_EQARMOR", 15),
+    ("MAP_EQSHIELD", 16),
+    ("MAP_EQLEFT", 17),
+    ("MAP_EQRIGHT", 18),
+    ("MAP_EQSUBLEFT", 19),
+    ("MAP_EQSUBRIGHT", 20),
+    ("MAP_EQFACEACC", 21),
+    ("MAP_EQCROWN", 22),
+    ("MAP_EQMANTLE", 23),
+    ("MAP_EQNECKLACE", 24),
+    ("MAP_EQBOOTS", 25),
+    ("MAP_EQCOAT", 26),
+    ("MAP_ERRVITA", 27),
+    ("MAP_ERRMANA", 28),
+    ("MAP_ERRSUMMON", 29),
 ];
 
 /// Parse the language config file and populate `map_msg[]`.
@@ -1682,7 +1754,10 @@ pub unsafe fn lang_read(cfg_file: *const i8) -> i32 {
         }
     };
 
-    const ZERO: MapMsgData = MapMsgData { message: [0; 256], len: 0 };
+    const ZERO: MapMsgData = MapMsgData {
+        message: [0; 256],
+        len: 0,
+    };
     let mut msgs = Box::new([ZERO; MSG_MAX]);
 
     for line in std::io::BufReader::new(file).lines() {
@@ -1697,7 +1772,9 @@ pub unsafe fn lang_read(cfg_file: *const i8) -> i32 {
         }
 
         // Parse `KEY: value` — split on the first `: ` only.
-        let Some(colon_pos) = line.find(": ") else { continue };
+        let Some(colon_pos) = line.find(": ") else {
+            continue;
+        };
         let key = &line[..colon_pos];
         // Value is everything after `: `, stripping any trailing \r\n.
         let value = line[colon_pos + 2..].trim_end_matches(['\r', '\n']);
@@ -1776,9 +1853,7 @@ pub async unsafe fn change_time_char(_id: i32, _n: i32) -> i32 {
         cur_season.load(Ordering::Relaxed),
         cur_year.load(Ordering::Relaxed),
     );
-    sqlx::query(
-            "UPDATE `Time` SET `TimHour` = ?, `TimDay` = ?, `TimSeason` = ?, `TimYear` = ?"
-        )
+    sqlx::query("UPDATE `Time` SET `TimHour` = ?, `TimDay` = ?, `TimSeason` = ?, `TimYear` = ?")
         .bind(t)
         .bind(d)
         .bind(s)
@@ -1802,19 +1877,23 @@ pub async unsafe fn change_time_char(_id: i32, _n: i32) -> i32 {
 pub async unsafe fn get_time_thing() -> i32 {
     #[derive(sqlx::FromRow)]
     struct TimeRow {
-        #[sqlx(rename = "TimHour")]   hour:   u32,
-        #[sqlx(rename = "TimDay")]    day:    u32,
-        #[sqlx(rename = "TimSeason")] season: u32,
-        #[sqlx(rename = "TimYear")]   year:   u32,
+        #[sqlx(rename = "TimHour")]
+        hour: u32,
+        #[sqlx(rename = "TimDay")]
+        day: u32,
+        #[sqlx(rename = "TimSeason")]
+        season: u32,
+        #[sqlx(rename = "TimYear")]
+        year: u32,
     }
 
     if let Some(row) = sqlx::query_as::<_, TimeRow>(
-            "SELECT `TimHour`, `TimDay`, `TimSeason`, `TimYear` FROM `Time` LIMIT 1"
-        )
-        .fetch_optional(get_pool())
-        .await
-        .ok()
-        .flatten()
+        "SELECT `TimHour`, `TimDay`, `TimSeason`, `TimYear` FROM `Time` LIMIT 1",
+    )
+    .fetch_optional(get_pool())
+    .await
+    .ok()
+    .flatten()
     {
         old_time.store(row.hour as i32, Ordering::Relaxed);
         cur_time.store(row.hour as i32, Ordering::Relaxed);
@@ -1995,7 +2074,10 @@ static MAP_SRC_LIST: OnceLock<Mutex<Vec<MapSrcEntry>>> = OnceLock::new();
 
 #[inline]
 fn map_src_list() -> std::sync::MutexGuard<'static, Vec<MapSrcEntry>> {
-    MAP_SRC_LIST.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap_or_else(|e| e.into_inner())
+    MAP_SRC_LIST
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 /// Free all entries in the map source list.
@@ -2061,17 +2143,21 @@ pub unsafe fn map_src_add(r1: *const i8) -> i32 {
         Err(_) => return -1,
     };
     // Single-character fields (%c in C sscanf) — read first byte only.
-    let cantalk    = parts[8].trim().as_bytes().first().copied().unwrap_or(0);
+    let cantalk = parts[8].trim().as_bytes().first().copied().unwrap_or(0);
     let showghosts = parts[9].trim().as_bytes().first().copied().unwrap_or(0);
-    let region     = parts[10].trim().as_bytes().first().copied().unwrap_or(0);
-    let indoor     = parts[11].trim().as_bytes().first().copied().unwrap_or(0);
+    let region = parts[10].trim().as_bytes().first().copied().unwrap_or(0);
+    let indoor = parts[11].trim().as_bytes().first().copied().unwrap_or(0);
     // C format has a leading space before warpout: `", %c"` — trim handles it.
-    let warpout    = parts[12].trim().as_bytes().first().copied().unwrap_or(0);
+    let warpout = parts[12].trim().as_bytes().first().copied().unwrap_or(0);
     if parts.len() < 14 {
         return -1;
     }
-    let bind       = parts[13].trim().as_bytes().first().copied().unwrap_or(0);
-    let map_file   = if parts.len() >= 15 { parts[14].trim() } else { "" };
+    let bind = parts[13].trim().as_bytes().first().copied().unwrap_or(0);
+    let map_file = if parts.len() >= 15 {
+        parts[14].trim()
+    } else {
+        ""
+    };
 
     let mut title_buf = [0u8; 64];
     let title_bytes = map_title.as_bytes();
@@ -2119,7 +2205,7 @@ use crate::common::constants::world::MAX_GAMEREG;
 /// ```
 #[repr(C)]
 pub struct GameData {
-    pub registry:     *mut crate::database::map_db::GlobalReg,
+    pub registry: *mut crate::database::map_db::GlobalReg,
     pub registry_num: i32,
 }
 
@@ -2141,10 +2227,15 @@ static GAMEREG: OnceLock<Mutex<GameData>> = OnceLock::new();
 
 #[inline]
 pub fn gamereg() -> std::sync::MutexGuard<'static, GameData> {
-    GAMEREG.get_or_init(|| Mutex::new(GameData {
-        registry:     std::ptr::null_mut(),
-        registry_num: 0,
-    })).lock().unwrap_or_else(|e| e.into_inner())
+    GAMEREG
+        .get_or_init(|| {
+            Mutex::new(GameData {
+                registry: std::ptr::null_mut(),
+                registry_num: 0,
+            })
+        })
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 /// Allocate a zeroed array of `GlobalReg` entries of the given length via the
@@ -2216,14 +2307,20 @@ unsafe fn copy_cstr_to_reg_str(dest: &mut [i8; 64], src: *const i8) {
 pub async unsafe fn map_registrysave(m: i32, i: i32) -> i32 {
     use crate::database::map_db::{GlobalReg, MAP_SLOTS, MAX_MAPREG};
 
-    if m < 0 || m as usize >= MAP_SLOTS { return 0; }
-    if i < 0 || i as usize >= MAX_MAPREG { return 0; }
+    if m < 0 || m as usize >= MAP_SLOTS {
+        return 0;
+    }
+    if i < 0 || i as usize >= MAX_MAPREG {
+        return 0;
+    }
 
     // Extract all data into owned/Copy values before the first .await to ensure
     // the future is Send (raw pointer refs cannot cross await points safely).
     let (identifier, val, m_u32, i_u32) = {
         let slot = &mut *crate::database::map_db::raw_map_ptr().add(m as usize);
-        if slot.registry.is_null() { return 0; }
+        if slot.registry.is_null() {
+            return 0;
+        }
 
         let p: &GlobalReg = &*slot.registry.add(i as usize);
 
@@ -2239,55 +2336,55 @@ pub async unsafe fn map_registrysave(m: i32, i: i32) -> i32 {
 
     // SELECT existing position.
     let save_id: Option<u32> = sqlx::query_scalar::<_, u32>(
-            "SELECT MrgPosition FROM MapRegistry \
+        "SELECT MrgPosition FROM MapRegistry \
              WHERE MrgMapId = ? AND MrgIdentifier = ?",
-        )
-        .bind(m_u32)
-        .bind(identifier.clone())
-        .fetch_optional(get_pool())
-        .await
-        .unwrap_or(None);
+    )
+    .bind(m_u32)
+    .bind(identifier.clone())
+    .fetch_optional(get_pool())
+    .await
+    .unwrap_or(None);
 
     match save_id {
         Some(pos) => {
             if val == 0 {
                 // Delete the entry — value cleared.
                 let _ = sqlx::query(
-                        "DELETE FROM MapRegistry \
+                    "DELETE FROM MapRegistry \
                          WHERE MrgMapId = ? AND MrgIdentifier = ?",
-                    )
-                    .bind(m_u32)
-                    .bind(identifier.clone())
-                    .execute(get_pool())
-                    .await;
+                )
+                .bind(m_u32)
+                .bind(identifier.clone())
+                .execute(get_pool())
+                .await;
             } else {
                 // Update in-place.
                 let _ = sqlx::query(
-                        "UPDATE MapRegistry SET MrgIdentifier = ?, MrgValue = ? \
+                    "UPDATE MapRegistry SET MrgIdentifier = ?, MrgValue = ? \
                          WHERE MrgMapId = ? AND MrgPosition = ?",
-                    )
-                    .bind(identifier.clone())
-                    .bind(val)
-                    .bind(m_u32)
-                    .bind(pos)
-                    .execute(get_pool())
-                    .await;
+                )
+                .bind(identifier.clone())
+                .bind(val)
+                .bind(m_u32)
+                .bind(pos)
+                .execute(get_pool())
+                .await;
             }
         }
         None => {
             if val > 0 {
                 // Insert new row.
                 let _ = sqlx::query(
-                        "INSERT INTO MapRegistry \
+                    "INSERT INTO MapRegistry \
                          (MrgMapId, MrgIdentifier, MrgValue, MrgPosition) \
                          VALUES (?, ?, ?, ?)",
-                    )
-                    .bind(m_u32)
-                    .bind(identifier)
-                    .bind(val)
-                    .bind(i_u32)
-                    .execute(get_pool())
-                    .await;
+                )
+                .bind(m_u32)
+                .bind(identifier)
+                .bind(val)
+                .bind(i_u32)
+                .execute(get_pool())
+                .await;
             }
         }
     }
@@ -2314,8 +2411,12 @@ pub async unsafe fn map_registrysave(m: i32, i: i32) -> i32 {
 pub async unsafe fn map_setglobalreg(m: i32, reg: *const i8, val: i32) -> i32 {
     use crate::database::map_db::MAP_SLOTS;
 
-    if reg.is_null() { return 0; }
-    if m < 0 || m as usize >= MAP_SLOTS { return 0; }
+    if reg.is_null() {
+        return 0;
+    }
+    if m < 0 || m as usize >= MAP_SLOTS {
+        return 0;
+    }
 
     // Determine the save index and apply all in-memory updates in a sync block,
     // releasing all raw pointer references before the first .await point.
@@ -2396,11 +2497,15 @@ pub async unsafe fn map_setglobalreg(m: i32, reg: *const i8, val: i32) -> i32 {
 /// `[0, MAP_SLOTS)`.
 pub async unsafe fn map_setglobalreg_str(m: i32, reg_name: String, val: i32) -> i32 {
     use crate::database::map_db::MAP_SLOTS;
-    if m < 0 || m as usize >= MAP_SLOTS { return 0; }
+    if m < 0 || m as usize >= MAP_SLOTS {
+        return 0;
+    }
 
     let save_info: Option<(i32, bool)> = {
         let slot = &mut *crate::database::map_db::raw_map_ptr().add(m as usize);
-        if slot.registry.is_null() { return 0; }
+        if slot.registry.is_null() {
+            return 0;
+        }
         let num = slot.registry_num as usize;
 
         // Search for an existing entry (case-insensitive compare with owned String).
@@ -2424,13 +2529,18 @@ pub async unsafe fn map_setglobalreg_str(m: i32, reg_name: String, val: i32) -> 
             let mut reuse_idx: Option<usize> = None;
             for idx in 0..num {
                 let entry = &*slot.registry.add(idx);
-                if entry.str[0] == 0 { reuse_idx = Some(idx); break; }
+                if entry.str[0] == 0 {
+                    reuse_idx = Some(idx);
+                    break;
+                }
             }
             if let Some(idx) = reuse_idx {
                 let entry = &mut *slot.registry.add(idx);
                 let bytes = reg_name.as_bytes();
                 let n = bytes.len().min(63);
-                for (i, &b) in bytes[..n].iter().enumerate() { entry.str[i] = b as i8; }
+                for (i, &b) in bytes[..n].iter().enumerate() {
+                    entry.str[i] = b as i8;
+                }
                 entry.str[n] = 0;
                 entry.val = val;
                 Some((idx as i32, false))
@@ -2439,7 +2549,9 @@ pub async unsafe fn map_setglobalreg_str(m: i32, reg_name: String, val: i32) -> 
                 let entry = &mut *slot.registry.add(num);
                 let bytes = reg_name.as_bytes();
                 let n = bytes.len().min(63);
-                for (i, &b) in bytes[..n].iter().enumerate() { entry.str[i] = b as i8; }
+                for (i, &b) in bytes[..n].iter().enumerate() {
+                    entry.str[i] = b as i8;
+                }
                 entry.str[n] = 0;
                 entry.val = val;
                 Some((num as i32, false))
@@ -2472,7 +2584,9 @@ pub async unsafe fn map_setglobalreg_str(m: i32, reg_name: String, val: i32) -> 
 pub async unsafe fn map_setglobalgamereg_str(reg_name: String, val: i32) -> i32 {
     let save_info: Option<(i32, bool)> = {
         let mut gr = gamereg();
-        if gr.registry.is_null() { return 0; }
+        if gr.registry.is_null() {
+            return 0;
+        }
         let num = gr.registry_num as usize;
 
         let mut exist: Option<usize> = None;
@@ -2489,20 +2603,27 @@ pub async unsafe fn map_setglobalgamereg_str(reg_name: String, val: i32) -> i32 
 
         if let Some(idx) = exist {
             let entry = &mut *gr.registry.add(idx);
-            if entry.val == val { return 0; } // value unchanged — skip save
+            if entry.val == val {
+                return 0;
+            } // value unchanged — skip save
             entry.val = val;
             Some((idx as i32, val == 0))
         } else {
             let mut reuse_idx: Option<usize> = None;
             for idx in 0..num {
                 let entry = &*gr.registry.add(idx);
-                if entry.str[0] == 0 { reuse_idx = Some(idx); break; }
+                if entry.str[0] == 0 {
+                    reuse_idx = Some(idx);
+                    break;
+                }
             }
             if let Some(idx) = reuse_idx {
                 let entry = &mut *gr.registry.add(idx);
                 let bytes = reg_name.as_bytes();
                 let n = bytes.len().min(63);
-                for (i, &b) in bytes[..n].iter().enumerate() { entry.str[i] = b as i8; }
+                for (i, &b) in bytes[..n].iter().enumerate() {
+                    entry.str[i] = b as i8;
+                }
                 entry.str[n] = 0;
                 entry.val = val;
                 Some((idx as i32, false))
@@ -2511,7 +2632,9 @@ pub async unsafe fn map_setglobalgamereg_str(reg_name: String, val: i32) -> i32 
                 let entry = &mut *gr.registry.add(num);
                 let bytes = reg_name.as_bytes();
                 let n = bytes.len().min(63);
-                for (i, &b) in bytes[..n].iter().enumerate() { entry.str[i] = b as i8; }
+                for (i, &b) in bytes[..n].iter().enumerate() {
+                    entry.str[i] = b as i8;
+                }
                 entry.str[n] = 0;
                 entry.val = val;
                 Some((num as i32, false))
@@ -2548,9 +2671,13 @@ pub async unsafe fn map_setglobalgamereg_str(reg_name: String, val: i32) -> i32 
 pub unsafe fn map_readglobalreg(m: i32, reg: *const i8) -> i32 {
     use crate::database::map_db::MAP_SLOTS;
 
-    if m < 0 || m as usize >= MAP_SLOTS { return 0; }
+    if m < 0 || m as usize >= MAP_SLOTS {
+        return 0;
+    }
     let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
-    if slot.registry.is_null() { return 0; }
+    if slot.registry.is_null() {
+        return 0;
+    }
 
     let num = slot.registry_num as usize;
     for idx in 0..num {
@@ -2592,8 +2719,9 @@ pub async unsafe fn map_loadgameregistry() -> i32 {
 
         // Free previous registry if reload.
         if !gr.registry.is_null() {
-            let layout = std::alloc::Layout::array::<crate::database::map_db::GlobalReg>(MAX_GAMEREG)
-                .expect("layout computation is infallible for MAX_GAMEREG = 5000");
+            let layout =
+                std::alloc::Layout::array::<crate::database::map_db::GlobalReg>(MAX_GAMEREG)
+                    .expect("layout computation is infallible for MAX_GAMEREG = 5000");
             std::alloc::dealloc(gr.registry as *mut u8, layout);
             gr.registry = std::ptr::null_mut();
         }
@@ -2601,12 +2729,17 @@ pub async unsafe fn map_loadgameregistry() -> i32 {
         gr.registry = alloc_zeroed_gamereg_registry(MAX_GAMEREG);
     }
 
-    let sql = format!(
-        "SELECT GrgIdentifier, GrgValue FROM `GameRegistry{sid}` LIMIT {limit}"
-    );
+    let sql = format!("SELECT GrgIdentifier, GrgValue FROM `GameRegistry{sid}` LIMIT {limit}");
 
-    let rows_opt = match sqlx::query_as::<_, GrgRow>(&sql).fetch_all(get_pool()).await {
-        Ok(rows) => Some(rows.into_iter().map(|r| (r.grg_identifier, r.grg_value as i32)).collect::<Vec<_>>()),
+    let rows_opt = match sqlx::query_as::<_, GrgRow>(&sql)
+        .fetch_all(get_pool())
+        .await
+    {
+        Ok(rows) => Some(
+            rows.into_iter()
+                .map(|r| (r.grg_identifier, r.grg_value as i32))
+                .collect::<Vec<_>>(),
+        ),
         Err(e) => {
             tracing::error!("[map] map_loadgameregistry failed: {e:#}");
             None
@@ -2663,8 +2796,12 @@ pub async unsafe fn map_savegameregistry(i: i32) -> i32 {
     // the future is Send (raw pointer refs cannot cross await points).
     let (sid, identifier, val) = {
         let gr = gamereg();
-        if gr.registry.is_null() { return 0; }
-        if i < 0 || i as usize >= gr.registry_num as usize { return 0; }
+        if gr.registry.is_null() {
+            return 0;
+        }
+        if i < 0 || i as usize >= gr.registry_num as usize {
+            return 0;
+        }
         let sid = crate::config::config().server_id;
         let entry = &*gr.registry.add(i as usize);
         let identifier = {
@@ -2679,47 +2816,47 @@ pub async unsafe fn map_savegameregistry(i: i32) -> i32 {
     // SELECT existing GrgId.
     let id2 = identifier.clone();
     let save_id: Option<u32> = sqlx::query_scalar::<_, u32>(&format!(
-            "SELECT GrgId FROM `GameRegistry{sid}` WHERE GrgIdentifier = ?",
-        ))
-        .bind(id2)
-        .fetch_optional(get_pool())
-        .await
-        .unwrap_or(None);
+        "SELECT GrgId FROM `GameRegistry{sid}` WHERE GrgIdentifier = ?",
+    ))
+    .bind(id2)
+    .fetch_optional(get_pool())
+    .await
+    .unwrap_or(None);
 
     match save_id {
         Some(grg_id) if grg_id != 0 => {
             if val == 0 {
                 let id2 = identifier.clone();
                 let _ = sqlx::query(&format!(
-                        "DELETE FROM `GameRegistry{sid}` WHERE GrgIdentifier = ?",
-                    ))
-                    .bind(id2)
-                    .execute(get_pool())
-                    .await;
+                    "DELETE FROM `GameRegistry{sid}` WHERE GrgIdentifier = ?",
+                ))
+                .bind(id2)
+                .execute(get_pool())
+                .await;
             } else {
                 let id2 = identifier.clone();
                 let _ = sqlx::query(&format!(
-                        "UPDATE `GameRegistry{sid}` \
+                    "UPDATE `GameRegistry{sid}` \
                          SET GrgIdentifier = ?, GrgValue = ? \
                          WHERE GrgId = ?",
-                    ))
-                    .bind(id2)
-                    .bind(val)
-                    .bind(grg_id)
-                    .execute(get_pool())
-                    .await;
+                ))
+                .bind(id2)
+                .bind(val)
+                .bind(grg_id)
+                .execute(get_pool())
+                .await;
             }
         }
         _ => {
             if val > 0 {
                 let _ = sqlx::query(&format!(
-                        "INSERT INTO `GameRegistry{sid}` \
+                    "INSERT INTO `GameRegistry{sid}` \
                          (GrgIdentifier, GrgValue) VALUES (?, ?)",
-                    ))
-                    .bind(identifier)
-                    .bind(val)
-                    .execute(get_pool())
-                    .await;
+                ))
+                .bind(identifier)
+                .bind(val)
+                .execute(get_pool())
+                .await;
             }
         }
     }
@@ -2742,14 +2879,18 @@ pub async unsafe fn map_savegameregistry(i: i32) -> i32 {
 /// Must be called on the game thread.  `reg` must be a valid non-null
 /// null-terminated C string.  `gamereg.registry` must be initialised.
 pub async unsafe fn map_setglobalgamereg(reg: *const i8, val: i32) -> i32 {
-    if reg.is_null() { return 0; }
+    if reg.is_null() {
+        return 0;
+    }
 
     // Perform all in-memory updates in a sync block, releasing raw pointer refs
     // before the first .await point.
     // Returns Some((save_idx, clear_str)) or None if nothing to save.
     let save_info: Option<(i32, bool)> = {
         let mut gr = gamereg();
-        if gr.registry.is_null() { return 0; }
+        if gr.registry.is_null() {
+            return 0;
+        }
         let num = gr.registry_num as usize;
 
         // Search for an existing entry (strcasecmp).
@@ -2764,7 +2905,9 @@ pub async unsafe fn map_setglobalgamereg(reg: *const i8, val: i32) -> i32 {
 
         if let Some(idx) = exist {
             let entry = &mut *gr.registry.add(idx);
-            if entry.val == val { return 0; } // value unchanged — skip save
+            if entry.val == val {
+                return 0;
+            } // value unchanged — skip save
             entry.val = val;
             Some((idx as i32, val == 0))
         } else {
@@ -2822,9 +2965,7 @@ pub async fn map_id2name(id: u32) -> String {
     if let Some(pe) = map_id2sd_pc(id) {
         return pe.name.clone();
     }
-    sqlx::query_scalar::<_, String>(
-            "SELECT `ChaName` FROM `Character` WHERE `ChaId`=?"
-        )
+    sqlx::query_scalar::<_, String>("SELECT `ChaName` FROM `Character` WHERE `ChaId`=?")
         .bind(id)
         .fetch_optional(get_pool())
         .await
@@ -2843,9 +2984,7 @@ pub unsafe fn map_weather(_id: i32, _n: i32) -> i32 {
     let ct = cur_time.load(Ordering::Relaxed);
     if ot != ct {
         old_time.store(ct, Ordering::Relaxed);
-        crate::game::scripting::doscript_blargs_id(
-            "mapWeather", None, &[],
-        );
+        crate::game::scripting::doscript_blargs_id("mapWeather", None, &[]);
     }
     0
 }
@@ -2858,9 +2997,15 @@ pub unsafe fn map_weather(_id: i32, _n: i32) -> i32 {
 pub unsafe fn map_savechars(_none: i32, _nonetoo: i32) -> i32 {
     for x in 0..crate::session::get_fd_max() {
         let fd = SessionId::from_raw(x);
-        if !session_exists(fd) { continue; }
-        if session_get_eof(fd) != 0 { continue; }
-        if let Some(sd) = session_get_data(fd) { sl_intif_save(&mut *sd.write() as *mut MapSessionData); }
+        if !session_exists(fd) {
+            continue;
+        }
+        if session_get_eof(fd) != 0 {
+            continue;
+        }
+        if let Some(sd) = session_get_data(fd) {
+            sl_intif_save(&mut *sd.write() as *mut MapSessionData);
+        }
     }
     0
 }
@@ -2889,19 +3034,19 @@ pub unsafe fn map_registrydelete(_m: i32, _i: i32) -> i32 {
 /// # Safety
 /// `p` must be a valid non-null pointer to a `MobSpawnData` struct.
 /// Must be called on the game thread after the DB pool is initialised.
-pub async unsafe fn map_lastdeath_mob(
-    p: *mut crate::game::mob::MobSpawnData,
-) -> i32 {
-    if p.is_null() { return 0; }
+pub async unsafe fn map_lastdeath_mob(p: *mut crate::game::mob::MobSpawnData) -> i32 {
+    if p.is_null() {
+        return 0;
+    }
 
     // Extract all data into Copy values before the first .await so the future is Send.
     let (last_death, startx, starty, map_id, mob_id, sid) = {
         let last_death = (*p).last_death;
-        let startx     = (*p).startx as i32;
-        let starty     = (*p).starty as i32;
-        let map_id     = (*p).m  as i32;
-        let mob_id     = (*p).id as i32;
-        let sid        = crate::config::config().server_id;
+        let startx = (*p).startx as i32;
+        let starty = (*p).starty as i32;
+        let map_id = (*p).m as i32;
+        let mob_id = (*p).id as i32;
+        let sid = crate::config::config().server_id;
         (last_death, startx, starty, map_id, mob_id, sid)
     }; // p ref dropped here
 
@@ -2946,10 +3091,9 @@ pub unsafe fn hasCoref(sd: *mut MapSessionData) -> i32 {
         return 1;
     }
     // Container coref: the container player must still be in the ID database.
-    if (*sd).coref_container != 0
-        && map_id2sd_pc((*sd).coref_container).is_some() {
-            return 1;
-        }
+    if (*sd).coref_container != 0 && map_id2sd_pc((*sd).coref_container).is_some() {
+        return 1;
+    }
     0
 }
 
@@ -2965,8 +3109,8 @@ pub unsafe fn hasCoref(sd: *mut MapSessionData) -> i32 {
 /// Must be called exactly once at shutdown, on the game thread, after all
 /// clients have been disconnected.
 pub unsafe fn map_do_term() {
-    use crate::database::map_db::{GlobalReg, MAP_SLOTS, MAX_MAPREG};
     use crate::database::map_db::WarpList;
+    use crate::database::map_db::{GlobalReg, MAP_SLOTS, MAX_MAPREG};
 
     map_savechars(0, 0);
     map_clritem();
@@ -2974,9 +3118,10 @@ pub unsafe fn map_do_term() {
 
     // Free per-slot tile arrays (Rust Vec alloc) and block grid arrays.
     if !crate::database::map_db::raw_map_ptr().is_null() {
-        let slots = std::slice::from_raw_parts_mut(crate::database::map_db::raw_map_ptr(), MAP_SLOTS);
+        let slots =
+            std::slice::from_raw_parts_mut(crate::database::map_db::raw_map_ptr(), MAP_SLOTS);
         for slot in slots.iter_mut() {
-            let cells  = slot.xs as usize * slot.ys as usize;
+            let cells = slot.xs as usize * slot.ys as usize;
             let bcells = slot.bxs as usize * slot.bys as usize;
 
             if !slot.tile.is_null() && cells > 0 {
@@ -2997,11 +3142,14 @@ pub unsafe fn map_do_term() {
             }
             // block/block_mob are no longer allocated (block_grid handles spatial indexing).
             if !slot.warp.is_null() && bcells > 0 {
-                drop(Vec::<*mut WarpList>::from_raw_parts(slot.warp, bcells, bcells));
+                drop(Vec::<*mut WarpList>::from_raw_parts(
+                    slot.warp, bcells, bcells,
+                ));
                 slot.warp = std::ptr::null_mut();
             }
             if !slot.registry.is_null() {
-                let layout = std::alloc::Layout::array::<GlobalReg>(MAX_MAPREG).expect("GlobalReg layout overflow");
+                let layout = std::alloc::Layout::array::<GlobalReg>(MAX_MAPREG)
+                    .expect("GlobalReg layout overflow");
                 std::alloc::dealloc(slot.registry as *mut u8, layout);
                 slot.registry = std::ptr::null_mut();
             }
@@ -3024,7 +3172,10 @@ static GROUPS: OnceLock<Mutex<Box<[u32; 65536]>>> = OnceLock::new();
 
 #[inline]
 pub fn groups() -> std::sync::MutexGuard<'static, Box<[u32; 65536]>> {
-    GROUPS.get_or_init(|| Mutex::new(Box::new([0u32; 65536]))).lock().unwrap_or_else(|e| e.into_inner())
+    GROUPS
+        .get_or_init(|| Mutex::new(Box::new([0u32; 65536])))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
 }
 
 /// File descriptor for the logging socket (unused in current build; kept for ABI).
@@ -3111,14 +3262,14 @@ static RESET_TIMER_DIFF: AtomicI32 = AtomicI32::new(0);
 /// `crate::session::get_fd_max()`. Both are single-threaded game globals.
 pub unsafe fn map_reset_timer(v1: i32, v2: i32) -> i32 {
     let mut remaining = RESET_TIMER_REMAINING.load(Ordering::Relaxed);
-    let mut diff      = RESET_TIMER_DIFF.load(Ordering::Relaxed);
+    let mut diff = RESET_TIMER_DIFF.load(Ordering::Relaxed);
 
     if remaining == 0 {
         remaining = v1;
     }
 
     remaining -= v2;
-    diff      += v2;
+    diff += v2;
     RESET_TIMER_REMAINING.store(remaining, Ordering::Relaxed);
     RESET_TIMER_DIFF.store(diff, Ordering::Relaxed);
 
@@ -3134,25 +3285,28 @@ pub unsafe fn map_reset_timer(v1: i32, v2: i32) -> i32 {
             if session_exists(fd) {
                 let sd = session_get_data(fd);
                 if let Some(ref sd_arc) = sd {
-                  if session_get_eof(fd) == 0 {
-                    let player_id = sd_arc.id;
-                    crate::database::blocking_run_async(crate::database::assert_send(async move {
-                        if let Some(pe) = map_id2sd_pc(player_id) {
-                            crate::game::client::handlers::clif_handle_disconnect(&pe).await;
+                    if session_get_eof(fd) == 0 {
+                        let player_id = sd_arc.id;
+                        crate::database::blocking_run_async(crate::database::assert_send(
+                            async move {
+                                if let Some(pe) = map_id2sd_pc(player_id) {
+                                    crate::game::client::handlers::clif_handle_disconnect(&pe)
+                                        .await;
+                                }
+                            },
+                        ));
+                        // session_call_parse is now async; schedule it on the LocalSet.
+                        // map_reset_timer is a sync TimerFn so it cannot .await directly.
+                        // The session eof flag (set below) ensures clif_parse sees the
+                        // disconnect state when the spawned task runs.
+                        tokio::task::spawn_local(session_call_parse(fd));
+                        if let Some(s) = get_session_manager().get_session(fd) {
+                            if let Ok(mut session) = s.try_lock() {
+                                session.flush_read_buffer();
+                            }
                         }
-                    }));
-                    // session_call_parse is now async; schedule it on the LocalSet.
-                    // map_reset_timer is a sync TimerFn so it cannot .await directly.
-                    // The session eof flag (set below) ensures clif_parse sees the
-                    // disconnect state when the spawned task runs.
-                    tokio::task::spawn_local(session_call_parse(fd));
-                    if let Some(s) = get_session_manager().get_session(fd) {
-                        if let Ok(mut session) = s.try_lock() {
-                            session.flush_read_buffer();
-                        }
+                        session_set_eof(fd, 1);
                     }
-                    session_set_eof(fd, 1);
-                  }
                 }
             }
         }
@@ -3174,12 +3328,11 @@ pub unsafe fn map_reset_timer(v1: i32, v2: i32) -> i32 {
             crate::game::map_parse::chat::clif_broadcast(msg.as_ptr() as *const i8, -1);
             RESET_TIMER_DIFF.store(0, Ordering::Relaxed);
         }
-    } else if remaining > 3_600_000
-        && diff >= 3_600_000 {
-            let msg = format!("Reset in {} hours\0", remaining / 3_600_000);
-            crate::game::map_parse::chat::clif_broadcast(msg.as_ptr() as *const i8, -1);
-            RESET_TIMER_DIFF.store(0, Ordering::Relaxed);
-        }
+    } else if remaining > 3_600_000 && diff >= 3_600_000 {
+        let msg = format!("Reset in {} hours\0", remaining / 3_600_000);
+        crate::game::map_parse::chat::clif_broadcast(msg.as_ptr() as *const i8, -1);
+        RESET_TIMER_DIFF.store(0, Ordering::Relaxed);
+    }
 
     0
 }
