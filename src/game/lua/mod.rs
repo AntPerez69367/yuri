@@ -1,9 +1,11 @@
 use mlua::prelude::*;
 
+use crate::game::lua::entity::types::EntityType;
+
 pub mod error;
 pub mod entity;
 
-pub fn log_missing(entity_type: &str, key: &str, lua: Lua) {
+pub fn log_missing(entity_type: EntityType, key: &str, lua: &Lua) {
     let location = lua
         .inspect_stack(2, |dbg| {
             let source = dbg.source();
@@ -11,5 +13,5 @@ pub fn log_missing(entity_type: &str, key: &str, lua: Lua) {
             format!("{}:{}", src_name, dbg.current_line().unwrap_or(0))
         })
         .unwrap_or_else(|| "unknown".to_string());
-        tracing::warn!("[LUA-MISSING] {}:{} called from {}", entity_type, key, location);
-    }
+    tracing::warn!("[LUA-MISSING] {}:{} called from {}", entity_type, key, location);
+}
