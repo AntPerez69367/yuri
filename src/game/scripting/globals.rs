@@ -4,6 +4,8 @@ use std::ffi::{CStr, CString};
 use std::sync::Arc;
 use mlua::{Lua, Value};
 
+use crate::common::traits::LegacyEntity;
+
 use crate::database::get_pool;
 use crate::database::map_db::get_map_ptr;
 use crate::common::constants::entity::{BL_PC, BL_MOB, BL_NPC, BL_ITEM, BL_ALL};
@@ -754,13 +756,13 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     g.set("removeClanMember", lua.create_async_function(|_, id: i32| async move {
         // Mutate in-memory session data synchronously before any await point.
         if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
-            let sd = &mut *arc.write();
-            sd.player.social.clan = 0;
-            sd.player.social.clan_title.clear();
-            sd.player.progression.clan_rank = 0;
-            crate::database::blocking_run_async(
-                        crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *const _ as usize)
-                    );
+            {
+                let sd = &mut *arc.write();
+                sd.player.social.clan = 0;
+                sd.player.social.clan_title.clear();
+                sd.player.progression.clan_rank = 0;
+            }
+            unsafe { crate::game::map_parse::player_state::clif_mystatus(&arc); }
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaClnId`='0',`ChaClanTitle`='',`ChaClnRank`='0' WHERE `ChaId`=?",
@@ -770,15 +772,14 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     })?)?;
 
     g.set("addClanMember", lua.create_async_function(|_, (id, clan): (i32, i32)| async move {
-        // Mutate in-memory session data synchronously before any await point.
         if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
-            let sd = &mut *arc.write();
-            sd.player.social.clan = clan as u32;
-            sd.player.social.clan_title.clear();
-            sd.player.progression.clan_rank = 1;
-            crate::database::blocking_run_async(
-                        crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *const _ as usize)
-                    );
+            {
+                let sd = &mut *arc.write();
+                sd.player.social.clan = clan as u32;
+                sd.player.social.clan_title.clear();
+                sd.player.progression.clan_rank = 1;
+            }
+            unsafe { crate::game::map_parse::player_state::clif_mystatus(&arc); }
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaClnId`=?,`ChaClanTitle`='',`ChaClnRank`='1' WHERE `ChaId`=?",
@@ -802,11 +803,11 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     g.set("updateClanMemberTitle", lua.create_async_function(|_, (id, title): (i32, String)| async move {
         // Mutate in-memory session data synchronously before any await point.
         if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
-            let sd = &mut *arc.write();
-            sd.player.social.clan_title = title.clone();
-            crate::database::blocking_run_async(
-                        crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *const _ as usize)
-                    );
+            {
+                let sd = &mut *arc.write();
+                sd.player.social.clan_title = title.clone();
+            }
+            unsafe { crate::game::map_parse::player_state::clif_mystatus(&arc); }
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaClanTitle`=? WHERE `ChaId`=?", title, id as u32
@@ -820,15 +821,16 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     g.set("removePathMember", lua.create_async_function(|_, id: i32| async move {
         // Online path: mutate in-memory state, then drop the lock before .await.
         let online_class = if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
-            let sd = &mut *arc.write();
-            let new_class = crate::database::class_db::path(sd.player.progression.class as i32) as u8;
-            sd.player.progression.class = new_class;
-            sd.player.progression.class_rank = 0;
-            crate::database::blocking_run_async(
-                        crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *const _ as usize)
-                    );
+            let new_class = {
+                let sd = &mut *arc.write();
+                let new_class = crate::database::class_db::path(sd.player.progression.class as i32) as u8;
+                sd.player.progression.class = new_class;
+                sd.player.progression.class_rank = 0;
+                arc.set_class_level(new_class, sd.player.progression.level);
+                new_class
+            };
+            unsafe { crate::game::map_parse::player_state::clif_mystatus(&arc); }
             Some(new_class)
-            // write lock drops here — before any .await
         } else {
             None
         };
@@ -851,12 +853,13 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     g.set("addPathMember", lua.create_async_function(|_, (id, cls): (i32, i32)| async move {
         // Mutate in-memory session data synchronously before any await point.
         if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
-            let sd = &mut *arc.write();
-            sd.player.progression.class = cls as u8;
-            sd.player.progression.class_rank = 0;
-            crate::database::blocking_run_async(
-                        crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *const _ as usize)
-                    );
+            {
+                let sd = &mut *arc.write();
+                sd.player.progression.class = cls as u8;
+                sd.player.progression.class_rank = 0;
+                arc.set_class_level(cls as u8, sd.player.progression.level);
+            }
+            unsafe { crate::game::map_parse::player_state::clif_mystatus(&arc); }
         }
         let ok = sqlx::query!(
             "UPDATE `Character` SET `ChaPthId`=?,`ChaPthRank`='0' WHERE `ChaId`=?",

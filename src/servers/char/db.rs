@@ -246,31 +246,34 @@ pub async fn load_player(pool: &MySqlPool, char_id: u32, login_name: &str) -> Re
 
     // ── Main character row ────────────────────────────────────────────────────
     let row = sqlx::query(
-        "SELECT `ChaName`, `ChaClnId`, `ChaClanTitle`, `ChaTitle`, \
-         `ChaF1Name`, `ChaLevel`, `ChaPthId`, `ChaMark`, \
-         `ChaTotem`, `ChaKarma`, `ChaCurrentVita`, `ChaBaseVita`, \
-         `ChaCurrentMana`, `ChaBaseMana`, `ChaExperience`, `ChaGold`, `ChaSex`, \
-         `ChaNation`, `ChaFace`, `ChaHairColor`, `ChaArmorColor`, \
-         `ChaMapId`, `ChaX`, `ChaY`, `ChaSide`, `ChaState`, `ChaHair`, `ChaFaceColor`, \
-         `ChaSkinColor`, `ChaPartner`, `ChaClanChat`, `ChaPathChat`, `ChaNoviceChat`, \
-         `ChaSettings`, `ChaGMLevel`, `ChaDisguise`, `ChaDisguiseColor`, \
-         `ChaMaximumBankSlots`, `ChaBankGold`, `ChaMaximumInventory`, `ChaPK`, \
-         `ChaKilledBy`, `ChaKillsPK`, `ChaPKDuration`, `ChaMuted`, `ChaHeroes`, `ChaTier`, \
-         `ChaExperienceSoldMagic`, `ChaExperienceSoldHealth`, `ChaExperienceSoldStats`, \
-         `ChaBaseMight`, `ChaBaseWill`, `ChaBaseGrace`, `ChaBaseArmor`, `ChaMiniMapToggle`, \
-         `ChaLastIP`, `ChaAFKMessage`, `ChaTutor`, `ChaAlignment`, \
-         `ChaProfileVitaStats`, `ChaProfileEquipList`, `ChaProfileLegends`, \
-         `ChaProfileSpells`, `ChaProfileInventory`, `ChaProfileBankItems`, \
-         `ChaPthRank`, `ChaClnRank` \
-         FROM `Character` WHERE `ChaId` = ? LIMIT 1"
+        "SELECT c.`ChaName`, c.`ChaClnId`, c.`ChaClanTitle`, c.`ChaTitle`, \
+         c.`ChaF1Name`, c.`ChaLevel`, c.`ChaPthId`, c.`ChaMark`, \
+         c.`ChaTotem`, c.`ChaKarma`, c.`ChaCurrentVita`, c.`ChaBaseVita`, \
+         c.`ChaCurrentMana`, c.`ChaBaseMana`, c.`ChaExperience`, c.`ChaGold`, c.`ChaSex`, \
+         c.`ChaNation`, c.`ChaFace`, c.`ChaHairColor`, c.`ChaArmorColor`, \
+         c.`ChaMapId`, c.`ChaX`, c.`ChaY`, c.`ChaSide`, c.`ChaState`, c.`ChaHair`, c.`ChaFaceColor`, \
+         c.`ChaSkinColor`, c.`ChaPartner`, c.`ChaClanChat`, c.`ChaPathChat`, c.`ChaNoviceChat`, \
+         c.`ChaSettings`, c.`ChaGMLevel`, c.`ChaDisguise`, c.`ChaDisguiseColor`, \
+         c.`ChaMaximumBankSlots`, c.`ChaBankGold`, c.`ChaMaximumInventory`, c.`ChaPK`, \
+         c.`ChaKilledBy`, c.`ChaKillsPK`, c.`ChaPKDuration`, c.`ChaMuted`, c.`ChaHeroes`, c.`ChaTier`, \
+         c.`ChaExperienceSoldMagic`, c.`ChaExperienceSoldHealth`, c.`ChaExperienceSoldStats`, \
+         c.`ChaBaseMight`, c.`ChaBaseWill`, c.`ChaBaseGrace`, c.`ChaBaseArmor`, c.`ChaMiniMapToggle`, \
+         c.`ChaLastIP`, c.`ChaAFKMessage`, c.`ChaTutor`, c.`ChaAlignment`, \
+         c.`ChaProfileVitaStats`, c.`ChaProfileEquipList`, c.`ChaProfileLegends`, \
+         c.`ChaProfileSpells`, c.`ChaProfileInventory`, c.`ChaProfileBankItems`, \
+         c.`ChaPthRank`, c.`ChaClnRank`, \
+         p.`ChaName` AS `PartnerName` \
+         FROM `Character` c \
+         LEFT JOIN `Character` p ON p.`ChaId` = c.`ChaPartner` \
+         WHERE c.`ChaId` = ? LIMIT 1"
     ).bind(char_id).fetch_optional(pool).await?;
 
     let row = match row { Some(r) => r, None => anyhow::bail!("character not found") };
 
     let last_pos = crate::common::types::Point::new(
-        row.try_get::<u32, _>(21).unwrap_or(0) as u16,
-        row.try_get::<u32, _>(22).unwrap_or(0) as u16,
-        row.try_get::<u32, _>(23).unwrap_or(0) as u16,
+        row.try_get::<u32, _>("ChaMapId").unwrap_or(0) as u16,
+        row.try_get::<u32, _>("ChaX").unwrap_or(0) as u16,
+        row.try_get::<u32, _>("ChaY").unwrap_or(0) as u16,
     );
 
     let mut pd = PlayerData {
@@ -278,96 +281,97 @@ pub async fn load_player(pool: &MySqlPool, char_id: u32, login_name: &str) -> Re
             id: char_id,
             name: login_name.to_string(),
             pass: String::new(),
-            f1name: row.try_get::<String, _>(4).unwrap_or_default(),
-            title: row.try_get::<String, _>(3).unwrap_or_default(),
-            ipaddress: row.try_get::<String, _>(55).unwrap_or_default(),
-            gm_level: row.try_get::<u32, _>(34).unwrap_or(0) as i8,
-            sex: row.try_get::<u32, _>(16).unwrap_or(0) as i8,
+            f1name: row.try_get::<String, _>("ChaF1Name").unwrap_or_default(),
+            title: row.try_get::<String, _>("ChaTitle").unwrap_or_default(),
+            ipaddress: row.try_get::<String, _>("ChaLastIP").unwrap_or_default(),
+            gm_level: row.try_get::<u32, _>("ChaGMLevel").unwrap_or(0) as i8,
+            sex: row.try_get::<u32, _>("ChaSex").unwrap_or(0) as i8,
             map_server: 0,
             dest_pos: last_pos,
             last_pos,
         },
         combat: PlayerCombat {
-            hp: row.try_get::<u32, _>(10).unwrap_or(0),
-            max_hp: row.try_get::<u32, _>(11).unwrap_or(0),
-            mp: row.try_get::<u32, _>(12).unwrap_or(0),
-            max_mp: row.try_get::<u32, _>(13).unwrap_or(0),
+            hp: row.try_get::<u32, _>("ChaCurrentVita").unwrap_or(0),
+            max_hp: row.try_get::<u32, _>("ChaBaseVita").unwrap_or(0),
+            mp: row.try_get::<u32, _>("ChaCurrentMana").unwrap_or(0),
+            max_mp: row.try_get::<u32, _>("ChaBaseMana").unwrap_or(0),
             might: 0,
             will: 0,
             grace: 0,
-            base_might: row.try_get::<u32, _>(50).unwrap_or(0),
-            base_will: row.try_get::<u32, _>(51).unwrap_or(0),
-            base_grace: row.try_get::<u32, _>(52).unwrap_or(0),
-            base_armor: row.try_get::<i32, _>(53).unwrap_or(0),
-            state: row.try_get::<u32, _>(25).unwrap_or(0) as i8,
-            side: row.try_get::<u32, _>(24).unwrap_or(0) as i8,
+            base_might: row.try_get::<u32, _>("ChaBaseMight").unwrap_or(0),
+            base_will: row.try_get::<u32, _>("ChaBaseWill").unwrap_or(0),
+            base_grace: row.try_get::<u32, _>("ChaBaseGrace").unwrap_or(0),
+            base_armor: row.try_get::<i32, _>("ChaBaseArmor").unwrap_or(0),
+            state: row.try_get::<u32, _>("ChaState").unwrap_or(0) as i8,
+            side: row.try_get::<u32, _>("ChaSide").unwrap_or(0) as i8,
         },
         progression: PlayerProgression {
-            level: row.try_get::<u32, _>(5).unwrap_or(0) as u8,
-            class: row.try_get::<u32, _>(6).unwrap_or(0) as u8,
-            tier: row.try_get::<u32, _>(46).unwrap_or(0) as u8,
-            mark: row.try_get::<u32, _>(7).unwrap_or(0) as u8,
-            totem: row.try_get::<u32, _>(8).unwrap_or(0) as u8,
-            country: row.try_get::<u32, _>(17).unwrap_or(0) as i8,
+            level: row.try_get::<u32, _>("ChaLevel").unwrap_or(0) as u8,
+            class: row.try_get::<u32, _>("ChaPthId").unwrap_or(0) as u8,
+            tier: row.try_get::<u32, _>("ChaTier").unwrap_or(0) as u8,
+            mark: row.try_get::<u32, _>("ChaMark").unwrap_or(0) as u8,
+            totem: row.try_get::<u32, _>("ChaTotem").unwrap_or(0) as u8,
+            country: row.try_get::<u32, _>("ChaNation").unwrap_or(0) as i8,
             magic_number: 0,
-            exp: row.try_get::<u32, _>(14).unwrap_or(0),
+            exp: row.try_get::<u32, _>("ChaExperience").unwrap_or(0),
             tnl: 0,
             next_level_xp: 0,
             max_tnl: 0,
             real_tnl: 0,
-            class_rank: row.try_get::<u32, _>(65).unwrap_or(0) as i32,
-            clan_rank: row.try_get::<u32, _>(66).unwrap_or(0) as i32,
+            class_rank: row.try_get::<u32, _>("ChaPthRank").unwrap_or(0) as i32,
+            clan_rank: row.try_get::<u32, _>("ChaClnRank").unwrap_or(0) as i32,
             percentage: 0.0,
             int_percentage: 0,
-            expsold_magic: row.try_get::<u64, _>(47).unwrap_or(0),
-            expsold_health: row.try_get::<u64, _>(48).unwrap_or(0),
-            expsold_stats: row.try_get::<u64, _>(49).unwrap_or(0),
+            expsold_magic: row.try_get::<u64, _>("ChaExperienceSoldMagic").unwrap_or(0),
+            expsold_health: row.try_get::<u64, _>("ChaExperienceSoldHealth").unwrap_or(0),
+            expsold_stats: row.try_get::<u64, _>("ChaExperienceSoldStats").unwrap_or(0),
         },
         spells: PlayerSpells::default(),
         inventory: PlayerInventory {
             equip: vec![crate::common::types::Item::default(); MAX_EQUIP],
             inventory: vec![crate::common::types::Item::default(); MAX_INVENTORY],
             banks: vec![crate::common::types::BankData::default(); MAX_BANK_SLOTS],
-            money: row.try_get::<u32, _>(15).unwrap_or(0),
-            bank_money: row.try_get::<u32, _>(38).unwrap_or(0),
-            max_inv: row.try_get::<u32, _>(39).unwrap_or(0) as u8,
-            max_slots: row.try_get::<u32, _>(37).unwrap_or(0),
+            money: row.try_get::<u32, _>("ChaGold").unwrap_or(0),
+            bank_money: row.try_get::<u32, _>("ChaBankGold").unwrap_or(0),
+            max_inv: row.try_get::<u32, _>("ChaMaximumInventory").unwrap_or(0) as u8,
+            max_slots: row.try_get::<u32, _>("ChaMaximumBankSlots").unwrap_or(0),
         },
         appearance: PlayerAppearance {
-            face: row.try_get::<u32, _>(18).unwrap_or(0) as u16,
-            hair: row.try_get::<u32, _>(26).unwrap_or(0) as u16,
-            face_color: row.try_get::<u32, _>(27).unwrap_or(0) as u16,
-            hair_color: row.try_get::<u32, _>(19).unwrap_or(0) as u16,
-            armor_color: row.try_get::<u32, _>(20).unwrap_or(0) as u16,
-            skin_color: row.try_get::<u32, _>(28).unwrap_or(0) as u16,
-            disguise: row.try_get::<u32, _>(35).unwrap_or(0) as u16,
-            disguise_color: row.try_get::<u32, _>(36).unwrap_or(0) as u16,
-            setting_flags: row.try_get::<u32, _>(33).unwrap_or(0),
-            heroes: row.try_get::<u32, _>(45).unwrap_or(0),
-            mini_map_toggle: row.try_get::<u32, _>(54).unwrap_or(0),
-            profile_vitastats: row.try_get::<u32, _>(59).unwrap_or(0) as u8,
-            profile_equiplist: row.try_get::<u32, _>(60).unwrap_or(0) as u8,
-            profile_legends: row.try_get::<u32, _>(61).unwrap_or(0) as u8,
-            profile_spells: row.try_get::<u32, _>(62).unwrap_or(0) as u8,
-            profile_inventory: row.try_get::<u32, _>(63).unwrap_or(0) as u8,
-            profile_bankitems: row.try_get::<u32, _>(64).unwrap_or(0) as u8,
+            face: row.try_get::<u32, _>("ChaFace").unwrap_or(0) as u16,
+            hair: row.try_get::<u32, _>("ChaHair").unwrap_or(0) as u16,
+            face_color: row.try_get::<u32, _>("ChaFaceColor").unwrap_or(0) as u16,
+            hair_color: row.try_get::<u32, _>("ChaHairColor").unwrap_or(0) as u16,
+            armor_color: row.try_get::<u32, _>("ChaArmorColor").unwrap_or(0) as u16,
+            skin_color: row.try_get::<u32, _>("ChaSkinColor").unwrap_or(0) as u16,
+            disguise: row.try_get::<u32, _>("ChaDisguise").unwrap_or(0) as u16,
+            disguise_color: row.try_get::<u32, _>("ChaDisguiseColor").unwrap_or(0) as u16,
+            setting_flags: row.try_get::<u32, _>("ChaSettings").unwrap_or(0),
+            heroes: row.try_get::<u32, _>("ChaHeroes").unwrap_or(0),
+            mini_map_toggle: row.try_get::<u32, _>("ChaMiniMapToggle").unwrap_or(0),
+            profile_vitastats: row.try_get::<u32, _>("ChaProfileVitaStats").unwrap_or(0) as u8,
+            profile_equiplist: row.try_get::<u32, _>("ChaProfileEquipList").unwrap_or(0) as u8,
+            profile_legends: row.try_get::<u32, _>("ChaProfileLegends").unwrap_or(0) as u8,
+            profile_spells: row.try_get::<u32, _>("ChaProfileSpells").unwrap_or(0) as u8,
+            profile_inventory: row.try_get::<u32, _>("ChaProfileInventory").unwrap_or(0) as u8,
+            profile_bankitems: row.try_get::<u32, _>("ChaProfileBankItems").unwrap_or(0) as u8,
         },
         social: PlayerSocial {
-            partner: row.try_get::<u32, _>(29).unwrap_or(0),
-            clan: row.try_get::<u32, _>(1).unwrap_or(0),
-            clan_title: row.try_get::<String, _>(2).unwrap_or_default(),
-            clan_chat: row.try_get::<u32, _>(30).unwrap_or(0) as i8,
-            pk: row.try_get::<u32, _>(40).unwrap_or(0) as u8,
-            killed_by: row.try_get::<u32, _>(41).unwrap_or(0),
-            kills_pk: row.try_get::<u32, _>(42).unwrap_or(0),
-            pk_duration: row.try_get::<u32, _>(43).unwrap_or(0),
-            karma: row.try_get::<f32, _>(9).unwrap_or(0.0),
-            alignment: row.try_get::<i8, _>(58).unwrap_or(0),
-            novice_chat: row.try_get::<u32, _>(32).unwrap_or(0) as i8,
-            subpath_chat: row.try_get::<u32, _>(31).unwrap_or(0) as i8,
-            mute: row.try_get::<u32, _>(44).unwrap_or(0) as i8,
-            tutor: row.try_get::<u8, _>(57).unwrap_or(0),
-            afk_message: row.try_get::<String, _>(56).unwrap_or_default(),
+            partner: row.try_get::<u32, _>("ChaPartner").unwrap_or(0),
+            partner_name: row.try_get::<String, _>("PartnerName").unwrap_or_default(),
+            clan: row.try_get::<u32, _>("ChaClnId").unwrap_or(0),
+            clan_title: row.try_get::<String, _>("ChaClanTitle").unwrap_or_default(),
+            clan_chat: row.try_get::<u32, _>("ChaClanChat").unwrap_or(0) as i8,
+            pk: row.try_get::<u32, _>("ChaPK").unwrap_or(0) as u8,
+            killed_by: row.try_get::<u32, _>("ChaKilledBy").unwrap_or(0),
+            kills_pk: row.try_get::<u32, _>("ChaKillsPK").unwrap_or(0),
+            pk_duration: row.try_get::<u32, _>("ChaPKDuration").unwrap_or(0),
+            karma: row.try_get::<f32, _>("ChaKarma").unwrap_or(0.0),
+            alignment: row.try_get::<i8, _>("ChaAlignment").unwrap_or(0),
+            novice_chat: row.try_get::<u32, _>("ChaNoviceChat").unwrap_or(0) as i8,
+            subpath_chat: row.try_get::<u32, _>("ChaPathChat").unwrap_or(0) as i8,
+            mute: row.try_get::<u32, _>("ChaMuted").unwrap_or(0) as i8,
+            tutor: row.try_get::<u8, _>("ChaTutor").unwrap_or(0),
+            afk_message: row.try_get::<String, _>("ChaAFKMessage").unwrap_or_default(),
         },
         registries: PlayerRegistries::default(),
         legends: PlayerLegends::default(),

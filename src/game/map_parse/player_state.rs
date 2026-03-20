@@ -60,7 +60,6 @@ use crate::game::map_server::{cur_time, cur_year};
 use crate::database::class_db::name as classdb_name;
 use crate::database::clan_db;
 use crate::database::item_db;
-use crate::game::map_server::map_id2name;
 use crate::game::client::handlers::clif_getName;
 use crate::game::client::visual::{
     clif_sendweather, clif_destroyold, clif_getLevelTNL, clif_getXPBarPercent,
@@ -74,7 +73,7 @@ use crate::game::block::AreaType;
 use crate::game::block_grid;
 use crate::game::map_parse::visual::{
     clif_object_look_by_id, clif_mob_look_start_func_inner, clif_mob_look_close_func_inner,
-    clif_charlook, clif_cnpclook, clif_cmoblook,
+    load_visible_entities,
 };
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -629,7 +628,7 @@ pub unsafe fn clif_sendoptions(pe: &PlayerEntity) -> i32 {
     0
 }
 
-// ─── clif_mystaytus ──────────────────────────────────────────────────────────
+// ─── clif_mystatus ──────────────────────────────────────────────────────────
 
 /// Send the full appearance / status packet visible to the player's own client.
 ///
@@ -646,7 +645,7 @@ pub unsafe fn clif_sendoptions(pe: &PlayerEntity) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub async unsafe fn clif_mystaytus(pe: &PlayerEntity) -> i32 {
+pub unsafe fn clif_mystatus(pe: &PlayerEntity) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
     }
@@ -732,7 +731,7 @@ pub async unsafe fn clif_mystaytus(pe: &PlayerEntity) -> i32 {
     // ── Partner ───────────────────────────────────────────────────────────────
     let partner_id = pe.read().player.social.partner;
     if partner_id != 0 {
-        let pname = map_id2name(partner_id).await;
+        let pname = pe.read().player.social.partner_name.clone();
         let mut buf = [0i8; 128];
         if !pname.is_empty() {
             // sprintf(buf, "Partner: %s", pname)
@@ -878,7 +877,7 @@ pub async unsafe fn clif_mystaytus(pe: &PlayerEntity) -> i32 {
         wfifob(fd, 9 + len, color as u8);
 
         if tchaid > 0 {
-            let char_name = clif_getName(tchaid).await;
+            let char_name = clif_getName(tchaid);
             let text_ptr  = text_ptr_usize as *const i8;
             let mut repl_buf = [0u8; 4096];
             let buff      = replace_str_local(text_ptr, b"$player\0", char_name, &mut repl_buf);
@@ -903,53 +902,6 @@ pub async unsafe fn clif_mystaytus(pe: &PlayerEntity) -> i32 {
     0
 }
 
-// ─── clif_mystaytus_by_addr ──────────────────────────────────────────────────
-
-/// A `Send` future that drives `clif_mystaytus` to completion.
-///
-/// Callers pass a `*mut MapSessionData` cast to `usize`. This wrapper reads
-/// the player `id` from the pointer, looks up the `Arc<PlayerEntity>` in
-/// `PLAYER_MAP`, and calls `clif_mystaytus` with the entity reference.
-///
-/// # Safety
-/// This future must only be driven to completion via [`blocking_run_async`],
-/// which joins the OS thread before returning. Do **not** pass to `tokio::spawn`
-/// or any executor that may poll it concurrently with the session thread.
-#[must_use]
-pub struct ClIfMystaytus {
-    inner: std::pin::Pin<Box<dyn std::future::Future<Output = i32> + 'static>>,
-}
-
-// SAFETY: `PlayerEntity` is `Send + Sync`.
-unsafe impl Send for ClIfMystaytus {}
-
-impl std::future::Future for ClIfMystaytus {
-    type Output = i32;
-    fn poll(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<i32> {
-        self.inner.as_mut().poll(cx)
-    }
-}
-
-/// Construct a `Send`-safe future that calls `clif_mystaytus` for the session
-/// whose `*mut MapSessionData` was cast to `sd_usize` by the caller.
-pub fn clif_mystaytus_by_addr(sd_usize: usize) -> ClIfMystaytus {
-    ClIfMystaytus {
-        // SAFETY: sd_usize is a valid *mut MapSessionData; we only read the
-        // `id` field to look up the Arc<PlayerEntity> in PLAYER_MAP.
-        inner: Box::pin(async move {
-            let id = unsafe { (*(sd_usize as *const MapSessionData)).id };
-            if let Some(pe_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                unsafe { clif_mystaytus(&pe_arc).await }
-            } else {
-                0
-            }
-        }),
-    }
-}
-
 // ─── clif_getchararea ────────────────────────────────────────────────────────
 
 /// Trigger an area scan to send all nearby PC, NPC, and MOB looks to the
@@ -958,24 +910,13 @@ pub fn clif_mystaytus_by_addr(sd_usize: usize) -> ClIfMystaytus {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_getchararea(pe: &PlayerEntity) -> i32 {
-    let sd_guard = pe.read();
-    let m = sd_guard.m as i32;
-    let x = sd_guard.x as i32;
-    let y = sd_guard.y as i32;
-    let sd_ref = &*sd_guard;
+pub fn clif_getchararea(pe: &PlayerEntity) -> i32 {
+    let pos = pe.position();
+    let (m, x, y) = (pos.m as i32, pos.x as i32, pos.y as i32);
     if let Some(grid) = block_grid::get_grid(m as usize) {
-        let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
+        let slot = unsafe { &*crate::database::map_db::raw_map_ptr().add(m as usize) };
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
-        for id in ids {
-            if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                clif_charlook(&pc_arc.read(), sd_ref);
-            } else if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(id) {
-                clif_cnpclook(&npc_arc.read(), sd_ref);
-            } else if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(id) {
-                clif_cmoblook(&mob_arc.read(), sd_ref);
-            }
-        }
+        load_visible_entities(pe, &ids);
     }
     0
 }

@@ -61,11 +61,12 @@ impl ScriptTarget for PlayerRegistries {
     }
 }
 
-// LegacyEntity trait to help with breaking up god structs
+// LegacyEntity trait to help with breaking up god structs.
+// Returns mapped guards that deref through Box, so callers see &T not &Box<T>.
 pub trait LegacyEntity {
     type Data;
-    fn read(&self) -> parking_lot::RwLockReadGuard<'_, Self::Data>;
-    fn write(&self) -> parking_lot::RwLockWriteGuard<'_, Self::Data>;
+    fn read(&self) -> parking_lot::MappedRwLockReadGuard<'_, Self::Data>;
+    fn write(&self) -> parking_lot::MappedRwLockWriteGuard<'_, Self::Data>;
 }
 
 #[cfg(test)]

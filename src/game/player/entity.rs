@@ -1,7 +1,6 @@
 #![allow(non_snake_case)]
 
-use std::ops::{Deref, DerefMut};
-use std::sync::atomic::{AtomicI32, AtomicU64};
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use crate::common::traits::LegacyEntity;
 use crate::session::SessionId;
 use super::types::MapSessionData;
@@ -36,9 +35,13 @@ pub struct PlayerEntity {
     pub fd: SessionId,
     // Level -1: Identity (lockless, set once at connection)
     pub name: String,
+    pub gm_level: i8,
     pub pos_atomic: AtomicU64,
     pub hp_atomic: AtomicI32,
     pub mp_atomic: AtomicI32,
+    pub exp_atomic: AtomicU32,
+    /// Packed class (high byte) | level (low byte).
+    pub class_level_atomic: AtomicU32,
     pub state_flags: AtomicU64,
 
     // Level 1: Decomposed domains
@@ -55,28 +58,54 @@ unsafe impl Sync for PlayerEntity {}
 
 impl PlayerEntity {
 
-    pub fn new(id: u32, fd: SessionId, name: String, sd: Box<MapSessionData>) -> Box<Self> {
-          Box::new(Self {                                                                                       
+    pub fn new(id: u32, fd: SessionId, name: String, gm_level: i8, sd: Box<MapSessionData>) -> Box<Self> {
+          let exp = sd.player.progression.exp;
+          let class = sd.player.progression.class;
+          let level = sd.player.progression.level;
+          Box::new(Self {
               id,
-              fd,                                                                                                       
+              fd,
               name,
+              gm_level,
               hp_atomic: AtomicI32::new(0),
               mp_atomic: AtomicI32::new(0),
-              state_flags: AtomicU64::new(0),                                                                                                  
-              pos_atomic: AtomicU64::new(0),                                                                         
+              exp_atomic: AtomicU32::new(exp),
+              class_level_atomic: AtomicU32::new((class as u32) << 8 | level as u32),
+              state_flags: AtomicU64::new(0),
+              pos_atomic: AtomicU64::new(0),
               net:    parking_lot::RwLock::new(PcNetworkState { look: LookAccum::default() }),
-              legacy: parking_lot::RwLock::new(sd),                                      
-          })  
+              legacy: parking_lot::RwLock::new(sd),
+          })
         }
 
     #[inline]
-    pub fn read(&self) -> impl Deref<Target = MapSessionData> + '_ {
-        parking_lot::RwLockReadGuard::map(self.legacy.read(), |b| b.as_ref())
+    pub fn position(&self) -> crate::config::Point {
+        crate::config::Point::from_u64(self.pos_atomic.load(Ordering::Relaxed))
     }
 
     #[inline]
-    pub fn write(&self) -> impl DerefMut<Target = MapSessionData> + '_ {
-        parking_lot::RwLockWriteGuard::map(self.legacy.write(), |b| b.as_mut())
+    pub fn exp(&self) -> u32 {
+        self.exp_atomic.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn set_exp(&self, val: u32) {
+        self.exp_atomic.store(val, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn class(&self) -> u8 {
+        (self.class_level_atomic.load(Ordering::Relaxed) >> 8) as u8
+    }
+
+    #[inline]
+    pub fn level(&self) -> u8 {
+        self.class_level_atomic.load(Ordering::Relaxed) as u8
+    }
+
+    #[inline]
+    pub fn set_class_level(&self, class: u8, level: u8) {
+        self.class_level_atomic.store((class as u32) << 8 | level as u32, Ordering::Relaxed);
     }
 
     #[inline]
@@ -87,14 +116,14 @@ impl PlayerEntity {
 }
 
 impl LegacyEntity for PlayerEntity {
-    type Data = Box<MapSessionData>;
+    type Data = MapSessionData;
     #[inline]
-    fn read(&self) -> parking_lot::RwLockReadGuard<'_, Self::Data> {
-        self.legacy.read()
+    fn read(&self) -> parking_lot::MappedRwLockReadGuard<'_, Self::Data> {
+        parking_lot::RwLockReadGuard::map(self.legacy.read(), |b| b.as_ref())
     }
     #[inline]
-    fn write(&self) -> parking_lot::RwLockWriteGuard<'_, Self::Data> {
-        self.legacy.write()
+    fn write(&self) -> parking_lot::MappedRwLockWriteGuard<'_, Self::Data> {
+        parking_lot::RwLockWriteGuard::map(self.legacy.write(), |b| b.as_mut())
     }
 }
 

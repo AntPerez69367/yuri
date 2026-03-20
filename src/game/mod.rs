@@ -12,4 +12,5 @@ pub mod gm_command;
 pub mod player;
 pub use self::player as pc;
 pub mod scripting;
+pub mod lua;
 pub mod types;

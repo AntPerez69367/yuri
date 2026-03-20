@@ -1,5 +1,7 @@
 use md5::{Digest, Md5};
 
+use crate::common::traits::LegacyEntity;
+
 /// Opcodes that use key1 (static XOR) on the client side.
 const CL_KEY1_PACKETS: &[u8] = &[2, 3, 4, 11, 21, 38, 58, 66, 67, 75, 80, 87, 98, 113, 115, 123];
 
@@ -176,9 +178,7 @@ pub fn tk_crypt_static(buff: &mut [u8], xor_key: &[u8]) {
 /// 3. Apply dynamic or static XOR encryption.
 /// 4. Return `new_payload_len + 3` = total bytes to commit (including the 3-byte framing header).
 ///
-/// # Safety
-/// `fd` must be a valid session fd with pending write data staged by `wfifohead`.
-pub unsafe fn encrypt(fd: SessionId) -> i32 {
+pub fn encrypt(fd: SessionId) -> i32 {
     use crate::config::config;
     use crate::session::{session_get_data, get_session_manager};
 
@@ -198,9 +198,6 @@ pub unsafe fn encrypt(fd: SessionId) -> i32 {
                 return 1;
             }
 
-            // Original payload length from packet header bytes 1–2 (big-endian).
-            // After set_packet_indexes the header is updated; total slice = original + 6
-            // (3-byte framing header + 3 index bytes appended by set_packet_indexes).
             let original_len = u16::from_be_bytes([session.wdata[wpos + 1], session.wdata[wpos + 2]]) as usize;
             let total_size = original_len + 6;
             let buf_slice = &mut session.wdata[wpos..wpos + total_size];
@@ -209,12 +206,8 @@ pub unsafe fn encrypt(fd: SessionId) -> i32 {
 
             if is_key_server(buf_slice[3]) {
                 let sd = pe.read();
-                let enc_hash = std::slice::from_raw_parts(
-                    sd.EncHash.as_ptr() as *const u8,
-                    sd.EncHash.len(),
-                );
                 let mut key = [0u8; 10];
-                generate_key2(buf_slice, enc_hash, &mut key, false);
+                generate_key2(buf_slice, &sd.EncHash, &mut key, false);
                 drop(sd);
                 tk_crypt_dynamic(buf_slice, &key);
             } else {
@@ -231,11 +224,7 @@ pub unsafe fn encrypt(fd: SessionId) -> i32 {
 
 /// Decrypts the incoming read buffer for `fd` in-place.
 ///
-/// # Safety
-/// `fd` must be a valid session fd with a complete incoming packet in the read buffer.
-/// The `*const u8 → *mut u8` cast for in-place XOR is safe here because
-/// packet dispatch is single-threaded and no other thread aliases this buffer.
-pub unsafe fn decrypt(fd: SessionId) -> i32 {
+pub fn decrypt(fd: SessionId) -> i32 {
     use crate::config::config;
     use crate::session::{session_get_data, get_session_manager};
 
@@ -252,14 +241,9 @@ pub unsafe fn decrypt(fd: SessionId) -> i32 {
             let buf_slice = &mut session.rdata[pos..size];
 
             let sd = pe.read();
-            let enc_hash = std::slice::from_raw_parts(
-                sd.EncHash.as_ptr() as *const u8,
-                sd.EncHash.len(),
-            );
-
             if is_key_client(buf_slice[3]) {
                 let mut key = [0u8; 10];
-                generate_key2(buf_slice, enc_hash, &mut key, true);
+                generate_key2(buf_slice, &sd.EncHash, &mut key, true);
                 drop(sd);
                 tk_crypt_dynamic(buf_slice, &key);
             } else {

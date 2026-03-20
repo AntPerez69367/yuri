@@ -13,6 +13,8 @@ pub mod types;
 use mlua::Lua;
 use std::ffi::{CStr, CString};
 
+use crate::common::traits::LegacyEntity;
+
 use types::floor::FloorListObject;
 use types::item::*;
 use types::mob::MobObject;
@@ -377,9 +379,11 @@ fn call_lua_str(root: &str, method: Option<&str>, args: mlua::MultiValue) -> boo
 
     match method {
         None => {
-            let func: mlua::Function = match lua.globals().get(root) { Ok(f) => f, Err(_) => return false };
-            if let Err(e) = func.call::<mlua::MultiValue>(args) {
-                tracing::warn!("[scripting] {root}: {e}");
+            let func: mlua::Function = match lua.globals().get(root) { Ok(f) => f, Err(_) => { tracing::warn!("[scripting] {root}: function not found"); return false } };
+            tracing::info!("[scripting] calling {root}");
+            match func.call::<mlua::MultiValue>(args) {
+                Ok(_) => tracing::info!("[scripting] {root} returned ok"),
+                Err(e) => tracing::warn!("[scripting] {root}: {e}"),
             }
             true
         }

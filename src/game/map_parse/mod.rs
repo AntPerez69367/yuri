@@ -28,6 +28,7 @@ pub mod events;
 // ─── clif_parse — main packet dispatcher ─────────────────────────────────────
 
 
+use crate::common::traits::LegacyEntity;
 use crate::database::map_db::raw_map_ptr;
 use crate::session::{SessionId, session_exists, session_get_data, session_get_eof, session_set_eof};
 use crate::game::time_util::timer_insert;
@@ -50,7 +51,7 @@ use crate::game::map_parse::items::{
 use crate::game::map_parse::trading::{clif_handitem, clif_handgold, clif_parse_exchange};
 use crate::game::map_parse::groups::{clif_groupstatus, clif_addgroup, clif_parseparcel, clif_huntertoggle, clif_sendhunternote};
 use crate::game::map_parse::events::{clif_sendRewardInfo, clif_getReward, clif_parseranking};
-use crate::game::map_parse::player_state::{clif_mystaytus, clif_refresh};
+use crate::game::map_parse::player_state::{clif_mystatus, clif_refresh};
 use crate::game::map_parse::dialogs::{clif_parsenpcdialog, clif_handle_clickgetinfo, clif_closeit};
 
 // get_fd_max is defined in the binary; import via the session module.
@@ -347,7 +348,7 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
             clif_cancelafk(pe);
             let pe_fd = pe.fd;
             if rfifob(pe_fd, 5) == 0 {
-                clif_mystaytus(pe).await;
+                clif_mystatus(pe);
             } else {
                 clif_groupstatus(pe);
             }

@@ -11,6 +11,7 @@
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
+use crate::common::traits::LegacyEntity;
 use crate::database::{board_db, class_db};
 use crate::session::{
     SessionId, session_exists, session_get_client_ip,
@@ -73,70 +74,42 @@ unsafe fn ww_be(p: *mut u8, pos: usize, val: u16) {
 // ─── Packet helpers ──────────────────────────────────────────────────────────
 
 /// Returns experience needed to reach the next level (TNL = To Next Level).
-pub fn clif_getLevelTNL(pe: &PlayerEntity) -> i32 {
-    let r = pe.read();
-    let mut path = r.player.progression.class as i32;
-    let level = r.player.progression.level as i32;
+/// Resolves the class_db path for a given class id.
+#[inline]
+fn class_path(class: i32) -> i32 {
+    if class > 5 { class_db::path(class) } else { class }
+}
 
-    if path > 5 {
-        path = class_db::path(path);
-    }
+pub fn clif_getLevelTNL(pe: &PlayerEntity) -> u32 {
+    let level = pe.level() as i32;
+    let path = class_path(pe.class() as i32);
 
     if level < 99 {
-        class_db::level(path, level) as i32 - r.player.progression.exp as i32
+        class_db::level(path, level).saturating_sub(pe.exp())
     } else {
         0
     }
 }
 
 /// Returns the current XP bar fill percentage (0.0–100.0).
-///
-///
-/// Mutates `pe->underLevelFlag` as a side effect (faithfully reproduced from C).
 pub fn clif_getXPBarPercent(pe: &PlayerEntity) -> f32 {
-    // C normalises path twice — the first assignment is overwritten immediately;
-    // reproduced faithfully. The `let _ = path` silences the dead-assignment lint.
-    let (class, level, exp, under_level_flag) = {
-        let r = pe.read();
-        (r.player.progression.class as i32, r.player.progression.level as i32,
-         r.player.progression.exp, r.underLevelFlag)
-    };
-    let mut path = class;
-    if path > 5 {
-        path = class_db::path(path);
-    }
-    let _ = path; // dead assignment; C re-reads sd->status.class next
+    let level = pe.level() as i32;
+    let exp = pe.exp();
+    let path = class_path(pe.class() as i32);
 
-    path = class;
-    if path > 5 {
-        path = class_db::path(path);
+    if level >= 99 {
+        return exp as f32 / u32::MAX as f32 * 100.0;
     }
 
-    if level < 99 {
-        let exp_in_level = class_db::level(path, level) as i32
-            - class_db::level(path, level - 1) as i32;
-        let tnl = class_db::level(path, level) as i32 - exp as i32;
-        let percentage = (exp_in_level - tnl) as f32 / exp_in_level as f32 * 100.0;
+    let xp_prev = class_db::level(path, level - 1);
+    let xp_cur = class_db::level(path, level);
 
-        if under_level_flag == 0
-            && exp < class_db::level(path, level - 1)
-        {
-            pe.write().underLevelFlag = level as i8;
-        }
-
-        let under_level_flag = pe.read().underLevelFlag;
-        if under_level_flag as u8 != pe.read().player.progression.level {
-            pe.write().underLevelFlag = 0;
-        }
-
-        let under_level_flag = pe.read().underLevelFlag;
-        if under_level_flag != 0 {
-            return exp as f32 / class_db::level(path, level) as f32 * 100.0;
-        }
-
-        percentage
+    if exp < xp_prev {
+        exp as f32 / xp_cur as f32 * 100.0
     } else {
-        exp as f32 / 4_294_967_295_f32 * 100.0
+        let exp_in_level = xp_cur - xp_prev;
+        let progress = exp - xp_prev;
+        progress as f32 / exp_in_level as f32 * 100.0
     }
 }
 
@@ -2319,7 +2292,7 @@ pub async unsafe fn clif_clickonplayer(pe: &PlayerEntity, target_id: u32) -> i32
         wb(p, len + 7, lg_color as u8);
 
         if lg_tchaid > 0 {
-            let char_name = clif_getName(lg_tchaid).await;
+            let char_name = clif_getName(lg_tchaid);
             let text_ptr  = lg_text.as_ptr();
             let mut repl_buf = [0u8; 4096];
             let bff = replace_str_rust(text_ptr, b"$player\0", char_name as *const i8, &mut repl_buf);

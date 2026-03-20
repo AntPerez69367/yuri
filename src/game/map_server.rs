@@ -8,10 +8,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use parking_lot::RwLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::common::traits::LegacyEntity;
 use crate::database::get_pool;
 use crate::database::{blocking_run_async, boards as db_boards};
 use crate::game::npc::NpcEntity;
-use crate::game::npc::prelude::*;
 use crate::game::pc::{
     MapSessionData, PlayerEntity, FLAG_MAIL,
     U_FLAG_UNPHYSICAL,
@@ -305,7 +305,8 @@ unsafe fn box_into_arc_rwlock<T>(b: Box<T>) -> Arc<RwLock<T>> {
 /// Insert a player — takes ownership of the Box, wrapping it in Arc<RwLock>.
 pub fn map_addiddb_player(id: u32, fd: crate::session::SessionId, sd: Box<crate::game::pc::MapSessionData>) {
     let name = sd.player.identity.name.clone();
-    let arc = Arc::from(PlayerEntity::new(id, fd, name, sd));
+    let gm_level = sd.player.identity.gm_level;
+    let arc = Arc::from(PlayerEntity::new(id, fd, name, gm_level, sd));
     player_map().insert(id, arc);
 }
 
@@ -2817,6 +2818,9 @@ pub async unsafe fn map_setglobalgamereg(reg: *const i8, val: i32) -> i32 {
 pub async fn map_id2name(id: u32) -> String {
     if id == 0 {
         return "None".to_string();
+    }
+    if let Some(pe) = map_id2sd_pc(id) {
+        return pe.name.clone();
     }
     sqlx::query_scalar::<_, String>(
             "SELECT `ChaName` FROM `Character` WHERE `ChaId`=?"

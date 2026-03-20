@@ -1,7 +1,9 @@
 //! PC (USER) field accessors for Lua scripting.
 
+use crate::common::traits::LegacyEntity;
 use crate::game::map_parse::packet::rfifob;
 use crate::game::pc::{MapSessionData, EQ_FACEACCTWO, SFLAG_HPMP, SFLAG_FULLSTATS, SFLAG_XPMONEY};
+use crate::game::player::entity::PlayerEntity;
 use crate::session::SessionId;
 use crate::game::mob::{MobSpawnData, MAX_THREATCOUNT};
 use crate::common::player::inventory::{MAX_INVENTORY, MAX_EQUIP, MAX_BANK_SLOTS};
@@ -288,7 +290,7 @@ use crate::game::map_char::intif_save_impl::sl_intif_save;
 use crate::game::pc::{
     pc_diescript, pc_res,
     pc_calcstat, pc_requestmp,
-    pc_warp_sync as pc_warp, pc_setpos,
+    pc_warp, pc_setpos,
     pc_getitemscript, pc_loaditem,
     pc_equipscript, pc_unequipscript,
     pc_loadmagic, pc_checklevel,
@@ -299,7 +301,6 @@ use crate::game::pc::{
 use crate::game::map_parse::movement::{
     clif_refreshnoclick, clif_noparsewalk, clif_blockmovement,
 };
-use crate::game::map_parse::visual::clif_spawn;
 use crate::game::map_parse::items::{clif_throwitem_script, clif_sendadditem, clif_checkinvbod};
 use crate::game::map_parse::chat::{clif_guitextsd, clif_sendminitext, clif_sendscriptsay};
 use crate::game::map_server::{boards_showposts, boards_readpost, nmail_sendmail, map_id2sd_pc};
@@ -413,9 +414,18 @@ pub fn sl_pc_classNameMark(sd: &mut MapSessionData) -> *const i8 {
 // player.* setters
 pub fn sl_pc_set_hp(sd: &mut MapSessionData, v: i32)         { sd.player.combat.hp = v as u32; }
 pub fn sl_pc_set_mp(sd: &mut MapSessionData, v: i32)         { sd.player.combat.mp = v as u32; }
-pub fn sl_pc_set_exp(sd: &mut MapSessionData, v: i32)        { sd.player.progression.exp = v as u32; }
-pub fn sl_pc_set_level(sd: &mut MapSessionData, v: i32)      { sd.player.progression.level = v as u8; }
-pub fn sl_pc_set_class(sd: &mut MapSessionData, v: i32)      { sd.player.progression.class = v as u8; }
+pub fn sl_pc_set_exp(pe: &PlayerEntity, sd: &mut MapSessionData, v: i32) {
+    sd.player.progression.exp = v as u32;
+    pe.set_exp(v as u32);
+}
+pub fn sl_pc_set_level(pe: &PlayerEntity, sd: &mut MapSessionData, v: i32) {
+    sd.player.progression.level = v as u8;
+    pe.set_class_level(sd.player.progression.class, v as u8);
+}
+pub fn sl_pc_set_class(pe: &PlayerEntity, sd: &mut MapSessionData, v: i32) {
+    sd.player.progression.class = v as u8;
+    pe.set_class_level(v as u8, sd.player.progression.level);
+}
 pub fn sl_pc_set_totem(sd: &mut MapSessionData, v: i32)      { sd.player.progression.totem = v as u8; }
 pub fn sl_pc_set_tier(sd: &mut MapSessionData, v: i32)       { sd.player.progression.tier = v as u8; }
 pub fn sl_pc_set_mark(sd: &mut MapSessionData, v: i32)       { sd.player.progression.mark = v as u8; }
@@ -763,31 +773,34 @@ pub fn sl_pc_showhealth(sd: &mut MapSessionData, damage: i32, kind: i32) {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn sl_pc_calcstat(sd: &mut MapSessionData) {
-    if let Some(arc) = map_id2sd_pc(sd.id) { pc_calcstat(&arc); }
+pub unsafe fn sl_pc_calcstat(pe: &PlayerEntity) {
+    pc_calcstat(pe);
 }
 
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn sl_pc_sendstatus(sd: &mut MapSessionData) {
-    pc_requestmp(sd);
-    if let Some(arc) = map_id2sd_pc(sd.id) {
-        clif_sendstatus(&arc, SFLAG_FULLSTATS | SFLAG_HPMP | SFLAG_XPMONEY);
-        clif_sendupdatestatus_onequip(&arc);
+pub unsafe fn sl_pc_sendstatus(pe: &PlayerEntity) {
+    {
+        let mut guard = pe.write();
+        pc_requestmp(&mut *guard);
     }
+    clif_sendstatus(pe, SFLAG_FULLSTATS | SFLAG_HPMP | SFLAG_XPMONEY);
+    clif_sendupdatestatus_onequip(pe);
 }
 
-pub fn sl_pc_status(sd: &mut MapSessionData) -> i32 {
-    crate::database::blocking_run_async(
-        crate::game::map_parse::player_state::clif_mystaytus_by_addr(sd as *mut MapSessionData as usize)
-    )
+pub unsafe fn sl_pc_status(pe: &PlayerEntity) -> i32 {
+    crate::game::map_parse::player_state::clif_mystatus(pe)
 }
 
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn sl_pc_warp(sd: &mut MapSessionData, m: i32, x: i32, y: i32) {
+pub unsafe fn sl_pc_warp(pe: &PlayerEntity, m: i32, x: i32, y: i32) {
+    let sd = {
+        let mut guard = pe.write();
+        &mut *guard as *mut MapSessionData
+    };
     pc_warp(sd, m, x, y);
 }
 
@@ -851,12 +864,6 @@ pub unsafe fn sl_pc_swing(sd: &mut MapSessionData) {
     clif_parseattack(&mut *sd);
 }
 
-/// # Safety
-///
-/// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn sl_pc_respawn(sd: &mut MapSessionData) {
-    clif_spawn(sd);
-}
 
 /// # Safety
 ///

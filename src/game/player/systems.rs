@@ -1058,8 +1058,11 @@ pub unsafe fn pc_givexp(
         let cur_exp = pe.read().player.progression.exp;
         if (cur_exp as i64) < (exp as i64).abs() {
             pe.write().player.progression.exp = 0;
+            pe.set_exp(0);
         } else {
-            pe.write().player.progression.exp = cur_exp.wrapping_add(exp);
+            let new_exp = cur_exp.wrapping_add(exp);
+            pe.write().player.progression.exp = new_exp;
+            pe.set_exp(new_exp);
         }
         return 0;
     }
@@ -1081,6 +1084,7 @@ pub unsafe fn pc_givexp(
     };
 
     pe.write().player.progression.exp = tempxp;
+    pe.set_exp(tempxp);
 
     libc::snprintf(
         xpstring.as_mut_ptr(),

@@ -4,7 +4,9 @@
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
 
+use crate::common::traits::LegacyEntity;
 use crate::game::scripting::carray_to_str;
+use crate::game::player::PlayerEntity;
 use crate::database::mob_db::MobDbData;
 use crate::database::map_db::raw_map_ptr;
 use crate::session::{SessionId, session_exists, session_set_eof};
@@ -1381,25 +1383,27 @@ pub fn clif_sendanimation_inner(fd: SessionId, setting_flags: u32, anim: i32, ta
 
 /// Send animation for `sd`'s block_list to `src`'s socket.
 ///
+/// Send a spell animation packet for `entity` to `viewer`.
 pub fn clif_animation(
-    src: &mut MapSessionData,
-    sd: &mut MapSessionData,
+    viewer: &PlayerEntity,
+    entity: &PlayerEntity,
     animation: i32,
     duration: i32,
 ) -> i32 {
-    if !session_exists(sd.fd) {
+    if !session_exists(entity.fd) {
         return 0;
     }
 
+    let setting_flags = viewer.read().player.appearance.setting_flags;
     unsafe {
-        wfifohead(src.fd, 0x0A + 3);
-        if src.player.appearance.setting_flags & FLAG_MAGIC != 0 {
-            let fd = src.fd;
+        let fd = viewer.fd;
+        wfifohead(fd, 0x0A + 3);
+        if setting_flags & FLAG_MAGIC != 0 {
             wfifob(fd, 0, 0xAA);
             wfifow(fd, 1, 0x000Au16.swap_bytes());
             wfifob(fd, 3, 0x29);
             wfifob(fd, 4, 0x03);
-            wfifol(fd, 5, sd.id.swap_bytes());
+            wfifol(fd, 5, entity.id.swap_bytes());
             wfifow(fd, 9,  (animation as u16).swap_bytes());
             wfifow(fd, 11, ((duration / 1000) as u16).swap_bytes());
             wfifoset(fd, encrypt(fd) as usize);
@@ -1410,12 +1414,13 @@ pub fn clif_animation(
 
 // ─── clif_sendanimations ──────────────────────────────────────────────────────
 
-/// Send all active aether animations from `sd` to `src`.
-///
-pub fn clif_sendanimations(src: &mut MapSessionData, sd: &mut MapSessionData) -> i32 {
+/// Send all active aether spell animations from `entity` to `viewer`.
+pub fn clif_sendanimations(viewer: &PlayerEntity, entity: &PlayerEntity) -> i32 {
+    let guard = entity.read();
     for x in 0..MAX_MAGIC_TIMERS {
-        if sd.player.spells.dura_aether[x].duration > 0 && sd.player.spells.dura_aether[x].animation != 0 {
-            clif_animation(src, sd, sd.player.spells.dura_aether[x].animation as i32, sd.player.spells.dura_aether[x].duration);
+        let aether = &guard.player.spells.dura_aether[x];
+        if aether.duration > 0 && aether.animation != 0 {
+            clif_animation(viewer, entity, aether.animation as i32, aether.duration);
         }
     }
     0

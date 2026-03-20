@@ -1,21 +1,24 @@
-//! Inline FIFO helpers for packet I/O.
+//! Packet I/O helpers.
+//!
+//! New code should use [`PacketWriter`] and [`PacketReader`] which hold the
+//! session lock for the lifetime of the packet, avoiding per-byte lock churn.
+//!
+//! The legacy `wfifob`/`rfifob`-style free functions are kept for unmigrated
+//! callers but should not be used in new code.
 
-
+use tokio::sync::OwnedMutexGuard;
 use crate::session::{
     session_exists, session_increment,
-    get_session_manager, SessionId,
+    get_session_manager, Session, SessionId,
 };
 
-// ─── Send-target constants (enum in map_parse.h) ─────────────────────────────
-// Re-exported from crate::common::constants::network for callers that import
-// these via `super::packet::*` or named imports from this module.
+// ─── Send-target constants ───────────────────────────────────────────────────
 
 pub use crate::common::constants::network::{
     ALL_CLIENT, SAMESRV, SAMEMAP, SAMEMAP_WOS,
     AREA, AREA_WOS, SAMEAREA, SAMEAREA_WOS,
     CORNER, SELF,
 };
-// Note: AREA_WOC not present in C source (map_parse.h enum ends at SELF = 9)
 
 // ─── Byte-order helpers ───────────────────────────────────────────────────────
 
@@ -24,6 +27,184 @@ pub fn swap16(x: u16) -> u16 { x.swap_bytes() }
 
 #[inline]
 pub fn swap32(x: u32) -> u32 { x.swap_bytes() }
+
+// ─── PacketWriter ────────────────────────────────────────────────────────────
+
+/// Builds an outbound packet while holding the session lock exactly once.
+///
+/// Created via [`PacketWriter::new`] (raw) or [`PacketWriter::header`]
+/// (writes the standard 5-byte header automatically).
+/// Call [`flush`](PacketWriter::flush) to commit; dropping without flush
+/// is a no-op (packet is silently discarded).
+pub struct PacketWriter {
+    guard: OwnedMutexGuard<Session>,
+    fd: SessionId,
+}
+
+impl PacketWriter {
+    /// Reserve `size` bytes and acquire the session lock.
+    /// Returns `None` if the session is gone.
+    pub fn new(fd: SessionId, size: usize) -> Option<Self> {
+        let arc = get_session_manager().get_session(fd)?;
+        let mut guard = arc.try_lock_owned().ok()?;
+        guard.ensure_wdata_capacity(size).ok()?;
+        Some(PacketWriter { guard, fd })
+    }
+
+    /// Reserve space and write the standard 5-byte packet header.
+    pub fn header(fd: SessionId, packet_id: u8, packet_size: u16) -> Option<Self> {
+        let mut w = Self::new(fd, packet_size as usize + 3)?;
+        w.u8(0, 0xAA);
+        let bytes = packet_size.to_be_bytes();
+        let actual = w.guard.wdata_size + 1;
+        if actual + 1 < w.guard.wdata.len() {
+            w.guard.wdata[actual] = bytes[0];
+            w.guard.wdata[actual + 1] = bytes[1];
+        }
+        w.u8(3, packet_id);
+        w.u8(4, session_increment(fd));
+        Some(w)
+    }
+
+    #[inline]
+    pub fn u8(&mut self, pos: usize, val: u8) {
+        let _ = self.guard.write_u8(pos, val);
+    }
+
+    #[inline]
+    pub fn u16_le(&mut self, pos: usize, val: u16) {
+        let actual = self.guard.wdata_size + pos;
+        if actual + 1 < self.guard.wdata.len() {
+            let bytes = val.to_le_bytes();
+            self.guard.wdata[actual] = bytes[0];
+            self.guard.wdata[actual + 1] = bytes[1];
+        }
+    }
+
+    #[inline]
+    pub fn u16_be(&mut self, pos: usize, val: u16) {
+        let actual = self.guard.wdata_size + pos;
+        if actual + 1 < self.guard.wdata.len() {
+            let bytes = val.to_be_bytes();
+            self.guard.wdata[actual] = bytes[0];
+            self.guard.wdata[actual + 1] = bytes[1];
+        }
+    }
+
+    #[inline]
+    pub fn u32_le(&mut self, pos: usize, val: u32) {
+        let actual = self.guard.wdata_size + pos;
+        if actual + 3 < self.guard.wdata.len() {
+            let bytes = val.to_le_bytes();
+            self.guard.wdata[actual] = bytes[0];
+            self.guard.wdata[actual + 1] = bytes[1];
+            self.guard.wdata[actual + 2] = bytes[2];
+            self.guard.wdata[actual + 3] = bytes[3];
+        }
+    }
+
+    #[inline]
+    pub fn u32_be(&mut self, pos: usize, val: u32) {
+        let actual = self.guard.wdata_size + pos;
+        if actual + 3 < self.guard.wdata.len() {
+            let bytes = val.to_be_bytes();
+            self.guard.wdata[actual] = bytes[0];
+            self.guard.wdata[actual + 1] = bytes[1];
+            self.guard.wdata[actual + 2] = bytes[2];
+            self.guard.wdata[actual + 3] = bytes[3];
+        }
+    }
+
+    /// Write a byte slice at `pos`.
+    #[inline]
+    pub fn bytes(&mut self, pos: usize, data: &[u8]) {
+        let actual = self.guard.wdata_size + pos;
+        let end = actual + data.len();
+        if end <= self.guard.wdata.len() {
+            self.guard.wdata[actual..end].copy_from_slice(data);
+        }
+    }
+
+    /// Raw mutable pointer into the write buffer at `pos`.
+    ///
+    /// # Safety
+    /// Caller must not write beyond the reserved capacity.
+    #[inline]
+    pub unsafe fn ptr(&mut self, pos: usize) -> *mut u8 {
+        self.guard.wdata_ptr(pos).unwrap_or(std::ptr::null_mut())
+    }
+
+    /// Commit the packet and encrypt. Consumes the writer.
+    pub fn flush(mut self, size: usize) {
+        let _ = self.guard.commit_write(size);
+    }
+
+    /// Commit via encrypt(). Consumes the writer, returns encrypted size.
+    pub fn flush_encrypt(self) -> usize {
+        drop(self.guard);
+        encrypt(self.fd) as usize
+    }
+}
+
+// ─── PacketReader ────────────────────────────────────────────────────────────
+
+/// Reads an inbound packet while holding the session lock exactly once.
+pub struct PacketReader {
+    guard: OwnedMutexGuard<Session>,
+}
+
+impl PacketReader {
+    /// Acquire the session lock for reading.
+    /// Returns `None` if the session is gone.
+    pub fn new(fd: SessionId) -> Option<Self> {
+        let arc = get_session_manager().get_session(fd)?;
+        let guard = arc.try_lock_owned().ok()?;
+        Some(PacketReader { guard })
+    }
+
+    #[inline]
+    pub fn u8(&self, pos: usize) -> u8 {
+        let bytes = self.guard.rdata_bytes();
+        if pos < bytes.len() { bytes[pos] } else { 0 }
+    }
+
+    #[inline]
+    pub fn u16_le(&self, pos: usize) -> u16 {
+        let bytes = self.guard.rdata_bytes();
+        if pos + 1 < bytes.len() {
+            u16::from_le_bytes([bytes[pos], bytes[pos + 1]])
+        } else { 0 }
+    }
+
+    #[inline]
+    pub fn u32_le(&self, pos: usize) -> u32 {
+        let bytes = self.guard.rdata_bytes();
+        if pos + 3 < bytes.len() {
+            u32::from_le_bytes([bytes[pos], bytes[pos + 1], bytes[pos + 2], bytes[pos + 3]])
+        } else { 0 }
+    }
+
+    /// Raw pointer into recv buffer at `pos`.
+    ///
+    /// # Safety
+    /// Only valid while this `PacketReader` is alive.
+    #[inline]
+    pub unsafe fn ptr(&self, pos: usize) -> *const u8 {
+        let bytes = self.guard.rdata_bytes();
+        if pos < bytes.len() { bytes.as_ptr().add(pos) } else { std::ptr::null() }
+    }
+
+    /// Remaining bytes in the recv buffer.
+    #[inline]
+    pub fn remaining(&self) -> usize {
+        self.guard.available()
+    }
+
+    /// Consume `len` bytes from the recv buffer.
+    pub fn skip(&mut self, len: usize) {
+        let _ = self.guard.skip(len);
+    }
+}
 
 // ─── Recv-buffer (RFIFO) helpers ─────────────────────────────────────────────
 

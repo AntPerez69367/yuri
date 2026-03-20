@@ -169,7 +169,6 @@ pub struct MapSessionData {
     pub disptimertype:     i8,
     pub sendstatus_tick:   i8,
 
-    pub underLevelFlag:    i8,
     pub dialogtype:        i8,
     pub alignment:         i8,
     pub boardnameval:      i8,
@@ -198,7 +197,7 @@ pub struct MapSessionData {
     pub bindmap:           u16,
 
     // encryption hash buffer (0x401 = 1025 bytes)
-    pub EncHash:           [i8; 0x401],
+    pub EncHash:           [u8; 0x401],
 
     // npc
     pub npc_id:            i32,

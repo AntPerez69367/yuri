@@ -44,15 +44,14 @@ impl LegacyEntity for NpcEntity {
     type Data = NpcData;
 
     #[inline]
-    fn read(&self) -> parking_lot::RwLockReadGuard<'_, Self::Data> {
-        self.legacy.read()
+    fn read(&self) -> parking_lot::MappedRwLockReadGuard<'_, Self::Data> {
+        parking_lot::RwLockReadGuard::map(self.legacy.read(), |d| d)
     }
 
     #[inline]
-    fn write(&self) -> parking_lot::RwLockWriteGuard<'_, Self::Data> {
-        self.legacy.write()
+    fn write(&self) -> parking_lot::MappedRwLockWriteGuard<'_, Self::Data> {
+        parking_lot::RwLockWriteGuard::map(self.legacy.write(), |d| d)
     }
-
 }
 
 impl Spatial for NpcEntity {
@@ -357,8 +356,7 @@ pub unsafe fn npc_warp(nd: *mut NpcData, m: i32, x: i32, y: i32) -> i32 {
         if nd.npctype == 1 {
             for id in ids {
                 if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    let pc = &*arc.read();
-                    clif_cnpclook(&*nd, pc);
+                    clif_cnpclook(&*nd, &arc);
                 }
             }
         } else {
@@ -459,6 +457,59 @@ pub unsafe fn npc_duration(nd: *mut NpcData) -> i32 {
     0
 }
 
+/// Advance all timers for one NPC and dispatch any pending Lua events.
+///
+/// The write lock is scoped tightly around timer mutation only. Lua dispatch
+/// happens after the lock is dropped to satisfy the "No lock across Lua" rule
+/// (holding an NpcEntity write guard across `sl_doscript_*` causes a
+/// self-deadlock when the Lua method reads the same NpcEntity).
+unsafe fn npc_tick_and_dispatch(entity: &NpcEntity) {
+    type Ev = Option<(String, u32, u32)>; // (name, id, owner)
+
+    let (action_ev, move_ev, dur_ev): (Ev, Ev, Ev) = {
+        let nd = &mut *entity.write();
+
+        let action_ev = if nd.actiontime > 0 {
+            nd.time = nd.time.wrapping_add(100);
+            if nd.time >= nd.actiontime {
+                nd.time = 0;
+                Some((crate::game::scripting::carray_to_str(&nd.name).to_owned(), nd.id, nd.owner))
+            } else { None }
+        } else { None };
+
+        let move_ev = if nd.movetime > 0 {
+            nd.movetimer = nd.movetimer.wrapping_add(100);
+            if nd.movetimer >= nd.movetime {
+                nd.movetimer = 0;
+                Some((crate::game::scripting::carray_to_str(&nd.name).to_owned(), nd.id, nd.owner))
+            } else { None }
+        } else { None };
+
+        let dur_ev = if nd.duration > 0 {
+            nd.duratime = nd.duratime.wrapping_add(100);
+            if nd.duratime >= nd.duration {
+                nd.duratime = 0;
+                Some((crate::game::scripting::carray_to_str(&nd.name).to_owned(), nd.id, nd.owner))
+            } else { None }
+        } else { None };
+
+        (action_ev, move_ev, dur_ev)
+    }; // write lock dropped here — safe to call Lua below
+
+    if let Some((name, id, owner)) = action_ev {
+        if owner != 0 { sl_doscript_2(&name, Some("action"), id, owner); }
+        else { sl_doscript_simple(&name, Some("action"), id); }
+    }
+    if let Some((name, id, owner)) = move_ev {
+        if owner != 0 { sl_doscript_2(&name, Some("move"), id, owner); }
+        else { sl_doscript_simple(&name, Some("move"), id); }
+    }
+    if let Some((name, id, owner)) = dur_ev {
+        if owner != 0 { sl_doscript_2(&name, Some("endAction"), id, owner); }
+        else { sl_doscript_simple(&name, Some("endAction"), id); }
+    }
+}
+
 /// Timer callback fired every 100 ms by the map-server timer wheel.
 ///
 /// Iterates all regular NPCs (IDs `NPC_START_NUM..=NPC_ID`) and all temp NPCs
@@ -477,17 +528,7 @@ pub unsafe fn npc_runtimers() {
     let npc_hi = NPC_ID.load(Ordering::Relaxed);
     while x <= npc_hi {
         if let Some(arc) = crate::game::map_server::map_id2npc_ref(x) {
-            let nd = &mut *arc.write();
-            let nd_ptr = nd as *mut NpcData;
-            if nd.actiontime > 0 {
-                npc_action(nd_ptr);
-            }
-            if nd.movetime > 0 {
-                npc_movetime(nd_ptr);
-            }
-            if nd.duration > 0 {
-                npc_duration(nd_ptr);
-            }
+            npc_tick_and_dispatch(&arc);
         }
         x += 1;
     }
@@ -497,17 +538,7 @@ pub unsafe fn npc_runtimers() {
     let npct_hi = NPCTEMP_ID.load(Ordering::Relaxed);
     while x <= npct_hi {
         if let Some(arc) = crate::game::map_server::map_id2npc_ref(x) {
-            let nd = &mut *arc.write();
-            let nd_ptr = nd as *mut NpcData;
-            if nd.actiontime > 0 {
-                npc_action(nd_ptr);
-            }
-            if nd.movetime > 0 {
-                npc_movetime(nd_ptr);
-            }
-            if nd.duration > 0 {
-                npc_duration(nd_ptr);
-            }
+            npc_tick_and_dispatch(&arc);
         }
         x += 1;
     }
@@ -1074,7 +1105,7 @@ pub unsafe fn npc_move(nd: *mut NpcData) -> i32 {
                 if nd.npctype == 1 {
                     for &id in &rect_ids {
                         if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                            clif_cnpclook(&*nd, &pc_arc.read());
+                            clif_cnpclook(&*nd, &pc_arc);
                         }
                     }
                 } else {

@@ -5,6 +5,9 @@
 use mlua::{MetaMethod, UserData, UserDataMethods};
 use std::ffi::{CStr, CString};
 
+use crate::common::traits::LegacyEntity;
+
+use crate::game::map_parse::visual::clif_spawn;
 use crate::game::scripting::pc_accessors::{
     sl_pc_getpk, sl_pc_getgroup,
     sl_pc_input_send, sl_pc_dialog_send, sl_pc_dialogseq_send,
@@ -109,6 +112,16 @@ impl PcObject {
     fn with_sd<R, F: FnOnce(&mut crate::game::pc::MapSessionData) -> R>(&self, default: R, f: F) -> R {
         match crate::game::map_server::map_id2sd_pc(self.id) {
             Some(pe) => f(&mut pe.write()),
+            None => default,
+        }
+    }
+
+    /// Execute a closure with the PlayerEntity reference.
+    /// Returns `default` if the player is no longer online.
+    #[inline]
+    fn with_pe<R, F: FnOnce(&crate::game::player::PlayerEntity) -> R>(&self, default: R, f: F) -> R {
+        match crate::game::map_server::map_id2sd_pc(self.id) {
+            Some(pe) => f(&pe),
             None => default,
         }
     }
@@ -482,11 +495,11 @@ impl UserData for PcObject {
         methods.add_meta_method_mut(
             MetaMethod::NewIndex,
             |_lua, this, (key, val): (String, mlua::Value)| {
-                let arc = match crate::game::map_server::map_id2sd_pc(this.id) {
-                    Some(arc) => arc,
+                let pe = match crate::game::map_server::map_id2sd_pc(this.id) {
+                    Some(pe) => pe,
                     None => return Ok(()),
                 };
-                let mut guard = arc.write();
+                let mut guard = pe.write();
                 let sd = &mut *guard;
                 let v = val_to_int(&val);
                 match key.as_str() {
@@ -514,7 +527,7 @@ impl UserData for PcObject {
                     "clan" => sl_pc_set_clan(sd, v),
                     "clanChat" => sl_pc_set_clan_chat(sd, v),
                     "clanRank" => sl_pc_set_clanRank(sd, v),
-                    "class" => sl_pc_set_class(sd, v),
+                    "class" => sl_pc_set_class(&pe, sd, v),
                     "classRank" => sl_pc_set_classRank(sd, v),
                     "coContainer" => sl_pc_set_coref_container(sd, v),
                     "con" => sl_pc_set_con(sd, v),
@@ -533,7 +546,7 @@ impl UserData for PcObject {
                     "dmgShield" => sl_pc_set_dmgshield(sd, v),
                     "dmgTaken" => sl_pc_set_dmgtaken(sd, v),
                     "drunk" => sl_pc_set_drunk(sd, v),
-                    "exp" => sl_pc_set_exp(sd, v),
+                    "exp" => sl_pc_set_exp(&pe, sd, v),
                     "extendHit" => sl_pc_set_extendhit(sd, v),
                     "face" => sl_pc_set_face(sd, v),
                     "faceColor" => sl_pc_set_face_color(sd, v),
@@ -577,7 +590,7 @@ impl UserData for PcObject {
                     "invis" => sl_pc_set_invis(sd, v),
                     "karma" => sl_pc_set_karma(sd, v),
                     "lastClick" => sl_pc_set_last_click(sd, v),
-                    "level" => sl_pc_set_level(sd, v),
+                    "level" => sl_pc_set_level(&pe, sd, v),
                     "magic" => sl_pc_set_mp(sd, v),
                     "mark" => sl_pc_set_mark(sd, v),
                     "maxHealth" => sl_pc_set_max_hp(sd, v),
@@ -698,16 +711,19 @@ impl UserData for PcObject {
             this.with_sd((), |sd| unsafe { sl_pc_forcesave(sd); }); Ok(())
         });
         methods.add_method("calcStat", |_, this, ()| {
-            this.with_sd((), |sd| unsafe { sl_pc_calcstat(sd) }); Ok(())
+            this.with_pe((), |pe| unsafe { sl_pc_calcstat(pe) }); Ok(())
         });
         methods.add_method("sendStatus", |_, this, ()| {
-            this.with_sd((), |sd| unsafe { sl_pc_sendstatus(sd) }); Ok(())
+            this.with_pe((), |pe| unsafe { sl_pc_sendstatus(pe) }); Ok(())
         });
         methods.add_method("status", |_, this, ()| {
-            this.with_sd((), |sd| { sl_pc_status(sd); }); Ok(())
+            if let Some(pe) = crate::game::map_server::map_id2sd_pc(this.id) {
+                unsafe { sl_pc_status(&pe); }
+            }
+            Ok(())
         });
         methods.add_method("warp", |_, this, (m, x, y): (i32, i32, i32)| {
-            this.with_sd((), |sd| unsafe { sl_pc_warp(sd, m, x, y) }); Ok(())
+            this.with_pe((), |pe| unsafe { sl_pc_warp(pe, m, x, y) }); Ok(())
         });
         methods.add_method("refresh", |_, this, ()| {
             this.with_sd((), |sd| unsafe { sl_pc_refresh(sd) }); Ok(())
@@ -731,7 +747,7 @@ impl UserData for PcObject {
             this.with_sd((), |sd| unsafe { sl_pc_swing(sd) }); Ok(())
         });
         methods.add_method("respawn", |_, this, ()| {
-            this.with_sd((), |sd| unsafe { sl_pc_respawn(sd) }); Ok(())
+            this.with_pe((), |pe| { clif_spawn(pe); }); Ok(())
         });
         methods.add_method("sendHealth", |_, this, (dmg, crit): (f32, i32)| {
             Ok(this.with_sd(0, |sd| unsafe { sl_pc_sendhealth(sd, dmg, crit) }))

@@ -16,6 +16,7 @@
 pub mod handlers;
 pub mod visual;
 
+use crate::common::traits::LegacyEntity;
 use crate::game::player::entity::PlayerEntity;
 
 #[inline]
@@ -98,7 +99,7 @@ unsafe fn clif_isignore(src: &PlayerEntity, dst: &PlayerEntity) -> i32 {
 #[inline] unsafe fn decrypt_fd(fd: SessionId) { decrypt(fd); }
 #[inline] async unsafe fn clif_handle_disconnect(pe: &PlayerEntity) { crate::game::client::handlers::clif_handle_disconnect(pe).await; }
 #[inline] unsafe fn clif_closeit(pe: &PlayerEntity) { crate::game::map_parse::dialogs::clif_closeit(pe); }
-#[inline] async unsafe fn clif_mystaytus(pe: &PlayerEntity) { crate::game::map_parse::player_state::clif_mystaytus(pe).await; }
+#[inline] unsafe fn clif_mystatus(pe: &PlayerEntity) { crate::game::map_parse::player_state::clif_mystatus(pe); }
 #[inline] unsafe fn clif_groupstatus(pe: &PlayerEntity) { crate::game::map_parse::groups::clif_groupstatus(pe); }
 #[inline] unsafe fn clif_refresh(pe: &PlayerEntity) { crate::game::map_parse::player_state::clif_refresh(pe); }
 #[inline] unsafe fn clif_changestatus(pe: &PlayerEntity, status: u8) { crate::game::client::handlers::clif_changestatus(pe, status as i32); }
@@ -140,13 +141,9 @@ unsafe fn clif_isignore(src: &PlayerEntity, dst: &PlayerEntity) -> i32 {
 #[inline] unsafe fn clif_paperpopupwrite_save(pe: &PlayerEntity) { crate::game::client::visual::clif_paperpopupwrite_save(pe); }
 #[inline] unsafe fn clif_parsechangespell(pe: &PlayerEntity) { crate::game::map_parse::items::clif_parsechangespell(pe); }
 #[inline] unsafe fn clif_parsechangepos(pe: &PlayerEntity) { crate::game::client::handlers::clif_parsechangepos(pe); }
-#[inline] async unsafe fn pc_warp(pe: &PlayerEntity, m: i32, x: i32, y: i32) -> i32 {
-    // Extract a stable raw pointer from the Box inside the RwLock. The Box does not
-    // move for the lifetime of the PlayerEntity, so sd_ptr remains valid across the
-    // await points inside pc_warp as long as the Arc<PlayerEntity> (held by `sd` in
-    // clif_parse) stays alive.
+#[inline] unsafe fn pc_warp(pe: &PlayerEntity, m: i32, x: i32, y: i32) -> i32 {
     let sd_ptr: *mut MapSessionData = { &mut *pe.write() as *mut MapSessionData };
-    crate::game::pc::pc_warp(sd_ptr, m, x, y).await
+    crate::game::pc::pc_warp(sd_ptr, m, x, y)
 }
 #[inline] unsafe fn clif_changeprofile(pe: &PlayerEntity) { crate::game::client::visual::clif_changeprofile(pe); }
 #[inline] async unsafe fn clif_handle_boards(pe: &PlayerEntity) { crate::game::client::handlers::clif_handle_boards(pe).await; }
@@ -848,7 +845,7 @@ pub async fn clif_parse(fd: SessionId) -> i32 {
             }
             0x2D => {
                 clif_cancelafk(pe);
-                if rbyte(fd, 5) == 0 { clif_mystaytus(pe).await; } else { clif_groupstatus(pe); }
+                if rbyte(fd, 5) == 0 { clif_mystatus(pe); } else { clif_groupstatus(pe); }
             }
             0x2E => {
                 clif_cancelafk(pe);
@@ -886,7 +883,7 @@ pub async fn clif_parse(fd: SessionId) -> i32 {
                 clif_handle_boards(pe).await;
             }
             0x3F => {
-                pc_warp(pe, rword_be(fd, 5) as i32, rword_be(fd, 7) as i32, rword_be(fd, 9) as i32).await;
+                pc_warp(pe, rword_be(fd, 5) as i32, rword_be(fd, 7) as i32, rword_be(fd, 9) as i32);
             }
             0x41 => {
                 clif_cancelafk(pe);

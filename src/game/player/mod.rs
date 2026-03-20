@@ -29,7 +29,7 @@ pub use types::{
 };
 
 pub use spatial::{
-    pc_setpos, pc_warp, pc_warp_sync, pc_die, pc_diescript, pc_res, addtokillreg,
+    pc_setpos, pc_warp, pc_die, pc_diescript, pc_res, addtokillreg,
 };
 
 pub use systems::{

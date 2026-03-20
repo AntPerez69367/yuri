@@ -2,6 +2,8 @@
 use std::ffi::CString;
 use std::sync::atomic::{AtomicI32, AtomicI8, Ordering};
 
+use crate::common::traits::LegacyEntity;
+
 use crate::game::mob::{MobSpawnData, MOB_DEAD, BL_PC};
 use crate::game::pc::{MapSessionData, PC_DIE, SFLAG_FULLSTATS, SFLAG_HPMP};
 
@@ -30,16 +32,15 @@ use crate::game::block_grid;
 
 // ── clif functions ─────────────────────────────────────────────────────────────
 use crate::game::map_parse::chat::{clif_sendminitext, clif_sendmsg, clif_broadcast, clif_playsound_entity};
-use crate::game::map_parse::movement::clif_sendchararea;
-use crate::game::map_parse::player_state::{clif_getchararea, clif_sendstatus, clif_mystaytus_by_addr, clif_refresh};
+use crate::game::map_parse::player_state::{clif_sendstatus, clif_mystatus, clif_refresh};
 use crate::game::client::visual::{broadcast_update_state, clif_sendweather, clif_sendurl};
 use crate::game::map_parse::combat::clif_sendanimation_inner;
-use crate::game::map_parse::visual::clif_lookgone_by_id;
+use crate::game::map_parse::visual::{clif_lookgone_by_id, refresh_appearance};
 use crate::game::client::handlers::clif_transfer_test;
 
 // ── pc functions ───────────────────────────────────────────────────────────────
 use crate::game::pc::{
-    pc_warp_sync as pc_warp,
+    pc_warp,
     pc_additem,
     pc_delitem,
     pc_res,
@@ -300,7 +301,7 @@ fn command_hair(sd: &mut MapSessionData, line: &str) -> i32 {
     let (hair, hair_color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.player.appearance.hair = hair as u16;
     sd.player.appearance.hair_color = hair_color as u16;
-    if let Some(pe) = pe_of(sd) { unsafe { clif_sendchararea(&pe); clif_getchararea(&pe); } }
+    if let Some(pe) = pe_of(sd) { refresh_appearance(&pe); }
     0
 }
 
@@ -393,7 +394,10 @@ fn command_heal(sd: &mut MapSessionData, _line: &str) -> i32 {
 fn command_level(sd: &mut MapSessionData, line: &str) -> i32 {
     let level = match parse_int(line) { Some(v) => v, None => return -1 };
     sd.player.progression.level = level as u8;
-    if let Some(pe) = pe_of(sd) { unsafe { clif_sendstatus(&pe, SFLAG_FULLSTATS); } }
+    if let Some(pe) = pe_of(sd) {
+        pe.set_class_level(sd.player.progression.class, level as u8);
+        unsafe { clif_sendstatus(&pe, SFLAG_FULLSTATS); }
+    }
     0
 }
 
@@ -471,7 +475,7 @@ fn command_givespell(sd: &mut MapSessionData, line: &str) -> i32 {
 fn command_side(sd: &mut MapSessionData, line: &str) -> i32 {
     let side = match parse_int(line) { Some(v) => v, None => return -1 };
     sd.player.combat.side = side as i8;
-    if let Some(pe) = pe_of(sd) { unsafe { clif_sendchararea(&pe); clif_getchararea(&pe); } }
+    if let Some(pe) = pe_of(sd) { refresh_appearance(&pe); }
     0
 }
 
@@ -489,7 +493,7 @@ fn command_state(sd: &mut MapSessionData, line: &str) -> i32 {
 fn command_armorcolor(sd: &mut MapSessionData, line: &str) -> i32 {
     let ac = match parse_int(line) { Some(v) => v, None => return -1 };
     sd.player.appearance.armor_color = ac as u16;
-    if let Some(pe) = pe_of(sd) { unsafe { clif_sendchararea(&pe); clif_getchararea(&pe); } }
+    if let Some(pe) = pe_of(sd) { refresh_appearance(&pe); }
     0
 }
 
@@ -547,7 +551,7 @@ fn command_lua(sd: &mut MapSessionData, line: &str) -> i32 {
 fn command_speed(sd: &mut MapSessionData, line: &str) -> i32 {
     let d = match parse_int(line) { Some(v) => v, None => return -1 };
     sd.speed = d;
-    if let Some(pe) = pe_of(sd) { unsafe { clif_sendchararea(&pe); clif_getchararea(&pe); } }
+    if let Some(pe) = pe_of(sd) { refresh_appearance(&pe); }
     0
 }
 
@@ -804,7 +808,7 @@ fn command_weap(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.weapon = id as u16;
     sd.gfx.cweapon = color as u8;
-    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
+    if let Some(pe) = pe_of(sd) { refresh_appearance(&pe); }
     0
 }
 
@@ -812,7 +816,7 @@ fn command_shield(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.shield = id as u16;
     sd.gfx.cshield = color as u8;
-    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
+    if let Some(pe) = pe_of(sd) { refresh_appearance(&pe); }
     0
 }
 
@@ -820,7 +824,7 @@ fn command_armor(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.armor = id as u16;
     sd.gfx.carmor = color as u8;
-    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
+    if let Some(pe) = pe_of(sd) { refresh_appearance(&pe); }
     0
 }
 
@@ -828,7 +832,7 @@ fn command_boots(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.boots = id as u16;
     sd.gfx.cboots = color as u8;
-    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
+    if let Some(pe) = pe_of(sd) { refresh_appearance(&pe); }
     0
 }
 
@@ -836,7 +840,7 @@ fn command_mantle(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.mantle = id as u16;
     sd.gfx.cmantle = color as u8;
-    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
+    if let Some(pe) = pe_of(sd) { refresh_appearance(&pe); }
     0
 }
 
@@ -844,7 +848,7 @@ fn command_necklace(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.necklace = id as u16;
     sd.gfx.cnecklace = color as u8;
-    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
+    if let Some(pe) = pe_of(sd) { refresh_appearance(&pe); }
     0
 }
 
@@ -852,7 +856,7 @@ fn command_faceacc(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.face_acc = id as u16;
     sd.gfx.cface_acc = color as u8;
-    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
+    if let Some(pe) = pe_of(sd) { refresh_appearance(&pe); }
     0
 }
 
@@ -860,7 +864,7 @@ fn command_crown(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.crown = id as u16;
     sd.gfx.ccrown = color as u8;
-    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
+    if let Some(pe) = pe_of(sd) { refresh_appearance(&pe); }
     0
 }
 
@@ -868,7 +872,7 @@ fn command_helm(sd: &mut MapSessionData, line: &str) -> i32 {
     let (id, color) = match parse_two_ints(line) { Some(v) => v, None => return -1 };
     sd.gfx.helm = id as u16;
     sd.gfx.chelm = color as u8;
-    if let Some(pe) = pe_of(sd) { unsafe { clif_getchararea(&pe); clif_sendchararea(&pe); } }
+    if let Some(pe) = pe_of(sd) { refresh_appearance(&pe); }
     0
 }
 
@@ -1003,12 +1007,16 @@ fn command_job(sd: &mut MapSessionData, line: &str) -> i32 {
     if !(0..=16).contains(&subjob) { subjob = 0; }
     sd.player.progression.class = job as u8;
     sd.player.progression.mark = subjob as u8;
+    if let Some(pe) = pe_of(sd) {
+        pe.set_class_level(job as u8, sd.player.progression.level);
+    }
     let class_val = sd.player.progression.class as u32;
     let mark_val = sd.player.progression.mark as u32;
     let char_id = sd.player.identity.id;
     crate::database::blocking_run_async(set_job_class(class_val, mark_val, char_id));
-    let sd_usize = as_ptr(sd) as usize;
-    crate::database::blocking_run_async(clif_mystaytus_by_addr(sd_usize));
+    if let Some(pe) = pe_of(sd) {
+        unsafe { clif_mystatus(&pe); }
+    }
     0
 }
 

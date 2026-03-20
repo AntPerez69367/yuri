@@ -688,16 +688,12 @@ static NAME_BUF: std::sync::Mutex<[u8; 16]> = std::sync::Mutex::new([0u8; 16]);
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub async unsafe fn clif_getName(id: u32) -> *mut i8 {
-    let name: String = sqlx::query_scalar::<_, String>(
-        "SELECT `ChaName` FROM `Character` WHERE `ChaId` = ?"
-    )
-    .bind(id)
-    .fetch_optional(get_pool())
-    .await
-    .ok()
-    .flatten()
-    .unwrap_or_default();
+pub unsafe fn clif_getName(id: u32) -> *mut i8 {
+    let name = if let Some(pe) = crate::game::map_server::map_id2sd_pc(id) {
+        pe.name.clone()
+    } else {
+        String::new()
+    };
     let mut buf = NAME_BUF.lock().unwrap_or_else(|e| e.into_inner());
     buf.fill(0);
     let bytes = name.as_bytes();
@@ -1026,8 +1022,7 @@ pub unsafe fn clif_changestatus(pe: &PlayerEntity, type_: i32) -> i32 {
             clif_sendmapinfo(pe);
             pc_setpos(&mut *pe.write() as *mut MapSessionData, oldm, oldx, oldy);
             clif_sendmapinfo(pe);
-            let sd_ptr = &mut *pe.write() as *mut MapSessionData;
-            clif_spawn(sd_ptr);
+            clif_spawn(pe);
             {
                 let mut net = pe.net.write();
                 clif_mob_look_start_func_inner(pe.fd, &mut net.look);

@@ -823,7 +823,7 @@ pub unsafe fn mob_respawn(mob: *mut MobSpawnData) -> i32 {
             if d.mobtype == 1 {
                 for id in ids {
                     if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                        clif_cmoblook(&*mob, &sd_arc.read());
+                        clif_cmoblook(&*mob, &sd_arc);
                     }
                 }
             } else {
@@ -879,7 +879,7 @@ pub unsafe fn mob_warp(mob: *mut MobSpawnData, m: i32, x: i32, y: i32) -> i32 {
         if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
             for id in ids {
                 if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(id) {
-                    clif_cmoblook(&*mob, &sd_arc.read());
+                    clif_cmoblook(&*mob, &sd_arc);
                 }
             }
         } else {
@@ -1367,7 +1367,7 @@ unsafe fn broadcast_move(
             if !(*mob).data.is_null() && (*(*mob).data).mobtype == 1 {
                 for id in &rect_ids {
                     if let Some(sd_arc) = crate::game::map_server::map_id2sd_pc(*id) {
-                        clif_cmoblook(&*mob, &sd_arc.read());
+                        clif_cmoblook(&*mob, &sd_arc);
                     }
                 }
             } else {

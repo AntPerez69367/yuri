@@ -2,7 +2,7 @@
 
 use std::sync::atomic::Ordering;
 use crate::common::player::spells::MAX_SPELLS;
-use crate::common::traits::{Spatial};
+use crate::common::traits::{LegacyEntity, Spatial};
 use crate::config::Point;
 use crate::database::{self, map_db, magic_db};
 use crate::game::block::AreaType;
@@ -89,22 +89,24 @@ pub unsafe fn pc_setpos(
 /// the destination map server and calls `clif_transfer`. Otherwise, fires
 /// pre-warp Lua hooks, calls `clif_quit` / `pc_setpos` / `clif_spawn` /
 /// `clif_refresh`, then fires post-warp Lua hooks.
-async fn lookup_map_server(map_id: i32) -> Option<u32> {
-    sqlx::query_scalar::<_, Option<u32>>(
-        "SELECT `MapServer` FROM `Maps` WHERE `MapId` = ?"
-    )
-    .bind(map_id)
-    .fetch_optional(database::get_pool())
-    .await
-    .ok()
-    .flatten()
-    .flatten()
+fn lookup_map_server(map_id: i32) -> Option<u32> {
+    database::blocking_run_async(async move {
+        sqlx::query_scalar::<_, Option<u32>>(
+            "SELECT `MapServer` FROM `Maps` WHERE `MapId` = ?"
+        )
+        .bind(map_id)
+        .fetch_optional(database::get_pool())
+        .await
+        .ok()
+        .flatten()
+        .flatten()
+    })
 }
 
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub async unsafe fn pc_warp(
+pub unsafe fn pc_warp(
     sd: *mut MapSessionData,
     mut m: i32,
     mut x: i32,
@@ -124,7 +126,7 @@ pub async unsafe fn pc_warp(
             return 0;
         }
 
-        let destsrv = lookup_map_server(m).await;
+        let destsrv = lookup_map_server(m);
 
         let destsrv = match destsrv {
             Some(srv) => srv as i32,
@@ -183,7 +185,7 @@ pub async unsafe fn pc_warp(
     if let Some(pe) = map_server::map_id2sd_pc((*sd).id) { clif_quit(&pe); }
     pc_setpos(sd, m, x, y);
     if let Some(pe) = map_server::map_id2sd_pc((*sd).id) { clif_sendtime(&pe); }
-    clif_spawn(sd);
+    if let Some(pe) = map_server::map_id2sd_pc((*sd).id) { clif_spawn(&pe); }
     if let Some(pe) = map_server::map_id2sd_pc((*sd).id) { clif_refresh(&pe); }
 
     // Fire map-enter hooks when changing maps.
@@ -361,13 +363,6 @@ pub unsafe fn pc_diescript(sd: *mut MapSessionData) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn pc_warp_sync(sd: *mut MapSessionData, m: i32, x: i32, y: i32) -> i32 {
-    let sd_usize = sd as usize;
-    database::blocking_run_async(database::assert_send(async move {
-        let sd = sd_usize as *mut MapSessionData;
-        pc_warp(sd, m, x, y).await
-    }))
-}
 
 /// Resurrects the player in-place.
 ///
@@ -381,7 +376,7 @@ pub unsafe fn pc_res(sd: *mut MapSessionData) -> i32 {
     (*sd).player.combat.state = PC_ALIVE as i8;
     (*sd).player.combat.hp    = 100;
     if let Some(pe) = map_server::map_id2sd_pc((*sd).id) { clif_sendstatus(&pe, SFLAG_HPMP); }
-    pc_warp_sync(sd, (*sd).m as i32, (*sd).x as i32, (*sd).y as i32);
+    pc_warp(sd, (*sd).m as i32, (*sd).x as i32, (*sd).y as i32);
     0
 }
 

@@ -25,7 +25,6 @@ use crate::common::constants::entity::player::{SFLAG_FULLSTATS, SFLAG_HPMP, SFLA
 use crate::game::map_server::{map_fd, map_id2sd_pc};
 
 use crate::session::{get_session_manager, SessionId};
-use crate::network::crypt::crypt_populate_table;
 use crate::game::pc::{
     pc_setpos, pc_loadmagic, pc_starttimer, pc_requestmp,
     pc_loaditem, pc_loadequip, pc_magic_startup,
@@ -75,11 +74,7 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
         let name = (*sd).player.identity.name.as_bytes();
         let n = name.len().min(15);
         name_buf[..n].copy_from_slice(&name[..n]);
-        crypt_populate_table(
-            name_buf.as_ptr() as *const i8,
-            (*sd).EncHash.as_mut_ptr(),
-            0x401,
-        );
+        crate::network::crypt::populate_table(&name_buf[..n], &mut (*sd).EncHash);
     }
 
     // Set up the block-list header.
@@ -150,8 +145,12 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
     crate::game::map_server::map_addiddb_player(sd_id, sd_fd, sd_box);
     let arc = map_id2sd_pc(sd_id).expect("player just inserted");
     // Re-bind legacy raw pointer for unmigrated callers.
-    // Write guard dropped immediately — pointer valid due to single-threaded game loop + Arc.
-    let sd: *mut crate::game::pc::MapSessionData = &mut *arc.write() as *mut crate::game::pc::MapSessionData;
+    // data_ptr() returns the inner pointer without acquiring any lock — safe here because
+    // intif_install_player_inner holds the only Arc reference at this point and runs
+    // synchronously on the single game thread before any clif_send* / encrypt calls that
+    // would try to read-lock the same RwLock.
+    #[allow(deprecated)]
+    let sd: *mut crate::game::pc::MapSessionData = arc.data_ptr();
 
     // Store Arc<PlayerEntity> in session so encrypt/decrypt can find the EncHash.
     if let Some(session_arc) = get_session_manager().get_session(sd_fd) {
@@ -162,7 +161,7 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
 
     use crate::game::map_parse::player_state::{
         clif_sendack, clif_sendtime, clif_sendid, clif_sendmapinfo,
-        clif_sendstatus, clif_mystaytus_by_addr, clif_refresh, clif_sendxy,
+        clif_sendstatus, clif_mystatus, clif_refresh, clif_sendxy,
         clif_getchararea, clif_retrieveprofile,
     };
     let fd = (*sd).fd;
@@ -177,9 +176,9 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
     tracing::info!("[map] [login] fd={} step=sendstatus", fd);
     clif_sendstatus(&arc, SFLAG_FULLSTATS | SFLAG_HPMP | SFLAG_XPMONEY);
     tracing::info!("[map] [login] fd={} step=mystaytus_1", fd);
-    crate::database::blocking_run_async(clif_mystaytus_by_addr(sd as usize));
+    clif_mystatus(&arc);
     tracing::info!("[map] [login] fd={} step=spawn", fd);
-    clif_spawn(sd); // TODO(phase6c): migrate clif_spawn to &PlayerEntity
+    clif_spawn(&arc);
     tracing::info!("[map] [login] fd={} step=refresh", fd);
     clif_refresh(&arc);
     tracing::info!("[map] [login] fd={} step=sendxy", fd);
@@ -218,18 +217,20 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
         let addr = format!("{}.{}.{}.{}", raw_ip & 0xff, (raw_ip >> 8) & 0xff,
             (raw_ip >> 16) & 0xff, (raw_ip >> 24) & 0xff);
         println!("[map] [login] name={} addr={}", name_str, addr);
+        tracing::info!("[map] [login] fd={} step=lua_login_start", fd);
         crate::game::scripting::doscript_blargs_id(
             "login",
             None,
             &[(*sd).id],
         );
+        tracing::info!("[map] [login] fd={} step=lua_login_done", fd);
     }
 
     tracing::info!("[map] [login] fd={} step=calcstat", fd);
     pc_calcstat(&arc);
     pc_checklevel(sd);
     tracing::info!("[map] [login] fd={} step=mystaytus_2", fd);
-    crate::database::blocking_run_async(clif_mystaytus_by_addr(sd as usize));
+    clif_mystatus(&arc);
 
     tracing::info!("[map] [login] fd={} step=updatestate", fd);
     broadcast_update_state(&arc);
@@ -243,6 +244,7 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
 // ---------------------------------------------------------------------------
 
 pub mod intif_save_impl {
+    use crate::common::traits::LegacyEntity;
     use crate::game::pc::MapSessionData;
     use crate::game::block::map_is_loaded;
     use crate::game::player::entity::PlayerEntity;

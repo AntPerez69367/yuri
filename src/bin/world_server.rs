@@ -223,7 +223,7 @@ async fn main() -> Result<()> {
             while let Some(req) = kick_rx.recv().await {
                 // Find the session for this char_id and kick it
                 if let Some(arc) = yuri::game::map_server::map_id2sd_pc(req.char_id) {
-                    let fd = arc.read().fd;
+                    let fd = arc.fd;
                     yuri::session::session_set_eof(fd, 12);
                     tracing::info!("[world] [kick] char_id={} fd={:?} kicked (duplicate login)", req.char_id, fd);
                 }

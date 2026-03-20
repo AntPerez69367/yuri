@@ -4,6 +4,7 @@ use serde::{Serialize, Deserialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerSocial {
     pub partner: u32,
+    pub partner_name: String,
     pub clan: u32,
     pub clan_title: String,
     pub clan_chat: i8,
@@ -23,7 +24,7 @@ pub struct PlayerSocial {
 impl Default for PlayerSocial {
     fn default() -> Self {
         Self {
-            partner: 0, clan: 0,
+            partner: 0, partner_name: String::new(), clan: 0,
             clan_title: String::new(), clan_chat: 0,
             pk: 0, killed_by: 0, kills_pk: 0, pk_duration: 0,
             karma: 0.0, alignment: 0,

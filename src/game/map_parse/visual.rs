@@ -4,6 +4,9 @@
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
 
+use std::sync::atomic::Ordering;
+
+use crate::game::block::map_addblock_id;
 use crate::game::mob::{MobSpawnData, MOB_DEAD};
 use crate::game::npc::NpcData;
 use crate::game::npc::prelude::*;
@@ -15,6 +18,7 @@ use crate::game::pc::{
 };
 use crate::common::constants::entity::{BL_PC_U8, BL_MOB_U8, BL_NPC_U8, BL_ITEM_U8};
 use crate::common::constants::entity::player::OPT_FLAG_STEALTH;
+use crate::game::player::PlayerEntity;
 use crate::game::scripting::types::floor::FloorItemData;
 use super::packet::{
     encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow, wfifoheader,
@@ -34,8 +38,6 @@ use crate::game::client::BroadcastSrc;
 use crate::game::map_parse::groups::clif_isingroup;
 use crate::game::map_parse::movement::clif_sendchararea;
 use crate::database::item_db;
-use crate::game::pc::pc_isequip;
-
 use crate::game::map_parse::combat::clif_sendanimations;
 
 // ─── clif_lookgone ────────────────────────────────────────────────────────────
@@ -401,39 +403,6 @@ pub unsafe fn clif_object_look2_item(fd: SessionId, viewer_char_id: u32, item: &
 
 // ─── Typed appearance wrappers ───────────────────────────────────────────────
 
-/// Send a PC's appearance to a viewer.
-/// # Safety
-///
-/// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_charlook(entity: &MapSessionData, viewer: &MapSessionData) -> i32 {
-    clif_charlook_inner(
-        entity as *const MapSessionData,
-        viewer as *const MapSessionData,
-    )
-}
-
-/// Send an NPC's appearance to a viewer.
-/// # Safety
-///
-/// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_cnpclook(npc: &NpcData, viewer: &MapSessionData) -> i32 {
-    clif_cnpclook_inner(
-        npc as *const NpcData,
-        viewer as *const MapSessionData,
-    )
-}
-
-/// Send a mob's appearance to a viewer.
-/// # Safety
-///
-/// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_cmoblook(mob: &MobSpawnData, viewer: &MapSessionData) -> i32 {
-    clif_cmoblook_inner(
-        mob as *const MobSpawnData,
-        viewer as *const MapSessionData,
-    )
-}
-
 // ─── clif_object_look_specific ───────────────────────────────────────────────
 
 /// Send a single-object look packet for a specific entity ID.
@@ -575,244 +544,244 @@ pub unsafe fn clif_mob_look_close(sd: *mut MapSessionData) -> i32 {
 /// `sd` is the player receiving the packet.
 ///
 /// Mirrors `clif_cnpclook_sub` (~line 2773).
-unsafe fn clif_cnpclook_inner(nd: *const NpcData, sd: *const MapSessionData) -> i32 {
-    if nd.is_null() || sd.is_null() { return 0; }
+pub unsafe fn clif_cnpclook(nd: &NpcData, viewer: &PlayerEntity) -> i32 {
+    let fd = viewer.fd;
 
-    if (*nd).m != (*sd).m || (*nd).npctype != 1 {
+    if nd.m != viewer.position().m || nd.npctype != 1 {
         return 0;
     }
 
-    if !session_exists((*sd).fd) {
+    if !session_exists(fd) {
         return 0;
     }
 
-    wfifohead((*sd).fd, 512);
-    wfifob((*sd).fd, 0, 0xAA);
-    wfifob((*sd).fd, 3, 0x33);
-    wfifow((*sd).fd, 5, (*nd).x.swap_bytes());
-    wfifow((*sd).fd, 7, (*nd).y.swap_bytes());
-    wfifob((*sd).fd, 9, (*nd).side as u8);
-    wfifol((*sd).fd, 10, (*nd).id.swap_bytes());
+    wfifohead(fd, 512);
+    wfifob(fd, 0, 0xAA);
+    wfifob(fd, 3, 0x33);
+    wfifow(fd, 5, nd.x.swap_bytes());
+    wfifow(fd, 7, nd.y.swap_bytes());
+    wfifob(fd, 9, nd.side as u8);
+    wfifol(fd, 10, nd.id.swap_bytes());
 
-    if ((*nd).state as u8) < 4 {
-        wfifow((*sd).fd, 14, (*nd).sex.swap_bytes());
+    if (nd.state as u8) < 4 {
+        wfifow(fd, 14, nd.sex.swap_bytes());
     } else {
-        wfifob((*sd).fd, 14, 1);
-        wfifob((*sd).fd, 15, 15);
+        wfifob(fd, 14, 1);
+        wfifob(fd, 15, 15);
     }
 
-    if (*nd).state == 2 && (*sd).player.identity.gm_level != 0 {
-        wfifob((*sd).fd, 16, 5);
+    if nd.state == 2 && viewer.gm_level != 0 {
+        wfifob(fd, 16, 5);
     } else {
-        wfifob((*sd).fd, 16, (*nd).state as u8);
+        wfifob(fd, 16, nd.state as u8);
     }
 
-    wfifob((*sd).fd, 19, 80);
+    wfifob(fd, 19, 80);
 
-    if (*nd).state == 3 {
-        wfifow((*sd).fd, 17, ((*nd).graphic_id as u16).swap_bytes());
-    } else if (*nd).state == 4 {
-        wfifow((*sd).fd, 17, ((*nd).graphic_id as u16).wrapping_add(32768).swap_bytes());
-        wfifob((*sd).fd, 19, (*nd).graphic_color as u8);
+    if nd.state == 3 {
+        wfifow(fd, 17, (nd.graphic_id as u16).swap_bytes());
+    } else if nd.state == 4 {
+        wfifow(fd, 17, (nd.graphic_id as u16).wrapping_add(32768).swap_bytes());
+        wfifob(fd, 19, nd.graphic_color as u8);
     } else {
-        wfifow((*sd).fd, 17, 0);
+        wfifow(fd, 17, 0);
     }
 
-    wfifob((*sd).fd, 20, 0);
-    wfifob((*sd).fd, 21, (*nd).face as u8);
-    wfifob((*sd).fd, 22, (*nd).hair as u8);
-    wfifob((*sd).fd, 23, (*nd).hair_color as u8);
-    wfifob((*sd).fd, 24, (*nd).face_color as u8);
-    wfifob((*sd).fd, 25, (*nd).skin_color as u8);
+    wfifob(fd, 20, 0);
+    wfifob(fd, 21, nd.face as u8);
+    wfifob(fd, 22, nd.hair as u8);
+    wfifob(fd, 23, nd.hair_color as u8);
+    wfifob(fd, 24, nd.face_color as u8);
+    wfifob(fd, 25, nd.skin_color as u8);
 
     // armor
-    if (*nd).equip[EQ_ARMOR as usize].amount == 0 {
-        wfifow((*sd).fd, 26, (*nd).sex.swap_bytes());
+    if nd.equip[EQ_ARMOR as usize].amount == 0 {
+        wfifow(fd, 26, nd.sex.swap_bytes());
     } else {
-        wfifow((*sd).fd, 26, ((*nd).equip[EQ_ARMOR as usize].id as u16).swap_bytes());
-        if (*nd).armor_color > 0 {
-            wfifob((*sd).fd, 28, (*nd).armor_color as u8);
+        wfifow(fd, 26, (nd.equip[EQ_ARMOR as usize].id as u16).swap_bytes());
+        if nd.armor_color > 0 {
+            wfifob(fd, 28, nd.armor_color as u8);
         } else {
-            wfifob((*sd).fd, 28, (*nd).equip[EQ_ARMOR as usize].custom_look_color as u8);
+            wfifob(fd, 28, nd.equip[EQ_ARMOR as usize].custom_look_color as u8);
         }
     }
 
     // coat
-    if (*nd).equip[EQ_COAT as usize].amount > 0 {
-        wfifow((*sd).fd, 26, ((*nd).equip[EQ_COAT as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 28, (*nd).equip[EQ_COAT as usize].custom_look_color as u8);
+    if nd.equip[EQ_COAT as usize].amount > 0 {
+        wfifow(fd, 26, (nd.equip[EQ_COAT as usize].id as u16).swap_bytes());
+        wfifob(fd, 28, nd.equip[EQ_COAT as usize].custom_look_color as u8);
     }
 
     // weapon
-    if (*nd).equip[EQ_WEAP as usize].amount == 0 {
-        wfifow((*sd).fd, 29, 0xFFFF);
-        wfifob((*sd).fd, 31, 0);
+    if nd.equip[EQ_WEAP as usize].amount == 0 {
+        wfifow(fd, 29, 0xFFFF);
+        wfifob(fd, 31, 0);
     } else {
-        wfifow((*sd).fd, 29, ((*nd).equip[EQ_WEAP as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 31, (*nd).equip[EQ_WEAP as usize].custom_look_color as u8);
+        wfifow(fd, 29, (nd.equip[EQ_WEAP as usize].id as u16).swap_bytes());
+        wfifob(fd, 31, nd.equip[EQ_WEAP as usize].custom_look_color as u8);
     }
 
     // shield
-    if (*nd).equip[EQ_SHIELD as usize].amount == 0 {
-        wfifow((*sd).fd, 32, 0xFFFF);
-        wfifob((*sd).fd, 34, 0);
+    if nd.equip[EQ_SHIELD as usize].amount == 0 {
+        wfifow(fd, 32, 0xFFFF);
+        wfifob(fd, 34, 0);
     } else {
-        wfifow((*sd).fd, 32, ((*nd).equip[EQ_SHIELD as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 34, (*nd).equip[EQ_SHIELD as usize].custom_look_color as u8);
+        wfifow(fd, 32, (nd.equip[EQ_SHIELD as usize].id as u16).swap_bytes());
+        wfifob(fd, 34, nd.equip[EQ_SHIELD as usize].custom_look_color as u8);
     }
 
     // helm
-    if (*nd).equip[EQ_HELM as usize].amount == 0 {
-        wfifob((*sd).fd, 35, 0);
-        wfifow((*sd).fd, 36, 0xFF);
+    if nd.equip[EQ_HELM as usize].amount == 0 {
+        wfifob(fd, 35, 0);
+        wfifow(fd, 36, 0xFF);
     } else {
-        wfifob((*sd).fd, 35, 1);
-        wfifob((*sd).fd, 36, (*nd).equip[EQ_HELM as usize].id as u8);
-        wfifob((*sd).fd, 37, (*nd).equip[EQ_HELM as usize].custom_look_color as u8);
+        wfifob(fd, 35, 1);
+        wfifob(fd, 36, nd.equip[EQ_HELM as usize].id as u8);
+        wfifob(fd, 37, nd.equip[EQ_HELM as usize].custom_look_color as u8);
     }
 
     // beard (face acc)
-    if (*nd).equip[EQ_FACEACC as usize].amount == 0 {
-        wfifow((*sd).fd, 38, 0xFFFF);
-        wfifob((*sd).fd, 40, 0);
+    if nd.equip[EQ_FACEACC as usize].amount == 0 {
+        wfifow(fd, 38, 0xFFFF);
+        wfifob(fd, 40, 0);
     } else {
-        wfifow((*sd).fd, 38, ((*nd).equip[EQ_FACEACC as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 40, (*nd).equip[EQ_FACEACC as usize].custom_look_color as u8);
+        wfifow(fd, 38, (nd.equip[EQ_FACEACC as usize].id as u16).swap_bytes());
+        wfifob(fd, 40, nd.equip[EQ_FACEACC as usize].custom_look_color as u8);
     }
 
     // crown
-    if (*nd).equip[EQ_CROWN as usize].amount == 0 {
-        wfifow((*sd).fd, 41, 0xFFFF);
-        wfifob((*sd).fd, 43, 0);
+    if nd.equip[EQ_CROWN as usize].amount == 0 {
+        wfifow(fd, 41, 0xFFFF);
+        wfifob(fd, 43, 0);
     } else {
-        wfifob((*sd).fd, 35, 0);
-        wfifow((*sd).fd, 41, ((*nd).equip[EQ_CROWN as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 43, (*nd).equip[EQ_CROWN as usize].custom_look_color as u8);
+        wfifob(fd, 35, 0);
+        wfifow(fd, 41, (nd.equip[EQ_CROWN as usize].id as u16).swap_bytes());
+        wfifob(fd, 43, nd.equip[EQ_CROWN as usize].custom_look_color as u8);
     }
 
     // second face acc
-    if (*nd).equip[EQ_FACEACCTWO as usize].amount == 0 {
-        wfifow((*sd).fd, 44, 0xFFFF);
-        wfifob((*sd).fd, 46, 0);
+    if nd.equip[EQ_FACEACCTWO as usize].amount == 0 {
+        wfifow(fd, 44, 0xFFFF);
+        wfifob(fd, 46, 0);
     } else {
-        wfifow((*sd).fd, 44, ((*nd).equip[EQ_FACEACCTWO as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 46, (*nd).equip[EQ_FACEACCTWO as usize].custom_look_color as u8);
+        wfifow(fd, 44, (nd.equip[EQ_FACEACCTWO as usize].id as u16).swap_bytes());
+        wfifob(fd, 46, nd.equip[EQ_FACEACCTWO as usize].custom_look_color as u8);
     }
 
     // mantle
-    if (*nd).equip[EQ_MANTLE as usize].amount == 0 {
-        wfifow((*sd).fd, 47, 0xFFFF);
-        wfifob((*sd).fd, 49, 0xFF);
+    if nd.equip[EQ_MANTLE as usize].amount == 0 {
+        wfifow(fd, 47, 0xFFFF);
+        wfifob(fd, 49, 0xFF);
     } else {
-        wfifow((*sd).fd, 47, ((*nd).equip[EQ_MANTLE as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 49, (*nd).equip[EQ_MANTLE as usize].custom_look_color as u8);
+        wfifow(fd, 47, (nd.equip[EQ_MANTLE as usize].id as u16).swap_bytes());
+        wfifob(fd, 49, nd.equip[EQ_MANTLE as usize].custom_look_color as u8);
     }
 
     // necklace
-    if (*nd).equip[EQ_NECKLACE as usize].amount == 0 {
-        wfifow((*sd).fd, 50, 0xFFFF);
-        wfifob((*sd).fd, 52, 0);
+    if nd.equip[EQ_NECKLACE as usize].amount == 0 {
+        wfifow(fd, 50, 0xFFFF);
+        wfifob(fd, 52, 0);
     } else {
-        wfifow((*sd).fd, 50, ((*nd).equip[EQ_NECKLACE as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 52, (*nd).equip[EQ_NECKLACE as usize].custom_look_color as u8);
+        wfifow(fd, 50, (nd.equip[EQ_NECKLACE as usize].id as u16).swap_bytes());
+        wfifob(fd, 52, nd.equip[EQ_NECKLACE as usize].custom_look_color as u8);
     }
 
     // boots
-    if (*nd).equip[EQ_BOOTS as usize].amount == 0 {
-        wfifow((*sd).fd, 53, (*nd).sex.swap_bytes());
-        wfifob((*sd).fd, 55, 0);
+    if nd.equip[EQ_BOOTS as usize].amount == 0 {
+        wfifow(fd, 53, nd.sex.swap_bytes());
+        wfifob(fd, 55, 0);
     } else {
-        wfifow((*sd).fd, 53, ((*nd).equip[EQ_BOOTS as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 55, (*nd).equip[EQ_BOOTS as usize].custom_look_color as u8);
+        wfifow(fd, 53, (nd.equip[EQ_BOOTS as usize].id as u16).swap_bytes());
+        wfifob(fd, 55, nd.equip[EQ_BOOTS as usize].custom_look_color as u8);
     }
 
-    wfifob((*sd).fd, 56, 0);
-    wfifob((*sd).fd, 57, 128);
-    wfifob((*sd).fd, 58, 0);
+    wfifob(fd, 56, 0);
+    wfifob(fd, 57, 128);
+    wfifob(fd, 58, 0);
 
     // name
-    let name_ptr = (*nd).npc_name.as_ptr();
+    let name_ptr = nd.npc_name.as_ptr();
     let name_len = libc_strlen(name_ptr);
 
-    if (*nd).state != 2 {
-        wfifob((*sd).fd, 59, name_len as u8);
-        let dst = wfifop((*sd).fd, 60);
+    if nd.state != 2 {
+        wfifob(fd, 59, name_len as u8);
+        let dst = wfifop(fd, 60);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(name_ptr as *const u8, dst, name_len);
         }
     } else {
-        wfifob((*sd).fd, 59, 0);
+        wfifob(fd, 59, 0);
     }
-    let len = if (*nd).state != 2 { name_len } else { 1 };
+    let len = if nd.state != 2 { name_len } else { 1 };
 
     // clone override
-    if (*nd).clone != 0 {
-        let gfx = &(*nd).gfx;
-        wfifob((*sd).fd, 21, gfx.face);
-        wfifob((*sd).fd, 22, gfx.hair);
-        wfifob((*sd).fd, 23, gfx.chair);
-        wfifob((*sd).fd, 24, gfx.cface);
-        wfifob((*sd).fd, 25, gfx.cskin);
-        wfifow((*sd).fd, 26, gfx.armor.swap_bytes());
+    if nd.clone != 0 {
+        let gfx = &nd.gfx;
+        wfifob(fd, 21, gfx.face);
+        wfifob(fd, 22, gfx.hair);
+        wfifob(fd, 23, gfx.chair);
+        wfifob(fd, 24, gfx.cface);
+        wfifob(fd, 25, gfx.cskin);
+        wfifow(fd, 26, gfx.armor.swap_bytes());
         if gfx.dye > 0 {
-            wfifob((*sd).fd, 28, gfx.dye);
+            wfifob(fd, 28, gfx.dye);
         } else {
-            wfifob((*sd).fd, 28, gfx.carmor);
+            wfifob(fd, 28, gfx.carmor);
         }
-        wfifow((*sd).fd, 29, gfx.weapon.swap_bytes());
-        wfifob((*sd).fd, 31, gfx.cweapon);
-        wfifow((*sd).fd, 32, gfx.shield.swap_bytes());
-        wfifob((*sd).fd, 34, gfx.cshield);
+        wfifow(fd, 29, gfx.weapon.swap_bytes());
+        wfifob(fd, 31, gfx.cweapon);
+        wfifow(fd, 32, gfx.shield.swap_bytes());
+        wfifob(fd, 34, gfx.cshield);
 
         if gfx.helm < 255 {
-            wfifob((*sd).fd, 35, 1);
+            wfifob(fd, 35, 1);
         } else if gfx.crown < 65535 {
-            wfifob((*sd).fd, 35, 0xFF);
+            wfifob(fd, 35, 0xFF);
         } else {
-            wfifob((*sd).fd, 35, 0);
+            wfifob(fd, 35, 0);
         }
 
-        wfifob((*sd).fd, 36, gfx.helm as u8);
-        wfifob((*sd).fd, 37, gfx.chelm);
-        wfifow((*sd).fd, 38, gfx.face_acc.swap_bytes());
-        wfifob((*sd).fd, 40, gfx.cface_acc);
-        wfifow((*sd).fd, 41, gfx.crown.swap_bytes());
-        wfifob((*sd).fd, 43, gfx.ccrown);
-        wfifow((*sd).fd, 44, gfx.face_acc_t.swap_bytes());
-        wfifob((*sd).fd, 46, gfx.cface_acc_t);
-        wfifow((*sd).fd, 47, gfx.mantle.swap_bytes());
-        wfifob((*sd).fd, 49, gfx.cmantle);
-        wfifow((*sd).fd, 50, gfx.necklace.swap_bytes());
-        wfifob((*sd).fd, 52, gfx.cnecklace);
-        wfifow((*sd).fd, 53, gfx.boots.swap_bytes());
-        wfifob((*sd).fd, 55, gfx.cboots);
+        wfifob(fd, 36, gfx.helm as u8);
+        wfifob(fd, 37, gfx.chelm);
+        wfifow(fd, 38, gfx.face_acc.swap_bytes());
+        wfifob(fd, 40, gfx.cface_acc);
+        wfifow(fd, 41, gfx.crown.swap_bytes());
+        wfifob(fd, 43, gfx.ccrown);
+        wfifow(fd, 44, gfx.face_acc_t.swap_bytes());
+        wfifob(fd, 46, gfx.cface_acc_t);
+        wfifow(fd, 47, gfx.mantle.swap_bytes());
+        wfifob(fd, 49, gfx.cmantle);
+        wfifow(fd, 50, gfx.necklace.swap_bytes());
+        wfifob(fd, 52, gfx.cnecklace);
+        wfifow(fd, 53, gfx.boots.swap_bytes());
+        wfifob(fd, 55, gfx.cboots);
 
-        wfifob((*sd).fd, 56, 0);
-        wfifob((*sd).fd, 57, 128);
-        wfifob((*sd).fd, 58, 0);
+        wfifob(fd, 56, 0);
+        wfifob(fd, 57, 128);
+        wfifob(fd, 58, 0);
 
         let gfx_name_ptr = gfx.name.as_ptr();
         let gfx_name_len = libc_strlen(gfx_name_ptr);
         let gfx_name_empty = gfx_name_len == 0 || *gfx_name_ptr == 0;
         if !gfx_name_empty {
-            wfifob((*sd).fd, 59, gfx_name_len as u8);
-            let dst = wfifop((*sd).fd, 60);
+            wfifob(fd, 59, gfx_name_len as u8);
+            let dst = wfifop(fd, 60);
             if !dst.is_null() {
                 std::ptr::copy_nonoverlapping(gfx_name_ptr as *const u8, dst, gfx_name_len);
             }
         } else {
-            wfifow((*sd).fd, 59, 0);
+            wfifow(fd, 59, 0);
         }
         let _len = if !gfx_name_empty { gfx_name_len } else { 1 };
         // Use gfx name length for packet size — mirrors C behaviour
         let final_len = if !gfx_name_empty { gfx_name_len } else { 1 };
-        wfifow((*sd).fd, 1, (final_len as u16 + 60).swap_bytes());
-        wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
+        wfifow(fd, 1, (final_len as u16 + 60).swap_bytes());
+        wfifoset(fd, encrypt(fd) as usize);
         return 0;
     }
 
-    wfifow((*sd).fd, 1, (len as u16 + 60).swap_bytes());
-    wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
+    wfifow(fd, 1, (len as u16 + 60).swap_bytes());
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -824,242 +793,242 @@ unsafe fn clif_cnpclook_inner(nd: *const NpcData, sd: *const MapSessionData) -> 
 /// `sd` is the player receiving the packet.
 ///
 /// Mirrors `clif_cmoblook_sub` (~line 3016).
-unsafe fn clif_cmoblook_inner(mob: *const MobSpawnData, sd: *const MapSessionData) -> i32 {
-    if mob.is_null() || sd.is_null() { return 0; }
+pub unsafe fn clif_cmoblook(mob: &MobSpawnData, viewer: &PlayerEntity) -> i32 {
+    let fd = viewer.fd;
 
-    if (*mob).m != (*sd).m || (*(*mob).data).mobtype != 1 || (*mob).state == 1 {
+    if mob.m != viewer.position().m || (*mob.data).mobtype != 1 || mob.state == 1 {
         return 0;
     }
 
-    if !session_exists((*sd).fd) {
+    if !session_exists(fd) {
         return 0;
     }
 
-    wfifohead((*sd).fd, 512);
-    wfifob((*sd).fd, 0, 0xAA);
-    wfifob((*sd).fd, 3, 0x33);
-    wfifow((*sd).fd, 5, (*mob).x.swap_bytes());
-    wfifow((*sd).fd, 7, (*mob).y.swap_bytes());
-    wfifob((*sd).fd, 9, (*mob).side as u8);
-    wfifol((*sd).fd, 10, (*mob).id.swap_bytes());
+    wfifohead(fd, 512);
+    wfifob(fd, 0, 0xAA);
+    wfifob(fd, 3, 0x33);
+    wfifow(fd, 5, mob.x.swap_bytes());
+    wfifow(fd, 7, mob.y.swap_bytes());
+    wfifob(fd, 9, mob.side as u8);
+    wfifol(fd, 10, mob.id.swap_bytes());
 
-    if (*mob).charstate < 4 {
-        wfifow((*sd).fd, 14, (*(*mob).data).sex.swap_bytes());
+    if mob.charstate < 4 {
+        wfifow(fd, 14, (*mob.data).sex.swap_bytes());
     } else {
-        wfifob((*sd).fd, 14, 1);
-        wfifob((*sd).fd, 15, 15);
+        wfifob(fd, 14, 1);
+        wfifob(fd, 15, 15);
     }
 
-    if (*mob).charstate == 2 && (*sd).player.identity.gm_level != 0 {
-        wfifob((*sd).fd, 16, 5);
+    if mob.charstate == 2 && viewer.gm_level != 0 {
+        wfifob(fd, 16, 5);
     } else {
-        wfifob((*sd).fd, 16, (*mob).charstate as u8);
+        wfifob(fd, 16, mob.charstate as u8);
     }
 
-    wfifob((*sd).fd, 19, 80);
+    wfifob(fd, 19, 80);
 
-    if (*mob).charstate == 3 {
-        wfifow((*sd).fd, 17, (*mob).look.swap_bytes());
-    } else if (*mob).charstate == 4 {
-        wfifow((*sd).fd, 17, (*mob).look.wrapping_add(32768).swap_bytes());
-        wfifob((*sd).fd, 19, (*mob).look_color);
+    if mob.charstate == 3 {
+        wfifow(fd, 17, mob.look.swap_bytes());
+    } else if mob.charstate == 4 {
+        wfifow(fd, 17, mob.look.wrapping_add(32768).swap_bytes());
+        wfifob(fd, 19, mob.look_color);
     } else {
-        wfifow((*sd).fd, 17, 0);
+        wfifow(fd, 17, 0);
     }
 
-    wfifob((*sd).fd, 20, 0);
-    wfifob((*sd).fd, 21, (*(*mob).data).face as u8);
-    wfifob((*sd).fd, 22, (*(*mob).data).hair as u8);
-    wfifob((*sd).fd, 23, (*(*mob).data).hair_color as u8);
-    wfifob((*sd).fd, 24, (*(*mob).data).face_color as u8);
-    wfifob((*sd).fd, 25, (*(*mob).data).skin_color as u8);
+    wfifob(fd, 20, 0);
+    wfifob(fd, 21, (*mob.data).face as u8);
+    wfifob(fd, 22, (*mob.data).hair as u8);
+    wfifob(fd, 23, (*mob.data).hair_color as u8);
+    wfifob(fd, 24, (*mob.data).face_color as u8);
+    wfifob(fd, 25, (*mob.data).skin_color as u8);
 
     // armor
-    if (*(*mob).data).equip[EQ_ARMOR as usize].amount == 0 {
-        wfifow((*sd).fd, 26, (*(*mob).data).sex.swap_bytes());
+    if (*mob.data).equip[EQ_ARMOR as usize].amount == 0 {
+        wfifow(fd, 26, (*mob.data).sex.swap_bytes());
     } else {
-        wfifow((*sd).fd, 26, ((*(*mob).data).equip[EQ_ARMOR as usize].id as u16).swap_bytes());
-        if (*(*mob).data).armor_color > 0 {
-            wfifob((*sd).fd, 28, (*(*mob).data).armor_color as u8);
+        wfifow(fd, 26, ((*mob.data).equip[EQ_ARMOR as usize].id as u16).swap_bytes());
+        if (*mob.data).armor_color > 0 {
+            wfifob(fd, 28, (*mob.data).armor_color as u8);
         } else {
-            wfifob((*sd).fd, 28, (*(*mob).data).equip[EQ_ARMOR as usize].custom_look_color as u8);
+            wfifob(fd, 28, (*mob.data).equip[EQ_ARMOR as usize].custom_look_color as u8);
         }
     }
 
     // coat
-    if (*(*mob).data).equip[EQ_COAT as usize].amount > 0 {
-        wfifow((*sd).fd, 26, ((*(*mob).data).equip[EQ_COAT as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 28, (*(*mob).data).equip[EQ_COAT as usize].custom_look_color as u8);
+    if (*mob.data).equip[EQ_COAT as usize].amount > 0 {
+        wfifow(fd, 26, ((*mob.data).equip[EQ_COAT as usize].id as u16).swap_bytes());
+        wfifob(fd, 28, (*mob.data).equip[EQ_COAT as usize].custom_look_color as u8);
     }
 
     // weapon
-    if (*(*mob).data).equip[EQ_WEAP as usize].amount == 0 {
-        wfifow((*sd).fd, 29, 0xFFFF);
-        wfifob((*sd).fd, 31, 0);
+    if (*mob.data).equip[EQ_WEAP as usize].amount == 0 {
+        wfifow(fd, 29, 0xFFFF);
+        wfifob(fd, 31, 0);
     } else {
-        wfifow((*sd).fd, 29, ((*(*mob).data).equip[EQ_WEAP as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 31, (*(*mob).data).equip[EQ_WEAP as usize].custom_look_color as u8);
+        wfifow(fd, 29, ((*mob.data).equip[EQ_WEAP as usize].id as u16).swap_bytes());
+        wfifob(fd, 31, (*mob.data).equip[EQ_WEAP as usize].custom_look_color as u8);
     }
 
     // shield
-    if (*(*mob).data).equip[EQ_SHIELD as usize].amount == 0 {
-        wfifow((*sd).fd, 32, 0xFFFF);
-        wfifob((*sd).fd, 34, 0);
+    if (*mob.data).equip[EQ_SHIELD as usize].amount == 0 {
+        wfifow(fd, 32, 0xFFFF);
+        wfifob(fd, 34, 0);
     } else {
-        wfifow((*sd).fd, 32, ((*(*mob).data).equip[EQ_SHIELD as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 34, (*(*mob).data).equip[EQ_SHIELD as usize].custom_look_color as u8);
+        wfifow(fd, 32, ((*mob.data).equip[EQ_SHIELD as usize].id as u16).swap_bytes());
+        wfifob(fd, 34, (*mob.data).equip[EQ_SHIELD as usize].custom_look_color as u8);
     }
 
     // helm
-    if (*(*mob).data).equip[EQ_HELM as usize].amount == 0 {
-        wfifob((*sd).fd, 35, 0);
-        wfifow((*sd).fd, 36, 0xFF);
+    if (*mob.data).equip[EQ_HELM as usize].amount == 0 {
+        wfifob(fd, 35, 0);
+        wfifow(fd, 36, 0xFF);
     } else {
-        wfifob((*sd).fd, 35, 1);
-        wfifob((*sd).fd, 36, (*(*mob).data).equip[EQ_HELM as usize].id as u8);
-        wfifob((*sd).fd, 37, (*(*mob).data).equip[EQ_HELM as usize].custom_look_color as u8);
+        wfifob(fd, 35, 1);
+        wfifob(fd, 36, (*mob.data).equip[EQ_HELM as usize].id as u8);
+        wfifob(fd, 37, (*mob.data).equip[EQ_HELM as usize].custom_look_color as u8);
     }
 
     // beard (face acc)
-    if (*(*mob).data).equip[EQ_FACEACC as usize].amount == 0 {
-        wfifow((*sd).fd, 38, 0xFFFF);
-        wfifob((*sd).fd, 40, 0);
+    if (*mob.data).equip[EQ_FACEACC as usize].amount == 0 {
+        wfifow(fd, 38, 0xFFFF);
+        wfifob(fd, 40, 0);
     } else {
-        wfifow((*sd).fd, 38, ((*(*mob).data).equip[EQ_FACEACC as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 40, (*(*mob).data).equip[EQ_FACEACC as usize].custom_look_color as u8);
+        wfifow(fd, 38, ((*mob.data).equip[EQ_FACEACC as usize].id as u16).swap_bytes());
+        wfifob(fd, 40, (*mob.data).equip[EQ_FACEACC as usize].custom_look_color as u8);
     }
 
     // crown
-    if (*(*mob).data).equip[EQ_CROWN as usize].amount == 0 {
-        wfifow((*sd).fd, 41, 0xFFFF);
-        wfifob((*sd).fd, 43, 0);
+    if (*mob.data).equip[EQ_CROWN as usize].amount == 0 {
+        wfifow(fd, 41, 0xFFFF);
+        wfifob(fd, 43, 0);
     } else {
-        wfifob((*sd).fd, 35, 0);
-        wfifow((*sd).fd, 41, ((*(*mob).data).equip[EQ_CROWN as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 43, (*(*mob).data).equip[EQ_CROWN as usize].custom_look_color as u8);
+        wfifob(fd, 35, 0);
+        wfifow(fd, 41, ((*mob.data).equip[EQ_CROWN as usize].id as u16).swap_bytes());
+        wfifob(fd, 43, (*mob.data).equip[EQ_CROWN as usize].custom_look_color as u8);
     }
 
     // second face acc
-    if (*(*mob).data).equip[EQ_FACEACCTWO as usize].amount == 0 {
-        wfifow((*sd).fd, 44, 0xFFFF);
-        wfifob((*sd).fd, 46, 0);
+    if (*mob.data).equip[EQ_FACEACCTWO as usize].amount == 0 {
+        wfifow(fd, 44, 0xFFFF);
+        wfifob(fd, 46, 0);
     } else {
-        wfifow((*sd).fd, 44, ((*(*mob).data).equip[EQ_FACEACCTWO as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 46, (*(*mob).data).equip[EQ_FACEACCTWO as usize].custom_look_color as u8);
+        wfifow(fd, 44, ((*mob.data).equip[EQ_FACEACCTWO as usize].id as u16).swap_bytes());
+        wfifob(fd, 46, (*mob.data).equip[EQ_FACEACCTWO as usize].custom_look_color as u8);
     }
 
     // mantle
-    if (*(*mob).data).equip[EQ_MANTLE as usize].amount == 0 {
-        wfifow((*sd).fd, 47, 0xFFFF);
-        wfifob((*sd).fd, 49, 0xFF);
+    if (*mob.data).equip[EQ_MANTLE as usize].amount == 0 {
+        wfifow(fd, 47, 0xFFFF);
+        wfifob(fd, 49, 0xFF);
     } else {
-        wfifow((*sd).fd, 47, ((*(*mob).data).equip[EQ_MANTLE as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 49, (*(*mob).data).equip[EQ_MANTLE as usize].custom_look_color as u8);
+        wfifow(fd, 47, ((*mob.data).equip[EQ_MANTLE as usize].id as u16).swap_bytes());
+        wfifob(fd, 49, (*mob.data).equip[EQ_MANTLE as usize].custom_look_color as u8);
     }
 
     // necklace
-    if (*(*mob).data).equip[EQ_NECKLACE as usize].amount == 0 {
-        wfifow((*sd).fd, 50, 0xFFFF);
-        wfifob((*sd).fd, 52, 0);
+    if (*mob.data).equip[EQ_NECKLACE as usize].amount == 0 {
+        wfifow(fd, 50, 0xFFFF);
+        wfifob(fd, 52, 0);
     } else {
-        wfifow((*sd).fd, 50, ((*(*mob).data).equip[EQ_NECKLACE as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 52, (*(*mob).data).equip[EQ_NECKLACE as usize].custom_look_color as u8);
+        wfifow(fd, 50, ((*mob.data).equip[EQ_NECKLACE as usize].id as u16).swap_bytes());
+        wfifob(fd, 52, (*mob.data).equip[EQ_NECKLACE as usize].custom_look_color as u8);
     }
 
     // boots
-    if (*(*mob).data).equip[EQ_BOOTS as usize].amount == 0 {
-        wfifow((*sd).fd, 53, (*(*mob).data).sex.swap_bytes());
-        wfifob((*sd).fd, 55, 0);
+    if (*mob.data).equip[EQ_BOOTS as usize].amount == 0 {
+        wfifow(fd, 53, (*mob.data).sex.swap_bytes());
+        wfifob(fd, 55, 0);
     } else {
-        wfifow((*sd).fd, 53, ((*(*mob).data).equip[EQ_BOOTS as usize].id as u16).swap_bytes());
-        wfifob((*sd).fd, 55, (*(*mob).data).equip[EQ_BOOTS as usize].custom_look_color as u8);
+        wfifow(fd, 53, ((*mob.data).equip[EQ_BOOTS as usize].id as u16).swap_bytes());
+        wfifob(fd, 55, (*mob.data).equip[EQ_BOOTS as usize].custom_look_color as u8);
     }
 
-    wfifob((*sd).fd, 56, 0);
-    wfifob((*sd).fd, 57, 128);
-    wfifob((*sd).fd, 58, 0);
+    wfifob(fd, 56, 0);
+    wfifob(fd, 57, 128);
+    wfifob(fd, 58, 0);
 
     // name
-    let name_ptr = (*(*mob).data).name.as_ptr();
+    let name_ptr = (*mob.data).name.as_ptr();
     let name_len = libc_strlen(name_ptr);
 
-    if (*mob).state != 2 {
-        wfifob((*sd).fd, 59, name_len as u8);
-        let dst = wfifop((*sd).fd, 60);
+    if mob.state != 2 {
+        wfifob(fd, 59, name_len as u8);
+        let dst = wfifop(fd, 60);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(name_ptr as *const u8, dst, name_len);
         }
     } else {
-        wfifob((*sd).fd, 59, 0);
+        wfifob(fd, 59, 0);
     }
-    let len = if (*mob).state != 2 { name_len } else { 1 };
+    let len = if mob.state != 2 { name_len } else { 1 };
 
     // clone override
-    if (*mob).clone != 0 {
-        let gfx = &(*mob).gfx;
-        wfifob((*sd).fd, 21, gfx.face);
-        wfifob((*sd).fd, 22, gfx.hair);
-        wfifob((*sd).fd, 23, gfx.chair);
-        wfifob((*sd).fd, 24, gfx.cface);
-        wfifob((*sd).fd, 25, gfx.cskin);
-        wfifow((*sd).fd, 26, gfx.armor.swap_bytes());
+    if mob.clone != 0 {
+        let gfx = &mob.gfx;
+        wfifob(fd, 21, gfx.face);
+        wfifob(fd, 22, gfx.hair);
+        wfifob(fd, 23, gfx.chair);
+        wfifob(fd, 24, gfx.cface);
+        wfifob(fd, 25, gfx.cskin);
+        wfifow(fd, 26, gfx.armor.swap_bytes());
         if gfx.dye > 0 {
-            wfifob((*sd).fd, 28, gfx.dye);
+            wfifob(fd, 28, gfx.dye);
         } else {
-            wfifob((*sd).fd, 28, gfx.carmor);
+            wfifob(fd, 28, gfx.carmor);
         }
-        wfifow((*sd).fd, 29, gfx.weapon.swap_bytes());
-        wfifob((*sd).fd, 31, gfx.cweapon);
-        wfifow((*sd).fd, 32, gfx.shield.swap_bytes());
-        wfifob((*sd).fd, 34, gfx.cshield);
+        wfifow(fd, 29, gfx.weapon.swap_bytes());
+        wfifob(fd, 31, gfx.cweapon);
+        wfifow(fd, 32, gfx.shield.swap_bytes());
+        wfifob(fd, 34, gfx.cshield);
 
         if gfx.helm < 255 {
-            wfifob((*sd).fd, 35, 1);
+            wfifob(fd, 35, 1);
         } else if gfx.crown < 65535 {
-            wfifob((*sd).fd, 35, 0xFF);
+            wfifob(fd, 35, 0xFF);
         } else {
-            wfifob((*sd).fd, 35, 0);
+            wfifob(fd, 35, 0);
         }
 
-        wfifob((*sd).fd, 36, gfx.helm as u8);
-        wfifob((*sd).fd, 37, gfx.chelm);
-        wfifow((*sd).fd, 38, gfx.face_acc.swap_bytes());
-        wfifob((*sd).fd, 40, gfx.cface_acc);
-        wfifow((*sd).fd, 41, gfx.crown.swap_bytes());
-        wfifob((*sd).fd, 43, gfx.ccrown);
-        wfifow((*sd).fd, 44, gfx.face_acc_t.swap_bytes());
-        wfifob((*sd).fd, 46, gfx.cface_acc_t);
-        wfifow((*sd).fd, 47, gfx.mantle.swap_bytes());
-        wfifob((*sd).fd, 49, gfx.cmantle);
-        wfifow((*sd).fd, 50, gfx.necklace.swap_bytes());
-        wfifob((*sd).fd, 52, gfx.cnecklace);
-        wfifow((*sd).fd, 53, gfx.boots.swap_bytes());
-        wfifob((*sd).fd, 55, gfx.cboots);
+        wfifob(fd, 36, gfx.helm as u8);
+        wfifob(fd, 37, gfx.chelm);
+        wfifow(fd, 38, gfx.face_acc.swap_bytes());
+        wfifob(fd, 40, gfx.cface_acc);
+        wfifow(fd, 41, gfx.crown.swap_bytes());
+        wfifob(fd, 43, gfx.ccrown);
+        wfifow(fd, 44, gfx.face_acc_t.swap_bytes());
+        wfifob(fd, 46, gfx.cface_acc_t);
+        wfifow(fd, 47, gfx.mantle.swap_bytes());
+        wfifob(fd, 49, gfx.cmantle);
+        wfifow(fd, 50, gfx.necklace.swap_bytes());
+        wfifob(fd, 52, gfx.cnecklace);
+        wfifow(fd, 53, gfx.boots.swap_bytes());
+        wfifob(fd, 55, gfx.cboots);
 
-        wfifob((*sd).fd, 56, 0);
-        wfifob((*sd).fd, 57, 128);
-        wfifob((*sd).fd, 58, 0);
+        wfifob(fd, 56, 0);
+        wfifob(fd, 57, 128);
+        wfifob(fd, 58, 0);
 
         let gfx_name_ptr = gfx.name.as_ptr();
         let gfx_name_len = libc_strlen(gfx_name_ptr);
         let gfx_name_empty = gfx_name_len == 0 || *gfx_name_ptr == 0;
         if !gfx_name_empty {
-            wfifob((*sd).fd, 59, gfx_name_len as u8);
-            let dst = wfifop((*sd).fd, 60);
+            wfifob(fd, 59, gfx_name_len as u8);
+            let dst = wfifop(fd, 60);
             if !dst.is_null() {
                 std::ptr::copy_nonoverlapping(gfx_name_ptr as *const u8, dst, gfx_name_len);
             }
         } else {
-            wfifow((*sd).fd, 59, 0);
+            wfifow(fd, 59, 0);
         }
         let final_len = if !gfx_name_empty { gfx_name_len } else { 1 };
-        wfifow((*sd).fd, 1, (final_len as u16 + 60).swap_bytes());
-        wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
+        wfifow(fd, 1, (final_len as u16 + 60).swap_bytes());
+        wfifoset(fd, encrypt(fd) as usize);
         return 0;
     }
 
-    wfifow((*sd).fd, 1, (len as u16 + 60).swap_bytes());
-    wfifoset((*sd).fd, encrypt((*sd).fd) as usize);
+    wfifow(fd, 1, (len as u16 + 60).swap_bytes());
+    wfifoset(fd, encrypt(fd) as usize);
     0
 }
 
@@ -1071,394 +1040,435 @@ unsafe fn clif_cmoblook_inner(mob: *const MobSpawnData, sd: *const MapSessionDat
 /// `viewer` is the player receiving the packet.
 ///
 /// Mirrors `clif_charlook_sub` (~line 3285).
-unsafe fn clif_charlook_inner(entity: *const MapSessionData, viewer: *const MapSessionData) -> i32 {
-    if entity.is_null() || viewer.is_null() { return 0; }
-    if entity == viewer { return 0; }
+pub unsafe fn clif_charlook(entity: &PlayerEntity, viewer: &PlayerEntity) -> i32 {
+    if entity.id == viewer.id { return 0; }
     // sd  = the player whose appearance we send
     // src_sd = the player receiving the packet
-    // SAFETY: locals are *mut for callees (clif_isingroup, pc_isequip) that still expect *mut.
-    // This function is verified read-only — no field mutations.
-    let sd: *mut MapSessionData = entity as *mut MapSessionData;
-    let src_sd: *mut MapSessionData = viewer as *mut MapSessionData;
+    let entity_guard = entity.read();
+    let sd = &*entity_guard;
+    let viewer_guard = viewer.read();
+    let src_sd = &*viewer_guard;
+    // Raw pointers for callees that still require *mut MapSessionData.
+    let sd_ptr: *mut MapSessionData = sd as *const _ as *mut _;
+    let src_sd_ptr: *mut MapSessionData = src_sd as *const _ as *mut _;
 
-    if (*sd).m != (*src_sd).m { return 0; }
+    if sd.m != src_sd.m { return 0; }
 
-    if ((*sd).optFlags & OPT_FLAG_STEALTH) != 0
-        && (*src_sd).player.identity.gm_level == 0
-        && (*sd).player.identity.id != (*src_sd).player.identity.id
+    if (sd.optFlags & OPT_FLAG_STEALTH) != 0
+        && src_sd.player.identity.gm_level == 0
+        && sd.player.identity.id != src_sd.player.identity.id
     {
         return 0;
     }
 
     // Ghost visibility check (mirrors C: `if (map[sd->bl.m].show_ghosts && ...)`)
     {
-        let slot = crate::database::map_db::get_map_ptr((*sd).m);
+        let slot = crate::database::map_db::get_map_ptr(sd.m);
         if !slot.is_null()
             && (*slot).show_ghosts != 0
-            && (*sd).player.combat.state == 1
-            && (*sd).id != (*src_sd).id
-            && (*src_sd).player.combat.state != 1
-                && ((*src_sd).optFlags & crate::game::pc::OPT_FLAG_GHOSTS) == 0
+            && sd.player.combat.state == 1
+            && sd.id != src_sd.id
+            && src_sd.player.combat.state != 1
+                && (src_sd.optFlags & crate::game::pc::OPT_FLAG_GHOSTS) == 0
             {
                 return 0;
             }
     }
 
-    if !session_exists((*sd).fd) {
+    if !session_exists(sd.fd) {
         return 0;
     }
 
-    wfifohead((*src_sd).fd, 512);
-    wfifob((*src_sd).fd, 0, 0xAA);
-    wfifob((*src_sd).fd, 3, 0x33);
-    wfifow((*src_sd).fd, 5, (*sd).x.swap_bytes());
-    wfifow((*src_sd).fd, 7, (*sd).y.swap_bytes());
-    wfifob((*src_sd).fd, 9, (*sd).player.combat.side as u8);
-    wfifol((*src_sd).fd, 10, (*sd).player.identity.id.swap_bytes());
+    wfifohead(src_sd.fd, 512);
+    wfifob(src_sd.fd, 0, 0xAA);
+    wfifob(src_sd.fd, 3, 0x33);
+    wfifow(src_sd.fd, 5, sd.x.swap_bytes());
+    wfifow(src_sd.fd, 7, sd.y.swap_bytes());
+    wfifob(src_sd.fd, 9, sd.player.combat.side as u8);
+    wfifol(src_sd.fd, 10, sd.player.identity.id.swap_bytes());
 
-    if (*sd).player.combat.state < 4 {
-        wfifow((*src_sd).fd, 14, ((*sd).player.identity.sex as u16).swap_bytes());
+    if sd.player.combat.state < 4 {
+        wfifow(src_sd.fd, 14, (sd.player.identity.sex as u16).swap_bytes());
     } else {
-        wfifob((*src_sd).fd, 14, 1);
-        wfifob((*src_sd).fd, 15, 15);
+        wfifob(src_sd.fd, 14, 1);
+        wfifob(src_sd.fd, 15, 15);
     }
 
     // Invisibility / stealth state
-    let src_isingroup = if let Some(src_pe) = crate::game::map_server::map_id2sd_pc((*src_sd).id) {
-        clif_isingroup(&src_pe, sd) != 0
-    } else { false };
-    let invis_cond = ((*sd).player.combat.state == 2 || ((*sd).optFlags & OPT_FLAG_STEALTH) != 0)
-        && (*sd).id != (*src_sd).id
-        && ((*src_sd).player.identity.gm_level != 0
+    let src_isingroup = clif_isingroup(viewer, sd_ptr) != 0;
+    let invis_cond = (sd.player.combat.state == 2 || (sd.optFlags & OPT_FLAG_STEALTH) != 0)
+        && sd.id != src_sd.id
+        && (src_sd.player.identity.gm_level != 0
             || src_isingroup
-            || ((*sd).gfx.dye == (*src_sd).gfx.dye
-                && (*sd).gfx.dye != 0
-                && (*src_sd).gfx.dye != 0));
+            || (sd.gfx.dye == src_sd.gfx.dye
+                && sd.gfx.dye != 0
+                && src_sd.gfx.dye != 0));
 
     if invis_cond {
-        wfifob((*src_sd).fd, 16, 5);
+        wfifob(src_sd.fd, 16, 5);
     } else {
-        wfifob((*src_sd).fd, 16, (*sd).player.combat.state as u8);
+        wfifob(src_sd.fd, 16, sd.player.combat.state as u8);
     }
 
-    if ((*sd).optFlags & OPT_FLAG_STEALTH) != 0
-        && (*sd).player.combat.state == 0
-        && ((*src_sd).player.identity.gm_level == 0 || (*sd).id == (*src_sd).id)
+    if (sd.optFlags & OPT_FLAG_STEALTH) != 0
+        && sd.player.combat.state == 0
+        && (src_sd.player.identity.gm_level == 0 || sd.id == src_sd.id)
     {
-        wfifob((*src_sd).fd, 16, 2);
+        wfifob(src_sd.fd, 16, 2);
     }
 
-    wfifob((*src_sd).fd, 19, (*sd).speed as u8);
+    wfifob(src_sd.fd, 19, sd.speed as u8);
 
-    if (*sd).player.combat.state == 3 {
-        wfifow((*src_sd).fd, 17, (*sd).disguise.swap_bytes());
-    } else if (*sd).player.combat.state == 4 {
-        wfifow((*src_sd).fd, 17, (*sd).disguise.wrapping_add(32768).swap_bytes());
-        wfifob((*src_sd).fd, 19, (*sd).disguise_color as u8);
+    if sd.player.combat.state == 3 {
+        wfifow(src_sd.fd, 17, sd.disguise.swap_bytes());
+    } else if sd.player.combat.state == 4 {
+        wfifow(src_sd.fd, 17, sd.disguise.wrapping_add(32768).swap_bytes());
+        wfifob(src_sd.fd, 19, sd.disguise_color as u8);
     } else {
-        wfifow((*src_sd).fd, 17, 0u16.swap_bytes());
+        wfifow(src_sd.fd, 17, 0u16.swap_bytes());
     }
 
-    wfifob((*src_sd).fd, 20, 0);
+    wfifob(src_sd.fd, 20, 0);
 
-    wfifob((*src_sd).fd, 21, (*sd).player.appearance.face as u8);
-    wfifob((*src_sd).fd, 22, (*sd).player.appearance.hair as u8);
-    wfifob((*src_sd).fd, 23, (*sd).player.appearance.hair_color as u8);
-    wfifob((*src_sd).fd, 24, (*sd).player.appearance.face_color as u8);
-    wfifob((*src_sd).fd, 25, (*sd).player.appearance.skin_color as u8);
+    wfifob(src_sd.fd, 21, sd.player.appearance.face as u8);
+    wfifob(src_sd.fd, 22, sd.player.appearance.hair as u8);
+    wfifob(src_sd.fd, 23, sd.player.appearance.hair_color as u8);
+    wfifob(src_sd.fd, 24, sd.player.appearance.face_color as u8);
+    wfifob(src_sd.fd, 25, sd.player.appearance.skin_color as u8);
 
     // armor
-    let armor_id = pc_isequip(sd, EQ_ARMOR) as u32;
+    let armor_id = sd.player.inventory.equip[EQ_ARMOR as usize].id as u32;
     if armor_id == 0 {
-        wfifow((*src_sd).fd, 26, ((*sd).player.identity.sex as u16).swap_bytes());
+        wfifow(src_sd.fd, 26, (sd.player.identity.sex as u16).swap_bytes());
     } else {
         let armor_item = item_db::search(armor_id);
-        if (&(*sd).player.inventory.equip)[EQ_ARMOR as usize].custom_look != 0 {
-            wfifow((*src_sd).fd, 26, ((&(*sd).player.inventory.equip)[EQ_ARMOR as usize].custom_look as u16).swap_bytes());
+        if sd.player.inventory.equip[EQ_ARMOR as usize].custom_look != 0 {
+            wfifow(src_sd.fd, 26, (sd.player.inventory.equip[EQ_ARMOR as usize].custom_look as u16).swap_bytes());
         } else {
-            wfifow((*src_sd).fd, 26, (armor_item.look as u16).swap_bytes());
+            wfifow(src_sd.fd, 26, (armor_item.look as u16).swap_bytes());
         }
-        if (*sd).player.appearance.armor_color > 0 {
-            wfifob((*src_sd).fd, 28, (*sd).player.appearance.armor_color as u8);
-        } else if (&(*sd).player.inventory.equip)[EQ_ARMOR as usize].custom_look != 0 {
-            wfifob((*src_sd).fd, 28, (&(*sd).player.inventory.equip)[EQ_ARMOR as usize].custom_look_color as u8);
+        if sd.player.appearance.armor_color > 0 {
+            wfifob(src_sd.fd, 28, sd.player.appearance.armor_color as u8);
+        } else if sd.player.inventory.equip[EQ_ARMOR as usize].custom_look != 0 {
+            wfifob(src_sd.fd, 28, sd.player.inventory.equip[EQ_ARMOR as usize].custom_look_color as u8);
         } else {
-            wfifob((*src_sd).fd, 28, armor_item.look_color as u8);
+            wfifob(src_sd.fd, 28, armor_item.look_color as u8);
         }
     }
 
     // coat
-    let coat_id = pc_isequip(sd, EQ_COAT) as u32;
+    let coat_id = sd.player.inventory.equip[EQ_COAT as usize].id as u32;
     if coat_id != 0 {
         let coat_item = item_db::search(coat_id);
-        wfifow((*src_sd).fd, 26, (coat_item.look as u16).swap_bytes());
-        if (*sd).player.appearance.armor_color > 0 {
-            wfifob((*src_sd).fd, 28, (*sd).player.appearance.armor_color as u8);
+        wfifow(src_sd.fd, 26, (coat_item.look as u16).swap_bytes());
+        if sd.player.appearance.armor_color > 0 {
+            wfifob(src_sd.fd, 28, sd.player.appearance.armor_color as u8);
         } else {
-            wfifob((*src_sd).fd, 28, coat_item.look_color as u8);
+            wfifob(src_sd.fd, 28, coat_item.look_color as u8);
         }
     }
 
     // weapon
-    let weap_id = pc_isequip(sd, EQ_WEAP) as u32;
+    let weap_id = sd.player.inventory.equip[EQ_WEAP as usize].id as u32;
     if weap_id == 0 {
-        wfifow((*src_sd).fd, 29, 0xFFFF);
-        wfifob((*src_sd).fd, 31, 0x0);
-    } else if (&(*sd).player.inventory.equip)[EQ_WEAP as usize].custom_look != 0 {
-        wfifow((*src_sd).fd, 29, ((&(*sd).player.inventory.equip)[EQ_WEAP as usize].custom_look as u16).swap_bytes());
-        wfifob((*src_sd).fd, 31, (&(*sd).player.inventory.equip)[EQ_WEAP as usize].custom_look_color as u8);
+        wfifow(src_sd.fd, 29, 0xFFFF);
+        wfifob(src_sd.fd, 31, 0x0);
+    } else if sd.player.inventory.equip[EQ_WEAP as usize].custom_look != 0 {
+        wfifow(src_sd.fd, 29, (sd.player.inventory.equip[EQ_WEAP as usize].custom_look as u16).swap_bytes());
+        wfifob(src_sd.fd, 31, sd.player.inventory.equip[EQ_WEAP as usize].custom_look_color as u8);
     } else {
         let weap_item = item_db::search(weap_id);
-        wfifow((*src_sd).fd, 29, (weap_item.look as u16).swap_bytes());
-        wfifob((*src_sd).fd, 31, weap_item.look_color as u8);
+        wfifow(src_sd.fd, 29, (weap_item.look as u16).swap_bytes());
+        wfifob(src_sd.fd, 31, weap_item.look_color as u8);
     }
 
     // shield
-    let shield_id = pc_isequip(sd, EQ_SHIELD) as u32;
+    let shield_id = sd.player.inventory.equip[EQ_SHIELD as usize].id as u32;
     if shield_id == 0 {
-        wfifow((*src_sd).fd, 32, 0xFFFF);
-        wfifob((*src_sd).fd, 34, 0);
-    } else if (&(*sd).player.inventory.equip)[EQ_SHIELD as usize].custom_look != 0 {
-        wfifow((*src_sd).fd, 32, ((&(*sd).player.inventory.equip)[EQ_SHIELD as usize].custom_look as u16).swap_bytes());
-        wfifob((*src_sd).fd, 34, (&(*sd).player.inventory.equip)[EQ_SHIELD as usize].custom_look_color as u8);
+        wfifow(src_sd.fd, 32, 0xFFFF);
+        wfifob(src_sd.fd, 34, 0);
+    } else if sd.player.inventory.equip[EQ_SHIELD as usize].custom_look != 0 {
+        wfifow(src_sd.fd, 32, (sd.player.inventory.equip[EQ_SHIELD as usize].custom_look as u16).swap_bytes());
+        wfifob(src_sd.fd, 34, sd.player.inventory.equip[EQ_SHIELD as usize].custom_look_color as u8);
     } else {
         let shield_item = item_db::search(shield_id);
-        wfifow((*src_sd).fd, 32, (shield_item.look as u16).swap_bytes());
-        wfifob((*src_sd).fd, 34, shield_item.look_color as u8);
+        wfifow(src_sd.fd, 32, (shield_item.look as u16).swap_bytes());
+        wfifob(src_sd.fd, 34, shield_item.look_color as u8);
     }
 
     // helm
-    let helm_id = pc_isequip(sd, EQ_HELM) as u32;
+    let helm_id = sd.player.inventory.equip[EQ_HELM as usize].id as u32;
     let helm_item = item_db::search(helm_id);
     if helm_id == 0
-        || ((*sd).player.appearance.setting_flags & FLAG_HELM) == 0
+        || (sd.player.appearance.setting_flags & FLAG_HELM) == 0
         || helm_item.look == -1
     {
-        wfifob((*src_sd).fd, 35, 0);
-        wfifow((*src_sd).fd, 36, 0xFFFF);
+        wfifob(src_sd.fd, 35, 0);
+        wfifow(src_sd.fd, 36, 0xFFFF);
     } else {
-        wfifob((*src_sd).fd, 35, 1);
-        if (&(*sd).player.inventory.equip)[EQ_HELM as usize].custom_look != 0 {
-            wfifob((*src_sd).fd, 36, (&(*sd).player.inventory.equip)[EQ_HELM as usize].custom_look as u8);
-            wfifob((*src_sd).fd, 37, (&(*sd).player.inventory.equip)[EQ_HELM as usize].custom_look_color as u8);
+        wfifob(src_sd.fd, 35, 1);
+        if sd.player.inventory.equip[EQ_HELM as usize].custom_look != 0 {
+            wfifob(src_sd.fd, 36, sd.player.inventory.equip[EQ_HELM as usize].custom_look as u8);
+            wfifob(src_sd.fd, 37, sd.player.inventory.equip[EQ_HELM as usize].custom_look_color as u8);
         } else {
-            wfifob((*src_sd).fd, 36, helm_item.look as u8);
-            wfifob((*src_sd).fd, 37, helm_item.look_color as u8);
+            wfifob(src_sd.fd, 36, helm_item.look as u8);
+            wfifob(src_sd.fd, 37, helm_item.look_color as u8);
         }
     }
 
     // beard (face acc)
-    let faceacc_id = pc_isequip(sd, EQ_FACEACC) as u32;
+    let faceacc_id = sd.player.inventory.equip[EQ_FACEACC as usize].id as u32;
     if faceacc_id == 0 {
-        wfifow((*src_sd).fd, 38, 0xFFFF);
-        wfifob((*src_sd).fd, 40, 0);
+        wfifow(src_sd.fd, 38, 0xFFFF);
+        wfifob(src_sd.fd, 40, 0);
     } else {
         let faceacc_item = item_db::search(faceacc_id);
-        wfifow((*src_sd).fd, 38, (faceacc_item.look as u16).swap_bytes());
-        wfifob((*src_sd).fd, 40, faceacc_item.look_color as u8);
+        wfifow(src_sd.fd, 38, (faceacc_item.look as u16).swap_bytes());
+        wfifob(src_sd.fd, 40, faceacc_item.look_color as u8);
     }
 
     // crown
-    let crown_id = pc_isequip(sd, EQ_CROWN) as u32;
+    let crown_id = sd.player.inventory.equip[EQ_CROWN as usize].id as u32;
     if crown_id == 0 {
-        wfifow((*src_sd).fd, 41, 0xFFFF);
-        wfifob((*src_sd).fd, 43, 0);
+        wfifow(src_sd.fd, 41, 0xFFFF);
+        wfifob(src_sd.fd, 43, 0);
     } else {
-        wfifob((*src_sd).fd, 35, 0xFF);
-        if (&(*sd).player.inventory.equip)[EQ_CROWN as usize].custom_look != 0 {
-            wfifow((*src_sd).fd, 41, ((&(*sd).player.inventory.equip)[EQ_CROWN as usize].custom_look as u16).swap_bytes());
-            wfifob((*src_sd).fd, 43, (&(*sd).player.inventory.equip)[EQ_CROWN as usize].custom_look_color as u8);
+        wfifob(src_sd.fd, 35, 0xFF);
+        if sd.player.inventory.equip[EQ_CROWN as usize].custom_look != 0 {
+            wfifow(src_sd.fd, 41, (sd.player.inventory.equip[EQ_CROWN as usize].custom_look as u16).swap_bytes());
+            wfifob(src_sd.fd, 43, sd.player.inventory.equip[EQ_CROWN as usize].custom_look_color as u8);
         } else {
             let crown_item = item_db::search(crown_id);
-            wfifow((*src_sd).fd, 41, (crown_item.look as u16).swap_bytes());
-            wfifob((*src_sd).fd, 43, crown_item.look_color as u8);
+            wfifow(src_sd.fd, 41, (crown_item.look as u16).swap_bytes());
+            wfifob(src_sd.fd, 43, crown_item.look_color as u8);
         }
     }
 
     // second face acc
-    let faceacctwo_id = pc_isequip(sd, EQ_FACEACCTWO) as u32;
+    let faceacctwo_id = sd.player.inventory.equip[EQ_FACEACCTWO as usize].id as u32;
     if faceacctwo_id == 0 {
-        wfifow((*src_sd).fd, 44, 0xFFFF);
-        wfifob((*src_sd).fd, 46, 0);
+        wfifow(src_sd.fd, 44, 0xFFFF);
+        wfifob(src_sd.fd, 46, 0);
     } else {
         let faceacctwo_item = item_db::search(faceacctwo_id);
-        wfifow((*src_sd).fd, 44, (faceacctwo_item.look as u16).swap_bytes());
-        wfifob((*src_sd).fd, 46, faceacctwo_item.look_color as u8);
+        wfifow(src_sd.fd, 44, (faceacctwo_item.look as u16).swap_bytes());
+        wfifob(src_sd.fd, 46, faceacctwo_item.look_color as u8);
     }
 
     // mantle
-    let mantle_id = pc_isequip(sd, EQ_MANTLE) as u32;
+    let mantle_id = sd.player.inventory.equip[EQ_MANTLE as usize].id as u32;
     if mantle_id == 0 {
-        wfifow((*src_sd).fd, 47, 0xFFFF);
-        wfifob((*src_sd).fd, 49, 0xFF);
+        wfifow(src_sd.fd, 47, 0xFFFF);
+        wfifob(src_sd.fd, 49, 0xFF);
     } else {
         let mantle_item = item_db::search(mantle_id);
-        wfifow((*src_sd).fd, 47, (mantle_item.look as u16).swap_bytes());
-        wfifob((*src_sd).fd, 49, mantle_item.look_color as u8);
+        wfifow(src_sd.fd, 47, (mantle_item.look as u16).swap_bytes());
+        wfifob(src_sd.fd, 49, mantle_item.look_color as u8);
     }
 
     // necklace
-    let necklace_id = pc_isequip(sd, EQ_NECKLACE) as u32;
+    let necklace_id = sd.player.inventory.equip[EQ_NECKLACE as usize].id as u32;
     let necklace_item = item_db::search(necklace_id);
     if necklace_id == 0
-        || ((*sd).player.appearance.setting_flags & FLAG_NECKLACE) == 0
+        || (sd.player.appearance.setting_flags & FLAG_NECKLACE) == 0
         || necklace_item.look == -1
     {
-        wfifow((*src_sd).fd, 50, 0xFFFF);
-        wfifob((*src_sd).fd, 52, 0);
+        wfifow(src_sd.fd, 50, 0xFFFF);
+        wfifob(src_sd.fd, 52, 0);
     } else {
-        wfifow((*src_sd).fd, 50, (necklace_item.look as u16).swap_bytes());
-        wfifob((*src_sd).fd, 52, necklace_item.look_color as u8);
+        wfifow(src_sd.fd, 50, (necklace_item.look as u16).swap_bytes());
+        wfifob(src_sd.fd, 52, necklace_item.look_color as u8);
     }
 
     // boots
-    let boots_id = pc_isequip(sd, EQ_BOOTS) as u32;
+    let boots_id = sd.player.inventory.equip[EQ_BOOTS as usize].id as u32;
     if boots_id == 0 {
-        wfifow((*src_sd).fd, 53, ((*sd).player.identity.sex as u16).swap_bytes());
-        wfifob((*src_sd).fd, 55, 0);
-    } else if (&(*sd).player.inventory.equip)[EQ_BOOTS as usize].custom_look != 0 {
-        wfifow((*src_sd).fd, 53, ((&(*sd).player.inventory.equip)[EQ_BOOTS as usize].custom_look as u16).swap_bytes());
-        wfifob((*src_sd).fd, 55, (&(*sd).player.inventory.equip)[EQ_BOOTS as usize].custom_look_color as u8);
+        wfifow(src_sd.fd, 53, (sd.player.identity.sex as u16).swap_bytes());
+        wfifob(src_sd.fd, 55, 0);
+    } else if sd.player.inventory.equip[EQ_BOOTS as usize].custom_look != 0 {
+        wfifow(src_sd.fd, 53, (sd.player.inventory.equip[EQ_BOOTS as usize].custom_look as u16).swap_bytes());
+        wfifob(src_sd.fd, 55, sd.player.inventory.equip[EQ_BOOTS as usize].custom_look_color as u8);
     } else {
         let boots_item = item_db::search(boots_id);
-        wfifow((*src_sd).fd, 53, (boots_item.look as u16).swap_bytes());
-        wfifob((*src_sd).fd, 55, boots_item.look_color as u8);
+        wfifow(src_sd.fd, 53, (boots_item.look as u16).swap_bytes());
+        wfifob(src_sd.fd, 55, boots_item.look_color as u8);
     }
 
     // 56 = title colour, 57 = outline colour (128=black), 58 = normal colour
-    wfifob((*src_sd).fd, 56, 0);
-    wfifob((*src_sd).fd, 57, 128);
-    wfifob((*src_sd).fd, 58, 0);
+    wfifob(src_sd.fd, 56, 0);
+    wfifob(src_sd.fd, 57, 128);
+    wfifob(src_sd.fd, 58, 0);
 
     // title colour: hidden for invisible/stealthy chars unless you're in their group
     if invis_cond {
-        wfifob((*src_sd).fd, 56, 0);
-    } else if (*sd).gfx.dye != 0 {
-        wfifob((*src_sd).fd, 56, (*sd).gfx.title_color);
+        wfifob(src_sd.fd, 56, 0);
+    } else if sd.gfx.dye != 0 {
+        wfifob(src_sd.fd, 56, sd.gfx.title_color);
     } else {
-        wfifob((*src_sd).fd, 56, 0);
+        wfifob(src_sd.fd, 56, 0);
     }
 
     // name
-    let name_ptr = (*sd).player.identity.name.as_ptr() as *const i8;
+    let name_ptr = sd.player.identity.name.as_ptr() as *const i8;
     let name_len = libc_strlen(name_ptr);
 
     // colour byte 58: clan=3, group=2, pk=1
-    if (*src_sd).player.social.clan == (*sd).player.social.clan && (*src_sd).player.social.clan > 0
-        && (*src_sd).player.identity.id != (*sd).player.identity.id
+    if src_sd.player.social.clan == sd.player.social.clan && src_sd.player.social.clan > 0
+        && src_sd.player.identity.id != sd.player.identity.id
     {
-        wfifob((*src_sd).fd, 58, 3);
+        wfifob(src_sd.fd, 58, 3);
     }
 
-    if let Some(src_pe) = crate::game::map_server::map_id2sd_pc((*src_sd).id) {
-        if clif_isingroup(&src_pe, sd) != 0 {
-            wfifob((*src_sd).fd, 58, 2);
-        }
+    if clif_isingroup(viewer, sd_ptr) != 0 {
+        wfifob(src_sd.fd, 58, 2);
     }
 
     let mut exist: i32 = -1;
     for x in 0..20usize {
-        if (*src_sd).pvp[x][0] == (*sd).id {
+        if src_sd.pvp[x][0] == sd.id {
             exist = x as i32;
             break;
         }
     }
 
-    if (*sd).player.social.pk > 0 || exist != -1 {
-        wfifob((*src_sd).fd, 58, 1);
+    if sd.player.social.pk > 0 || exist != -1 {
+        wfifob(src_sd.fd, 58, 1);
     }
 
     // name field
-    if (*sd).player.combat.state != 2 && (*sd).player.combat.state != 5 {
-        wfifob((*src_sd).fd, 59, name_len as u8);
-        let dst = wfifop((*src_sd).fd, 60);
+    if sd.player.combat.state != 2 && sd.player.combat.state != 5 {
+        wfifob(src_sd.fd, 59, name_len as u8);
+        let dst = wfifop(src_sd.fd, 60);
         if !dst.is_null() {
             std::ptr::copy_nonoverlapping(name_ptr as *const u8, dst, name_len);
         }
     } else {
-        wfifob((*src_sd).fd, 59, 0);
+        wfifob(src_sd.fd, 59, 0);
     }
-    let len = if (*sd).player.combat.state != 2 && (*sd).player.combat.state != 5 { name_len } else { 0 };
+    let len = if sd.player.combat.state != 2 && sd.player.combat.state != 5 { name_len } else { 0 };
 
     // gm/clone gfx override
-    if ((*sd).player.identity.gm_level != 0 && (*sd).gfx.toggle != 0) || (*sd).clone != 0 {
-        let gfx = &(*sd).gfx;
-        wfifob((*src_sd).fd, 21, gfx.face);
-        wfifob((*src_sd).fd, 22, gfx.hair);
-        wfifob((*src_sd).fd, 23, gfx.chair);
-        wfifob((*src_sd).fd, 24, gfx.cface);
-        wfifob((*src_sd).fd, 25, gfx.cskin);
-        wfifow((*src_sd).fd, 26, gfx.armor.swap_bytes());
+    if (sd.player.identity.gm_level != 0 && sd.gfx.toggle != 0) || sd.clone != 0 {
+        let gfx = &sd.gfx;
+        wfifob(src_sd.fd, 21, gfx.face);
+        wfifob(src_sd.fd, 22, gfx.hair);
+        wfifob(src_sd.fd, 23, gfx.chair);
+        wfifob(src_sd.fd, 24, gfx.cface);
+        wfifob(src_sd.fd, 25, gfx.cskin);
+        wfifow(src_sd.fd, 26, gfx.armor.swap_bytes());
         if gfx.dye > 0 {
-            wfifob((*src_sd).fd, 28, gfx.dye);
+            wfifob(src_sd.fd, 28, gfx.dye);
         } else {
-            wfifob((*src_sd).fd, 28, gfx.carmor);
+            wfifob(src_sd.fd, 28, gfx.carmor);
         }
-        wfifow((*src_sd).fd, 29, gfx.weapon.swap_bytes());
-        wfifob((*src_sd).fd, 31, gfx.cweapon);
-        wfifow((*src_sd).fd, 32, gfx.shield.swap_bytes());
-        wfifob((*src_sd).fd, 34, gfx.cshield);
+        wfifow(src_sd.fd, 29, gfx.weapon.swap_bytes());
+        wfifob(src_sd.fd, 31, gfx.cweapon);
+        wfifow(src_sd.fd, 32, gfx.shield.swap_bytes());
+        wfifob(src_sd.fd, 34, gfx.cshield);
 
         if gfx.helm < 255 {
-            wfifob((*src_sd).fd, 35, 1);
+            wfifob(src_sd.fd, 35, 1);
         } else if gfx.crown < 65535 {
-            wfifob((*src_sd).fd, 35, 0xFF);
+            wfifob(src_sd.fd, 35, 0xFF);
         } else {
-            wfifob((*src_sd).fd, 35, 0);
+            wfifob(src_sd.fd, 35, 0);
         }
 
-        wfifob((*src_sd).fd, 36, gfx.helm as u8);
-        wfifob((*src_sd).fd, 37, gfx.chelm);
-        wfifow((*src_sd).fd, 38, gfx.face_acc.swap_bytes());
-        wfifob((*src_sd).fd, 40, gfx.cface_acc);
-        wfifow((*src_sd).fd, 41, gfx.crown.swap_bytes());
-        wfifob((*src_sd).fd, 43, gfx.ccrown);
-        wfifow((*src_sd).fd, 44, gfx.face_acc_t.swap_bytes());
-        wfifob((*src_sd).fd, 46, gfx.cface_acc_t);
-        wfifow((*src_sd).fd, 47, gfx.mantle.swap_bytes());
-        wfifob((*src_sd).fd, 49, gfx.cmantle);
-        wfifow((*src_sd).fd, 50, gfx.necklace.swap_bytes());
-        wfifob((*src_sd).fd, 52, gfx.cnecklace);
-        wfifow((*src_sd).fd, 53, gfx.boots.swap_bytes());
-        wfifob((*src_sd).fd, 55, gfx.cboots);
+        wfifob(src_sd.fd, 36, gfx.helm as u8);
+        wfifob(src_sd.fd, 37, gfx.chelm);
+        wfifow(src_sd.fd, 38, gfx.face_acc.swap_bytes());
+        wfifob(src_sd.fd, 40, gfx.cface_acc);
+        wfifow(src_sd.fd, 41, gfx.crown.swap_bytes());
+        wfifob(src_sd.fd, 43, gfx.ccrown);
+        wfifow(src_sd.fd, 44, gfx.face_acc_t.swap_bytes());
+        wfifob(src_sd.fd, 46, gfx.cface_acc_t);
+        wfifow(src_sd.fd, 47, gfx.mantle.swap_bytes());
+        wfifob(src_sd.fd, 49, gfx.cmantle);
+        wfifow(src_sd.fd, 50, gfx.necklace.swap_bytes());
+        wfifob(src_sd.fd, 52, gfx.cnecklace);
+        wfifow(src_sd.fd, 53, gfx.boots.swap_bytes());
+        wfifob(src_sd.fd, 55, gfx.cboots);
 
-        wfifob((*src_sd).fd, 56, 0);
-        wfifob((*src_sd).fd, 57, 128);
-        wfifob((*src_sd).fd, 58, 0);
+        wfifob(src_sd.fd, 56, 0);
+        wfifob(src_sd.fd, 57, 128);
+        wfifob(src_sd.fd, 58, 0);
 
         // gfx title colour
         if invis_cond {
-            wfifob((*src_sd).fd, 56, 0);
+            wfifob(src_sd.fd, 56, 0);
         } else if gfx.dye != 0 {
-            wfifob((*src_sd).fd, 56, gfx.title_color);
+            wfifob(src_sd.fd, 56, gfx.title_color);
         } else {
-            wfifob((*src_sd).fd, 56, 0);
+            wfifob(src_sd.fd, 56, 0);
         }
 
         let gfx_name_ptr = gfx.name.as_ptr();
         let gfx_name_len = libc_strlen(gfx_name_ptr);
         let gfx_name_empty = gfx_name_len == 0 || *gfx_name_ptr == 0;
-        let visible = (*sd).player.combat.state != 2 && (*sd).player.combat.state != 5;
+        let visible = sd.player.combat.state != 2 && sd.player.combat.state != 5;
         if visible && !gfx_name_empty {
-            wfifob((*src_sd).fd, 59, gfx_name_len as u8);
-            let dst = wfifop((*src_sd).fd, 60);
+            wfifob(src_sd.fd, 59, gfx_name_len as u8);
+            let dst = wfifop(src_sd.fd, 60);
             if !dst.is_null() {
                 std::ptr::copy_nonoverlapping(gfx_name_ptr as *const u8, dst, gfx_name_len);
             }
         } else {
-            wfifob((*src_sd).fd, 59, 0);
+            wfifob(src_sd.fd, 59, 0);
         }
         let final_len = if visible && !gfx_name_empty { gfx_name_len } else { 1 };
-        wfifow((*src_sd).fd, 1, (final_len as u16 + 60 + 3).swap_bytes());
-        wfifoset((*src_sd).fd, encrypt((*src_sd).fd) as usize);
-        clif_sendanimations(&mut *src_sd, &mut *sd);
+        wfifow(src_sd.fd, 1, (final_len as u16 + 60 + 3).swap_bytes());
+        wfifoset(src_sd.fd, encrypt(src_sd.fd) as usize);
+        clif_sendanimations(viewer, entity);
         return 0;
     }
 
-    wfifow((*src_sd).fd, 1, (len as u16 + 60 + 3).swap_bytes());
-    wfifoset((*src_sd).fd, encrypt((*src_sd).fd) as usize);
-    clif_sendanimations(&mut *src_sd, &mut *sd);
+    wfifow(src_sd.fd, 1, (len as u16 + 60 + 3).swap_bytes());
+    wfifoset(src_sd.fd, encrypt(src_sd.fd) as usize);
+    clif_sendanimations(viewer, entity);
     0
+}
+
+// ─── Area broadcast helpers ──────────────────────────────────────────────────
+
+/// Send each nearby entity's appearance to `viewer` (player sees the area).
+pub fn load_visible_entities(viewer: &PlayerEntity, ids: &[u32]) {
+    for &id in ids {
+        if let Some(other_player) = crate::game::map_server::map_id2sd_pc(id) {
+            unsafe { clif_charlook(&other_player, viewer); }
+        } else if let Some(npc) = crate::game::map_server::map_id2npc_ref(id) {
+            unsafe { clif_cnpclook(&npc.read(), viewer); }
+        } else if let Some(mob) = crate::game::map_server::map_id2mob_ref(id) {
+            unsafe { clif_cmoblook(&mob.read(), viewer); }
+        }
+    }
+}
+
+/// Send `entity`'s appearance to each nearby player (area sees the player).
+pub fn announce_to_nearby(entity: &PlayerEntity, ids: &[u32]) {
+    for &id in ids {
+        if let Some(other_player) = crate::game::map_server::map_id2sd_pc(id) {
+            unsafe { clif_charlook(entity, &other_player); }
+        }
+    }
+}
+
+/// Refresh a player's appearance for all nearby entities (bidirectional).
+///
+/// Combines `announce_to_nearby` (others see pe) + `load_visible_entities` (pe sees others).
+pub fn refresh_appearance(pe: &PlayerEntity) {
+    let pos = pe.position();
+    let (m, x, y) = (pos.m as usize, pos.x as i32, pos.y as i32);
+    if let (Some(grid), Some(slot)) = (
+        crate::game::block_grid::get_grid(m),
+        crate::database::map_db::map_data(m),
+    ) {
+        let ids = crate::game::block_grid::ids_in_area(
+            grid, x, y, crate::game::block::AreaType::Area,
+            slot.xs as i32, slot.ys as i32,
+        );
+        announce_to_nearby(pe, &ids);
+        load_visible_entities(pe, &ids);
+    }
 }
 
 // ─── clif_spawn ──────────────────────────────────────────────────────────────
@@ -1469,13 +1479,14 @@ unsafe fn clif_charlook_inner(entity: *const MapSessionData, viewer: *const MapS
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_spawn(sd: *mut MapSessionData) -> i32 {
-    if crate::game::block::map_addblock_id((*sd).id, (*sd).bl_type, (*sd).m, (*sd).x, (*sd).y) != 0 {
+pub fn clif_spawn(pe: &PlayerEntity) -> i32 {
+
+    let pos = Point::from_u64(pe.pos_atomic.load(Ordering::Relaxed));
+    
+    if map_addblock_id(pe.id, BL_PC_U8, pos.m, pos.x, pos.y) != 0 {
         // printf("Error Spawn\n") — silently ignore in Rust
     }
-    if let Some(pe) = crate::game::map_server::map_id2sd_pc((*sd).id) {
-        clif_sendchararea(&pe);
-    }
+    clif_sendchararea(pe); 
     0
 }
 

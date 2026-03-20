@@ -120,6 +120,7 @@ use crate::game::map_parse::visual::{
     clif_charlook, clif_cnpclook, clif_cmoblook,
     clif_object_look_by_id,
     clif_mob_look_start_func_inner, clif_mob_look_close_func_inner,
+    load_visible_entities, announce_to_nearby,
 };
 use crate::game::map_parse::player_state::{
     clif_sendxy, clif_sendstatus, clif_sendxychange,
@@ -128,7 +129,7 @@ use crate::game::map_parse::player_state::{
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::map_parse::groups::{clif_isingroup, clif_canmove_sub_inner, clif_leavegroup};
 use crate::game::pc::{
-    pc_warp_sync as pc_warp, pc_isequip, pc_runfloor_sub,
+    pc_warp, pc_isequip, pc_runfloor_sub,
     FLAG_GROUP,
 };
 use crate::game::mob::{MobSpawnData, MOB_DEAD};
@@ -229,28 +230,15 @@ pub unsafe fn clif_blockmovement(pe: &PlayerEntity, flag: i32) -> i32 {
 
 // ─── clif_sendchararea ────────────────────────────────────────────────────────
 
-/// Broadcast all nearby PCs to `pe` (LOOK_SEND direction).
+/// Broadcast `pe`'s appearance to all nearby PCs.
 ///
 /// Uses `AREA` (the full surrounding area, not just `SAMEAREA`).
-///
-/// # Safety
-///
-/// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_sendchararea(pe: &PlayerEntity) -> i32 {
-    let (m, x, y) = {
-        let sd = pe.read();
-        (sd.m as usize, sd.x as i32, sd.y as i32)
-    };
+pub fn clif_sendchararea(pe: &PlayerEntity) -> i32 {
+    let pos = pe.position();
+    let (m, x, y) = (pos.m as usize, pos.x as i32, pos.y as i32);
     if let (Some(grid), Some(slot)) = (block_grid::get_grid(m), map_data(m)) {
         let ids = block_grid::ids_in_area(grid, x, y, AreaType::Area, slot.xs as i32, slot.ys as i32);
-        let sd_guard = pe.read();
-        let sd_ref = &*sd_guard;
-        for id in ids {
-            if let Some(pc_arc) = map_id2sd_pc(id) {
-                let pc = pc_arc.read();
-                clif_charlook(sd_ref, &pc);
-            }
-        }
+        announce_to_nearby(pe, &ids);
     }
     0
 }
@@ -832,28 +820,8 @@ pub unsafe fn clif_parsewalk(pe: &PlayerEntity) -> i32 {
                 }
                 clif_mob_look_close_func_inner(fd, &mut net.look);
             }
-            let sd_guard = pe.read();
-            let sd_ref = &*sd_guard;
-            for &id in &rect_ids {
-                if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook(&pc_arc.read(), sd_ref);
-                }
-            }
-            for &id in &rect_ids {
-                if let Some(npc_arc) = map_id2npc_ref(id) {
-                    clif_cnpclook(&npc_arc.read(), sd_ref);
-                }
-            }
-            for &id in &rect_ids {
-                if let Some(mob_arc) = map_id2mob_ref(id) {
-                    clif_cmoblook(&mob_arc.read(), sd_ref);
-                }
-            }
-            for &id in &rect_ids {
-                if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook(sd_ref, &pc_arc.read());
-                }
-            }
+            load_visible_entities(pe, &rect_ids);
+            announce_to_nearby(pe, &rect_ids);
         }
     }
 
@@ -1101,28 +1069,8 @@ pub unsafe fn clif_noparsewalk(pe: &PlayerEntity, _speed: i8) -> i32 {
                 }
                 clif_mob_look_close_func_inner(fd, &mut net.look);
             }
-            let sd_guard = pe.read();
-            let sd_ref = &*sd_guard;
-            for &id in &rect_ids {
-                if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook(&pc_arc.read(), sd_ref);
-                }
-            }
-            for &id in &rect_ids {
-                if let Some(npc_arc) = map_id2npc_ref(id) {
-                    clif_cnpclook(&npc_arc.read(), sd_ref);
-                }
-            }
-            for &id in &rect_ids {
-                if let Some(mob_arc) = map_id2mob_ref(id) {
-                    clif_cmoblook(&mob_arc.read(), sd_ref);
-                }
-            }
-            for &id in &rect_ids {
-                if let Some(pc_arc) = map_id2sd_pc(id) {
-                    clif_charlook(sd_ref, &pc_arc.read());
-                }
-            }
+            load_visible_entities(pe, &rect_ids);
+            announce_to_nearby(pe, &rect_ids);
         }
     }
 
@@ -1593,23 +1541,13 @@ pub unsafe fn clif_parseviewchange(pe: &PlayerEntity) -> i32 {
         let sd_guard = pe.read();
         let sd_ref = &*sd_guard;
         for &id in &rect_ids {
-            if let Some(pc_arc) = map_id2sd_pc(id) {
-                clif_charlook(&pc_arc.read(), sd_ref);
-            }
-        }
-        for &id in &rect_ids {
-            if let Some(npc_arc) = map_id2npc_ref(id) {
-                clif_cnpclook(&npc_arc.read(), sd_ref);
-            }
-        }
-        for &id in &rect_ids {
-            if let Some(mob_arc) = map_id2mob_ref(id) {
-                clif_cmoblook(&mob_arc.read(), sd_ref);
-            }
-        }
-        for &id in &rect_ids {
-            if let Some(pc_arc) = map_id2sd_pc(id) {
-                clif_charlook(sd_ref, &pc_arc.read());
+            if let Some(other_player) = map_id2sd_pc(id) {
+                clif_charlook(&other_player, pe);   // pe sees other_player
+                clif_charlook(pe, &other_player);   // other_player sees pe
+            } else if let Some(npc) = map_id2npc_ref(id) {
+                clif_cnpclook(&npc.read(), pe);
+            } else if let Some(mob) = map_id2mob_ref(id) {
+                clif_cmoblook(&mob.read(), pe);
             }
         }
     }

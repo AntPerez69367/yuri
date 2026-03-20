@@ -2,6 +2,7 @@
 #![allow(non_snake_case, clippy::wildcard_imports, clippy::too_many_lines)]
 
 
+use crate::common::traits::LegacyEntity;
 use crate::database::get_pool;
 
 use crate::game::player::entity::PlayerEntity;
