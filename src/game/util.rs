@@ -2,6 +2,23 @@
 //! No C dependencies — safe to use anywhere in the Rust codebase.
 
 
+/// Convert a null-terminated `i8` C array to a `&str`.
+pub fn carray_to_str(arr: &[i8]) -> &str {
+    let bytes = unsafe { &*(arr as *const [i8] as *const [u8]) };
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    std::str::from_utf8(&bytes[..end]).unwrap_or("")
+}
+
+/// Copy a `&str` into a fixed-size `i8` C array, null-terminated.
+pub fn str_to_carray(src: &str, dst: &mut [i8]) {
+    let bytes = src.as_bytes();
+    let n = bytes.len().min(dst.len() - 1);
+    for i in 0..n {
+        dst[i] = bytes[i] as i8;
+    }
+    dst[n] = 0;
+}
+
 /// Map an equipment-type enum value (EQ_*) to the CLIF slot index sent in packets.
 ///
 /// EQ_* enum values (from item_db.h, 0-based):
