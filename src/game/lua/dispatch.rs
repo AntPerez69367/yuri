@@ -5,7 +5,7 @@ use crate::game::mob::{FLOORITEM_START_NUM, MOB_START_NUM, NPC_START_NUM};
 use crate::game::scripting::sl_state;
 use mlua::prelude::*;
 
-fn id_to_lua(lua: &Lua, id: u32) -> LuaResult<LuaValue> {
+pub fn id_to_lua(lua: &Lua, id: u32) -> LuaResult<LuaValue> {
     if id == 0 {
         return Ok(LuaValue::Nil);
     }

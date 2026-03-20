@@ -1,10 +1,14 @@
 use crate::game::lua::entity::prelude::*;
 use mlua::prelude::*;
 
+#[macro_use]
+pub mod macros;
 pub mod coroutine;
 pub mod dispatch;
 pub mod entity;
 pub mod error;
+pub mod globals;
+pub mod registry;
 
 pub fn log_missing(entity_type: EntityType, key: &str, lua: &Lua) {
     let location = lua
@@ -23,27 +27,7 @@ pub fn log_missing(entity_type: EntityType, key: &str, lua: &Lua) {
 }
 
 pub fn register(lua: &Lua) -> LuaResult<()> {
-    let globals = lua.globals();
-    globals.set(
-        EntityType::Player.to_string(),
-        lua.create_function(|_lua, id: u32| Ok(LuaPlayer::new(id)))?,
-    )?;
-    globals.set(
-        EntityType::Npc.to_string(),
-        lua.create_function(|_lua, id: u32| Ok(LuaNpc::new(id)))?,
-    )?;
-    globals.set(
-        EntityType::Mob.to_string(),
-        lua.create_function(|_lua, id: u32| Ok(LuaMob::new(id)))?,
-    )?;
-    globals.set(
-        EntityType::Item.to_string(),
-        lua.create_function(|_lua, id: u32| Ok(LuaItem::new(id)))?,
-    )?;
-    globals.set(
-        "FloorItem",
-        lua.create_function(|_lua, id: u32| Ok(LuaItem::new(id)))?,
-    )?;
-
+    entity::register(lua)?;
+    globals::register(lua)?;
     Ok(())
 }
