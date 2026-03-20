@@ -11,49 +11,41 @@
 
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
-
-use crate::session::{session_exists, session_set_eof};
+use crate::common::constants::entity::{BL_ALL, BL_MOB, BL_NPC, BL_PC};
+use crate::common::player::inventory::MAX_INVENTORY;
+use crate::game::pc::MapSessionData;
 use crate::game::pc::FLAG_EXCHANGE;
 use crate::game::player::entity::PlayerEntity;
 use crate::game::player::prelude::*;
-use crate::game::pc::MapSessionData;
-use crate::common::constants::entity::{BL_ALL, BL_MOB, BL_NPC, BL_PC};
-use crate::common::player::inventory::MAX_INVENTORY;
+use crate::session::{session_exists, session_set_eof};
 
-use super::packet::{
-    encrypt,
-    rfifob, rfifol,
-    wfifob, wfifop, wfifow, wfifoset, wfifohead,
-};
+use super::packet::{encrypt, rfifob, rfifol, wfifob, wfifohead, wfifop, wfifoset, wfifow};
 
 use crate::common::constants::entity::player::OPT_FLAG_STEALTH;
 
-
+use crate::database::class_db::name as classdb_name;
+use crate::database::item_db;
+use crate::game::block_grid;
+use crate::game::lua::dispatch::{dispatch, dispatch_coro};
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::map_parse::player_state::clif_sendstatus;
-use crate::game::block_grid;
 use crate::game::pc::{
-    pc_additem, pc_additemnolog,
-    pc_delitem, pc_isinvenspace, ItemCustomization,
-    pc_readglobalreg,
+    pc_additem, pc_additemnolog, pc_delitem, pc_isinvenspace, pc_readglobalreg, ItemCustomization,
 };
-use crate::database::item_db;
-use crate::database::class_db::name as classdb_name;
 
 /// Dispatch a Lua event with two entity ID arguments.
-fn sl_doscript_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
-    crate::game::scripting::doscript_blargs_id(root, method, &[id1, id2])
+fn sl_doscript_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> bool {
+    dispatch(root, method, &[id1, id2])
 }
 
-fn sl_doscript_coro_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
-    crate::game::scripting::doscript_coro_id(root, method, &[id1, id2])
+fn sl_doscript_coro_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> bool {
+    dispatch_coro(root, method, &[id1, id2])
 }
-
 
 use crate::common::constants::entity::player::SFLAG_XPMONEY;
 
 // Item type constants (from item_db.h)
-use crate::common::constants::entity::player::{ITM_SMOKE, ITM_BAG, ITM_MAP, ITM_QUIVER};
+use crate::common::constants::entity::player::{ITM_BAG, ITM_MAP, ITM_QUIVER, ITM_SMOKE};
 
 // ─── string_truncate: mirror of C stringTruncate ─────────────────────────────
 
@@ -86,15 +78,15 @@ pub unsafe fn clif_exchange_cleanup(pe: &PlayerEntity) -> i32 {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_exchange_message(
-    pe:      &PlayerEntity,
+    pe: &PlayerEntity,
     message: *const i8,
-    kind:    i32,
-    extra:   i32,
+    kind: i32,
+    extra: i32,
 ) -> i32 {
     let extra = if extra > 1 { 0 } else { extra };
 
     let msg_len = libc::strlen(message);
-    let len = msg_len + 5;   // mirrors C: len = strlen(message) + 5
+    let len = msg_len + 5; // mirrors C: len = strlen(message) + 5
 
     if !session_exists(pe.fd) {
         return 0;
@@ -112,9 +104,11 @@ pub unsafe fn clif_exchange_message(
     if !dst.is_null() {
         std::ptr::copy_nonoverlapping(message as *const u8, dst, msg_len);
     }
-    wfifow(pe.fd, 1, (len + 3) as u16);   // SWAP16(len + 3) — big-endian
+    wfifow(pe.fd, 1, (len + 3) as u16); // SWAP16(len + 3) — big-endian
     let p = wfifop(pe.fd, 1) as *mut u16;
-    if !p.is_null() { p.write_unaligned(((len + 3) as u16).to_be()); }
+    if !p.is_null() {
+        p.write_unaligned(((len + 3) as u16).to_be());
+    }
     wfifoset(pe.fd, encrypt(pe.fd) as usize);
     0
 }
@@ -125,10 +119,7 @@ pub unsafe fn clif_exchange_message(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_exchange_finalize(
-    pe:  &PlayerEntity,
-    tpe: &PlayerEntity,
-) -> i32 {
+pub unsafe fn clif_exchange_finalize(pe: &PlayerEntity, tpe: &PlayerEntity) -> i32 {
     let (pe_id, tpe_id) = (pe.id, tpe.id);
     sl_doscript_2("characterLog", Some("exchangeLogWrite"), pe_id, tpe_id);
 
@@ -140,7 +131,7 @@ pub unsafe fn clif_exchange_finalize(
     }
     let pe_gold = pe.read().exchange.gold;
     tpe.write().player.inventory.money = tpe.read().player.inventory.money.saturating_add(pe_gold);
-    pe.write().player.inventory.money  = pe.read().player.inventory.money.saturating_sub(pe_gold);
+    pe.write().player.inventory.money = pe.read().player.inventory.money.saturating_sub(pe_gold);
     pe.write().exchange.gold = 0;
 
     // Transfer tpe's items to pe
@@ -150,11 +141,11 @@ pub unsafe fn clif_exchange_finalize(
         pc_additem(pe, &it as *const _ as *mut _);
     }
     let tpe_gold = tpe.read().exchange.gold;
-    pe.write().player.inventory.money  = pe.read().player.inventory.money.saturating_add(tpe_gold);
+    pe.write().player.inventory.money = pe.read().player.inventory.money.saturating_add(tpe_gold);
     tpe.write().player.inventory.money = tpe.read().player.inventory.money.saturating_sub(tpe_gold);
     tpe.write().exchange.gold = 0;
 
-    clif_sendstatus(pe,  SFLAG_XPMONEY);
+    clif_sendstatus(pe, SFLAG_XPMONEY);
     clif_sendstatus(tpe, SFLAG_XPMONEY);
     0
 }
@@ -165,15 +156,12 @@ pub unsafe fn clif_exchange_finalize(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_exchange_sendok(
-    pe:  &PlayerEntity,
-    tpe: &PlayerEntity,
-) -> i32 {
+pub unsafe fn clif_exchange_sendok(pe: &PlayerEntity, tpe: &PlayerEntity) -> i32 {
     if tpe.read().exchange.exchange_done == 1 {
         clif_exchange_finalize(pe, tpe);
 
         let msg = c"You exchanged, and gave away ownership of the items.".as_ptr();
-        clif_exchange_message(pe,  msg, 5, 0);
+        clif_exchange_message(pe, msg, 5, 0);
         clif_exchange_message(tpe, msg, 5, 0);
 
         clif_exchange_cleanup(pe);
@@ -182,7 +170,7 @@ pub unsafe fn clif_exchange_sendok(
         pe.write().exchange.exchange_done = 1;
         let msg = c"You exchanged, and gave away ownership of the items.".as_ptr();
         clif_exchange_message(tpe, msg, 5, 1);
-        clif_exchange_message(pe,  msg, 5, 1);
+        clif_exchange_message(pe, msg, 5, 1);
     }
     0
 }
@@ -193,17 +181,14 @@ pub unsafe fn clif_exchange_sendok(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_startexchange(
-    pe:     &PlayerEntity,
-    tpe:    &PlayerEntity,
-) -> i32 {
+pub unsafe fn clif_startexchange(pe: &PlayerEntity, tpe: &PlayerEntity) -> i32 {
     if tpe.id == pe.id {
         let msg = c"You move your items from one hand to another, but quickly get bored.".as_ptr();
         clif_sendminitext(pe, msg);
         return 0;
     }
 
-    pe.write().exchange.target  = tpe.id;
+    pe.write().exchange.target = tpe.id;
     tpe.write().exchange.target = pe.id;
 
     if tpe.read().player.appearance.setting_flags & FLAG_EXCHANGE != 0 {
@@ -212,13 +197,22 @@ pub unsafe fn clif_startexchange(
         // Build name string for pe (to send to tpe)
         let (tpe_class, tpe_mark, tpe_name, tpe_level) = {
             let g = tpe.read();
-            (g.player.progression.class, g.player.progression.mark, g.player.identity.name.clone(), g.player.progression.level)
+            (
+                g.player.progression.class,
+                g.player.progression.mark,
+                g.player.identity.name.clone(),
+                g.player.progression.level,
+            )
         };
         let tsd_class_name = classdb_name(tpe_class as i32, tpe_mark as i32);
         {
             let formatted = format!("{}({})\0", tpe_name, tsd_class_name);
             let copy_len = formatted.len().min(buff.len());
-            std::ptr::copy_nonoverlapping(formatted.as_ptr() as *const i8, buff.as_mut_ptr(), copy_len);
+            std::ptr::copy_nonoverlapping(
+                formatted.as_ptr() as *const i8,
+                buff.as_mut_ptr(),
+                copy_len,
+            );
         }
 
         if !session_exists(pe.fd) {
@@ -231,7 +225,9 @@ pub unsafe fn clif_startexchange(
         wfifob(pe.fd, 4, 0x03);
         wfifob(pe.fd, 5, 0x00);
         let p = wfifop(pe.fd, 6) as *mut u32;
-        if !p.is_null() { p.write_unaligned(tpe.id.to_be()); }
+        if !p.is_null() {
+            p.write_unaligned(tpe.id.to_be());
+        }
         let mut len: usize = 4;
         let buf_len = libc::strlen(buff.as_ptr());
         wfifob(pe.fd, len + 6, buf_len as u8);
@@ -241,10 +237,14 @@ pub unsafe fn clif_startexchange(
         }
         len += buf_len + 1;
         let p2 = wfifop(pe.fd, len + 6) as *mut u16;
-        if !p2.is_null() { p2.write_unaligned((tpe_level as u16).to_be()); }
+        if !p2.is_null() {
+            p2.write_unaligned((tpe_level as u16).to_be());
+        }
         len += 2;
         let ph = wfifop(pe.fd, 1) as *mut u16;
-        if !ph.is_null() { ph.write_unaligned(((len + 3) as u16).to_be()); }
+        if !ph.is_null() {
+            ph.write_unaligned(((len + 3) as u16).to_be());
+        }
         wfifoset(pe.fd, encrypt(pe.fd) as usize);
 
         if !session_exists(pe.fd) {
@@ -254,13 +254,22 @@ pub unsafe fn clif_startexchange(
         // Build name string for tpe (to send to pe)
         let (sd_class, sd_mark, sd_name, sd_level) = {
             let g = pe.read();
-            (g.player.progression.class, g.player.progression.mark, g.player.identity.name.clone(), g.player.progression.level)
+            (
+                g.player.progression.class,
+                g.player.progression.mark,
+                g.player.identity.name.clone(),
+                g.player.progression.level,
+            )
         };
         let sd_class_name = classdb_name(sd_class as i32, sd_mark as i32);
         {
             let formatted = format!("{}({})\0", sd_name, sd_class_name);
             let copy_len = formatted.len().min(buff.len());
-            std::ptr::copy_nonoverlapping(formatted.as_ptr() as *const i8, buff.as_mut_ptr(), copy_len);
+            std::ptr::copy_nonoverlapping(
+                formatted.as_ptr() as *const i8,
+                buff.as_mut_ptr(),
+                copy_len,
+            );
         }
 
         wfifohead(tpe.fd, 512);
@@ -269,7 +278,9 @@ pub unsafe fn clif_startexchange(
         wfifob(tpe.fd, 4, 0x03);
         wfifob(tpe.fd, 5, 0x00);
         let p3 = wfifop(tpe.fd, 6) as *mut u32;
-        if !p3.is_null() { p3.write_unaligned(pe.id.to_be()); }
+        if !p3.is_null() {
+            p3.write_unaligned(pe.id.to_be());
+        }
         let mut len: usize = 4;
         let buf_len = libc::strlen(buff.as_ptr());
         wfifob(tpe.fd, len + 6, buf_len as u8);
@@ -279,18 +290,22 @@ pub unsafe fn clif_startexchange(
         }
         len += buf_len + 1;
         let p4 = wfifop(tpe.fd, len + 6) as *mut u16;
-        if !p4.is_null() { p4.write_unaligned((sd_level as u16).to_be()); }
+        if !p4.is_null() {
+            p4.write_unaligned((sd_level as u16).to_be());
+        }
         len += 2;
         let ph2 = wfifop(tpe.fd, 1) as *mut u16;
-        if !ph2.is_null() { ph2.write_unaligned(((len + 3) as u16).to_be()); }
+        if !ph2.is_null() {
+            ph2.write_unaligned(((len + 3) as u16).to_be());
+        }
         wfifoset(tpe.fd, encrypt(tpe.fd) as usize);
 
         pe.write().player.appearance.setting_flags ^= FLAG_EXCHANGE;
         tpe.write().player.appearance.setting_flags ^= FLAG_EXCHANGE;
 
-        pe.write().exchange.item_count  = 0;
+        pe.write().exchange.item_count = 0;
         tpe.write().exchange.item_count = 0;
-        pe.write().exchange.list_count  = 0;
+        pe.write().exchange.list_count = 0;
         tpe.write().exchange.list_count = 1;
     } else {
         let msg = c"They have refused to exchange with you".as_ptr();
@@ -305,11 +320,7 @@ pub unsafe fn clif_startexchange(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_exchange_additem_else(
-    pe:  &PlayerEntity,
-    tpe: &PlayerEntity,
-    _id: i32,
-) -> i32 {
+pub unsafe fn clif_exchange_additem_else(pe: &PlayerEntity, tpe: &PlayerEntity, _id: i32) -> i32 {
     // nameof = pe->exchange.item[pe->exchange.item_count - 1].real_name, truncated to 15
     let item_idx = (pe.read().exchange.item_count - 1).max(0) as usize;
     let real_name = pe.read().exchange.item[item_idx].real_name;
@@ -337,7 +348,9 @@ pub unsafe fn clif_exchange_additem_else(
     wfifob(pe.fd, 7, list_count as u8);
     let len: usize = 0;
     let pw = wfifop(pe.fd, len + 8) as *mut u16;
-    if !pw.is_null() { pw.write_unaligned(0xFFFF_u16.to_le()); }
+    if !pw.is_null() {
+        pw.write_unaligned(0xFFFF_u16.to_le());
+    }
     wfifob(pe.fd, len + 10, 0x00);
     wfifob(pe.fd, len + 11, buf_len as u8);
     let dst = wfifop(pe.fd, len + 12);
@@ -346,7 +359,9 @@ pub unsafe fn clif_exchange_additem_else(
     }
     let pkt_len = len + buf_len + 5;
     let ph = wfifop(pe.fd, 1) as *mut u16;
-    if !ph.is_null() { ph.write_unaligned((pkt_len as u16).to_be()); }
+    if !ph.is_null() {
+        ph.write_unaligned((pkt_len as u16).to_be());
+    }
     wfifoset(pe.fd, encrypt(pe.fd) as usize);
 
     if !session_exists(pe.fd) {
@@ -362,7 +377,9 @@ pub unsafe fn clif_exchange_additem_else(
     wfifob(tpe.fd, 6, 0x01);
     wfifob(tpe.fd, 7, list_count as u8);
     let pw2 = wfifop(tpe.fd, 8) as *mut u16;
-    if !pw2.is_null() { pw2.write_unaligned(0xFFFF_u16.to_le()); }
+    if !pw2.is_null() {
+        pw2.write_unaligned(0xFFFF_u16.to_le());
+    }
     wfifob(tpe.fd, 10, 0);
     wfifob(tpe.fd, 11, buf_len as u8);
     let dst2 = wfifop(tpe.fd, 12);
@@ -371,7 +388,9 @@ pub unsafe fn clif_exchange_additem_else(
     }
     let tsd_pkt_len = buf_len + 1;
     let ph2 = wfifop(tpe.fd, 1) as *mut u16;
-    if !ph2.is_null() { ph2.write_unaligned(((tsd_pkt_len + 8) as u16).to_be()); }
+    if !ph2.is_null() {
+        ph2.write_unaligned(((tsd_pkt_len + 8) as u16).to_be());
+    }
     wfifoset(tpe.fd, encrypt(tpe.fd) as usize);
 
     0
@@ -384,9 +403,9 @@ pub unsafe fn clif_exchange_additem_else(
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_exchange_additem(
-    pe:     &PlayerEntity,
-    tpe:    &PlayerEntity,
-    id:     i32,
+    pe: &PlayerEntity,
+    tpe: &PlayerEntity,
+    id: i32,
     amount: i32,
 ) -> i32 {
     let slot = id as usize;
@@ -395,18 +414,31 @@ pub unsafe fn clif_exchange_additem(
     }
     let item_id = pe.read().player.inventory.inventory[slot].id;
 
-    if item_id != 0
-        && item_db::search(item_id).exchangeable != 0 {
-            let msg = c"You cannot exchange that.".as_ptr();
-            clif_sendminitext(pe, msg);
-            return 0;
-        }
+    if item_id != 0 && item_db::search(item_id).exchangeable != 0 {
+        let msg = c"You cannot exchange that.".as_ptr();
+        clif_sendminitext(pe, msg);
+        return 0;
+    }
 
     // Check target has inventory space
-    let (inv_owner, inv_real_name, inv_custom_look, inv_custom_look_color, inv_custom_icon, inv_custom_icon_color) = {
+    let (
+        inv_owner,
+        inv_real_name,
+        inv_custom_look,
+        inv_custom_look_color,
+        inv_custom_icon,
+        inv_custom_icon_color,
+    ) = {
         let g = pe.read();
         let inv = &g.player.inventory.inventory[slot];
-        (inv.owner, inv.real_name, inv.custom_look, inv.custom_look_color, inv.custom_icon, inv.custom_icon_color)
+        (
+            inv.owner,
+            inv.real_name,
+            inv.custom_look,
+            inv.custom_look_color,
+            inv.custom_icon,
+            inv.custom_icon_color,
+        )
     };
     let space = pc_isinvenspace(
         &mut *tpe.write() as *mut MapSessionData,
@@ -458,7 +490,13 @@ pub unsafe fn clif_exchange_additem(
     let (ex_type, ex_dura, ex_custom_icon, ex_custom_icon_color, list_count) = {
         let g = pe.read();
         let ex_item = &g.exchange.item[xcount];
-        (ex_item_data.typ as i32, ex_item.dura, ex_item.custom_icon, ex_item.custom_icon_color, g.exchange.list_count)
+        (
+            ex_item_data.typ as i32,
+            ex_item.dura,
+            ex_item.custom_icon,
+            ex_item.custom_icon_color,
+            g.exchange.list_count,
+        )
     };
 
     // Build buff string: name(amount) or name with durability annotation
@@ -467,13 +505,16 @@ pub unsafe fn clif_exchange_additem(
 
     if amount > 1 {
         libc::snprintf(
-            buff.as_mut_ptr(), buff.len(),
+            buff.as_mut_ptr(),
+            buff.len(),
             c"%s(%d)".as_ptr(),
-            nameof.as_ptr(), amount,
+            nameof.as_ptr(),
+            amount,
         );
     } else {
         libc::snprintf(
-            buff.as_mut_ptr(), buff.len(),
+            buff.as_mut_ptr(),
+            buff.len(),
             c"%s".as_ptr(),
             nameof.as_ptr(),
         );
@@ -483,35 +524,48 @@ pub unsafe fn clif_exchange_additem(
         let max_dura = ex_item_data.dura;
         let percentage = if max_dura > 0 {
             (ex_dura as f32 / max_dura as f32) * 100.0
-        } else { 0.0 };
+        } else {
+            0.0
+        };
         libc::snprintf(
-            buff.as_mut_ptr(), buff.len(),
+            buff.as_mut_ptr(),
+            buff.len(),
             c"%s (%d%%)".as_ptr(),
-            nameof.as_ptr(), percentage as i32,
+            nameof.as_ptr(),
+            percentage as i32,
         );
     } else if ex_type == ITM_SMOKE {
         libc::snprintf(
-            buff.as_mut_ptr(), buff.len(),
+            buff.as_mut_ptr(),
+            buff.len(),
             c"%s [%d %s]".as_ptr(),
-            nameof.as_ptr(), ex_dura, ex_item_data.text.as_ptr(),
+            nameof.as_ptr(),
+            ex_dura,
+            ex_item_data.text.as_ptr(),
         );
     } else if ex_type == ITM_BAG {
         libc::snprintf(
-            buff.as_mut_ptr(), buff.len(),
+            buff.as_mut_ptr(),
+            buff.len(),
             c"%s [%d]".as_ptr(),
-            nameof.as_ptr(), ex_dura,
+            nameof.as_ptr(),
+            ex_dura,
         );
     } else if ex_type == ITM_MAP {
         libc::snprintf(
-            buff.as_mut_ptr(), buff.len(),
+            buff.as_mut_ptr(),
+            buff.len(),
             c"[T%d] %s".as_ptr(),
-            ex_dura, nameof.as_ptr(),
+            ex_dura,
+            nameof.as_ptr(),
         );
     } else if ex_type == ITM_QUIVER {
         libc::snprintf(
-            buff.as_mut_ptr(), buff.len(),
+            buff.as_mut_ptr(),
+            buff.len(),
             c"%s [%d]".as_ptr(),
-            nameof.as_ptr(), ex_dura,
+            nameof.as_ptr(),
+            ex_dura,
         );
     }
 
@@ -530,12 +584,16 @@ pub unsafe fn clif_exchange_additem(
     if ex_custom_icon != 0 {
         let icon_val = ex_custom_icon + 49152;
         let pw = wfifop(pe.fd, len + 8) as *mut u16;
-        if !pw.is_null() { pw.write_unaligned((icon_val as u16).to_be()); }
+        if !pw.is_null() {
+            pw.write_unaligned((icon_val as u16).to_be());
+        }
         wfifob(pe.fd, len + 10, ex_custom_icon_color as u8);
     } else {
         let icon_val = ex_item_data.icon as u16;
         let pw = wfifop(pe.fd, len + 8) as *mut u16;
-        if !pw.is_null() { pw.write_unaligned(icon_val.to_be()); }
+        if !pw.is_null() {
+            pw.write_unaligned(icon_val.to_be());
+        }
         wfifob(pe.fd, len + 10, ex_item_data.icon_color as u8);
     }
     wfifob(pe.fd, len + 11, buf_len as u8);
@@ -545,7 +603,9 @@ pub unsafe fn clif_exchange_additem(
     }
     let sd_pkt_len = len + buf_len + 5;
     let ph = wfifop(pe.fd, 1) as *mut u16;
-    if !ph.is_null() { ph.write_unaligned((sd_pkt_len as u16).to_be()); }
+    if !ph.is_null() {
+        ph.write_unaligned((sd_pkt_len as u16).to_be());
+    }
     wfifoset(pe.fd, encrypt(pe.fd) as usize);
 
     let len: usize = 0;
@@ -557,13 +617,16 @@ pub unsafe fn clif_exchange_additem(
     // Rebuild buff for the tpe side (same logic, slightly different format for amount>1)
     if amount > 1 {
         libc::snprintf(
-            buff.as_mut_ptr(), buff.len(),
+            buff.as_mut_ptr(),
+            buff.len(),
             c"%s (%d)".as_ptr(),
-            nameof.as_ptr(), amount,
+            nameof.as_ptr(),
+            amount,
         );
     } else {
         libc::snprintf(
-            buff.as_mut_ptr(), buff.len(),
+            buff.as_mut_ptr(),
+            buff.len(),
             c"%s".as_ptr(),
             nameof.as_ptr(),
         );
@@ -573,35 +636,48 @@ pub unsafe fn clif_exchange_additem(
         let max_dura = ex_item_data.dura;
         let percentage = if max_dura > 0 {
             (ex_dura as f32 / max_dura as f32) * 100.0
-        } else { 0.0 };
+        } else {
+            0.0
+        };
         libc::snprintf(
-            buff.as_mut_ptr(), buff.len(),
+            buff.as_mut_ptr(),
+            buff.len(),
             c"%s (%d%%)".as_ptr(),
-            nameof.as_ptr(), percentage as i32,
+            nameof.as_ptr(),
+            percentage as i32,
         );
     } else if ex_type == ITM_SMOKE {
         libc::snprintf(
-            buff.as_mut_ptr(), buff.len(),
+            buff.as_mut_ptr(),
+            buff.len(),
             c"%s [%d %s]".as_ptr(),
-            nameof.as_ptr(), ex_dura, ex_item_data.text.as_ptr(),
+            nameof.as_ptr(),
+            ex_dura,
+            ex_item_data.text.as_ptr(),
         );
     } else if ex_type == ITM_BAG {
         libc::snprintf(
-            buff.as_mut_ptr(), buff.len(),
+            buff.as_mut_ptr(),
+            buff.len(),
             c"%s [%d]".as_ptr(),
-            nameof.as_ptr(), ex_dura,
+            nameof.as_ptr(),
+            ex_dura,
         );
     } else if ex_type == ITM_MAP {
         libc::snprintf(
-            buff.as_mut_ptr(), buff.len(),
+            buff.as_mut_ptr(),
+            buff.len(),
             c"[T%d] %s".as_ptr(),
-            ex_dura, nameof.as_ptr(),
+            ex_dura,
+            nameof.as_ptr(),
         );
     } else if ex_type == ITM_QUIVER {
         libc::snprintf(
-            buff.as_mut_ptr(), buff.len(),
+            buff.as_mut_ptr(),
+            buff.len(),
             c"%s [%d]".as_ptr(),
-            nameof.as_ptr(), ex_dura,
+            nameof.as_ptr(),
+            ex_dura,
         );
     }
 
@@ -619,12 +695,16 @@ pub unsafe fn clif_exchange_additem(
     if ex_custom_icon != 0 {
         let icon_val = ex_custom_icon + 49152;
         let pw = wfifop(tpe.fd, 8) as *mut u16;
-        if !pw.is_null() { pw.write_unaligned((icon_val as u16).to_be()); }
+        if !pw.is_null() {
+            pw.write_unaligned((icon_val as u16).to_be());
+        }
         wfifob(tpe.fd, 10, ex_custom_icon_color as u8);
     } else {
         let icon_val = ex_item_data.icon as u16;
         let pw = wfifop(tpe.fd, 8) as *mut u16;
-        if !pw.is_null() { pw.write_unaligned(icon_val.to_be()); }
+        if !pw.is_null() {
+            pw.write_unaligned(icon_val.to_be());
+        }
         wfifob(tpe.fd, 10, ex_item_data.icon_color as u8);
     }
     wfifob(tpe.fd, 11, buf_len as u8);
@@ -632,9 +712,11 @@ pub unsafe fn clif_exchange_additem(
     if !dst2.is_null() {
         std::ptr::copy_nonoverlapping(buff.as_ptr() as *const u8, dst2, buf_len);
     }
-    let tsd_pkt_len = len + buf_len + 1;   // len += strlen(buff)+1; WFIFOW(tsd->fd,1)=SWAP16(len+8)
+    let tsd_pkt_len = len + buf_len + 1; // len += strlen(buff)+1; WFIFOW(tsd->fd,1)=SWAP16(len+8)
     let ph2 = wfifop(tpe.fd, 1) as *mut u16;
-    if !ph2.is_null() { ph2.write_unaligned(((tsd_pkt_len + 8) as u16).to_be()); }
+    if !ph2.is_null() {
+        ph2.write_unaligned(((tsd_pkt_len + 8) as u16).to_be());
+    }
     wfifoset(tpe.fd, encrypt(tpe.fd) as usize);
 
     pe.write().exchange.item_count += 1;
@@ -654,10 +736,7 @@ pub unsafe fn clif_exchange_additem(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_exchange_money(
-    pe:  &PlayerEntity,
-    tpe: &PlayerEntity,
-) -> i32 {
+pub unsafe fn clif_exchange_money(pe: &PlayerEntity, tpe: &PlayerEntity) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
     }
@@ -667,14 +746,16 @@ pub unsafe fn clif_exchange_money(
 
     let pe_gold = pe.read().exchange.gold;
 
-    wfifohead(pe.fd,  11);
+    wfifohead(pe.fd, 11);
     wfifohead(tpe.fd, 11);
 
     // pe side: own gold offer
     wfifob(pe.fd, 0, 0xAA);
     {
         let p = wfifop(pe.fd, 1) as *mut u16;
-        if !p.is_null() { p.write_unaligned(8_u16.to_be()); }
+        if !p.is_null() {
+            p.write_unaligned(8_u16.to_be());
+        }
     }
     wfifob(pe.fd, 3, 0x42);
     wfifob(pe.fd, 4, 0x03);
@@ -682,7 +763,9 @@ pub unsafe fn clif_exchange_money(
     wfifob(pe.fd, 6, 0x00);
     {
         let p = wfifop(pe.fd, 7) as *mut u32;
-        if !p.is_null() { p.write_unaligned(pe_gold.to_be()); }
+        if !p.is_null() {
+            p.write_unaligned(pe_gold.to_be());
+        }
     }
     wfifoset(pe.fd, encrypt(pe.fd) as usize);
 
@@ -690,7 +773,9 @@ pub unsafe fn clif_exchange_money(
     wfifob(tpe.fd, 0, 0xAA);
     {
         let p = wfifop(tpe.fd, 1) as *mut u16;
-        if !p.is_null() { p.write_unaligned(8_u16.to_be()); }
+        if !p.is_null() {
+            p.write_unaligned(8_u16.to_be());
+        }
     }
     wfifob(tpe.fd, 3, 0x42);
     wfifob(tpe.fd, 4, 0x03);
@@ -698,7 +783,9 @@ pub unsafe fn clif_exchange_money(
     wfifob(tpe.fd, 6, 0x01);
     {
         let p = wfifop(tpe.fd, 7) as *mut u32;
-        if !p.is_null() { p.write_unaligned(pe_gold.to_be()); }
+        if !p.is_null() {
+            p.write_unaligned(pe_gold.to_be());
+        }
     }
     wfifoset(tpe.fd, encrypt(tpe.fd) as usize);
 
@@ -733,17 +820,22 @@ pub unsafe fn clif_handgold(pe: &PlayerEntity) -> i32 {
     let gold = {
         // SWAP32(RFIFOL(sd->fd, 5)) — network big-endian
         let raw = rfifol(pe.fd, 5);
-        u32::from_be_bytes(raw.to_le_bytes())   // raw is LE from rfifol; SWAP32 makes BE → flip
+        u32::from_be_bytes(raw.to_le_bytes()) // raw is LE from rfifol; SWAP32 makes BE → flip
     };
 
     // C: if (gold < 0) gold = 0; (gold is unsigned so this is a no-op, but kept for fidelity)
-    if gold == 0 { return 0; }
+    if gold == 0 {
+        return 0;
+    }
     let gold = gold.min(pe.read().player.inventory.money);
 
     // Compute adjacent cell based on facing direction
     let (x, y) = side_cell(pe);
 
-    let (map_id,) = { let g = pe.read(); (g.m,) };
+    let (map_id,) = {
+        let g = pe.read();
+        (g.m,)
+    };
     let target_id = block_grid::first_in_cell(map_id as usize, x as u16, y as u16, BL_ALL);
 
     pe.write().exchange.gold = gold;
@@ -774,8 +866,8 @@ pub unsafe fn clif_handgold(pe: &PlayerEntity) -> i32 {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_handitem(pe: &PlayerEntity) -> i32 {
-    let slot      = rfifob(pe.fd, 5).saturating_sub(1) as usize;
-    let handgive  = rfifob(pe.fd, 6);
+    let slot = rfifob(pe.fd, 5).saturating_sub(1) as usize;
+    let handgive = rfifob(pe.fd, 6);
     let amount: i32 = if handgive == 0 {
         1
     } else {
@@ -811,13 +903,16 @@ pub unsafe fn clif_handitem(pe: &PlayerEntity) -> i32 {
 
     if bl_type == BL_MOB {
         let mob_arc = match crate::game::map_server::map_id2mob_ref(target_id) {
-            Some(a) => a, None => return 0,
+            Some(a) => a,
+            None => return 0,
         };
         let mut mob_guard = mob_arc.write();
         let mob = &mut *mob_guard as *mut crate::game::mob::MobSpawnData;
 
         let inv_id = pe.read().player.inventory.inventory[slot].id;
-        if item_db::search(inv_id).exchangeable == 1 { return 0; }
+        if item_db::search(inv_id).exchangeable == 1 {
+            return 0;
+        }
 
         let (inv_dura, inv_own, inv_prot) = {
             let g = pe.read();
@@ -829,18 +924,18 @@ pub unsafe fn clif_handitem(pe: &PlayerEntity) -> i32 {
         for i in 0..MAX_INVENTORY {
             let mob_slot = &mut (*mob).inventory[i];
             if mob_slot.id == inv_id
-                && mob_slot.dura    == inv_dura
-                && mob_slot.owner   == inv_own
+                && mob_slot.dura == inv_dura
+                && mob_slot.owner == inv_own
                 && mob_slot.protected == inv_prot
             {
                 mob_slot.amount += amount;
                 found = true;
                 break;
             } else if mob_slot.id == 0 {
-                mob_slot.id     = inv_id;
+                mob_slot.id = inv_id;
                 mob_slot.amount = amount;
-                mob_slot.owner  = inv_own;
-                mob_slot.dura   = inv_dura;
+                mob_slot.owner = inv_own;
+                mob_slot.dura = inv_dura;
                 mob_slot.protected = inv_prot;
                 found = true;
                 break;
@@ -852,7 +947,8 @@ pub unsafe fn clif_handitem(pe: &PlayerEntity) -> i32 {
 
     if bl_type == BL_NPC {
         let nd_arc = match crate::game::map_server::map_id2npc_ref(target_id) {
-            Some(a) => a, None => return 0,
+            Some(a) => a,
+            None => return 0,
         };
         let mut nd_guard = nd_arc.write();
         let nd = &mut *nd_guard as *mut crate::game::npc::NpcData;
@@ -864,12 +960,18 @@ pub unsafe fn clif_handitem(pe: &PlayerEntity) -> i32 {
         }
 
         if (*nd).receive_item == 1 {
-            sl_doscript_coro_2(crate::game::scripting::carray_to_str(&(*nd).name), Some("handItem"), pe.id, (*nd).id);
+            sl_doscript_coro_2(
+                crate::game::scripting::carray_to_str(&(*nd).name),
+                Some("handItem"),
+                pe.id,
+                (*nd).id,
+            );
         } else {
             let item_name = item_db::search(inv_id).name.as_ptr();
             let mut msg = [0i8; 128];
             libc::snprintf(
-                msg.as_mut_ptr(), msg.len(),
+                msg.as_mut_ptr(),
+                msg.len(),
                 c"What are you trying to do? Keep your junky %s with you!".as_ptr(),
                 item_name,
             );
@@ -883,7 +985,9 @@ pub unsafe fn clif_handitem(pe: &PlayerEntity) -> i32 {
             wfifob(pe.fd, 5, 0);
             {
                 let p = wfifop(pe.fd, 6) as *mut u32;
-                if !p.is_null() { p.write_unaligned(target_id.to_be()); }
+                if !p.is_null() {
+                    p.write_unaligned(target_id.to_be());
+                }
             }
             wfifob(pe.fd, 10, msg_len as u8);
             let dst = wfifop(pe.fd, 11);
@@ -895,7 +999,9 @@ pub unsafe fn clif_handitem(pe: &PlayerEntity) -> i32 {
             wfifob(pe.fd, 4, 0); // increment placeholder (WFIFOHEADER sets it)
             {
                 let ph = wfifop(pe.fd, 1) as *mut u16;
-                if !ph.is_null() { ph.write_unaligned(((msg_len + 11) as u16).to_be()); }
+                if !ph.is_null() {
+                    ph.write_unaligned(((msg_len + 11) as u16).to_be());
+                }
             }
             wfifoset(pe.fd, encrypt(pe.fd) as usize);
         }
@@ -922,7 +1028,8 @@ pub unsafe fn clif_parse_exchange(pe: &PlayerEntity) -> i32 {
             let raw = rfifol(pe.fd, 6);
             let target_id = u32::from_be_bytes(raw.to_le_bytes());
             let tpe_arc = match crate::game::map_server::map_id2sd_pc(target_id) {
-                Some(a) => a, None => return 0,
+                Some(a) => a,
+                None => return 0,
             };
             let (pe_m, pe_gm_level) = {
                 let g = pe.read();
@@ -947,7 +1054,10 @@ pub unsafe fn clif_parse_exchange(pe: &PlayerEntity) -> i32 {
             }
             let (inv_amount, inv_id) = {
                 let g = pe.read();
-                (g.player.inventory.inventory[id].amount, g.player.inventory.inventory[id].id)
+                (
+                    g.player.inventory.inventory[id].amount,
+                    g.player.inventory.inventory[id].id,
+                )
             };
             if inv_amount > 1 {
                 if !session_exists(pe.fd) {
@@ -957,7 +1067,9 @@ pub unsafe fn clif_parse_exchange(pe: &PlayerEntity) -> i32 {
                 wfifob(pe.fd, 0, 0xAA);
                 {
                     let p = wfifop(pe.fd, 1) as *mut u16;
-                    if !p.is_null() { p.write_unaligned(4_u16.to_be()); }
+                    if !p.is_null() {
+                        p.write_unaligned(4_u16.to_be());
+                    }
                 }
                 wfifob(pe.fd, 3, 0x42);
                 wfifob(pe.fd, 4, 0x03);
@@ -968,7 +1080,8 @@ pub unsafe fn clif_parse_exchange(pe: &PlayerEntity) -> i32 {
                 let raw = rfifol(pe.fd, 6);
                 let target_id = u32::from_be_bytes(raw.to_le_bytes());
                 let tpe_arc = match crate::game::map_server::map_id2sd_pc(target_id) {
-                    Some(a) => a, None => return 0,
+                    Some(a) => a,
+                    None => return 0,
                 };
                 clif_exchange_additem(pe, tpe_arc.as_ref(), id as i32, 1);
             }
@@ -976,7 +1089,7 @@ pub unsafe fn clif_parse_exchange(pe: &PlayerEntity) -> i32 {
         }
         2 => {
             // Add item with explicit amount
-            let id     = rfifob(pe.fd, 10).saturating_sub(1) as usize;
+            let id = rfifob(pe.fd, 10).saturating_sub(1) as usize;
             if id >= pe.read().player.inventory.max_inv as usize {
                 return 0;
             }
@@ -984,11 +1097,15 @@ pub unsafe fn clif_parse_exchange(pe: &PlayerEntity) -> i32 {
             let raw = rfifol(pe.fd, 6);
             let target_id = u32::from_be_bytes(raw.to_le_bytes());
             let tpe_arc = match crate::game::map_server::map_id2sd_pc(target_id) {
-                Some(a) => a, None => return 0,
+                Some(a) => a,
+                None => return 0,
             };
             let (inv_id, inv_amount) = {
                 let g = pe.read();
-                (g.player.inventory.inventory[id].id, g.player.inventory.inventory[id].amount)
+                (
+                    g.player.inventory.inventory[id].id,
+                    g.player.inventory.inventory[id].amount,
+                )
             };
             if amount > 0 && inv_id != 0 && amount <= inv_amount {
                 clif_exchange_additem(pe, tpe_arc.as_ref(), id as i32, amount);
@@ -998,11 +1115,12 @@ pub unsafe fn clif_parse_exchange(pe: &PlayerEntity) -> i32 {
         3 => {
             // Exchange gold
             let raw_target = rfifol(pe.fd, 6);
-            let target_id  = u32::from_be_bytes(raw_target.to_le_bytes());
+            let target_id = u32::from_be_bytes(raw_target.to_le_bytes());
             let raw_amount = rfifol(pe.fd, 10);
-            let amount     = u32::from_be_bytes(raw_amount.to_le_bytes());
+            let amount = u32::from_be_bytes(raw_amount.to_le_bytes());
             let tpe_arc = match crate::game::map_server::map_id2sd_pc(target_id) {
-                Some(a) => a, None => return 0,
+                Some(a) => a,
+                None => return 0,
             };
             let tpe = tpe_arc.as_ref();
             if amount > pe.read().player.inventory.money {
@@ -1033,7 +1151,13 @@ pub unsafe fn clif_parse_exchange(pe: &PlayerEntity) -> i32 {
 
             let (pe_exchange_target, pe_id, pe_exchange_gold, pe_money, pe_fd) = {
                 let g = pe.read();
-                (g.exchange.target, g.id, g.exchange.gold, g.player.inventory.money, pe.fd)
+                (
+                    g.exchange.target,
+                    g.id,
+                    g.exchange.gold,
+                    g.player.inventory.money,
+                    pe.fd,
+                )
             };
 
             if pe_exchange_target != target_id {
@@ -1051,7 +1175,7 @@ pub unsafe fn clif_parse_exchange(pe: &PlayerEntity) -> i32 {
                 return 0;
             }
             let msg_no_gold = c"You do not have that amount.".as_ptr();
-            let msg_cancel  = c"Exchange cancelled.".as_ptr();
+            let msg_cancel = c"Exchange cancelled.".as_ptr();
             if pe_exchange_gold > pe_money {
                 clif_exchange_message(pe, msg_no_gold, 4, 0);
                 if let Some(ref arc) = tpe_arc {
@@ -1081,11 +1205,10 @@ unsafe fn side_cell(pe: &PlayerEntity) -> (i32, i32) {
         (g.player.combat.side, g.x, g.y)
     };
     match side {
-        0 => (x as i32,     y as i32 - 1),
+        0 => (x as i32, y as i32 - 1),
         1 => (x as i32 + 1, y as i32),
-        2 => (x as i32,     y as i32 + 1),
+        2 => (x as i32, y as i32 + 1),
         3 => (x as i32 - 1, y as i32),
-        _ => (x as i32,     y as i32),
+        _ => (x as i32, y as i32),
     }
 }
-

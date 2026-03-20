@@ -1,46 +1,43 @@
 //! Covers broadcast, whisper, say, ignore list, and NPC speech callbacks.
 
-use crate::database::map_db::raw_map_ptr;
-use crate::session::{
-    SessionId, session_exists, session_get_data,
-};
-use crate::game::npc::NpcData;
-use crate::game::pc::{
-    SdIgnoreList,
-    FLAG_ADVICE, FLAG_SHOUT, FLAG_WHISPER,
-    OPT_FLAG_STEALTH, U_FLAG_SILENCED,
-    MAP_WHISPFAIL,
-    groups,
-    map_msg,
-};
 use crate::common::player::spells::MAX_SPELLS;
+use crate::database::map_db::raw_map_ptr;
+use crate::game::npc::NpcData;
 use crate::game::pc::MapSessionData;
+use crate::game::pc::{
+    groups, map_msg, SdIgnoreList, FLAG_ADVICE, FLAG_SHOUT, FLAG_WHISPER, MAP_WHISPFAIL,
+    OPT_FLAG_STEALTH, U_FLAG_SILENCED,
+};
 use crate::game::player::entity::PlayerEntity;
 use crate::game::player::prelude::*;
+use crate::session::{session_exists, session_get_data, SessionId};
 
 use super::packet::{
-    encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow, wfifoheader,
-    clif_send,
-    SAMEMAP, SAMEAREA,
+    clif_send, encrypt, wfifob, wfifohead, wfifoheader, wfifol, wfifop, wfifoset, wfifow, SAMEAREA,
+    SAMEMAP,
 };
 use crate::game::block::AreaType;
 use crate::game::block_grid;
-use crate::game::mob::{BL_PC, MobSpawnData};
+use crate::game::lua::dispatch::dispatch_strings;
+use crate::game::mob::{MobSpawnData, BL_PC};
 
 /// Check that the session exists; if not, return false.
 #[inline]
 unsafe fn session_alive(fd: SessionId) -> bool {
-    if session_exists(fd) { return true; }
+    if session_exists(fd) {
+        return true;
+    }
     false
 }
 
-use crate::game::map_server::map_name2sd;
-use crate::game::map_parse::combat::clif_sendaction_pc;
-use crate::database::class_db::{name as classdb_name, chat as classdb_chat};
-use crate::game::gm_command::is_command;
+use crate::database::class_db::{chat as classdb_chat, name as classdb_name};
 use crate::database::magic_db;
 use crate::game::client::handlers::clif_Hacker;
 use crate::game::client::BroadcastSrc;
+use crate::game::gm_command::is_command;
+use crate::game::lua::dispatch::{dispatch, dispatch_coro};
+use crate::game::map_parse::combat::clif_sendaction_pc;
+use crate::game::map_server::map_name2sd;
 
 // Alias for the async coroutine freeer (returns () in Rust, was i32 in C -- return unused).
 #[inline]
@@ -50,14 +47,13 @@ unsafe fn sl_async_freeco(pe: &PlayerEntity) {
 }
 
 /// Dispatch a Lua event with a single entity ID argument.
-fn sl_doscript_simple(root: &str, method: Option<&str>, id: u32) -> i32 {
-    crate::game::scripting::doscript_blargs_id(root, method, &[id])
+fn sl_doscript_simple(root: &str, method: Option<&str>, id: u32) -> bool {
+    dispatch(root, method, &[id])
 }
 
-fn sl_doscript_coro_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
-    crate::game::scripting::doscript_coro_id(root, method, &[id1, id2])
+fn sl_doscript_coro_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> bool {
+    dispatch_coro(root, method, &[id1, id2])
 }
-
 
 // NPC subtype constant (from map_server.h)
 const SCRIPT: u8 = 0;
@@ -74,14 +70,14 @@ unsafe fn map_isloaded(m: usize) -> bool {
 #[inline]
 fn buf_put_be16(buf: &mut [u8], pos: usize, val: u16) {
     let bytes = val.to_be_bytes();
-    buf[pos]     = bytes[0];
+    buf[pos] = bytes[0];
     buf[pos + 1] = bytes[1];
 }
 
 #[inline]
 fn buf_put_be32(buf: &mut [u8], pos: usize, val: u32) {
     let bytes = val.to_be_bytes();
-    buf[pos]     = bytes[0];
+    buf[pos] = bytes[0];
     buf[pos + 1] = bytes[1];
     buf[pos + 2] = bytes[2];
     buf[pos + 3] = bytes[3];
@@ -95,7 +91,9 @@ fn buf_put_be32(buf: &mut [u8], pos: usize, val: u32) {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendguidespecific(pe: &PlayerEntity, guide: i32) -> i32 {
-    if !session_alive(pe.fd) { return 0; }
+    if !session_alive(pe.fd) {
+        return 0;
+    }
 
     wfifohead(pe.fd, 10);
     wfifob(pe.fd, 0, 0xAA);
@@ -119,10 +117,14 @@ pub unsafe fn clif_sendguidespecific(pe: &PlayerEntity, guide: i32) -> i32 {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_broadcast_sub_inner(pe: &PlayerEntity, msg: *const i8) -> i32 {
-    if !session_alive(pe.fd) { return 0; }
+    if !session_alive(pe.fd) {
+        return 0;
+    }
 
     let flag = pe.read().player.appearance.setting_flags & FLAG_SHOUT;
-    if flag == 0 { return 0; }
+    if flag == 0 {
+        return 0;
+    }
 
     let len = libc_strlen(msg);
 
@@ -150,7 +152,9 @@ pub unsafe fn clif_broadcast_sub_inner(pe: &PlayerEntity, msg: *const i8) -> i32
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_gmbroadcast_sub_inner(pe: &PlayerEntity, msg: *const i8) -> i32 {
-    if !session_alive(pe.fd) { return 0; }
+    if !session_alive(pe.fd) {
+        return 0;
+    }
 
     let len = libc_strlen(msg);
 
@@ -213,7 +217,14 @@ pub unsafe fn clif_broadcast(msg: *const i8, m: i32) -> i32 {
             if map_isloaded(x) {
                 if let Some(grid) = block_grid::get_grid(x) {
                     let slot = &*raw_map_ptr().add(x);
-                    let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+                    let ids = block_grid::ids_in_area(
+                        grid,
+                        1,
+                        1,
+                        AreaType::SameMap,
+                        slot.xs as i32,
+                        slot.ys as i32,
+                    );
                     for id in ids {
                         if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
                             clif_broadcast_sub_inner(pc_arc.as_ref(), msg);
@@ -225,7 +236,14 @@ pub unsafe fn clif_broadcast(msg: *const i8, m: i32) -> i32 {
     } else {
         if let Some(grid) = block_grid::get_grid(m as usize) {
             let slot = &*raw_map_ptr().add(m as usize);
-            let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+            let ids = block_grid::ids_in_area(
+                grid,
+                1,
+                1,
+                AreaType::SameMap,
+                slot.xs as i32,
+                slot.ys as i32,
+            );
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
                     clif_broadcast_sub_inner(pc_arc.as_ref(), msg);
@@ -249,7 +267,14 @@ pub unsafe fn clif_gmbroadcast(msg: *const i8, m: i32) -> i32 {
             if map_isloaded(x) {
                 if let Some(grid) = block_grid::get_grid(x) {
                     let slot = &*raw_map_ptr().add(x);
-                    let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+                    let ids = block_grid::ids_in_area(
+                        grid,
+                        1,
+                        1,
+                        AreaType::SameMap,
+                        slot.xs as i32,
+                        slot.ys as i32,
+                    );
                     for id in ids {
                         if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
                             clif_gmbroadcast_sub_inner(pc_arc.as_ref(), msg);
@@ -261,7 +286,14 @@ pub unsafe fn clif_gmbroadcast(msg: *const i8, m: i32) -> i32 {
     } else {
         if let Some(grid) = block_grid::get_grid(m as usize) {
             let slot = &*raw_map_ptr().add(m as usize);
-            let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+            let ids = block_grid::ids_in_area(
+                grid,
+                1,
+                1,
+                AreaType::SameMap,
+                slot.xs as i32,
+                slot.ys as i32,
+            );
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
                     clif_gmbroadcast_sub_inner(pc_arc.as_ref(), msg);
@@ -285,7 +317,14 @@ pub unsafe fn clif_broadcasttogm(msg: *const i8, m: i32) -> i32 {
             if map_isloaded(x) {
                 if let Some(grid) = block_grid::get_grid(x) {
                     let slot = &*raw_map_ptr().add(x);
-                    let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+                    let ids = block_grid::ids_in_area(
+                        grid,
+                        1,
+                        1,
+                        AreaType::SameMap,
+                        slot.xs as i32,
+                        slot.ys as i32,
+                    );
                     for id in ids {
                         if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
                             clif_broadcasttogm_sub_inner(pc_arc.as_ref(), msg);
@@ -297,7 +336,14 @@ pub unsafe fn clif_broadcasttogm(msg: *const i8, m: i32) -> i32 {
     } else {
         if let Some(grid) = block_grid::get_grid(m as usize) {
             let slot = &*raw_map_ptr().add(m as usize);
-            let ids = block_grid::ids_in_area(grid, 1, 1, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+            let ids = block_grid::ids_in_area(
+                grid,
+                1,
+                1,
+                AreaType::SameMap,
+                slot.xs as i32,
+                slot.ys as i32,
+            );
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
                     clif_broadcasttogm_sub_inner(pc_arc.as_ref(), msg);
@@ -316,7 +362,9 @@ pub unsafe fn clif_broadcasttogm(msg: *const i8, m: i32) -> i32 {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_guitextsd(msg: *const i8, pe: &PlayerEntity) -> i32 {
-    if !session_alive(pe.fd) { return 0; }
+    if !session_alive(pe.fd) {
+        return 0;
+    }
 
     let mlen = libc_strlen(msg);
 
@@ -343,7 +391,9 @@ pub unsafe fn clif_guitextsd(msg: *const i8, pe: &PlayerEntity) -> i32 {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_guitext_inner(pe: &PlayerEntity, msg: *const i8) -> i32 {
-    if !session_alive(pe.fd) { return 0; }
+    if !session_alive(pe.fd) {
+        return 0;
+    }
 
     let mlen = libc_strlen(msg);
 
@@ -372,12 +422,7 @@ pub unsafe fn clif_guitext_inner(pe: &PlayerEntity, msg: *const i8) -> i32 {
 pub unsafe fn clif_parseemotion(pe: &PlayerEntity) -> i32 {
     use super::packet::rfifob;
     if pe.read().player.combat.state == 0 {
-        clif_sendaction_pc(
-            &mut pe.write(),
-            rfifob(pe.fd, 5) as i32 + 11,
-            0x4E,
-            0,
-        );
+        clif_sendaction_pc(&mut pe.write(), rfifob(pe.fd, 5) as i32 + 11, 0x4E, 0);
     }
     0
 }
@@ -391,12 +436,10 @@ pub unsafe fn clif_parseemotion(pe: &PlayerEntity) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_sendmsg(
-    pe: &PlayerEntity,
-    mut msg_type: i32,
-    buf: *const i8,
-) -> i32 {
-    if buf.is_null() { return 0; }
+pub unsafe fn clif_sendmsg(pe: &PlayerEntity, mut msg_type: i32, buf: *const i8) -> i32 {
+    if buf.is_null() {
+        return 0;
+    }
 
     let advice_flag = pe.read().player.appearance.setting_flags & FLAG_ADVICE;
     if msg_type == 99 && advice_flag != 0 {
@@ -407,7 +450,9 @@ pub unsafe fn clif_sendmsg(
 
     let len = libc_strlen(buf);
 
-    if !session_alive(pe.fd) { return 0; }
+    if !session_alive(pe.fd) {
+        return 0;
+    }
 
     wfifohead(pe.fd, 8 + len);
     wfifob(pe.fd, 0, 0xAA);
@@ -432,7 +477,9 @@ pub unsafe fn clif_sendmsg(
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendminitext(pe: &PlayerEntity, msg: *const i8) -> i32 {
-    if libc_strlen(msg) == 0 { return 0; }
+    if libc_strlen(msg) == 0 {
+        return 0;
+    }
     clif_sendmsg(pe, 3, msg);
     0
 }
@@ -444,18 +491,19 @@ pub unsafe fn clif_sendminitext(pe: &PlayerEntity, msg: *const i8) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_sendwisp(
-    pe: &PlayerEntity,
-    srcname: *const i8,
-    msg: *const i8,
-) -> i32 {
+pub unsafe fn clif_sendwisp(pe: &PlayerEntity, srcname: *const i8, msg: *const i8) -> i32 {
     let msglen = libc_strlen(msg);
     let srclen = libc_strlen(srcname);
 
     let src_sd = map_name2sd(srcname);
-    if src_sd.is_null() { return 0; }
+    if src_sd.is_null() {
+        return 0;
+    }
 
-    let cn = classdb_name((*src_sd).player.progression.class as i32, (*src_sd).player.progression.mark as i32);
+    let cn = classdb_name(
+        (*src_sd).player.progression.class as i32,
+        (*src_sd).player.progression.mark as i32,
+    );
     let buf2: Vec<u8>;
     let newlen: usize;
     {
@@ -496,11 +544,7 @@ pub unsafe fn clif_sendwisp(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_retrwisp(
-    pe: &PlayerEntity,
-    dstname: *mut i8,
-    msg: *mut i8,
-) -> i32 {
+pub unsafe fn clif_retrwisp(pe: &PlayerEntity, dstname: *mut i8, msg: *mut i8) -> i32 {
     let dst_str = std::ffi::CStr::from_ptr(dstname).to_bytes();
     let msg_str = std::ffi::CStr::from_ptr(msg).to_bytes();
 
@@ -535,7 +579,9 @@ pub unsafe fn clif_failwisp(pe: &PlayerEntity) -> i32 {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendbluemessage(pe: &PlayerEntity, msg: *const i8) -> i32 {
-    if !session_alive(pe.fd) { return 0; }
+    if !session_alive(pe.fd) {
+        return 0;
+    }
 
     let mlen = libc_strlen(msg);
 
@@ -561,7 +607,14 @@ pub unsafe fn clif_sendbluemessage(pe: &PlayerEntity, msg: *const i8) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_playsound_entity(id: u32, m: u16, x: u16, y: u16, bl_type: u8, sound: i32) -> i32 {
+pub unsafe fn clif_playsound_entity(
+    id: u32,
+    m: u16,
+    x: u16,
+    y: u16,
+    bl_type: u8,
+    sound: i32,
+) -> i32 {
     let mut buf2 = [0u8; 32];
 
     buf2[0] = 0xAA;
@@ -580,7 +633,18 @@ pub unsafe fn clif_playsound_entity(id: u32, m: u16, x: u16, y: u16, bl_type: u8
     buf_put_be16(&mut buf2, 20, 4);
     buf2[22] = 0;
 
-    clif_send(buf2.as_ptr(), 32, BroadcastSrc { id, m, x, y, bl_type }, SAMEAREA);
+    clif_send(
+        buf2.as_ptr(),
+        32,
+        BroadcastSrc {
+            id,
+            m,
+            x,
+            y,
+            bl_type,
+        },
+        SAMEAREA,
+    );
     0
 }
 
@@ -661,13 +725,12 @@ pub unsafe fn ignorelist_remove(pe: &PlayerEntity, name: *const i8) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_isignore(
-    pe: &PlayerEntity,
-    dst_pe: &PlayerEntity,
-) -> i32 {
+pub unsafe fn clif_isignore(pe: &PlayerEntity, dst_pe: &PlayerEntity) -> i32 {
     // Check if pe's name is in dst_pe's ignore list
-    let sd_name_cstr = std::ffi::CString::new(pe.read().player.identity.name.as_str()).unwrap_or_default();
-    let dst_name_cstr = std::ffi::CString::new(dst_pe.read().player.identity.name.as_str()).unwrap_or_default();
+    let sd_name_cstr =
+        std::ffi::CString::new(pe.read().player.identity.name.as_str()).unwrap_or_default();
+    let dst_name_cstr =
+        std::ffi::CString::new(dst_pe.read().player.identity.name.as_str()).unwrap_or_default();
     let mut current = dst_pe.read().IgnoreList;
     while !current.is_null() {
         if strcasecmp_cstr((*current).name.as_ptr(), sd_name_cstr.as_ptr()) == 0 {
@@ -695,10 +758,7 @@ pub unsafe fn clif_isignore(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn canwhisper(
-    pe: &PlayerEntity,
-    dst_pe: &PlayerEntity,
-) -> i32 {
+pub unsafe fn canwhisper(pe: &PlayerEntity, dst_pe: &PlayerEntity) -> i32 {
     let (uflags, gm_level) = {
         let g = pe.read();
         (g.uFlags, g.player.identity.gm_level)
@@ -721,14 +781,16 @@ pub unsafe fn canwhisper(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_sendgroupmessage(
-    pe: &PlayerEntity,
-    msg: *mut u8,
-    msglen: i32,
-) -> i32 {
+pub unsafe fn clif_sendgroupmessage(pe: &PlayerEntity, msg: *mut u8, msglen: i32) -> i32 {
     let (uflags, sd_m, gm_level, groupid, group_count) = {
         let g = pe.read();
-        (g.uFlags, g.m, g.player.identity.gm_level, g.groupid, g.group_count)
+        (
+            g.uFlags,
+            g.m,
+            g.player.identity.gm_level,
+            g.groupid,
+            g.group_count,
+        )
     };
 
     if uflags & U_FLAG_SILENCED != 0 {
@@ -752,7 +814,9 @@ pub unsafe fn clif_sendgroupmessage(
     let grp = groups();
     for i in 0..group_count as usize {
         let idx = base + i;
-        if idx >= grp.len() { break; }
+        if idx >= grp.len() {
+            break;
+        }
         let tsd = match session_get_data_checked(SessionId::from_raw(grp[idx] as i32)) {
             Some(a) => a,
             None => continue,
@@ -771,14 +835,15 @@ pub unsafe fn clif_sendgroupmessage(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_sendsubpathmessage(
-    pe: &PlayerEntity,
-    msg: *mut u8,
-    msglen: i32,
-) -> i32 {
+pub unsafe fn clif_sendsubpathmessage(pe: &PlayerEntity, msg: *mut u8, msglen: i32) -> i32 {
     let (uflags, sd_m, gm_level, sd_class) = {
         let g = pe.read();
-        (g.uFlags, g.m, g.player.identity.gm_level, g.player.progression.class)
+        (
+            g.uFlags,
+            g.m,
+            g.player.identity.gm_level,
+            g.player.progression.class,
+        )
     };
 
     if uflags & U_FLAG_SILENCED != 0 {
@@ -800,16 +865,20 @@ pub unsafe fn clif_sendsubpathmessage(
 
     for i in 0..crate::session::get_fd_max() {
         let fd = SessionId::from_raw(i);
-        if !session_exists(fd) { continue; }
-        let tsd = match session_get_data(fd) { Some(a) => a, None => continue };
+        if !session_exists(fd) {
+            continue;
+        }
+        let tsd = match session_get_data(fd) {
+            Some(a) => a,
+            None => continue,
+        };
         let (tsd_class, tsd_subpath_chat) = {
             let r = tsd.read();
             (r.player.progression.class, r.player.social.subpath_chat)
         };
-        if tsd_class == sd_class && tsd_subpath_chat != 0
-            && clif_isignore(pe, tsd.as_ref()) != 0 {
-                clif_sendmsg(tsd.as_ref(), 11, buf2_c.as_ptr());
-            }
+        if tsd_class == sd_class && tsd_subpath_chat != 0 && clif_isignore(pe, tsd.as_ref()) != 0 {
+            clif_sendmsg(tsd.as_ref(), 11, buf2_c.as_ptr());
+        }
     }
     0
 }
@@ -821,14 +890,15 @@ pub unsafe fn clif_sendsubpathmessage(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_sendclanmessage(
-    pe: &PlayerEntity,
-    msg: *mut u8,
-    msglen: i32,
-) -> i32 {
+pub unsafe fn clif_sendclanmessage(pe: &PlayerEntity, msg: *mut u8, msglen: i32) -> i32 {
     let (uflags, sd_m, gm_level, sd_clan) = {
         let g = pe.read();
-        (g.uFlags, g.m, g.player.identity.gm_level, g.player.social.clan)
+        (
+            g.uFlags,
+            g.m,
+            g.player.identity.gm_level,
+            g.player.social.clan,
+        )
     };
 
     if uflags & U_FLAG_SILENCED != 0 {
@@ -850,16 +920,20 @@ pub unsafe fn clif_sendclanmessage(
 
     for i in 0..crate::session::get_fd_max() {
         let fd = SessionId::from_raw(i);
-        if !session_exists(fd) { continue; }
-        let tsd = match session_get_data(fd) { Some(a) => a, None => continue };
+        if !session_exists(fd) {
+            continue;
+        }
+        let tsd = match session_get_data(fd) {
+            Some(a) => a,
+            None => continue,
+        };
         let (tsd_clan, tsd_clan_chat) = {
             let r = tsd.read();
             (r.player.social.clan, r.player.social.clan_chat)
         };
-        if tsd_clan == sd_clan && tsd_clan_chat != 0
-            && clif_isignore(pe, tsd.as_ref()) != 0 {
-                clif_sendmsg(tsd.as_ref(), 12, buf2_c.as_ptr());
-            }
+        if tsd_clan == sd_clan && tsd_clan_chat != 0 && clif_isignore(pe, tsd.as_ref()) != 0 {
+            clif_sendmsg(tsd.as_ref(), 12, buf2_c.as_ptr());
+        }
     }
     0
 }
@@ -871,14 +945,17 @@ pub unsafe fn clif_sendclanmessage(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_sendnovicemessage(
-    pe: &PlayerEntity,
-    msg: *mut u8,
-    msglen: i32,
-) -> i32 {
+pub unsafe fn clif_sendnovicemessage(pe: &PlayerEntity, msg: *mut u8, msglen: i32) -> i32 {
     let (uflags, sd_m, gm_level, sd_class, sd_mark, sd_tutor) = {
         let g = pe.read();
-        (g.uFlags, g.m, g.player.identity.gm_level, g.player.progression.class, g.player.progression.mark, g.player.social.tutor)
+        (
+            g.uFlags,
+            g.m,
+            g.player.identity.gm_level,
+            g.player.progression.class,
+            g.player.progression.mark,
+            g.player.social.tutor,
+        )
     };
 
     if uflags & U_FLAG_SILENCED != 0 {
@@ -899,10 +976,7 @@ pub unsafe fn clif_sendnovicemessage(
     let class_str = classdb_name(sd_class as i32, sd_mark as i32);
 
     let name_str = pe.read().player.identity.name.clone();
-    let buf2 = format!(
-        "[Novice]({}) {}> {}\0",
-        class_str, name_str, msg_str
-    );
+    let buf2 = format!("[Novice]({}) {}> {}\0", class_str, name_str, msg_str);
 
     // Non-tutors get a copy of their own message (so it appears on their screen)
     if sd_tutor == 0 {
@@ -911,16 +985,27 @@ pub unsafe fn clif_sendnovicemessage(
 
     for i in 0..crate::session::get_fd_max() {
         let fd = SessionId::from_raw(i);
-        if !session_exists(fd) { continue; }
-        let tsd = match session_get_data(fd) { Some(a) => a, None => continue };
+        if !session_exists(fd) {
+            continue;
+        }
+        let tsd = match session_get_data(fd) {
+            Some(a) => a,
+            None => continue,
+        };
         let (tsd_tutor, tsd_tgm, tsd_novice_chat) = {
             let r = tsd.read();
-            (r.player.social.tutor, r.player.identity.gm_level, r.player.social.novice_chat)
+            (
+                r.player.social.tutor,
+                r.player.identity.gm_level,
+                r.player.social.novice_chat,
+            )
         };
-        if (tsd_tutor != 0 || tsd_tgm > 0) && tsd_novice_chat != 0
-            && clif_isignore(pe, tsd.as_ref()) != 0 {
-                clif_sendmsg(tsd.as_ref(), 12, buf2.as_ptr() as *const i8);
-            }
+        if (tsd_tutor != 0 || tsd_tgm > 0)
+            && tsd_novice_chat != 0
+            && clif_isignore(pe, tsd.as_ref()) != 0
+        {
+            clif_sendmsg(tsd.as_ref(), 12, buf2.as_ptr() as *const i8);
+        }
     }
     0
 }
@@ -935,7 +1020,18 @@ pub unsafe fn clif_sendnovicemessage(
 pub unsafe fn clif_parsewisp(pe: &PlayerEntity) -> i32 {
     use super::packet::{rfifob, rfifop, rfiforest, rfifow};
 
-    let (whisper_flag, gm_level, sd_m, uflags, sd_clan, clan_chat, group_count, sd_class, sd_tutor, sd_level) = {
+    let (
+        whisper_flag,
+        gm_level,
+        sd_m,
+        uflags,
+        sd_clan,
+        clan_chat,
+        group_count,
+        sd_class,
+        sd_tutor,
+        sd_level,
+    ) = {
         let g = pe.read();
         (
             g.player.appearance.setting_flags & FLAG_WHISPER,
@@ -981,7 +1077,10 @@ pub unsafe fn clif_parsewisp(pe: &PlayerEntity) -> i32 {
     {
         let mut sd_name_buf: Vec<u8> = pe.read().player.identity.name.as_bytes().to_vec();
         sd_name_buf.push(0);
-        clif_Hacker(sd_name_buf.as_mut_ptr() as *mut i8, c"Whisper packet".as_ptr());
+        clif_Hacker(
+            sd_name_buf.as_mut_ptr() as *mut i8,
+            c"Whisper packet".as_ptr(),
+        );
         return 0;
     }
 
@@ -998,15 +1097,21 @@ pub unsafe fn clif_parsewisp(pe: &PlayerEntity) -> i32 {
     let dst_name_c = dst_name.as_ptr() as *const i8;
     let msg_c = msg_buf.as_ptr() as *const i8;
 
-    // Build null-terminated CStrings for the player names used in C API calls.
-    let sd_name_cstr = std::ffi::CString::new(pe.read().player.identity.name.as_str()).unwrap_or_default();
+    // Player name as Rust string for Lua dispatch.
+    let sd_name = pe.read().player.identity.name.clone();
+    // msg as &str for Lua dispatch (msg_buf is null-terminated, take up to msglen).
+    let msg_str = std::str::from_utf8(&msg_buf[..msglen]).unwrap_or("");
 
     // "!" → clan chat
     if dst_name[0] == b'!' && dst_name[1] == 0 {
         if sd_clan == 0 {
             clif_sendbluemessage(pe, c"You are not in a clan".as_ptr());
         } else if clan_chat != 0 {
-            crate::game::scripting::doscript_strings(c"characterLog".as_ptr(), c"clanChatLog".as_ptr(), &[sd_name_cstr.as_ptr(), msg_c]);
+            dispatch_strings(
+                "characterLog",
+                Some("clanChatLog"),
+                &[&sd_name, msg_str],
+            );
             clif_sendclanmessage(pe, rfifop(pe.fd, 7 + dstlen) as *mut u8, msglen as i32);
         } else {
             clif_sendbluemessage(pe, c"Clan chat is off.".as_ptr());
@@ -1016,13 +1121,21 @@ pub unsafe fn clif_parsewisp(pe: &PlayerEntity) -> i32 {
         if group_count == 0 {
             clif_sendbluemessage(pe, c"You are not in a group".as_ptr());
         } else {
-            crate::game::scripting::doscript_strings(c"characterLog".as_ptr(), c"groupChatLog".as_ptr(), &[sd_name_cstr.as_ptr(), msg_c]);
+            dispatch_strings(
+                "characterLog",
+                Some("groupChatLog"),
+                &[&sd_name, msg_str],
+            );
             clif_sendgroupmessage(pe, rfifop(pe.fd, 7 + dstlen) as *mut u8, msglen as i32);
         }
     // "@" → subpath chat
     } else if dst_name[0] == b'@' && dst_name[1] == 0 {
         if classdb_chat(sd_class as i32) != 0 {
-            crate::game::scripting::doscript_strings(c"characterLog".as_ptr(), c"subPathChatLog".as_ptr(), &[sd_name_cstr.as_ptr(), msg_c]);
+            dispatch_strings(
+                "characterLog",
+                Some("subPathChatLog"),
+                &[&sd_name, msg_str],
+            );
             clif_sendsubpathmessage(pe, rfifop(pe.fd, 7 + dstlen) as *mut u8, msglen as i32);
         } else {
             clif_sendbluemessage(pe, c"You cannot do that.".as_ptr());
@@ -1031,13 +1144,21 @@ pub unsafe fn clif_parsewisp(pe: &PlayerEntity) -> i32 {
     } else if dst_name[0] == b'?' && dst_name[1] == 0 {
         if sd_tutor == 0 && gm_level == 0 {
             if sd_level < 99 {
-                crate::game::scripting::doscript_strings(c"characterLog".as_ptr(), c"noviceChatLog".as_ptr(), &[sd_name_cstr.as_ptr(), msg_c]);
+                dispatch_strings(
+                    "characterLog",
+                    Some("noviceChatLog"),
+                    &[&sd_name, msg_str],
+                );
                 clif_sendnovicemessage(pe, rfifop(pe.fd, 7 + dstlen) as *mut u8, msglen as i32);
             } else {
                 clif_sendbluemessage(pe, c"You cannot do that.".as_ptr());
             }
         } else {
-            crate::game::scripting::doscript_strings(c"characterLog".as_ptr(), c"noviceChatLog".as_ptr(), &[sd_name_cstr.as_ptr(), msg_c]);
+            dispatch_strings(
+                "characterLog",
+                Some("noviceChatLog"),
+                &[&sd_name, msg_str],
+            );
             clif_sendnovicemessage(pe, rfifop(pe.fd, 7 + dstlen) as *mut u8, msglen as i32);
         }
     // named whisper
@@ -1055,31 +1176,61 @@ pub unsafe fn clif_parsewisp(pe: &PlayerEntity) -> i32 {
                         let dg = dst_pe_arc.read();
                         (dg.afk, dg.optFlags)
                     };
-                    let dst_name_cstr = std::ffi::CString::new(dst_pe_arc.read().player.identity.name.as_str()).unwrap_or_default();
+                    let dst_name_str = dst_pe_arc.read().player.identity.name.clone();
+                    let dst_name_cstr =
+                        std::ffi::CString::new(dst_name_str.as_str()).unwrap_or_default();
                     if dst_afk != 0 {
                         let afk_msg_ptr = dst_pe_arc.read().afkmessage.as_ptr();
-                        crate::game::scripting::doscript_strings(c"characterLog".as_ptr(), c"whisperLog".as_ptr(), &[dst_name_cstr.as_ptr(), sd_name_cstr.as_ptr(), msg_c]);
+                        dispatch_strings(
+                            "characterLog",
+                            Some("whisperLog"),
+                            &[&dst_name_str, &sd_name, msg_str],
+                        );
 
+                        let sd_name_cstr =
+                            std::ffi::CString::new(sd_name.as_str()).unwrap_or_default();
                         clif_sendwisp(dst_pe_arc.as_ref(), sd_name_cstr.as_ptr(), msg_c);
                         // afk message needs a stable pointer — copy it out
                         let afk_msg_bytes = dst_pe_arc.read().afkmessage;
-                        clif_sendwisp(dst_pe_arc.as_ref(), dst_name_cstr.as_ptr(), afk_msg_bytes.as_ptr());
+                        clif_sendwisp(
+                            dst_pe_arc.as_ref(),
+                            dst_name_cstr.as_ptr(),
+                            afk_msg_bytes.as_ptr(),
+                        );
 
                         if gm_level == 0 && dst_opt_flags & OPT_FLAG_STEALTH != 0 {
                             // don't reveal their presence
                         } else {
-                            let mut dst_name_buf: Vec<u8> = dst_pe_arc.read().player.identity.name.as_bytes().to_vec();
+                            let mut dst_name_buf: Vec<u8> =
+                                dst_pe_arc.read().player.identity.name.as_bytes().to_vec();
                             dst_name_buf.push(0);
-                            clif_retrwisp(pe, dst_name_buf.as_mut_ptr() as *mut i8, msg_buf.as_mut_ptr() as *mut i8);
-                            let mut afk_msg_buf: Vec<u8> = afk_msg_bytes.iter().map(|&b| b as u8).collect();
-                            if let Some(z) = afk_msg_buf.iter().position(|&b| b == 0) { afk_msg_buf.truncate(z); }
+                            clif_retrwisp(
+                                pe,
+                                dst_name_buf.as_mut_ptr() as *mut i8,
+                                msg_buf.as_mut_ptr() as *mut i8,
+                            );
+                            let mut afk_msg_buf: Vec<u8> =
+                                afk_msg_bytes.iter().map(|&b| b as u8).collect();
+                            if let Some(z) = afk_msg_buf.iter().position(|&b| b == 0) {
+                                afk_msg_buf.truncate(z);
+                            }
                             afk_msg_buf.push(0);
-                            clif_retrwisp(pe, dst_name_buf.as_mut_ptr() as *mut i8, afk_msg_buf.as_mut_ptr() as *mut i8);
+                            clif_retrwisp(
+                                pe,
+                                dst_name_buf.as_mut_ptr() as *mut i8,
+                                afk_msg_buf.as_mut_ptr() as *mut i8,
+                            );
                         }
                         let _ = afk_msg_ptr;
                     } else {
-                        crate::game::scripting::doscript_strings(c"characterLog".as_ptr(), c"whisperLog".as_ptr(), &[dst_name_cstr.as_ptr(), sd_name_cstr.as_ptr(), msg_c]);
+                        dispatch_strings(
+                            "characterLog",
+                            Some("whisperLog"),
+                            &[&dst_name_str, &sd_name, msg_str],
+                        );
 
+                        let sd_name_cstr =
+                            std::ffi::CString::new(sd_name.as_str()).unwrap_or_default();
                         clif_sendwisp(dst_pe_arc.as_ref(), sd_name_cstr.as_ptr(), msg_c);
 
                         if gm_level == 0 && dst_opt_flags & OPT_FLAG_STEALTH != 0 {
@@ -1087,9 +1238,14 @@ pub unsafe fn clif_parsewisp(pe: &PlayerEntity) -> i32 {
                             let nf = format!("{} is nowhere to be found.\0", target);
                             clif_sendbluemessage(pe, nf.as_ptr() as *const i8);
                         } else {
-                            let mut dst_name_buf: Vec<u8> = dst_pe_arc.read().player.identity.name.as_bytes().to_vec();
+                            let mut dst_name_buf: Vec<u8> =
+                                dst_pe_arc.read().player.identity.name.as_bytes().to_vec();
                             dst_name_buf.push(0);
-                            clif_retrwisp(pe, dst_name_buf.as_mut_ptr() as *mut i8, msg_buf.as_mut_ptr() as *mut i8);
+                            clif_retrwisp(
+                                pe,
+                                dst_name_buf.as_mut_ptr() as *mut i8,
+                                msg_buf.as_mut_ptr() as *mut i8,
+                            );
                         }
                     }
                 } else {
@@ -1112,12 +1268,7 @@ pub unsafe fn clif_parsewisp(pe: &PlayerEntity) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_sendsay(
-    pe: &PlayerEntity,
-    msg: *mut i8,
-    msglen: i32,
-    say_type: i32,
-) -> i32 {
+pub unsafe fn clif_sendsay(pe: &PlayerEntity, msg: *mut i8, msglen: i32, say_type: i32) -> i32 {
     let src = std::slice::from_raw_parts(msg as *const u8, (msglen as usize).min(254));
     {
         let mut g = pe.write();
@@ -1154,7 +1305,15 @@ pub unsafe fn clif_sendscriptsay(
 ) -> i32 {
     let (sd_m, gm_level, uflags, sd_name, sd_id, sd_x, sd_y) = {
         let g = pe.read();
-        (g.m, g.player.identity.gm_level, g.uFlags, g.player.identity.name.clone(), g.player.identity.id, g.x, g.y)
+        (
+            g.m,
+            g.player.identity.gm_level,
+            g.uFlags,
+            g.player.identity.name.clone(),
+            g.player.identity.id,
+            g.x,
+            g.y,
+        )
     };
     let namelen = sd_name.len();
 
@@ -1199,7 +1358,7 @@ pub unsafe fn clif_sendscriptsay(
             13 => format!("CN[{}]", sd_name),
             14 => format!("PT[{}]", sd_name),
             15 => format!("ID[{}]", sd_name),
-            _  => sd_name.to_string(),
+            _ => sd_name.to_string(),
         };
         let pname = prefixed.as_bytes();
         buf[11..11 + pname.len()].copy_from_slice(pname);
@@ -1207,7 +1366,18 @@ pub unsafe fn clif_sendscriptsay(
         buf[12 + pname.len()] = b' ';
         buf[13 + pname.len()..13 + pname.len() + msglen as usize].copy_from_slice(msg_bytes);
 
-        clif_send(buf.as_ptr(), buf_size as i32, BroadcastSrc { id: pe.id, m: sd_m, x: sd_x, y: sd_y, bl_type: BL_PC as u8 }, SAMEAREA);
+        clif_send(
+            buf.as_ptr(),
+            buf_size as i32,
+            BroadcastSrc {
+                id: pe.id,
+                m: sd_m,
+                x: sd_x,
+                y: sd_y,
+                bl_type: BL_PC as u8,
+            },
+            SAMEAREA,
+        );
     } else {
         if !session_exists(pe.fd) {
             return 0;
@@ -1230,7 +1400,18 @@ pub unsafe fn clif_sendscriptsay(
         buf[13 + namelen..13 + namelen + msglen as usize].copy_from_slice(msg_bytes);
 
         let send_target = if say_type == 1 { SAMEMAP } else { SAMEAREA };
-        clif_send(buf.as_ptr(), buf_size as i32, BroadcastSrc { id: pe.id, m: sd_m, x: sd_x, y: sd_y, bl_type: BL_PC as u8 }, send_target);
+        clif_send(
+            buf.as_ptr(),
+            buf_size as i32,
+            BroadcastSrc {
+                id: pe.id,
+                m: sd_m,
+                x: sd_x,
+                y: sd_y,
+                bl_type: BL_PC as u8,
+            },
+            send_target,
+        );
     }
 
     // Copy msg to speech
@@ -1247,7 +1428,11 @@ pub unsafe fn clif_sendscriptsay(
     let by = sd_y as i32;
     if let Some(grid) = block_grid::get_grid(m as usize) {
         let slot = &*raw_map_ptr().add(m as usize);
-        let area = if say_type == 1 { AreaType::SameMap } else { AreaType::Area };
+        let area = if say_type == 1 {
+            AreaType::SameMap
+        } else {
+            AreaType::Area
+        };
         let ids = block_grid::ids_in_area(grid, bx, by, area, slot.xs as i32, slot.ys as i32);
         for id in ids {
             if let Some(npc_arc) = crate::game::map_server::map_id2npc_ref(id) {
@@ -1276,13 +1461,23 @@ pub unsafe fn clif_sendscriptsay(
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_sendnpcsay_inner(nd: *const NpcData, _msg: *const i8, pe: &PlayerEntity) -> i32 {
-    if (*nd).subtype != SCRIPT { return 0; }
+    if (*nd).subtype != SCRIPT {
+        return 0;
+    }
 
-    let (sd_x, sd_y) = { let g = pe.read(); (g.x, g.y) };
+    let (sd_x, sd_y) = {
+        let g = pe.read();
+        (g.x, g.y)
+    };
     if clif_distance((*nd).x, (*nd).y, sd_x, sd_y) <= 10 {
         pe.write().last_click = (*nd).id;
         sl_async_freeco(pe);
-        sl_doscript_coro_2(crate::game::scripting::carray_to_str(&(*nd).name), Some("onSayClick"), pe.id, (*nd).id);
+        sl_doscript_coro_2(
+            crate::game::scripting::carray_to_str(&(*nd).name),
+            Some("onSayClick"),
+            pe.id,
+            (*nd).id,
+        );
     }
     0
 }
@@ -1294,7 +1489,11 @@ pub unsafe fn clif_sendnpcsay_inner(nd: *const NpcData, _msg: *const i8, pe: &Pl
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_sendmobsay_inner(_md: *const MobSpawnData, _msg: *const i8, _pe: &PlayerEntity) -> i32 {
+pub unsafe fn clif_sendmobsay_inner(
+    _md: *const MobSpawnData,
+    _msg: *const i8,
+    _pe: &PlayerEntity,
+) -> i32 {
     0
 }
 
@@ -1305,14 +1504,28 @@ pub unsafe fn clif_sendmobsay_inner(_md: *const MobSpawnData, _msg: *const i8, _
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_sendnpcyell_inner(nd: *const NpcData, _msg: *const i8, pe: &PlayerEntity) -> i32 {
-    if (*nd).subtype != SCRIPT { return 0; }
+pub unsafe fn clif_sendnpcyell_inner(
+    nd: *const NpcData,
+    _msg: *const i8,
+    pe: &PlayerEntity,
+) -> i32 {
+    if (*nd).subtype != SCRIPT {
+        return 0;
+    }
 
-    let (sd_x, sd_y) = { let g = pe.read(); (g.x, g.y) };
+    let (sd_x, sd_y) = {
+        let g = pe.read();
+        (g.x, g.y)
+    };
     if clif_distance((*nd).x, (*nd).y, sd_x, sd_y) <= 20 {
         pe.write().last_click = (*nd).id;
         sl_async_freeco(pe);
-        sl_doscript_coro_2(crate::game::scripting::carray_to_str(&(*nd).name), Some("onSayClick"), pe.id, (*nd).id);
+        sl_doscript_coro_2(
+            crate::game::scripting::carray_to_str(&(*nd).name),
+            Some("onSayClick"),
+            pe.id,
+            (*nd).id,
+        );
     }
     0
 }
@@ -1324,7 +1537,11 @@ pub unsafe fn clif_sendnpcyell_inner(nd: *const NpcData, _msg: *const i8, pe: &P
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_sendmobyell_inner(_md: *const MobSpawnData, _msg: *const i8, _pe: &PlayerEntity) -> i32 {
+pub unsafe fn clif_sendmobyell_inner(
+    _md: *const MobSpawnData,
+    _msg: *const i8,
+    _pe: &PlayerEntity,
+) -> i32 {
     0
 }
 
@@ -1335,12 +1552,21 @@ pub unsafe fn clif_sendmobyell_inner(_md: *const MobSpawnData, _msg: *const i8, 
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_speak_inner(viewer_fd: SessionId, msg: *const i8, speaker_id: u32, speak_type: i32) -> i32 {
-    if speaker_id == 0 { return 0; }
+pub unsafe fn clif_speak_inner(
+    viewer_fd: SessionId,
+    msg: *const i8,
+    speaker_id: u32,
+    speak_type: i32,
+) -> i32 {
+    if speaker_id == 0 {
+        return 0;
+    }
 
     let len = libc_strlen(msg);
 
-    if !session_alive(viewer_fd) { return 0; }
+    if !session_alive(viewer_fd) {
+        return 0;
+    }
 
     wfifohead(viewer_fd, len + 11);
     wfifob(viewer_fd, 5, speak_type as u8);
@@ -1375,13 +1601,21 @@ pub unsafe fn clif_parseignore(pe: &PlayerEntity) -> i32 {
             0x02 => {
                 // Add
                 let src = super::packet::rfifop(pe.fd, 7);
-                std::ptr::copy_nonoverlapping(src as *const i8, name_buf.as_mut_ptr(), nlen.min(31));
+                std::ptr::copy_nonoverlapping(
+                    src as *const i8,
+                    name_buf.as_mut_ptr(),
+                    nlen.min(31),
+                );
                 ignorelist_add(pe, name_buf.as_ptr());
             }
             0x03 => {
                 // Remove
                 let src = super::packet::rfifop(pe.fd, 7);
-                std::ptr::copy_nonoverlapping(src as *const i8, name_buf.as_mut_ptr(), nlen.min(31));
+                std::ptr::copy_nonoverlapping(
+                    src as *const i8,
+                    name_buf.as_mut_ptr(),
+                    nlen.min(31),
+                );
                 ignorelist_remove(pe, name_buf.as_ptr());
             }
             _ => {}
@@ -1411,7 +1645,12 @@ pub unsafe fn clif_parsesay(pe: &PlayerEntity) -> i32 {
         return 0;
     }
 
-    if is_command(&mut *pe.write() as *mut MapSessionData, msg, rfifob(pe.fd, 6) as i32) != 0 {
+    if is_command(
+        &mut *pe.write() as *mut MapSessionData,
+        msg,
+        rfifob(pe.fd, 6) as i32,
+    ) != 0
+    {
         return 0;
     }
 
@@ -1442,10 +1681,15 @@ pub unsafe fn clif_parsesay(pe: &PlayerEntity) -> i32 {
 /// Measure a C string length (mirrors `strlen`).
 #[inline]
 unsafe fn libc_strlen(s: *const i8) -> usize {
-    if s.is_null() { return 0; }
+    if s.is_null() {
+        return 0;
+    }
     let mut p = s as *const u8;
     let mut n = 0usize;
-    while *p != 0 { p = p.add(1); n += 1; }
+    while *p != 0 {
+        p = p.add(1);
+        n += 1;
+    }
     n
 }
 
@@ -1456,9 +1700,13 @@ unsafe fn strcasecmp_cstr(a: *const i8, b: *const i8) -> i32 {
     // Compare byte-by-byte, case-insensitive (ASCII only — player names are ASCII).
     let a_bytes = a_str.to_bytes();
     let b_bytes = b_str.to_bytes();
-    if a_bytes.len() != b_bytes.len() { return 1; }
+    if a_bytes.len() != b_bytes.len() {
+        return 1;
+    }
     for (&x, &y) in a_bytes.iter().zip(b_bytes.iter()) {
-        if !x.eq_ignore_ascii_case(&y) { return 1; }
+        if !x.eq_ignore_ascii_case(&y) {
+            return 1;
+        }
     }
     0
 }
@@ -1474,7 +1722,11 @@ fn i8_slice_to_str(s: &[i8]) -> &str {
 unsafe fn format_chat_prefix(pe: &PlayerEntity, open: &[u8], close: &[u8], msg: &[i8]) -> Vec<u8> {
     let (name, sd_class, sd_mark) = {
         let g = pe.read();
-        (g.player.identity.name.clone(), g.player.progression.class, g.player.progression.mark)
+        (
+            g.player.identity.name.clone(),
+            g.player.progression.class,
+            g.player.progression.mark,
+        )
     };
     let class_str = classdb_name(sd_class as i32, sd_mark as i32);
     let msg_str = i8_slice_to_str(msg);
@@ -1499,7 +1751,9 @@ fn clif_distance(x1: u16, y1: u16, x2: u16, y2: u16) -> i32 {
 
 /// Retrieve session data for fd, returning None if session does not exist.
 #[inline]
-fn session_get_data_checked(fd: SessionId) -> Option<std::sync::Arc<crate::game::player::entity::PlayerEntity>> {
+fn session_get_data_checked(
+    fd: SessionId,
+) -> Option<std::sync::Arc<crate::game::player::entity::PlayerEntity>> {
     if session_exists(fd) {
         session_get_data(fd)
     } else {

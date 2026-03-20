@@ -10,13 +10,16 @@ use std::ptr;
 
 use crate::common::player::PlayerData;
 use crate::database::{blocking_run_async, get_pool};
+use crate::game::lua::dispatch::dispatch;
 use crate::game::pc::MapSessionData;
 
 // ---------------------------------------------------------------------------
 // Constants mirrored from map_server.h / map_parse.h
 // ---------------------------------------------------------------------------
 
-use crate::common::constants::entity::player::{SFLAG_FULLSTATS, SFLAG_HPMP, SFLAG_XPMONEY, OPT_FLAG_WALKTHROUGH};
+use crate::common::constants::entity::player::{
+    OPT_FLAG_WALKTHROUGH, SFLAG_FULLSTATS, SFLAG_HPMP, SFLAG_XPMONEY,
+};
 
 // ---------------------------------------------------------------------------
 
@@ -24,18 +27,19 @@ use crate::common::constants::entity::player::{SFLAG_FULLSTATS, SFLAG_HPMP, SFLA
 
 use crate::game::map_server::{map_fd, map_id2sd_pc};
 
-use crate::session::{get_session_manager, SessionId};
-use crate::game::pc::{
-    pc_setpos, pc_loadmagic, pc_starttimer, pc_requestmp,
-    pc_loaditem, pc_loadequip, pc_magic_startup,
-    pc_calcstat, pc_checklevel,
-};
-use crate::game::map_parse::visual::clif_spawn;
 use crate::game::client::visual::broadcast_update_state;
+use crate::game::map_parse::visual::clif_spawn;
+use crate::game::pc::{
+    pc_calcstat, pc_checklevel, pc_loadequip, pc_loaditem, pc_loadmagic, pc_magic_startup,
+    pc_requestmp, pc_setpos, pc_starttimer,
+};
+use crate::session::{get_session_manager, SessionId};
 
 use crate::game::block::AreaType;
 use crate::game::block_grid;
-use crate::game::map_parse::visual::{clif_object_look_by_id, clif_mob_look_start_func_inner, clif_mob_look_close_func_inner};
+use crate::game::map_parse::visual::{
+    clif_mob_look_close_func_inner, clif_mob_look_start_func_inner, clif_object_look_by_id,
+};
 
 // ---------------------------------------------------------------------------
 // intif_install_player — replaces intif_mmo_tosd (bincode era)
@@ -78,10 +82,10 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
     }
 
     // Set up the block-list header.
-    (*sd).id   = (*sd).player.identity.id;
+    (*sd).id = (*sd).player.identity.id;
 
     // Visual / display defaults.
-    (*sd).disguise       = (*sd).player.appearance.disguise;
+    (*sd).disguise = (*sd).player.appearance.disguise;
     (*sd).disguise_color = (*sd).player.appearance.disguise_color;
     (*sd).viewx = 8;
     (*sd).viewy = 7;
@@ -160,9 +164,8 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
     }
 
     use crate::game::map_parse::player_state::{
-        clif_sendack, clif_sendtime, clif_sendid, clif_sendmapinfo,
-        clif_sendstatus, clif_mystatus, clif_refresh, clif_sendxy,
-        clif_getchararea, clif_retrieveprofile,
+        clif_getchararea, clif_mystatus, clif_refresh, clif_retrieveprofile, clif_sendack,
+        clif_sendid, clif_sendmapinfo, clif_sendstatus, clif_sendtime, clif_sendxy,
     };
     let fd = (*sd).fd;
     tracing::info!("[map] [login] fd={} step=sendack", fd);
@@ -192,7 +195,14 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
         clif_mob_look_start_func_inner(arc.fd, &mut net.look);
         if let Some(grid) = block_grid::get_grid((*sd).m as usize) {
             let slot = &*crate::database::map_db::raw_map_ptr().add((*sd).m as usize);
-            let ids = block_grid::ids_in_area(grid, (*sd).x as i32, (*sd).y as i32, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
+            let ids = block_grid::ids_in_area(
+                grid,
+                (*sd).x as i32,
+                (*sd).y as i32,
+                AreaType::SameArea,
+                slot.xs as i32,
+                slot.ys as i32,
+            );
             for id in ids {
                 clif_object_look_by_id(arc.fd, &mut net.look, (*sd).player.identity.id, id);
             }
@@ -208,21 +218,22 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
     tracing::info!("[map] [login] fd={} step=magic_startup", fd);
     pc_magic_startup(sd);
 
-    let fire_login_hook = crate::database::blocking_run_async(
-        crate::database::assert_send(crate::game::map_server::mmo_setonline((*sd).player.identity.id, 1))
-    );
+    let fire_login_hook = crate::database::blocking_run_async(crate::database::assert_send(
+        crate::game::map_server::mmo_setonline((*sd).player.identity.id, 1),
+    ));
     if fire_login_hook {
         let name_str = (*sd).player.identity.name.as_str();
         let raw_ip = crate::session::session_get_client_ip(fd);
-        let addr = format!("{}.{}.{}.{}", raw_ip & 0xff, (raw_ip >> 8) & 0xff,
-            (raw_ip >> 16) & 0xff, (raw_ip >> 24) & 0xff);
+        let addr = format!(
+            "{}.{}.{}.{}",
+            raw_ip & 0xff,
+            (raw_ip >> 8) & 0xff,
+            (raw_ip >> 16) & 0xff,
+            (raw_ip >> 24) & 0xff
+        );
         println!("[map] [login] name={} addr={}", name_str, addr);
         tracing::info!("[map] [login] fd={} step=lua_login_start", fd);
-        crate::game::scripting::doscript_blargs_id(
-            "login",
-            None,
-            &[(*sd).id],
-        );
+        dispatch("login", None, &[(*sd).id]);
         tracing::info!("[map] [login] fd={} step=lua_login_done", fd);
     }
 
@@ -245,28 +256,34 @@ unsafe fn intif_install_player_inner(fd: i32, player: PlayerData) -> i32 {
 
 pub mod intif_save_impl {
     use crate::common::traits::LegacyEntity;
-    use crate::game::pc::MapSessionData;
     use crate::game::block::map_is_loaded;
+    use crate::game::pc::MapSessionData;
     use crate::game::player::entity::PlayerEntity;
 
     /// # Safety
     ///
     /// Caller must ensure all pointer arguments are valid and non-null.
     pub unsafe fn sl_intif_save(sd: *mut MapSessionData) -> i32 {
-        if sd.is_null() { return -1; }
+        if sd.is_null() {
+            return -1;
+        }
 
         // Sync runtime shadow fields into player before save.
         (*sd).player.identity.last_pos.m = (*sd).m;
         (*sd).player.identity.last_pos.x = (*sd).x;
         (*sd).player.identity.last_pos.y = (*sd).y;
-        (*sd).player.appearance.disguise       = (*sd).disguise;
+        (*sd).player.appearance.disguise = (*sd).disguise;
         (*sd).player.appearance.disguise_color = (*sd).disguise_color;
 
         let player = (*sd).player.clone();
         crate::database::blocking_run_async(async move {
             let pool = crate::database::get_pool();
             if let Err(e) = crate::servers::char::db::save_player(pool, &player).await {
-                tracing::error!("[map] [save] save_player failed for id={}: {}", player.identity.id, e);
+                tracing::error!(
+                    "[map] [save] save_player failed for id={}: {}",
+                    player.identity.id,
+                    e
+                );
             }
         });
         0
@@ -275,36 +292,36 @@ pub mod intif_save_impl {
     pub fn sl_intif_savequit(pe: &PlayerEntity) -> i32 {
         let sd = &mut *pe.write() as *mut MapSessionData;
         unsafe {
-        if !map_is_loaded((*sd).player.identity.dest_pos.m as i32) {
-            if (*sd).player.identity.dest_pos.m == 0 {
-                (*sd).player.identity.dest_pos.m = (*sd).m;
-                (*sd).player.identity.dest_pos.x = (*sd).x;
-                (*sd).player.identity.dest_pos.y = (*sd).y;
+            if !map_is_loaded((*sd).player.identity.dest_pos.m as i32) {
+                if (*sd).player.identity.dest_pos.m == 0 {
+                    (*sd).player.identity.dest_pos.m = (*sd).m;
+                    (*sd).player.identity.dest_pos.x = (*sd).x;
+                    (*sd).player.identity.dest_pos.y = (*sd).y;
+                }
+                (*sd).player.identity.last_pos = (*sd).player.identity.dest_pos;
+            } else {
+                (*sd).player.identity.last_pos.m = (*sd).m;
+                (*sd).player.identity.last_pos.x = (*sd).x;
+                (*sd).player.identity.last_pos.y = (*sd).y;
             }
-            (*sd).player.identity.last_pos = (*sd).player.identity.dest_pos;
-        } else {
-            (*sd).player.identity.last_pos.m = (*sd).m;
-            (*sd).player.identity.last_pos.x = (*sd).x;
-            (*sd).player.identity.last_pos.y = (*sd).y;
-        }
 
-        (*sd).player.appearance.disguise       = (*sd).disguise;
-        (*sd).player.appearance.disguise_color = (*sd).disguise_color;
+            (*sd).player.appearance.disguise = (*sd).disguise;
+            (*sd).player.appearance.disguise_color = (*sd).disguise_color;
 
-        let player = (*sd).player.clone();
-        let char_id = player.identity.id;
-        crate::database::blocking_run_async(async move {
-            let pool = crate::database::get_pool();
-            if let Err(e) = crate::servers::char::db::save_player(pool, &player).await {
-                tracing::error!("[map] [save] save_player failed for id={}: {}", char_id, e);
+            let player = (*sd).player.clone();
+            let char_id = player.identity.id;
+            crate::database::blocking_run_async(async move {
+                let pool = crate::database::get_pool();
+                if let Err(e) = crate::servers::char::db::save_player(pool, &player).await {
+                    tracing::error!("[map] [save] save_player failed for id={}: {}", char_id, e);
+                }
+                crate::servers::char::db::set_online(pool, char_id, false).await;
+            });
+
+            // Remove from online tracking
+            if let Some(world) = crate::world::get_world() {
+                world.online.remove(&char_id);
             }
-            crate::servers::char::db::set_online(pool, char_id, false).await;
-        });
-
-        // Remove from online tracking
-        if let Some(world) = crate::world::get_world() {
-            world.online.remove(&char_id);
-        }
         } // end unsafe
         0
     }

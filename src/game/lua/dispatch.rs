@@ -114,3 +114,21 @@ pub fn dispatch_coro(root: &str, method: Option<&str>, entity_ids: &[u32]) -> bo
     }
     true
 }
+
+pub fn dispatch_strings(root: &str, method: Option<&str>, args: &[&str]) -> bool {
+    let lua = sl_state();
+    let Some(func) = resolve_func(lua, root, method) else {
+        return false;
+    };
+    let mut mv = LuaMultiValue::new();
+    for &s in args {
+        mv.push_back(LuaValue::String(lua.create_string(s).unwrap()));
+    }
+    match func.call::<LuaMultiValue>(mv) {
+        Ok(_) => true,
+        Err(e) => {
+            tracing::warn!("[lua] {}: {}", root, e);
+            false
+        }
+    }
+}

@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicI32, AtomicI8, Ordering};
 
 use crate::common::traits::LegacyEntity;
 
+use crate::game::lua::dispatch::dispatch;
 use crate::game::mob::{MobSpawnData, BL_PC, MOB_DEAD};
 use crate::game::pc::{MapSessionData, PC_DIE, SFLAG_FULLSTATS, SFLAG_HPMP};
 
@@ -1000,7 +1001,7 @@ fn command_magicreload(sd: &mut MapSessionData, _line: &str) -> i32 {
 
 fn command_lua(sd: &mut MapSessionData, line: &str) -> i32 {
     sd.luaexec = 0;
-    crate::game::scripting::doscript_blargs_id("canRunLuaTalk", None, &[sd.id]);
+    dispatch("canRunLuaTalk", None, &[sd.id]);
     if sd.luaexec != 0 {
         if let Ok(cs) = CString::new(line) {
             unsafe {
@@ -1863,7 +1864,7 @@ fn command_transfer(sd: &mut MapSessionData, _line: &str) -> i32 {
 
 // ── Command dispatcher ───────────────────────────────────────────────────────
 
-unsafe fn dispatch(sd: *mut MapSessionData, p: *const i8, len: i32, log: bool) -> i32 {
+unsafe fn dispatch_cmd(sd: *mut MapSessionData, p: *const i8, len: i32, log: bool) -> i32 {
     if sd.is_null() {
         return 0;
     }
@@ -1906,5 +1907,5 @@ unsafe fn dispatch(sd: *mut MapSessionData, p: *const i8, len: i32, log: bool) -
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn is_command(sd: *mut MapSessionData, p: *const i8, len: i32) -> i32 {
-    dispatch(sd, p, len, true)
+    dispatch_cmd(sd, p, len, true)
 }

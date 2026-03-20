@@ -2,19 +2,19 @@
 #![allow(non_upper_case_globals)]
 #![allow(non_snake_case)]
 
+use crate::common::traits::LegacyEntity;
+use crate::database::get_pool;
+use crate::database::{blocking_run_async, boards as db_boards};
+use crate::game::lua::coroutine::purge_player;
+use crate::game::lua::dispatch::dispatch;
+use crate::game::npc::NpcEntity;
+use crate::game::pc::{MapSessionData, PlayerEntity, FLAG_MAIL, U_FLAG_UNPHYSICAL};
+use crate::servers::map::packet::ClientPacket;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
-
-use crate::common::traits::LegacyEntity;
-use crate::database::get_pool;
-use crate::database::{blocking_run_async, boards as db_boards};
-use crate::game::lua::coroutine::purge_player;
-use crate::game::npc::NpcEntity;
-use crate::game::pc::{MapSessionData, PlayerEntity, FLAG_MAIL, U_FLAG_UNPHYSICAL};
-use crate::servers::map::packet::ClientPacket;
 
 use crate::game::map_parse::packet::{rfifob, rfifop, wfifohead, wfifop, wfifoset};
 
@@ -608,13 +608,13 @@ pub unsafe fn map_cronjob() {
 }
 
 /// Dispatch a Lua event with a single entity ID argument.
-fn sl_doscript_simple(root: &str, method: Option<&str>, id: u32) -> i32 {
-    crate::game::scripting::doscript_blargs_id(root, method, &[id])
+fn sl_doscript_simple(root: &str, method: Option<&str>, id: u32) -> bool {
+    dispatch(root, method, &[id])
 }
 
 #[inline]
 fn cron(name: &str) {
-    crate::game::scripting::doscript_blargs_id(name, None, &[]);
+    dispatch(name, None, &[]);
 }
 
 // ---------------------------------------------------------------------------
@@ -2979,14 +2979,14 @@ pub async fn map_id2name(id: u32) -> String {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn map_weather(_id: i32, _n: i32) -> i32 {
+pub fn map_weather(_id: i32, _n: i32) -> bool {
     let ot = old_time.load(Ordering::Relaxed);
     let ct = cur_time.load(Ordering::Relaxed);
     if ot != ct {
         old_time.store(ct, Ordering::Relaxed);
-        crate::game::scripting::doscript_blargs_id("mapWeather", None, &[]);
+        dispatch("mapWeather", None, &[]);
     }
-    0
+    false
 }
 
 /// Save all online character sessions to the char server.

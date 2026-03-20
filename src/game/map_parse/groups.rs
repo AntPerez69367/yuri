@@ -5,26 +5,17 @@
 
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
-
-use crate::database::map_db::{get_map_ptr, map_is_loaded};
-use crate::session::{session_exists, SessionId};
-use crate::game::mob::MobSpawnData;
 use crate::database::get_pool;
+use crate::database::map_db::{get_map_ptr, map_is_loaded};
+use crate::game::mob::MobSpawnData;
+use crate::session::{session_exists, SessionId};
 
 use crate::game::pc::{
-    MapSessionData,
-    BL_MOB,
-    EQ_HELM, EQ_FACEACC, EQ_CROWN, EQ_FACEACCTWO,
-    MAX_GROUP_MEMBERS,
-    OPT_FLAG_STEALTH, OPT_FLAG_GHOSTS,
-    FLAG_GROUP,
+    MapSessionData, BL_MOB, EQ_CROWN, EQ_FACEACC, EQ_FACEACCTWO, EQ_HELM, FLAG_GROUP,
+    MAX_GROUP_MEMBERS, OPT_FLAG_GHOSTS, OPT_FLAG_STEALTH,
 };
 
-use super::packet::{
-    encrypt,
-    rfifob, rfifop, wfifop,
-    wfifob, wfifoset, wfifohead,
-};
+use super::packet::{encrypt, rfifob, rfifop, wfifob, wfifohead, wfifop, wfifoset};
 use crate::game::block::AreaType;
 use crate::game::block_grid;
 
@@ -32,11 +23,12 @@ use crate::game::block_grid;
 
 use crate::common::constants::world::MAX_GROUPS;
 
-use crate::game::map_parse::chat::clif_sendminitext;
-use crate::game::map_server::{map_name2sd, groups as groups_raw};
-use crate::game::map_parse::movement::clif_object_canmove;
-use crate::database::class_db::{path as classdb_path, level as classdb_level};
+use crate::database::class_db::{level as classdb_level, path as classdb_path};
 use crate::database::item_db;
+use crate::game::lua::dispatch::dispatch;
+use crate::game::map_parse::chat::clif_sendminitext;
+use crate::game::map_parse::movement::clif_object_canmove;
+use crate::game::map_server::{groups as groups_raw, map_name2sd};
 use crate::game::player::entity::PlayerEntity;
 use crate::game::player::prelude::*;
 
@@ -47,10 +39,9 @@ unsafe fn pc_isequip(sd: *mut MapSessionData, slot: i32) -> u32 {
 }
 
 /// Dispatch a Lua event with two entity ID arguments.
-fn sl_doscript_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
-    crate::game::scripting::doscript_blargs_id(root, method, &[id1, id2])
+fn sl_doscript_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> bool {
+    dispatch(root, method, &[id1, id2])
 }
-
 
 // ─── inline helper: groups array access ──────────────────────────────────────
 
@@ -62,7 +53,8 @@ fn groups_get(groupid: usize, slot: usize) -> u32 {
 #[allow(dead_code)]
 #[inline]
 fn groups_set(groupid: usize, slot: usize, val: u32) {
-    groups_raw()[groupid.min(MAX_GROUPS - 1) * MAX_GROUP_MEMBERS + slot.min(MAX_GROUP_MEMBERS - 1)] = val;
+    groups_raw()
+        [groupid.min(MAX_GROUPS - 1) * MAX_GROUP_MEMBERS + slot.min(MAX_GROUP_MEMBERS - 1)] = val;
 }
 
 // ─── wfifop_copy: write a counted string into the send buffer ─────────────────
@@ -80,14 +72,18 @@ unsafe fn wfifop_copy(fd: SessionId, pos: usize, src: *const u8, len: usize) {
 #[inline]
 unsafe fn wfifow_be(fd: SessionId, pos: usize, val: u16) {
     let p = wfifop(fd, pos) as *mut u16;
-    if !p.is_null() { p.write_unaligned(val.to_be()); }
+    if !p.is_null() {
+        p.write_unaligned(val.to_be());
+    }
 }
 
 /// Write a big-endian u32 into the send buffer at `pos`.
 #[inline]
 unsafe fn wfifol_be(fd: SessionId, pos: usize, val: u32) {
     let p = wfifop(fd, pos) as *mut u32;
-    if !p.is_null() { p.write_unaligned(val.to_be()); }
+    if !p.is_null() {
+        p.write_unaligned(val.to_be());
+    }
 }
 
 // ─── clif_groupstatus ─────────────────────────────────────────────────────────
@@ -97,15 +93,15 @@ unsafe fn wfifol_be(fd: SessionId, pos: usize, val: u32) {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_groupstatus(pe: &PlayerEntity) -> i32 {
-    let mut rogue:   [u32; 256] = [0; 256];
+    let mut rogue: [u32; 256] = [0; 256];
     let mut warrior: [u32; 256] = [0; 256];
-    let mut mage:    [u32; 256] = [0; 256];
-    let mut poet:    [u32; 256] = [0; 256];
+    let mut mage: [u32; 256] = [0; 256];
+    let mut poet: [u32; 256] = [0; 256];
     let mut peasant: [u32; 256] = [0; 256];
-    let mut gm_arr:  [u32; 256] = [0; 256];
+    let mut gm_arr: [u32; 256] = [0; 256];
 
     let group_count = pe.read().group_count as usize;
-    let groupid     = pe.read().groupid as usize;
+    let groupid = pe.read().groupid as usize;
 
     if !session_exists(pe.fd) {
         return 0;
@@ -125,23 +121,37 @@ pub unsafe fn clif_groupstatus(pe: &PlayerEntity) -> i32 {
         let member_id = groups_get(groupid, x);
         x += 1;
         let tsd_arc = match crate::game::map_server::map_id2sd_pc(member_id) {
-            Some(a) => a, None => continue,
+            Some(a) => a,
+            None => continue,
         };
         let mut _tsd_guard = tsd_arc.write();
         let tsd = &mut *_tsd_guard as *mut MapSessionData;
 
         // TNL calculation mirrors C exactly
         if (*tsd).player.progression.level < 99 {
-            (*tsd).player.progression.max_tnl = classdb_level((*tsd).player.progression.class as i32, (*tsd).player.progression.level as i32);
-            (*tsd).player.progression.max_tnl = (*tsd).player.progression.max_tnl.saturating_sub(
-                classdb_level((*tsd).player.progression.class as i32, (*tsd).player.progression.level as i32 - 1)
+            (*tsd).player.progression.max_tnl = classdb_level(
+                (*tsd).player.progression.class as i32,
+                (*tsd).player.progression.level as i32,
             );
-            let lvl_xp = classdb_level((*tsd).player.progression.class as i32, (*tsd).player.progression.level as i32);
+            (*tsd).player.progression.max_tnl =
+                (*tsd)
+                    .player
+                    .progression
+                    .max_tnl
+                    .saturating_sub(classdb_level(
+                        (*tsd).player.progression.class as i32,
+                        (*tsd).player.progression.level as i32 - 1,
+                    ));
+            let lvl_xp = classdb_level(
+                (*tsd).player.progression.class as i32,
+                (*tsd).player.progression.level as i32,
+            );
             (*tsd).player.progression.tnl = lvl_xp.saturating_sub((*tsd).player.progression.exp);
             let maxtnl = (*tsd).player.progression.max_tnl as f32;
-            let tnl    = (*tsd).player.progression.tnl as f32;
+            let tnl = (*tsd).player.progression.tnl as f32;
             if maxtnl > 0.0 {
-                (*tsd).player.progression.percentage = ((maxtnl - tnl) / maxtnl * 100.0 + 0.5) + 0.5;
+                (*tsd).player.progression.percentage =
+                    ((maxtnl - tnl) / maxtnl * 100.0 + 0.5) + 0.5;
             } else {
                 (*tsd).player.progression.percentage = 0.5 + 0.5;
             }
@@ -152,12 +162,30 @@ pub unsafe fn clif_groupstatus(pe: &PlayerEntity) -> i32 {
         (*tsd).player.progression.int_percentage = (*tsd).player.progression.percentage as i32;
 
         match classdb_path((*tsd).player.progression.class as i32) {
-            0 => { peasant[n] = member_id; n += 1; }
-            1 => { warrior[w] = member_id; w += 1; }
-            2 => { rogue[r]   = member_id; r += 1; }
-            3 => { mage[m]    = member_id; m += 1; }
-            4 => { poet[p]    = member_id; p += 1; }
-            _ => { gm_arr[g]  = member_id; g += 1; }
+            0 => {
+                peasant[n] = member_id;
+                n += 1;
+            }
+            1 => {
+                warrior[w] = member_id;
+                w += 1;
+            }
+            2 => {
+                rogue[r] = member_id;
+                r += 1;
+            }
+            3 => {
+                mage[m] = member_id;
+                m += 1;
+            }
+            4 => {
+                poet[p] = member_id;
+                p += 1;
+            }
+            _ => {
+                gm_arr[g] = member_id;
+                g += 1;
+            }
         }
     }
 
@@ -166,22 +194,35 @@ pub unsafe fn clif_groupstatus(pe: &PlayerEntity) -> i32 {
     let mut len = 0usize;
     while (n + w + r + m + p + g) < group_count {
         let member_id = if rogue[r] != 0 {
-            let id = rogue[r]; r += 1; id
+            let id = rogue[r];
+            r += 1;
+            id
         } else if warrior[w] != 0 {
-            let id = warrior[w]; w += 1; id
+            let id = warrior[w];
+            w += 1;
+            id
         } else if mage[m] != 0 {
-            let id = mage[m]; m += 1; id
+            let id = mage[m];
+            m += 1;
+            id
         } else if poet[p] != 0 {
-            let id = poet[p]; p += 1; id
+            let id = poet[p];
+            p += 1;
+            id
         } else if peasant[n] != 0 {
-            let id = peasant[n]; n += 1; id
+            let id = peasant[n];
+            n += 1;
+            id
         } else if gm_arr[g] != 0 {
-            let id = gm_arr[g]; g += 1; id
+            let id = gm_arr[g];
+            g += 1;
+            id
         } else {
             break;
         };
         let tsd_arc = match crate::game::map_server::map_id2sd_pc(member_id) {
-            Some(a) => a, None => continue,
+            Some(a) => a,
+            None => continue,
         };
         let _tsd_guard = tsd_arc.write();
         let tsd = &*_tsd_guard as *const MapSessionData as *mut MapSessionData;
@@ -214,9 +255,14 @@ pub unsafe fn clif_groupstatus(pe: &PlayerEntity) -> i32 {
 
         // Helm slot
         let helm_id = pc_isequip(tsd, EQ_HELM);
-        let helm_item = if helm_id != 0 { Some(item_db::search(helm_id)) } else { None };
+        let helm_item = if helm_id != 0 {
+            Some(item_db::search(helm_id))
+        } else {
+            None
+        };
         let helm_look = helm_item.as_ref().map_or(-1, |i| i.look);
-        if helm_id == 0 || (*tsd).player.appearance.setting_flags as u32 & crate::game::pc::FLAG_HELM == 0
+        if helm_id == 0
+            || (*tsd).player.appearance.setting_flags as u32 & crate::game::pc::FLAG_HELM == 0
             || helm_look == -1
         {
             wfifob(pe.fd, len + 6, 0);
@@ -225,10 +271,16 @@ pub unsafe fn clif_groupstatus(pe: &PlayerEntity) -> i32 {
         } else {
             wfifob(pe.fd, len + 6, 1);
             if (&(*tsd).player.inventory.equip)[EQ_HELM as usize].custom_look != 0 {
-                wfifow_be(pe.fd, len + 7,
-                    (&(*tsd).player.inventory.equip)[EQ_HELM as usize].custom_look as u16);
-                wfifob(pe.fd, len + 9,
-                    (&(*tsd).player.inventory.equip)[EQ_HELM as usize].custom_look_color as u8);
+                wfifow_be(
+                    pe.fd,
+                    len + 7,
+                    (&(*tsd).player.inventory.equip)[EQ_HELM as usize].custom_look as u16,
+                );
+                wfifob(
+                    pe.fd,
+                    len + 9,
+                    (&(*tsd).player.inventory.equip)[EQ_HELM as usize].custom_look_color as u8,
+                );
             } else {
                 wfifow_be(pe.fd, len + 7, helm_look as u16);
                 wfifob(pe.fd, len + 9, helm_item.as_ref().unwrap().look_color as u8);
@@ -254,10 +306,16 @@ pub unsafe fn clif_groupstatus(pe: &PlayerEntity) -> i32 {
         } else {
             wfifob(pe.fd, len + 6, 0); // clears helm flag when crown is present
             if (&(*tsd).player.inventory.equip)[EQ_CROWN as usize].custom_look != 0 {
-                wfifow_be(pe.fd, len + 13,
-                    (&(*tsd).player.inventory.equip)[EQ_CROWN as usize].custom_look as u16);
-                wfifob(pe.fd, len + 15,
-                    (&(*tsd).player.inventory.equip)[EQ_CROWN as usize].custom_look_color as u8);
+                wfifow_be(
+                    pe.fd,
+                    len + 13,
+                    (&(*tsd).player.inventory.equip)[EQ_CROWN as usize].custom_look as u16,
+                );
+                wfifob(
+                    pe.fd,
+                    len + 15,
+                    (&(*tsd).player.inventory.equip)[EQ_CROWN as usize].custom_look_color as u8,
+                );
             } else {
                 let crown_item = item_db::search(crown_id);
                 wfifow_be(pe.fd, len + 13, crown_item.look as u16);
@@ -304,11 +362,12 @@ pub unsafe fn clif_groupstatus(pe: &PlayerEntity) -> i32 {
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_grouphealth_update(pe: &PlayerEntity) -> i32 {
     let group_count = pe.read().group_count as usize;
-    let groupid     = pe.read().groupid as usize;
+    let groupid = pe.read().groupid as usize;
 
     for x in 0..group_count {
         let tsd_arc = match crate::game::map_server::map_id2sd_pc(groups_get(groupid, x)) {
-            Some(a) => a, None => continue,
+            Some(a) => a,
+            None => continue,
         };
         let _tsd_guard = tsd_arc.write();
         let tsd = &*_tsd_guard as *const MapSessionData as *mut MapSessionData;
@@ -360,7 +419,9 @@ pub unsafe fn clif_addgroup(pe: &PlayerEntity) -> i32 {
     }
 
     let tsd = map_name2sd(nameof.as_ptr());
-    if tsd.is_null() { return 0; }
+    if tsd.is_null() {
+        return 0;
+    }
 
     let pe_gm_level = pe.read().player.identity.gm_level;
     if pe_gm_level == 0 && ((*tsd).optFlags & OPT_FLAG_STEALTH) != 0 {
@@ -376,14 +437,15 @@ pub unsafe fn clif_addgroup(pe: &PlayerEntity) -> i32 {
 
     let pe_group_leader = pe.read().group_leader;
     let pe_id = pe.id;
-    if (*tsd).group_count != 0
-        && (*tsd).group_leader == pe_group_leader && pe_group_leader == pe_id {
-            let tsd_arc = match crate::game::map_server::map_id2sd_pc((*tsd).id) {
-                Some(a) => a, None => return 0,
-            };
-            clif_leavegroup(tsd_arc.as_ref());
-            return 0;
-        }
+    if (*tsd).group_count != 0 && (*tsd).group_leader == pe_group_leader && pe_group_leader == pe_id
+    {
+        let tsd_arc = match crate::game::map_server::map_id2sd_pc((*tsd).id) {
+            Some(a) => a,
+            None => return 0,
+        };
+        clif_leavegroup(tsd_arc.as_ref());
+        return 0;
+    }
 
     let pe_group_count = pe.read().group_count;
     if pe_group_count >= MAX_GROUP_MEMBERS as i32 {
@@ -402,21 +464,29 @@ pub unsafe fn clif_addgroup(pe: &PlayerEntity) -> i32 {
     let pe_m = pe.read().m;
     let sd_map_ok = if map_is_loaded(pe_m) {
         (*get_map_ptr(pe_m)).can_group
-    } else { 0 };
+    } else {
+        0
+    };
     if sd_map_ok == 0 {
         // TODO(phase6c): migrate clif_sendminitext
-        clif_sendminitext(pe,
-            c"You are unable to join a party. (Grouping disabled on map)".as_ptr());
+        clif_sendminitext(
+            pe,
+            c"You are unable to join a party. (Grouping disabled on map)".as_ptr(),
+        );
         return 0;
     }
 
     let tsd_map_ok = if map_is_loaded((*tsd).m) {
         (*get_map_ptr((*tsd).m)).can_group
-    } else { 0 };
+    } else {
+        0
+    };
     if tsd_map_ok == 0 {
         // TODO(phase6c): migrate clif_sendminitext
-        clif_sendminitext(pe,
-            c"They are unable to join your party. (Grouping disabled on map)".as_ptr());
+        clif_sendminitext(
+            pe,
+            c"They are unable to join your party. (Grouping disabled on map)".as_ptr(),
+        );
         return 0;
     }
 
@@ -437,13 +507,17 @@ pub unsafe fn clif_addgroup(pe: &PlayerEntity) -> i32 {
         // Find first empty group slot
         let mut x = 1usize;
         while x < MAX_GROUPS {
-            if groups_get(x, 0) == 0 { break; }
+            if groups_get(x, 0) == 0 {
+                break;
+            }
             x += 1;
         }
         if x == MAX_GROUPS {
             // TODO(phase6c): migrate clif_sendminitext
-            clif_sendminitext(pe,
-                c"All groups are currently occupied, please try again later.".as_ptr());
+            clif_sendminitext(
+                pe,
+                c"All groups are currently occupied, please try again later.".as_ptr(),
+            );
             return 0;
         }
         groups_set(x, 0, pe_identity_id);
@@ -463,7 +537,9 @@ pub unsafe fn clif_addgroup(pe: &PlayerEntity) -> i32 {
     let mut buff = [0i8; 256];
     {
         let join_msg = format!("{} is joining the group.", (*tsd).player.identity.name);
-        for (i, b) in join_msg.bytes().take(255).enumerate() { buff[i] = b as i8; }
+        for (i, b) in join_msg.bytes().take(255).enumerate() {
+            buff[i] = b as i8;
+        }
     }
 
     clif_updategroup(pe, buff.as_mut_ptr());
@@ -477,28 +553,26 @@ pub unsafe fn clif_addgroup(pe: &PlayerEntity) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_updategroup(
-    pe:      &PlayerEntity,
-    message: *mut i8,
-) -> i32 {
+pub unsafe fn clif_updategroup(pe: &PlayerEntity, message: *mut i8) -> i32 {
     let group_count = pe.read().group_count as usize;
-    let groupid     = pe.read().groupid as usize;
+    let groupid = pe.read().groupid as usize;
 
     for x in 0..group_count {
         let tsd_arc = match crate::game::map_server::map_id2sd_pc(groups_get(groupid, x)) {
-            Some(a) => a, None => continue,
+            Some(a) => a,
+            None => continue,
         };
         {
             let mut _tsd_guard = tsd_arc.write();
             let tsd = &mut *_tsd_guard as *mut MapSessionData;
 
-            (*tsd).group_count  = pe.read().group_count;
+            (*tsd).group_count = pe.read().group_count;
             (*tsd).group_leader = pe.read().group_leader;
 
             if (*tsd).group_count == 1 {
                 groups_set(groupid, 0, 0);
                 (*tsd).group_count = 0;
-                (*tsd).groupid     = 0;
+                (*tsd).groupid = 0;
             }
         } // write guard dropped before calling same-file functions
 
@@ -519,7 +593,7 @@ pub unsafe fn clif_updategroup(
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_leavegroup(pe: &PlayerEntity) -> i32 {
     let group_count = pe.read().group_count as usize;
-    let groupid     = pe.read().groupid as usize;
+    let groupid = pe.read().groupid as usize;
     let pe_identity_id = pe.read().player.identity.id;
 
     let mut taken = 0i32;
@@ -545,7 +619,9 @@ pub unsafe fn clif_leavegroup(pe: &PlayerEntity) -> i32 {
     let mut buff = [0i8; 256];
     {
         let leave_msg = format!("{} is leaving the group.", pe.read().player.identity.name);
-        for (i, b) in leave_msg.bytes().take(255).enumerate() { buff[i] = b as i8; }
+        for (i, b) in leave_msg.bytes().take(255).enumerate() {
+            buff[i] = b as i8;
+        }
     }
     pe.write().group_count -= 1;
     clif_updategroup(pe, buff.as_mut_ptr());
@@ -555,7 +631,7 @@ pub unsafe fn clif_leavegroup(pe: &PlayerEntity) -> i32 {
     clif_sendminitext(pe, msg_left);
 
     pe.write().group_count = 0;
-    pe.write().groupid     = 0;
+    pe.write().groupid = 0;
     clif_groupstatus(pe);
     0
 }
@@ -569,10 +645,18 @@ pub unsafe fn clif_leavegroup(pe: &PlayerEntity) -> i32 {
 pub unsafe fn clif_findmount(pe: &PlayerEntity) -> i32 {
     let (mut x, mut y) = (pe.read().x as i32, pe.read().y as i32);
     match pe.read().player.combat.side {
-        0 => { y -= 1; }
-        1 => { x += 1; }
-        2 => { y += 1; }
-        3 => { x -= 1; }
+        0 => {
+            y -= 1;
+        }
+        1 => {
+            x += 1;
+        }
+        2 => {
+            y += 1;
+        }
+        3 => {
+            x -= 1;
+        }
         _ => {}
     }
 
@@ -588,11 +672,15 @@ pub unsafe fn clif_findmount(pe: &PlayerEntity) -> i32 {
     let mut mob_guard = mob_arc.write();
     let mob = &mut *mob_guard as *mut MobSpawnData;
 
-    if pe.read().player.combat.state != 0 { return 0; }
+    if pe.read().player.combat.state != 0 {
+        return 0;
+    }
 
     let can_mount = if map_is_loaded(pe_m) {
         (*get_map_ptr(pe_m)).can_mount
-    } else { 0 };
+    } else {
+        0
+    };
     if can_mount == 0 && pe.read().player.identity.gm_level == 0 {
         // TODO(phase6c): migrate clif_sendminitext
         clif_sendminitext(pe, c"You cannot mount here.".as_ptr());
@@ -609,14 +697,13 @@ pub unsafe fn clif_findmount(pe: &PlayerEntity) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_isingroup(
-    pe:  &PlayerEntity,
-    tsd: *mut MapSessionData,
-) -> i32 {
-    if tsd.is_null() { return 0; }
+pub unsafe fn clif_isingroup(pe: &PlayerEntity, tsd: *mut MapSessionData) -> i32 {
+    if tsd.is_null() {
+        return 0;
+    }
 
     let group_count = pe.read().group_count as usize;
-    let groupid     = pe.read().groupid as usize;
+    let groupid = pe.read().groupid as usize;
 
     for x in 0..group_count {
         if groups_get(groupid, x) == (*tsd).id {
@@ -634,18 +721,19 @@ pub unsafe fn clif_isingroup(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_canmove_sub_inner(
-    entity_id: u32,
-    pe: &PlayerEntity,
-) -> i32 {
-    if pe.read().canmove == 1 { return 0; }
+pub unsafe fn clif_canmove_sub_inner(entity_id: u32, pe: &PlayerEntity) -> i32 {
+    if pe.read().canmove == 1 {
+        return 0;
+    }
 
     // Try PC
     if let Some(tsd_arc) = crate::game::map_server::map_id2sd_pc(entity_id) {
         let tsd = tsd_arc.read();
         let show_ghosts = if map_is_loaded(tsd.m) {
             (*get_map_ptr(tsd.m)).show_ghosts
-        } else { 0 };
+        } else {
+            0
+        };
 
         let pe_sd = pe.read();
         if (show_ghosts != 0
@@ -701,11 +789,10 @@ pub unsafe fn clif_canmove_sub_inner(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_canmove(
-    pe:     &PlayerEntity,
-    direct: i32,
-) -> i32 {
-    if pe.read().player.identity.gm_level != 0 { return 0; }
+pub unsafe fn clif_canmove(pe: &PlayerEntity, direct: i32) -> i32 {
+    if pe.read().player.identity.gm_level != 0 {
+        return 0;
+    }
 
     let pe_x = pe.read().x;
     let pe_y = pe.read().y;
@@ -713,10 +800,18 @@ pub unsafe fn clif_canmove(
 
     let (mut nx, mut ny) = (0i32, 0i32);
     match direct {
-        0 => { ny = pe_y as i32 - 1; }
-        1 => { nx = pe_x as i32 + 1; }
-        2 => { ny = pe_y as i32 + 1; }
-        3 => { nx = pe_x as i32 - 1; }
+        0 => {
+            ny = pe_y as i32 - 1;
+        }
+        1 => {
+            nx = pe_x as i32 + 1;
+        }
+        2 => {
+            ny = pe_y as i32 + 1;
+        }
+        3 => {
+            nx = pe_x as i32 - 1;
+        }
         _ => {}
     }
 
@@ -741,14 +836,14 @@ pub unsafe fn clif_canmove(
 
 /// Map list data passed to `clif_mapselect`.
 pub struct MapSelectData {
-    pub wm:    *const i8,
-    pub x0:    *const i32,
-    pub y0:    *const i32,
+    pub wm: *const i8,
+    pub x0: *const i32,
+    pub y0: *const i32,
     pub mname: *const *const i8,
-    pub id:    *const u32,
-    pub x1:    *const i32,
-    pub y1:    *const i32,
-    pub i:     i32,
+    pub id: *const u32,
+    pub x1: *const i32,
+    pub y1: *const i32,
+    pub i: i32,
 }
 
 /// Send the map-selection UI to `pe`.  C line 9306.
@@ -756,11 +851,17 @@ pub struct MapSelectData {
 /// # Safety
 ///
 /// `x0`, `y0`, `mname`, `id`, `x1`, `y1` must each point to at least `i` valid elements.
-pub unsafe fn clif_mapselect(
-    pe:   &PlayerEntity,
-    data: MapSelectData,
-) -> i32 {
-    let MapSelectData { wm, x0, y0, mname, id, x1, y1, i } = data;
+pub unsafe fn clif_mapselect(pe: &PlayerEntity, data: MapSelectData) -> i32 {
+    let MapSelectData {
+        wm,
+        x0,
+        y0,
+        mname,
+        id,
+        x1,
+        y1,
+        i,
+    } = data;
     if !session_exists(pe.fd) {
         return 0;
     }
@@ -791,7 +892,7 @@ pub unsafe fn clif_mapselect(
         len += mn_len + 1;
 
         wfifol_be(pe.fd, len + 5, *id.add(x));
-        wfifow_be(pe.fd, len + 9,  *x1.add(x) as u16);
+        wfifow_be(pe.fd, len + 9, *x1.add(x) as u16);
         wfifow_be(pe.fd, len + 11, *y1.add(x) as u16);
         len += 8;
 
@@ -824,22 +925,37 @@ pub unsafe fn clif_pb_sub_inner(
     pe: &PlayerEntity,
     len_ptr: *mut i32,
 ) -> i32 {
-    if tsd.is_null() { return 0; }
-    if len_ptr.is_null() { return 0; }
+    if tsd.is_null() {
+        return 0;
+    }
+    if len_ptr.is_null() {
+        return 0;
+    }
 
     let mut path = classdb_path((*tsd).player.progression.class as i32);
-    if path == 5 { path = 2; }
-    if path == 50 || path == 0 { return 0; }
+    if path == 5 {
+        path = 2;
+    }
+    if path == 50 || path == 0 {
+        return 0;
+    }
 
-    let power_rating: u32 =
-        (*tsd).player.combat.max_hp.saturating_add((*tsd).player.combat.max_mp);
+    let power_rating: u32 = (*tsd)
+        .player
+        .combat
+        .max_hp
+        .saturating_add((*tsd).player.combat.max_mp);
 
     let offset = *len_ptr as usize;
 
     wfifol_be(pe.fd, offset + 8, (*tsd).id);
     wfifob(pe.fd, offset + 12, path as u8);
     wfifol_be(pe.fd, offset + 13, power_rating);
-    wfifob(pe.fd, offset + 17, (*tsd).player.appearance.armor_color as u8);
+    wfifob(
+        pe.fd,
+        offset + 17,
+        (*tsd).player.appearance.armor_color as u8,
+    );
 
     let name_bytes = (*tsd).player.identity.name.as_bytes();
     let name_len = name_bytes.len();
@@ -877,7 +993,14 @@ pub unsafe fn clif_sendpowerboard(pe: &PlayerEntity) -> i32 {
     let pe_y = pe.read().y;
     if let Some(grid) = block_grid::get_grid(pe_m as usize) {
         let slot = &*get_map_ptr(pe_m);
-        let ids = block_grid::ids_in_area(grid, pe_x as i32, pe_y as i32, AreaType::SameMap, slot.xs as i32, slot.ys as i32);
+        let ids = block_grid::ids_in_area(
+            grid,
+            pe_x as i32,
+            pe_y as i32,
+            AreaType::SameMap,
+            slot.xs as i32,
+            slot.ys as i32,
+        );
         for id in ids {
             if let Some(arc) = crate::game::map_server::map_id2sd_pc(id) {
                 let guard = arc.read();
@@ -930,9 +1053,7 @@ pub async unsafe fn clif_huntertoggle(pe: &PlayerEntity) -> i32 {
         .unwrap_or("")
         .to_owned();
 
-    sqlx::query(
-            "UPDATE `Character` SET `ChaHunter` = ?, `ChaHunterNote` = ? WHERE `ChaId` = ?"
-        )
+    sqlx::query("UPDATE `Character` SET `ChaHunter` = ?, `ChaHunterNote` = ? WHERE `ChaId` = ?")
         .bind(hunter_val)
         .bind(hunter_tag_str)
         .bind(char_id)
@@ -968,8 +1089,7 @@ pub async unsafe fn clif_sendhunternote(pe: &PlayerEntity) -> i32 {
 
     // Don't send your own hunter note to yourself
     let sd_name = pe.read().player.identity.name.clone();
-    let sd_name_cstr = std::ffi::CString::new(sd_name.as_bytes())
-        .unwrap_or_default();
+    let sd_name_cstr = std::ffi::CString::new(sd_name.as_bytes()).unwrap_or_default();
     if libc::strcasecmp(sd_name_cstr.as_ptr(), huntername.as_ptr()) == 0 {
         return 1;
     }
@@ -980,14 +1100,14 @@ pub async unsafe fn clif_sendhunternote(pe: &PlayerEntity) -> i32 {
         .to_owned();
 
     let note_result = sqlx::query_scalar::<_, String>(
-            "SELECT `ChaHunterNote` FROM `Character` WHERE `ChaName` = ?"
-        )
-        .bind(hunter_name_str)
-        .fetch_optional(get_pool())
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or_default();
+        "SELECT `ChaHunterNote` FROM `Character` WHERE `ChaName` = ?",
+    )
+    .bind(hunter_name_str)
+    .fetch_optional(get_pool())
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_default();
 
     // Copy note into fixed-size buffer for packet building
     let mut hunternote = [0i8; 41];

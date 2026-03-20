@@ -13,75 +13,81 @@
 //!   groups       — party/group status, add, update, leave
 //!   events       — rankings, reward parcels
 
+pub mod chat;
+pub mod combat;
+pub mod dialogs;
+pub mod events;
+pub mod groups;
+pub mod items;
+pub mod movement;
 pub mod packet;
 pub mod player_state;
-pub mod visual;
-pub mod movement;
-pub mod combat;
-pub mod chat;
-pub mod dialogs;
-pub mod items;
 pub mod trading;
-pub mod groups;
-pub mod events;
+pub mod visual;
 
 // ─── clif_parse — main packet dispatcher ─────────────────────────────────────
 
-
 use crate::common::traits::LegacyEntity;
 use crate::database::map_db::raw_map_ptr;
-use crate::session::{SessionId, session_exists, session_get_data, session_get_eof, session_set_eof};
-use crate::game::time_util::timer_insert;
 use crate::game::pc::MapSessionData;
 use crate::game::player::entity::PlayerEntity;
+use crate::game::time_util::timer_insert;
+use crate::session::{
+    session_exists, session_get_data, session_get_eof, session_set_eof, SessionId,
+};
 
 use crate::game::map_parse::packet::{
-    rfifob, rfifow, rfifol, rfifop, rfiforest, rfifoskip, swap16, swap32, decrypt,
+    decrypt, rfifob, rfifol, rfifop, rfiforest, rfifoskip, rfifow, swap16, swap32,
 };
 
 // Rust-native functions
-use crate::game::map_parse::movement::{clif_parsewalk, clif_parsemap};
-use crate::game::map_parse::combat::{clif_parseattack, clif_parsemagic};
-use crate::game::map_parse::chat::{clif_parsesay, clif_parsewisp, clif_parseignore, clif_sendminitext};
-use crate::game::map_parse::items::{
-    clif_parsegetitem, clif_parsewield, clif_parseunequip, clif_parseuseitem,
-    clif_parseeatitem, clif_parsethrow, clif_throwconfirm, clif_dropgold, clif_open_sub,
-    clif_parsechangespell,
+use crate::game::map_parse::chat::{
+    clif_parseignore, clif_parsesay, clif_parsewisp, clif_sendminitext,
 };
-use crate::game::map_parse::trading::{clif_handitem, clif_handgold, clif_parse_exchange};
-use crate::game::map_parse::groups::{clif_groupstatus, clif_addgroup, clif_parseparcel, clif_huntertoggle, clif_sendhunternote};
-use crate::game::map_parse::events::{clif_sendRewardInfo, clif_getReward, clif_parseranking};
+use crate::game::map_parse::combat::{clif_parseattack, clif_parsemagic};
+use crate::game::map_parse::dialogs::{
+    clif_closeit, clif_handle_clickgetinfo, clif_parsenpcdialog,
+};
+use crate::game::map_parse::events::{clif_getReward, clif_parseranking, clif_sendRewardInfo};
+use crate::game::map_parse::groups::{
+    clif_addgroup, clif_groupstatus, clif_huntertoggle, clif_parseparcel, clif_sendhunternote,
+};
+use crate::game::map_parse::items::{
+    clif_dropgold, clif_open_sub, clif_parsechangespell, clif_parseeatitem, clif_parsegetitem,
+    clif_parsethrow, clif_parseunequip, clif_parseuseitem, clif_parsewield, clif_throwconfirm,
+};
+use crate::game::map_parse::movement::{clif_parsemap, clif_parsewalk};
 use crate::game::map_parse::player_state::{clif_mystatus, clif_refresh};
-use crate::game::map_parse::dialogs::{clif_parsenpcdialog, clif_handle_clickgetinfo, clif_closeit};
+use crate::game::map_parse::trading::{clif_handgold, clif_handitem, clif_parse_exchange};
 
 // get_fd_max is defined in the binary; import via the session module.
 
-use crate::game::client::visual::{
-    clif_cancelafk, clif_print_disconnect, clif_user_list, clif_debug,
-    clif_paperpopupwrite_save, clif_changeprofile, clif_sendboard,
-};
+use crate::database::item_db;
 use crate::game::client::handlers::{
-    clif_handle_disconnect, clif_handle_missingobject, clif_handle_powerboards,
-    clif_parsedropitem, clif_postitem, clif_handle_boards, clif_handle_menuinput,
-    clif_parsechangepos, clif_parsefriends, clif_changestatus, clif_accept2,
+    clif_accept2, clif_changestatus, clif_handle_boards, clif_handle_disconnect,
+    clif_handle_menuinput, clif_handle_missingobject, clif_handle_powerboards, clif_parsechangepos,
+    clif_parsedropitem, clif_parsefriends, clif_postitem,
 };
-use crate::game::map_parse::movement::{
-    clif_parseside, clif_parselookat, clif_parselookat_2, clif_parseviewchange,
+use crate::game::client::visual::clif_sendprofile;
+use crate::game::client::visual::{
+    clif_cancelafk, clif_changeprofile, clif_debug, clif_paperpopupwrite_save,
+    clif_print_disconnect, clif_sendboard, clif_user_list,
 };
 use crate::game::map_parse::chat::clif_parseemotion;
 use crate::game::map_parse::dialogs::clif_sendtowns;
-use crate::game::client::visual::clif_sendprofile;
+use crate::game::map_parse::movement::{
+    clif_parselookat, clif_parselookat_2, clif_parseside, clif_parseviewchange,
+};
 use crate::game::map_parse::player_state::clif_sendminimap;
-use crate::network::crypt::{send_meta, send_metalist};
-use crate::database::item_db;
 use crate::game::pc::pc_atkspeed;
+use crate::network::crypt::{send_meta, send_metalist};
 
 // pc_warp: actual fn takes i32, old extern had u16 — wrap with cast.
 // pc_warp in spatial.rs still takes *mut MapSessionData (not yet migrated).
 #[inline]
 unsafe fn pc_warp(pe: &PlayerEntity, map_id: u16, x: u16, y: u16) {
     let sd_ptr = &mut *pe.write() as *mut MapSessionData;
-    std::mem::drop(crate::game::pc::pc_warp(sd_ptr, map_id as i32, x as i32, y as i32));
+    let _ = crate::game::pc::pc_warp(sd_ptr, map_id as i32, x as i32, y as i32);
 }
 // clif_debug: actual fn takes i32 for len, old extern had u16 — wrap with cast.
 #[inline]
@@ -100,15 +106,18 @@ unsafe fn createdb_start(pe: &PlayerEntity) {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
-    if fd.raw() < 0 { return 0; }
-    if !session_exists(fd) { return 0; }
+    if fd.raw() < 0 {
+        return 0;
+    }
+    if !session_exists(fd) {
+        return 0;
+    }
 
     let sd = session_get_data(fd);
 
     if session_get_eof(fd) != 0 {
         if let Some(pe) = sd.as_deref() {
-            libc::printf(c"[map] [session_eof] name=%s\n".as_ptr(),
-                pe.name.as_ptr());
+            libc::printf(c"[map] [session_eof] name=%s\n".as_ptr(), pe.name.as_ptr());
             clif_handle_disconnect(pe).await;
             clif_closeit(pe);
         }
@@ -123,11 +132,15 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
         return 0;
     }
 
-    if rfiforest(fd) < 3 { return 0; }
+    if rfiforest(fd) < 3 {
+        return 0;
+    }
 
     let len = swap16(rfifow(fd, 1)) as usize + 3;
 
-    if rfiforest(fd) < len as i32 { return 0; }
+    if rfiforest(fd) < len as i32 {
+        return 0;
+    }
 
     if sd.is_none() {
         if rfifob(fd, 3) == 0x10 {
@@ -222,14 +235,15 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
         0x0F => {
             clif_cancelafk(pe);
             pe.write().time += 1;
-            if pe.read().paralyzed == 0 && pe.read().sleep == 1.0f32
-                && pe.read().time < 4 {
-                    if (*raw_map_ptr().add(pe.read().m as usize)).spell != 0 || pe.read().player.identity.gm_level != 0 {
-                        clif_parsemagic(&mut pe.write());
-                    } else {
-                        clif_sendminitext(pe, c"That doesn't work here.".as_ptr());
-                    }
+            if pe.read().paralyzed == 0 && pe.read().sleep == 1.0f32 && pe.read().time < 4 {
+                if (*raw_map_ptr().add(pe.read().m as usize)).spell != 0
+                    || pe.read().player.identity.gm_level != 0
+                {
+                    clif_parsemagic(&mut pe.write());
+                } else {
+                    clif_sendminitext(pe, c"That doesn't work here.".as_ptr());
                 }
+            }
         }
         0x11 => {
             clif_cancelafk(pe);
@@ -395,7 +409,8 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
         }
         0x3F => {
             let pe_fd = pe.fd;
-            pc_warp(pe,
+            pc_warp(
+                pe,
                 swap16(rfifow(pe_fd, 5)),
                 swap16(rfifow(pe_fd, 7)),
                 swap16(rfifow(pe_fd, 9)),
@@ -460,11 +475,14 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
             clif_parsefriends(pe, name_ptr, name_len).await;
         }
         0x7B => {
-            libc::printf(c"request: %u\n".as_ptr(),
-                rfifob(pe.fd, 5) as u32);
+            libc::printf(c"request: %u\n".as_ptr(), rfifob(pe.fd, 5) as u32);
             match rfifob(pe.fd, 5) {
-                0 => { send_meta(&mut *pe.write() as *mut MapSessionData); }
-                1 => { send_metalist(&mut *pe.write() as *mut MapSessionData); }
+                0 => {
+                    send_meta(&mut *pe.write() as *mut MapSessionData);
+                }
+                1 => {
+                    send_metalist(&mut *pe.write() as *mut MapSessionData);
+                }
                 _ => {}
             }
         }
@@ -475,9 +493,15 @@ pub async unsafe fn clif_parse(fd: SessionId) -> i32 {
         0x7D => {
             clif_cancelafk(pe);
             match rfifob(fd, 5) {
-                5 => { clif_sendRewardInfo(pe, fd).await; }
-                6 => { clif_getReward(pe, fd).await; }
-                _ => { clif_parseranking(pe, fd).await; }
+                5 => {
+                    clif_sendRewardInfo(pe, fd).await;
+                }
+                6 => {
+                    clif_getReward(pe, fd).await;
+                }
+                _ => {
+                    clif_parseranking(pe, fd).await;
+                }
             }
         }
         0x82 => {

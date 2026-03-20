@@ -4,17 +4,18 @@ use std::ffi::CString;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use yuri::config::ServerConfig;
-use yuri::game::block::map_initblock;
-use yuri::game::map_server::map_initiddb;
-use yuri::game::scripting::sl_init;
-use yuri::game::map_server::{lang_read, map_do_term, map_loadgameregistry};
-use yuri::game::client::visual::clif_timeout;
-use yuri::database::{item_db, magic_db, mob_db, class_db, board_db, clan_db, recipe_db};
-use yuri::game::mob::mobspawn_read;
-use yuri::session::{get_session_manager, sync_callback, make_listen_port};
 use yuri::core::{core_init, set_termfunc};
-use yuri::servers::login::{LoginState, parse_lang_file};
-use yuri::world::{WorldState, KickRequest};
+use yuri::database::{board_db, clan_db, class_db, item_db, magic_db, mob_db, recipe_db};
+use yuri::game::block::map_initblock;
+use yuri::game::client::visual::clif_timeout;
+use yuri::game::lua::dispatch::dispatch;
+use yuri::game::map_server::map_initiddb;
+use yuri::game::map_server::{lang_read, map_do_term, map_loadgameregistry};
+use yuri::game::mob::mobspawn_read;
+use yuri::game::scripting::sl_init;
+use yuri::servers::login::{parse_lang_file, LoginState};
+use yuri::session::{get_session_manager, make_listen_port, sync_callback};
+use yuri::world::{KickRequest, WorldState};
 
 pub fn db_init() {}
 
@@ -40,8 +41,14 @@ async fn main() -> Result<()> {
                 println!("Usage: world_server [--conf FILE] [--lang FILE]");
                 return Ok(());
             }
-            "--conf" if i + 1 < args.len() => { i += 1; conf_file = args[i].clone(); }
-            "--lang" if i + 1 < args.len() => { i += 1; lang_file = args[i].clone(); }
+            "--conf" if i + 1 < args.len() => {
+                i += 1;
+                conf_file = args[i].clone();
+            }
+            "--lang" if i + 1 < args.len() => {
+                i += 1;
+                lang_file = args[i].clone();
+            }
             _ => {}
         }
         i += 1;
@@ -62,7 +69,9 @@ async fn main() -> Result<()> {
     // Load lang strings for map server
     {
         let clang = CString::new(lang_file.as_str()).unwrap();
-        unsafe { lang_read(clang.as_ptr()); }
+        unsafe {
+            lang_read(clang.as_ptr());
+        }
     }
 
     // Load login messages
@@ -73,8 +82,8 @@ async fn main() -> Result<()> {
 
     // Shared DB pool — increased max_connections for combined workload.
     let pool = {
-        let db_url = std::env::var("DATABASE_URL")
-            .context("DATABASE_URL environment variable not set")?;
+        let db_url =
+            std::env::var("DATABASE_URL").context("DATABASE_URL environment variable not set")?;
         MySqlPoolOptions::new()
             .max_connections(15)
             .connect(&db_url)
@@ -82,8 +91,7 @@ async fn main() -> Result<()> {
             .with_context(|| format!("Cannot connect to MySQL: {}", db_url))?
     };
 
-    yuri::database::set_pool(pool.clone())
-        .context("Failed to register DB pool")?;
+    yuri::database::set_pool(pool.clone()).context("Failed to register DB pool")?;
 
     // Reset online flags
     sqlx::query("UPDATE `Character` SET `ChaOnline` = 0 WHERE `ChaOnline` = 1")
@@ -145,20 +153,23 @@ async fn main() -> Result<()> {
                 {
                     let manager = get_session_manager();
                     let mut cbs = manager.default_callbacks.lock().unwrap();
-                    cbs.parse = Some(std::sync::Arc::new(|fd: yuri::session::SessionId| -> yuri::session::CallbackFuture {
-                        Box::pin(yuri::game::client::clif_parse(fd))
-                    }));
+                    cbs.parse = Some(std::sync::Arc::new(
+                        |fd: yuri::session::SessionId| -> yuri::session::CallbackFuture {
+                            Box::pin(yuri::game::client::clif_parse(fd))
+                        },
+                    ));
                     cbs.timeout = Some(sync_callback(clif_timeout));
                 }
                 make_listen_port(map_port as i32);
 
-                yuri::game::scripting::doscript_blargs_id("startup", None, &[]);
+                dispatch("startup", None, &[]);
 
                 set_termfunc(Some(map_do_term));
             }
             Ok(())
-        }).await
-          .context("Init thread panicked")??;
+        })
+        .await
+        .context("Init thread panicked")??;
     }
 
     // ── Login listener (general tokio runtime) ────────────────────────
@@ -166,11 +177,8 @@ async fn main() -> Result<()> {
         let w = Arc::clone(&world);
         let bind = format!("{}:{}", config.login_ip, config.login_port);
         tokio::spawn(async move {
-            let mut login_state = LoginState::new(
-                w.db.clone(),
-                w.config.clone(),
-                w.messages.clone(),
-            );
+            let mut login_state =
+                LoginState::new(w.db.clone(), w.config.clone(), w.messages.clone());
             login_state.world = Some(Arc::clone(&w));
             let login_state = Arc::new(login_state);
             tracing::info!("[login] [ready] addr={}", bind);
@@ -193,22 +201,33 @@ async fn main() -> Result<()> {
         });
     }
 
-    tracing::info!("[world] [ready] Login={}:{} Map={}:{}",
-        config.login_ip, config.login_port,
-        config.map_ip, config.map_port);
+    tracing::info!(
+        "[world] [ready] Login={}:{} Map={}:{}",
+        config.login_ip,
+        config.login_port,
+        config.map_ip,
+        config.map_port
+    );
 
     // ── Deadlock detector ─────────────────────────────────────────────
-    std::thread::spawn(|| {
-        loop {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            let deadlocks = parking_lot::deadlock::check_deadlock();
-            if deadlocks.is_empty() { continue; }
-            tracing::error!("[world] [deadlock] {} deadlock(s) detected!", deadlocks.len());
-            for (i, threads) in deadlocks.iter().enumerate() {
-                tracing::error!("[world] [deadlock] Deadlock #{}", i + 1);
-                for t in threads {
-                    tracing::error!("[world] [deadlock]   Thread {:?}:\n{:?}", t.thread_id(), t.backtrace());
-                }
+    std::thread::spawn(|| loop {
+        std::thread::sleep(std::time::Duration::from_secs(5));
+        let deadlocks = parking_lot::deadlock::check_deadlock();
+        if deadlocks.is_empty() {
+            continue;
+        }
+        tracing::error!(
+            "[world] [deadlock] {} deadlock(s) detected!",
+            deadlocks.len()
+        );
+        for (i, threads) in deadlocks.iter().enumerate() {
+            tracing::error!("[world] [deadlock] Deadlock #{}", i + 1);
+            for t in threads {
+                tracing::error!(
+                    "[world] [deadlock]   Thread {:?}:\n{:?}",
+                    t.thread_id(),
+                    t.backtrace()
+                );
             }
         }
     });
@@ -225,17 +244,27 @@ async fn main() -> Result<()> {
                 if let Some(arc) = yuri::game::map_server::map_id2sd_pc(req.char_id) {
                     let fd = arc.fd;
                     yuri::session::session_set_eof(fd, 12);
-                    tracing::info!("[world] [kick] char_id={} fd={:?} kicked (duplicate login)", req.char_id, fd);
+                    tracing::info!(
+                        "[world] [kick] char_id={} fd={:?} kicked (duplicate login)",
+                        req.char_id,
+                        fd
+                    );
                 }
             }
         });
     }
 
-    local.run_until(yuri::session::run_async_server(world.config.map_port)).await
+    local
+        .run_until(yuri::session::run_async_server(world.config.map_port))
+        .await
         .map_err(|e| anyhow::anyhow!("session loop error: {}", e))?;
 
     tracing::info!("[world] Shutting down...");
-    unsafe { set_termfunc(None); }
-    unsafe { map_do_term(); }
+    unsafe {
+        set_termfunc(None);
+    }
+    unsafe {
+        map_do_term();
+    }
     Ok(())
 }

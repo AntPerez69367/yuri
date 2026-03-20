@@ -3,37 +3,31 @@
 
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
-
-use crate::game::npc::NpcData;
-use crate::game::pc::{
-    MapSessionData,
-    BL_NPC, BL_MOB, BL_PC,
-    EQ_ARMOR, EQ_COAT, EQ_WEAP, EQ_SHIELD, EQ_HELM,
-    EQ_FACEACC, EQ_CROWN, EQ_FACEACCTWO, EQ_MANTLE, EQ_NECKLACE, EQ_BOOTS,
+use super::packet::{
+    encrypt, rfifob, rfifol, rfifop, swap16, swap32, wfifob, wfifohead, wfifol, wfifop, wfifoset,
+    wfifow,
 };
 use crate::common::types::Item;
-use crate::session::{SessionId, session_exists};
+use crate::game::lua::dispatch::dispatch_coro;
+use crate::game::npc::NpcData;
+use crate::game::pc::{
+    MapSessionData, BL_MOB, BL_NPC, BL_PC, EQ_ARMOR, EQ_BOOTS, EQ_COAT, EQ_CROWN, EQ_FACEACC,
+    EQ_FACEACCTWO, EQ_HELM, EQ_MANTLE, EQ_NECKLACE, EQ_SHIELD, EQ_WEAP,
+};
 use crate::game::player::entity::PlayerEntity;
 use crate::game::player::prelude::*;
-
-use super::packet::{
-    encrypt, wfifob, wfifohead, wfifol, wfifop, wfifoset, wfifow,
-    rfifob, rfifol, rfifop,
-    swap16, swap32,
-};
+use crate::session::{session_exists, SessionId};
 
 // ─── External C globals ───────────────────────────────────────────────────────
 
-
-
-use crate::game::map_parse::chat::clif_sendminitext;
-use crate::game::client::visual::clif_clickonplayer;
-use crate::game::scripting::{
-    sl_resumedialog, sl_resumemenuseq, sl_resumeinputseq,
-    sl_resumebuy, sl_resumesell, sl_resumeinput, sl_async_freeco,
-};
-use crate::database::item_db;
 use crate::database::class_db::name as classdb_name;
+use crate::database::item_db;
+use crate::game::client::visual::clif_clickonplayer;
+use crate::game::map_parse::chat::clif_sendminitext;
+use crate::game::scripting::{
+    sl_async_freeco, sl_resumebuy, sl_resumedialog, sl_resumeinput, sl_resumeinputseq,
+    sl_resumemenuseq, sl_resumesell,
+};
 
 // map_id2sd_local: typed lookup returning raw pointer for use in unsafe context.
 #[inline]
@@ -49,14 +43,13 @@ fn map_id2npc_local(id: u32) -> *mut crate::game::npc::NpcData {
         .map(|arc| &mut *arc.write() as *mut crate::game::npc::NpcData)
         .unwrap_or(std::ptr::null_mut())
 }
-fn sl_doscript_coro(root: &str, method: Option<&str>, id: u32) -> i32 {
-    crate::game::scripting::doscript_coro_id(root, method, &[id])
+fn sl_doscript_coro(root: &str, method: Option<&str>, id: u32) -> bool {
+    dispatch_coro(root, method, &[id])
 }
 
-fn sl_doscript_coro_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
-    crate::game::scripting::doscript_coro_id(root, method, &[id1, id2])
+fn sl_doscript_coro_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> bool {
+    dispatch_coro(root, method, &[id1, id2])
 }
-
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -82,14 +75,18 @@ unsafe fn copy_rfifo_bytes(dst: &mut [u8], src: *const u8, len: usize) {
 #[allow(clippy::too_many_arguments)]
 unsafe fn write_npc_equip_look(fd: SessionId, nd: *const NpcData, base_off: usize) {
     let nd = &*nd;
-    wfifob(fd, base_off,      1);
-    wfifow(fd, base_off + 1,  swap16(nd.sex));
-    wfifob(fd, base_off + 3,  nd.state as u8);
-    wfifob(fd, base_off + 4,  0);
-    wfifow(fd, base_off + 5,  swap16(nd.equip[EQ_ARMOR as usize].id as u16));
-    wfifob(fd, base_off + 7,  0);
-    wfifob(fd, base_off + 8,  nd.face as u8);
-    wfifob(fd, base_off + 9,  nd.hair as u8);
+    wfifob(fd, base_off, 1);
+    wfifow(fd, base_off + 1, swap16(nd.sex));
+    wfifob(fd, base_off + 3, nd.state as u8);
+    wfifob(fd, base_off + 4, 0);
+    wfifow(
+        fd,
+        base_off + 5,
+        swap16(nd.equip[EQ_ARMOR as usize].id as u16),
+    );
+    wfifob(fd, base_off + 7, 0);
+    wfifob(fd, base_off + 8, nd.face as u8);
+    wfifob(fd, base_off + 9, nd.hair as u8);
     wfifob(fd, base_off + 10, nd.hair_color as u8);
     wfifob(fd, base_off + 11, nd.face_color as u8);
     wfifob(fd, base_off + 12, nd.skin_color as u8);
@@ -99,17 +96,33 @@ unsafe fn write_npc_equip_look(fd: SessionId, nd: *const NpcData, base_off: usiz
         wfifow(fd, base_off + 13, 0xFFFF);
         wfifob(fd, base_off + 15, 0);
     } else {
-        wfifow(fd, base_off + 13, swap16(nd.equip[EQ_ARMOR as usize].id as u16));
+        wfifow(
+            fd,
+            base_off + 13,
+            swap16(nd.equip[EQ_ARMOR as usize].id as u16),
+        );
         if nd.armor_color != 0 {
             wfifob(fd, base_off + 15, nd.armor_color as u8);
         } else {
-            wfifob(fd, base_off + 15, nd.equip[EQ_ARMOR as usize].custom_look_color as u8);
+            wfifob(
+                fd,
+                base_off + 15,
+                nd.equip[EQ_ARMOR as usize].custom_look_color as u8,
+            );
         }
     }
     // coat overrides armor slot
     if nd.equip[EQ_COAT as usize].id != 0 {
-        wfifow(fd, base_off + 13, swap16(nd.equip[EQ_COAT as usize].id as u16));
-        wfifob(fd, base_off + 15, nd.equip[EQ_COAT as usize].custom_look_color as u8);
+        wfifow(
+            fd,
+            base_off + 13,
+            swap16(nd.equip[EQ_COAT as usize].id as u16),
+        );
+        wfifob(
+            fd,
+            base_off + 15,
+            nd.equip[EQ_COAT as usize].custom_look_color as u8,
+        );
     }
 
     // weap
@@ -117,8 +130,16 @@ unsafe fn write_npc_equip_look(fd: SessionId, nd: *const NpcData, base_off: usiz
         wfifow(fd, base_off + 16, 0xFFFF);
         wfifob(fd, base_off + 18, 0);
     } else {
-        wfifow(fd, base_off + 16, swap16(nd.equip[EQ_WEAP as usize].id as u16));
-        wfifob(fd, base_off + 18, nd.equip[EQ_WEAP as usize].custom_look_color as u8);
+        wfifow(
+            fd,
+            base_off + 16,
+            swap16(nd.equip[EQ_WEAP as usize].id as u16),
+        );
+        wfifob(
+            fd,
+            base_off + 18,
+            nd.equip[EQ_WEAP as usize].custom_look_color as u8,
+        );
     }
 
     // shield
@@ -126,8 +147,16 @@ unsafe fn write_npc_equip_look(fd: SessionId, nd: *const NpcData, base_off: usiz
         wfifow(fd, base_off + 19, 0xFFFF);
         wfifob(fd, base_off + 21, 0);
     } else {
-        wfifow(fd, base_off + 19, swap16(nd.equip[EQ_SHIELD as usize].id as u16));
-        wfifob(fd, base_off + 21, nd.equip[EQ_SHIELD as usize].custom_look_color as u8);
+        wfifow(
+            fd,
+            base_off + 19,
+            swap16(nd.equip[EQ_SHIELD as usize].id as u16),
+        );
+        wfifob(
+            fd,
+            base_off + 21,
+            nd.equip[EQ_SHIELD as usize].custom_look_color as u8,
+        );
     }
 
     // helm
@@ -138,7 +167,11 @@ unsafe fn write_npc_equip_look(fd: SessionId, nd: *const NpcData, base_off: usiz
     } else {
         wfifob(fd, base_off + 22, 1);
         wfifob(fd, base_off + 23, nd.equip[EQ_HELM as usize].id as u8);
-        wfifob(fd, base_off + 24, nd.equip[EQ_HELM as usize].custom_look_color as u8);
+        wfifob(
+            fd,
+            base_off + 24,
+            nd.equip[EQ_HELM as usize].custom_look_color as u8,
+        );
     }
 
     // faceacc
@@ -146,8 +179,16 @@ unsafe fn write_npc_equip_look(fd: SessionId, nd: *const NpcData, base_off: usiz
         wfifow(fd, base_off + 25, 0xFFFF);
         wfifob(fd, base_off + 27, 0);
     } else {
-        wfifow(fd, base_off + 25, swap16(nd.equip[EQ_FACEACC as usize].id as u16));
-        wfifob(fd, base_off + 27, nd.equip[EQ_FACEACC as usize].custom_look_color as u8);
+        wfifow(
+            fd,
+            base_off + 25,
+            swap16(nd.equip[EQ_FACEACC as usize].id as u16),
+        );
+        wfifob(
+            fd,
+            base_off + 27,
+            nd.equip[EQ_FACEACC as usize].custom_look_color as u8,
+        );
     }
 
     // crown (clears helm-present flag if crown present)
@@ -156,8 +197,16 @@ unsafe fn write_npc_equip_look(fd: SessionId, nd: *const NpcData, base_off: usiz
         wfifob(fd, base_off + 30, 0);
     } else {
         wfifob(fd, base_off + 22, 0); // matches C: clears helm-present flag
-        wfifow(fd, base_off + 28, swap16(nd.equip[EQ_CROWN as usize].id as u16));
-        wfifob(fd, base_off + 30, nd.equip[EQ_CROWN as usize].custom_look_color as u8);
+        wfifow(
+            fd,
+            base_off + 28,
+            swap16(nd.equip[EQ_CROWN as usize].id as u16),
+        );
+        wfifob(
+            fd,
+            base_off + 30,
+            nd.equip[EQ_CROWN as usize].custom_look_color as u8,
+        );
     }
 
     // faceacctwo
@@ -165,8 +214,16 @@ unsafe fn write_npc_equip_look(fd: SessionId, nd: *const NpcData, base_off: usiz
         wfifow(fd, base_off + 31, 0xFFFF);
         wfifob(fd, base_off + 33, 0);
     } else {
-        wfifow(fd, base_off + 31, swap16(nd.equip[EQ_FACEACCTWO as usize].id as u16));
-        wfifob(fd, base_off + 33, nd.equip[EQ_FACEACCTWO as usize].custom_look_color as u8);
+        wfifow(
+            fd,
+            base_off + 31,
+            swap16(nd.equip[EQ_FACEACCTWO as usize].id as u16),
+        );
+        wfifob(
+            fd,
+            base_off + 33,
+            nd.equip[EQ_FACEACCTWO as usize].custom_look_color as u8,
+        );
     }
 
     // mantle
@@ -174,8 +231,16 @@ unsafe fn write_npc_equip_look(fd: SessionId, nd: *const NpcData, base_off: usiz
         wfifow(fd, base_off + 34, 0xFFFF);
         wfifob(fd, base_off + 36, 0);
     } else {
-        wfifow(fd, base_off + 34, swap16(nd.equip[EQ_MANTLE as usize].id as u16));
-        wfifob(fd, base_off + 36, nd.equip[EQ_MANTLE as usize].custom_look_color as u8);
+        wfifow(
+            fd,
+            base_off + 34,
+            swap16(nd.equip[EQ_MANTLE as usize].id as u16),
+        );
+        wfifob(
+            fd,
+            base_off + 36,
+            nd.equip[EQ_MANTLE as usize].custom_look_color as u8,
+        );
     }
 
     // necklace
@@ -183,8 +248,16 @@ unsafe fn write_npc_equip_look(fd: SessionId, nd: *const NpcData, base_off: usiz
         wfifow(fd, base_off + 37, 0xFFFF);
         wfifob(fd, base_off + 39, 0);
     } else {
-        wfifow(fd, base_off + 37, swap16(nd.equip[EQ_NECKLACE as usize].id as u16));
-        wfifob(fd, base_off + 39, nd.equip[EQ_NECKLACE as usize].custom_look_color as u8);
+        wfifow(
+            fd,
+            base_off + 37,
+            swap16(nd.equip[EQ_NECKLACE as usize].id as u16),
+        );
+        wfifob(
+            fd,
+            base_off + 39,
+            nd.equip[EQ_NECKLACE as usize].custom_look_color as u8,
+        );
     }
 
     // boots (falls back to sex)
@@ -192,8 +265,16 @@ unsafe fn write_npc_equip_look(fd: SessionId, nd: *const NpcData, base_off: usiz
         wfifow(fd, base_off + 40, swap16(nd.sex));
         wfifob(fd, base_off + 42, 0);
     } else {
-        wfifow(fd, base_off + 40, swap16(nd.equip[EQ_BOOTS as usize].id as u16));
-        wfifob(fd, base_off + 42, nd.equip[EQ_BOOTS as usize].custom_look_color as u8);
+        wfifow(
+            fd,
+            base_off + 40,
+            swap16(nd.equip[EQ_BOOTS as usize].id as u16),
+        );
+        wfifob(
+            fd,
+            base_off + 42,
+            nd.equip[EQ_BOOTS as usize].custom_look_color as u8,
+        );
     }
     // 43 bytes of equip data written starting at base_off
 }
@@ -203,14 +284,14 @@ unsafe fn write_npc_equip_look(fd: SessionId, nd: *const NpcData, base_off: usiz
 unsafe fn write_npc_gfx_look(fd: SessionId, nd: *const NpcData, base_off: usize) {
     let nd = &*nd;
     let g = &nd.gfx;
-    wfifob(fd, base_off,      1);
-    wfifow(fd, base_off + 1,  swap16(nd.sex));
-    wfifob(fd, base_off + 3,  nd.state as u8);
-    wfifob(fd, base_off + 4,  0);
-    wfifow(fd, base_off + 5,  swap16(g.armor));
-    wfifob(fd, base_off + 7,  0);
-    wfifob(fd, base_off + 8,  g.face);
-    wfifob(fd, base_off + 9,  g.hair);
+    wfifob(fd, base_off, 1);
+    wfifow(fd, base_off + 1, swap16(nd.sex));
+    wfifob(fd, base_off + 3, nd.state as u8);
+    wfifob(fd, base_off + 4, 0);
+    wfifow(fd, base_off + 5, swap16(g.armor));
+    wfifob(fd, base_off + 7, 0);
+    wfifob(fd, base_off + 8, g.face);
+    wfifob(fd, base_off + 9, g.hair);
     wfifob(fd, base_off + 10, g.chair);
     wfifob(fd, base_off + 11, g.cface);
     wfifob(fd, base_off + 12, g.cskin);
@@ -287,7 +368,9 @@ pub unsafe fn clif_closeit(pe: &PlayerEntity) -> i32 {
     wfifob(fd, 0, 0xAA);
     wfifob(fd, 3, 0x03);
     let cfg = crate::config::config();
-    let login_ip: u32 = cfg.login_ip.parse::<std::net::Ipv4Addr>()
+    let login_ip: u32 = cfg
+        .login_ip
+        .parse::<std::net::Ipv4Addr>()
         .map(|a| u32::from_le_bytes(a.octets()))
         .unwrap_or(0);
     wfifol(fd, 4, swap32(login_ip));
@@ -305,10 +388,7 @@ pub unsafe fn clif_closeit(pe: &PlayerEntity) -> i32 {
     let name_ptr = name.as_ptr();
     let name_len = cstrlen(name_ptr as *const i8);
     wfifob(fd, len + 11, name_len as u8);
-    libc::strcpy(
-        wfifop(fd, len + 12) as *mut i8,
-        name_ptr as *const i8,
-    );
+    libc::strcpy(wfifop(fd, len + 12) as *mut i8, name_ptr as *const i8);
     len += name_len + 1;
     // WFIFOL(sd->fd,len+11)=SWAP32(sd->status.id);  // commented-out in C
     len += 4;
@@ -365,11 +445,7 @@ pub unsafe fn clif_sendtowns(pe: &PlayerEntity) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_send_timer(
-    pe: &PlayerEntity,
-    timer_type: i8,
-    length: u32,
-) {
+pub unsafe fn clif_send_timer(pe: &PlayerEntity, timer_type: i8, length: u32) {
     let fd = pe.fd;
 
     if !session_exists(fd) {
@@ -403,7 +479,11 @@ pub unsafe fn clif_parsenpcdialog(pe: &PlayerEntity) -> i32 {
         0x02 => {
             // Special menu
             let npc_menu = rfifob(fd, 15) as i32;
-            sl_resumemenuseq(npc_choice, npc_menu, &mut *pe.write() as *mut MapSessionData);
+            sl_resumemenuseq(
+                npc_choice,
+                npc_menu,
+                &mut *pe.write() as *mut MapSessionData,
+            );
         }
         0x04 => {
             // inputSeq returned input
@@ -439,10 +519,10 @@ pub unsafe fn clif_scriptmes(
     previous: i32,
     next: i32,
 ) -> i32 {
-    let fd       = pe.fd;
+    let fd = pe.fd;
     let graphic_id = pe.read().npc_g;
-    let color    = pe.read().npc_gc;
-    let nd       = map_id2npc_local(id as u32);
+    let color = pe.read().npc_gc;
+    let nd = map_id2npc_local(id as u32);
     let dialog_type = pe.read().dialogtype;
 
     if !nd.is_null() {
@@ -481,15 +561,14 @@ pub unsafe fn clif_scriptmes(
             wfifob(fd, 24, previous as u8);
             wfifob(fd, 25, next as u8);
             wfifow(fd, 26, swap16(msg_len as u16));
-            libc::strcpy(
-                wfifop(fd, 28) as *mut i8,
-                msg,
-            );
+            libc::strcpy(wfifop(fd, 28) as *mut i8, msg);
             wfifow(fd, 1, swap16((msg_len + 25) as u16));
         }
         1 => {
             // NPC equip look
-            if nd.is_null() { return 0; }
+            if nd.is_null() {
+                return 0;
+            }
             write_npc_equip_look(fd, nd, 11);
             // after the 43 bytes of equip data (base 11):
             // offset 11+43 = 54: graphic block
@@ -500,15 +579,14 @@ pub unsafe fn clif_scriptmes(
             wfifob(fd, 62, previous as u8);
             wfifob(fd, 63, next as u8);
             wfifow(fd, 64, swap16(msg_len as u16));
-            libc::strcpy(
-                wfifop(fd, 66) as *mut i8,
-                msg,
-            );
+            libc::strcpy(wfifop(fd, 66) as *mut i8, msg);
             wfifow(fd, 1, swap16((msg_len + 63) as u16));
         }
         2 => {
             // NPC gfx look
-            if nd.is_null() { return 0; }
+            if nd.is_null() {
+                return 0;
+            }
             write_npc_gfx_look(fd, nd, 11);
             wfifob(fd, 54, 1);
             wfifow(fd, 55, swap16(graphic_id as u16));
@@ -517,10 +595,7 @@ pub unsafe fn clif_scriptmes(
             wfifob(fd, 62, previous as u8);
             wfifob(fd, 63, next as u8);
             wfifow(fd, 64, swap16(msg_len as u16));
-            libc::strcpy(
-                wfifop(fd, 66) as *mut i8,
-                msg,
-            );
+            libc::strcpy(wfifop(fd, 66) as *mut i8, msg);
             wfifow(fd, 1, swap16((msg_len + 63) as u16));
         }
         _ => {}
@@ -544,10 +619,10 @@ pub unsafe fn clif_scriptmenu(
     menu: *mut *mut i8,
     size: i32,
 ) -> i32 {
-    let fd      = pe.fd;
+    let fd = pe.fd;
     let graphic = pe.read().npc_g;
-    let color   = pe.read().npc_gc;
-    let nd      = map_id2npc_local(id as u32);
+    let color = pe.read().npc_gc;
+    let nd = map_id2npc_local(id as u32);
     let dialog_type = pe.read().dialogtype;
 
     if !nd.is_null() {
@@ -582,20 +657,14 @@ pub unsafe fn clif_scriptmenu(
             wfifow(fd, 17, swap16(graphic as u16));
             wfifob(fd, 19, color as u8);
             wfifow(fd, 20, swap16(dialog_len as u16));
-            libc::strcpy(
-                wfifop(fd, 22) as *mut i8,
-                dialog as *const i8,
-            );
+            libc::strcpy(wfifop(fd, 22) as *mut i8, dialog as *const i8);
             wfifob(fd, dialog_len + 22, size as u8);
             let mut len = dialog_len;
             for x in 1..=(size as usize) {
                 let entry = *menu.add(x);
                 let entry_len = cstrlen(entry as *const i8);
                 wfifob(fd, len + 23, entry_len as u8);
-                libc::strcpy(
-                    wfifop(fd, len + 24) as *mut i8,
-                    entry as *const i8,
-                );
+                libc::strcpy(wfifop(fd, len + 24) as *mut i8, entry as *const i8);
                 len += entry_len + 1;
                 wfifow(fd, len + 23, swap16(x as u16));
                 len += 2;
@@ -603,26 +672,22 @@ pub unsafe fn clif_scriptmenu(
             wfifow(fd, 1, swap16((len + 20) as u16));
         }
         1 => {
-            if nd.is_null() { return 0; }
+            if nd.is_null() {
+                return 0;
+            }
             write_npc_equip_look(fd, nd, 11);
             wfifob(fd, 54, 1);
             wfifow(fd, 55, swap16(graphic as u16));
             wfifob(fd, 57, color as u8);
             wfifow(fd, 58, swap16(dialog_len as u16));
-            libc::strcpy(
-                wfifop(fd, 60) as *mut i8,
-                dialog as *const i8,
-            );
+            libc::strcpy(wfifop(fd, 60) as *mut i8, dialog as *const i8);
             wfifob(fd, dialog_len + 60, size as u8);
             let mut len = dialog_len;
             for x in 1..=(size as usize) {
                 let entry = *menu.add(x);
                 let entry_len = cstrlen(entry as *const i8);
                 wfifob(fd, len + 61, entry_len as u8);
-                libc::strcpy(
-                    wfifop(fd, len + 62) as *mut i8,
-                    entry as *const i8,
-                );
+                libc::strcpy(wfifop(fd, len + 62) as *mut i8, entry as *const i8);
                 len += entry_len + 1;
                 wfifow(fd, len + 61, swap16(x as u16));
                 len += 2;
@@ -630,26 +695,22 @@ pub unsafe fn clif_scriptmenu(
             wfifow(fd, 1, swap16((len + 58) as u16));
         }
         2 => {
-            if nd.is_null() { return 0; }
+            if nd.is_null() {
+                return 0;
+            }
             write_npc_gfx_look(fd, nd, 11);
             wfifob(fd, 54, 1);
             wfifow(fd, 55, swap16(graphic as u16));
             wfifob(fd, 57, color as u8);
             wfifow(fd, 58, swap16(dialog_len as u16));
-            libc::strcpy(
-                wfifop(fd, 60) as *mut i8,
-                dialog as *const i8,
-            );
+            libc::strcpy(wfifop(fd, 60) as *mut i8, dialog as *const i8);
             wfifob(fd, dialog_len + 60, size as u8);
             let mut len = dialog_len;
             for x in 1..=(size as usize) {
                 let entry = *menu.add(x);
                 let entry_len = cstrlen(entry as *const i8);
                 wfifob(fd, len + 61, entry_len as u8);
-                libc::strcpy(
-                    wfifop(fd, len + 62) as *mut i8,
-                    entry as *const i8,
-                );
+                libc::strcpy(wfifop(fd, len + 62) as *mut i8, entry as *const i8);
                 len += entry_len + 1;
                 wfifow(fd, len + 61, swap16(x as u16));
                 len += 2;
@@ -678,10 +739,10 @@ pub unsafe fn clif_scriptmenuseq(
     previous: i32,
     next: i32,
 ) -> i32 {
-    let fd         = pe.fd;
+    let fd = pe.fd;
     let graphic_id = pe.read().npc_g;
-    let color      = pe.read().npc_gc;
-    let nd         = map_id2npc_local(id as u32);
+    let color = pe.read().npc_gc;
+    let nd = map_id2npc_local(id as u32);
     let dialog_type = pe.read().dialogtype;
 
     if !nd.is_null() {
@@ -721,10 +782,7 @@ pub unsafe fn clif_scriptmenuseq(
             wfifob(fd, 24, previous as u8);
             wfifob(fd, 25, next as u8);
             wfifow(fd, 26, swap16(dialog_len as u16));
-            libc::strcpy(
-                wfifop(fd, 28) as *mut i8,
-                dialog,
-            );
+            libc::strcpy(wfifop(fd, 28) as *mut i8, dialog);
             let mut len = dialog_len + 1;
             wfifob(fd, len + 27, size as u8);
             len += 1;
@@ -732,16 +790,15 @@ pub unsafe fn clif_scriptmenuseq(
                 let entry = *menu.add(x);
                 let entry_len = cstrlen(entry);
                 wfifob(fd, len + 27, entry_len as u8);
-                libc::strcpy(
-                    wfifop(fd, len + 28) as *mut i8,
-                    entry,
-                );
+                libc::strcpy(wfifop(fd, len + 28) as *mut i8, entry);
                 len += entry_len + 1;
             }
             wfifow(fd, 1, swap16((len + 24) as u16));
         }
         1 => {
-            if nd.is_null() { return 0; }
+            if nd.is_null() {
+                return 0;
+            }
             write_npc_equip_look(fd, nd, 11);
             // type==1 sequential menu uses slightly different offsets than type==0
             // C writes: [55]=0, [56]=1, [55]=graphic (swap), [59]=color, [60..]=dialog etc.
@@ -753,10 +810,7 @@ pub unsafe fn clif_scriptmenuseq(
             wfifob(fd, 64, previous as u8);
             wfifob(fd, 65, next as u8);
             wfifow(fd, 66, swap16(dialog_len as u16));
-            libc::strcpy(
-                wfifop(fd, 68) as *mut i8,
-                dialog,
-            );
+            libc::strcpy(wfifop(fd, 68) as *mut i8, dialog);
             let mut len = dialog_len + 68;
             wfifob(fd, len, size as u8);
             len += 1;
@@ -764,10 +818,7 @@ pub unsafe fn clif_scriptmenuseq(
                 let entry = *menu.add(x);
                 let entry_len = cstrlen(entry);
                 wfifob(fd, len, entry_len as u8);
-                libc::strcpy(
-                    wfifop(fd, len + 1) as *mut i8,
-                    entry,
-                );
+                libc::strcpy(wfifop(fd, len + 1) as *mut i8, entry);
                 len += entry_len + 1;
             }
             wfifow(fd, 1, swap16((len + 68) as u16));
@@ -840,10 +891,7 @@ pub unsafe fn clif_scriptmenuseq(
             wfifob(fd, 64, previous as u8);
             wfifob(fd, 65, next as u8);
             wfifow(fd, 66, swap16(dialog_len as u16));
-            libc::strcpy(
-                wfifop(fd, 68) as *mut i8,
-                dialog,
-            );
+            libc::strcpy(wfifop(fd, 68) as *mut i8, dialog);
             let mut len = dialog_len + 68;
             wfifob(fd, len, size as u8);
             len += 1;
@@ -851,10 +899,7 @@ pub unsafe fn clif_scriptmenuseq(
                 let entry = *menu.add(x);
                 let entry_len = cstrlen(entry);
                 wfifob(fd, len, entry_len as u8);
-                libc::strcpy(
-                    wfifop(fd, len + 1) as *mut i8,
-                    entry,
-                );
+                libc::strcpy(wfifop(fd, len + 1) as *mut i8, entry);
                 len += entry_len + 1;
             }
             wfifow(fd, 1, swap16((len + 68) as u16));
@@ -870,13 +915,13 @@ pub unsafe fn clif_scriptmenuseq(
 
 /// Dialog content pointers passed to `clif_inputseq`.
 pub struct DialogContent {
-    pub dialog:   *const i8,
-    pub dialog2:  *const i8,
-    pub dialog3:  *const i8,
-    pub menu:     *mut *const i8,
-    pub size:     i32,
+    pub dialog: *const i8,
+    pub dialog2: *const i8,
+    pub dialog3: *const i8,
+    pub menu: *mut *const i8,
+    pub size: i32,
     pub previous: i32,
-    pub next:     i32,
+    pub next: i32,
 }
 
 /// Send sequential NPC input dialog.
@@ -884,16 +929,20 @@ pub struct DialogContent {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_inputseq(
-    pe:      &PlayerEntity,
-    id:      i32,
-    content: DialogContent,
-) -> i32 {
-    let DialogContent { dialog, dialog2, dialog3, menu, size, previous, next } = content;
-    let fd         = pe.fd;
+pub unsafe fn clif_inputseq(pe: &PlayerEntity, id: i32, content: DialogContent) -> i32 {
+    let DialogContent {
+        dialog,
+        dialog2,
+        dialog3,
+        menu,
+        size,
+        previous,
+        next,
+    } = content;
+    let fd = pe.fd;
     let graphic_id = pe.read().npc_g;
-    let color      = pe.read().npc_gc;
-    let nd         = map_id2npc_local(id as u32);
+    let color = pe.read().npc_gc;
+    let nd = map_id2npc_local(id as u32);
 
     if !nd.is_null() {
         (*nd).lastaction = libc::time(std::ptr::null_mut()) as u32;
@@ -903,7 +952,7 @@ pub unsafe fn clif_inputseq(
         return 0;
     }
 
-    let dialog_len  = cstrlen(dialog);
+    let dialog_len = cstrlen(dialog);
     let dialog2_len = cstrlen(dialog2);
     let dialog3_len = cstrlen(dialog3);
     let _ = (menu, size); // these are declared in C but not used in this path
@@ -935,26 +984,17 @@ pub unsafe fn clif_inputseq(
     wfifob(fd, 25, next as u8);
 
     wfifow(fd, 26, swap16(dialog_len as u16));
-    libc::strcpy(
-        wfifop(fd, 28) as *mut i8,
-        dialog,
-    );
+    libc::strcpy(wfifop(fd, 28) as *mut i8, dialog);
     let mut len = dialog_len + 28;
 
     wfifob(fd, len, dialog2_len as u8);
-    libc::strcpy(
-        wfifop(fd, len + 1) as *mut i8,
-        dialog2,
-    );
+    libc::strcpy(wfifop(fd, len + 1) as *mut i8, dialog2);
     len += dialog2_len + 1;
 
     wfifob(fd, len, 42);
     len += 1;
     wfifob(fd, len, dialog3_len as u8);
-    libc::strcpy(
-        wfifop(fd, len + 1) as *mut i8,
-        dialog3,
-    );
+    libc::strcpy(wfifop(fd, len + 1) as *mut i8, dialog3);
     len += dialog3_len + 3;
 
     wfifow(fd, 1, swap16(len as u16));
@@ -1009,17 +1049,22 @@ pub async unsafe fn clif_handle_clickgetinfo(pe: &PlayerEntity) -> i32 {
                 && (pe_y as i32 - tsd_ref.y as i32).abs() <= 21
                 && (pe_gm_level != 0
                     || (tsd_ref.optFlags & 64 == 0      // !optFlag_noclick
-                        && tsd_ref.optFlags & 32 == 0))  // !optFlag_stealth
-                {
-                    sl_doscript_coro("onClick", None, pe.id);
-                }
+                        && tsd_ref.optFlags & 32 == 0))
+            // !optFlag_stealth
+            {
+                sl_doscript_coro("onClick", None, pe.id);
+            }
         }
         clif_clickonplayer(pe, target_id).await;
     } else if bl_type == BL_NPC {
-        let Some(arc) = crate::game::map_server::map_id2npc_ref(target_id) else { return 0; };
+        let Some(arc) = crate::game::map_server::map_id2npc_ref(target_id) else {
+            return 0;
+        };
         let nd = arc.read();
         let mut radius = 10i32;
-        if nd.subtype as i32 == crate::common::constants::entity::SUBTYPE_FLOOR as i32 { radius = 0; }
+        if nd.subtype as i32 == crate::common::constants::entity::SUBTYPE_FLOOR as i32 {
+            radius = 0;
+        }
 
         // F1 NPC: map id 0 always accessible; otherwise check proximity
         let pe_m = pe.read().m;
@@ -1044,10 +1089,17 @@ pub async unsafe fn clif_handle_clickgetinfo(pe: &PlayerEntity) -> i32 {
                 }
             }
 
-            sl_doscript_coro_2(crate::game::scripting::carray_to_str(&nd.name), Some("click"), pe.id, nd.id);
+            sl_doscript_coro_2(
+                crate::game::scripting::carray_to_str(&nd.name),
+                Some("click"),
+                pe.id,
+                nd.id,
+            );
         }
     } else if bl_type == BL_MOB {
-        let Some(arc) = crate::game::map_server::map_id2mob_ref(target_id) else { return 0; };
+        let Some(arc) = crate::game::map_server::map_id2mob_ref(target_id) else {
+            return 0;
+        };
         let mob = &*arc.data_ptr();
         let mut radius = 10i32;
         if !mob.data.is_null() && (*mob.data).mobtype == 3 {
@@ -1066,7 +1118,12 @@ pub async unsafe fn clif_handle_clickgetinfo(pe: &PlayerEntity) -> i32 {
             sl_async_freeco(&mut *pe.write() as *mut MapSessionData);
             sl_doscript_coro_2("onLook", None, pe.id, target_id);
             if !mob.data.is_null() {
-                sl_doscript_coro_2(crate::game::scripting::carray_to_str(&(*mob.data).yname), Some("click"), pe.id, target_id);
+                sl_doscript_coro_2(
+                    crate::game::scripting::carray_to_str(&(*mob.data).yname),
+                    Some("click"),
+                    pe.id,
+                    target_id,
+                );
             }
         }
     }
@@ -1088,9 +1145,9 @@ pub unsafe fn clif_buydialog(
     price: *mut i32,
     count: i32,
 ) -> i32 {
-    let fd      = pe.fd;
+    let fd = pe.fd;
     let graphic = pe.read().npc_g;
-    let color   = pe.read().npc_gc;
+    let color = pe.read().npc_gc;
 
     if !session_exists(fd) {
         // item points into caller's Vec — do not free here.
@@ -1120,10 +1177,7 @@ pub unsafe fn clif_buydialog(
         wfifob(fd, 19, color as u8);
 
         wfifow(fd, 20, swap16(dialog_len as u16));
-        libc::strcpy(
-            wfifop(fd, 22) as *mut i8,
-            dialog,
-        );
+        libc::strcpy(wfifop(fd, 22) as *mut i8, dialog);
         let mut len = dialog_len;
         wfifow(fd, len + 22, dialog_len as u16); // NOTE: C writes strlen() without SWAP16 here
         len += 2;
@@ -1189,10 +1243,7 @@ pub unsafe fn clif_buydialog(
                     it.buytext.as_ptr() as *const i8,
                 );
             } else {
-                let cn = classdb_name(
-                    item.class as i32,
-                    item.rank,
-                );
+                let cn = classdb_name(item.class as i32, item.rank);
                 let formatted = format!("{} level {}\0", cn, item.level as u32);
                 let copy = formatted.len().min(64);
                 std::ptr::copy_nonoverlapping(formatted.as_ptr(), buff_buf.as_mut_ptr(), copy);
@@ -1224,10 +1275,7 @@ pub unsafe fn clif_buydialog(
         wfifob(fd, 57, color as u8);
 
         wfifow(fd, 60, swap16(dialog_len as u16));
-        libc::strcpy(
-            wfifop(fd, 62) as *mut i8,
-            dialog,
-        );
+        libc::strcpy(wfifop(fd, 62) as *mut i8, dialog);
         let mut len = dialog_len;
         wfifow(fd, len + 62, dialog_len as u16);
         len += 2;
@@ -1251,15 +1299,9 @@ pub unsafe fn clif_buydialog(
             len += 4;
 
             if it.real_name[0] != 0 {
-                libc::strcpy(
-                    name_buf.as_mut_ptr() as *mut i8,
-                    it.real_name.as_ptr(),
-                );
+                libc::strcpy(name_buf.as_mut_ptr() as *mut i8, it.real_name.as_ptr());
             } else {
-                libc::strcpy(
-                    name_buf.as_mut_ptr() as *mut i8,
-                    item.name.as_ptr(),
-                );
+                libc::strcpy(name_buf.as_mut_ptr() as *mut i8, item.name.as_ptr());
             }
             if it.owner != 0 {
                 let cur_len = libc::strlen(name_buf.as_ptr() as *const i8);
@@ -1287,10 +1329,7 @@ pub unsafe fn clif_buydialog(
                     it.buytext.as_ptr() as *const i8,
                 );
             } else {
-                let cn = classdb_name(
-                    item.class as i32,
-                    item.rank,
-                );
+                let cn = classdb_name(item.class as i32, item.rank);
                 let formatted = format!("{} level {}\0", cn, item.level as u32);
                 let copy = formatted.len().min(64);
                 std::ptr::copy_nonoverlapping(formatted.as_ptr(), buff_buf.as_mut_ptr(), copy);
@@ -1329,7 +1368,10 @@ pub unsafe fn clif_parsebuy(pe: &PlayerEntity) -> i32 {
         item_name_len,
     );
     if itemname[0] != 0 {
-        sl_resumebuy(itemname.as_mut_ptr() as *mut i8, &mut *pe.write() as *mut MapSessionData);
+        sl_resumebuy(
+            itemname.as_mut_ptr() as *mut i8,
+            &mut *pe.write() as *mut MapSessionData,
+        );
     }
     0
 }
@@ -1347,9 +1389,9 @@ pub unsafe fn clif_selldialog(
     item: *const i32,
     count: i32,
 ) -> i32 {
-    let fd      = pe.fd;
+    let fd = pe.fd;
     let graphic = pe.read().npc_g;
-    let color   = pe.read().npc_gc;
+    let color = pe.read().npc_gc;
 
     if !session_exists(fd) {
         return 0;
@@ -1379,10 +1421,7 @@ pub unsafe fn clif_selldialog(
         wfifob(fd, 19, color as u8);
 
         wfifow(fd, 20, swap16(dialog_len as u16));
-        libc::strcpy(
-            wfifop(fd, 22) as *mut i8,
-            dialog,
-        );
+        libc::strcpy(wfifop(fd, 22) as *mut i8, dialog);
         let mut len = dialog_len + 2;
         wfifow(fd, len + 20, swap16(dialog_len as u16));
         len += 2;
@@ -1396,7 +1435,9 @@ pub unsafe fn clif_selldialog(
         wfifoset(fd, encrypt(fd) as usize);
     } else {
         let nd = map_id2npc_local(id);
-        if nd.is_null() { return 0; }
+        if nd.is_null() {
+            return 0;
+        }
         write_npc_equip_look(fd, nd, 11);
 
         wfifob(fd, 54, 1);
@@ -1404,10 +1445,7 @@ pub unsafe fn clif_selldialog(
         wfifob(fd, 57, color as u8);
 
         wfifow(fd, 60, swap16(dialog_len as u16));
-        libc::strcpy(
-            wfifop(fd, 62) as *mut i8,
-            dialog,
-        );
+        libc::strcpy(wfifop(fd, 62) as *mut i8, dialog);
         let mut len = dialog_len;
         wfifow(fd, len + 62, dialog_len as u16);
         len += 2;
@@ -1432,7 +1470,10 @@ pub unsafe fn clif_selldialog(
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parsesell(pe: &PlayerEntity) -> i32 {
     let fd = pe.fd;
-    sl_resumesell(rfifob(fd, 12) as u32, &mut *pe.write() as *mut MapSessionData);
+    sl_resumesell(
+        rfifob(fd, 12) as u32,
+        &mut *pe.write() as *mut MapSessionData,
+    );
     0
 }
 
@@ -1442,16 +1483,11 @@ pub unsafe fn clif_parsesell(pe: &PlayerEntity) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_input(
-    pe: &PlayerEntity,
-    id: i32,
-    dialog: *const i8,
-    item: *const i8,
-) -> i32 {
-    let fd      = pe.fd;
+pub unsafe fn clif_input(pe: &PlayerEntity, id: i32, dialog: *const i8, item: *const i8) -> i32 {
+    let fd = pe.fd;
     let graphic = pe.read().npc_g;
-    let color   = pe.read().npc_gc;
-    let nd      = map_id2npc_local(id as u32);
+    let color = pe.read().npc_gc;
+    let nd = map_id2npc_local(id as u32);
     let dialog_type = pe.read().dialogtype;
 
     if !nd.is_null() {
@@ -1463,7 +1499,7 @@ pub unsafe fn clif_input(
     }
 
     let dialog_len = cstrlen(dialog);
-    let item_len   = cstrlen(item);
+    let item_len = cstrlen(item);
 
     wfifohead(fd, 1000);
     wfifob(fd, 0, 0xAA);
@@ -1489,17 +1525,11 @@ pub unsafe fn clif_input(
             wfifob(fd, 19, color as u8);
 
             wfifow(fd, 20, swap16(dialog_len as u16));
-            libc::strcpy(
-                wfifop(fd, 22) as *mut i8,
-                dialog,
-            );
+            libc::strcpy(wfifop(fd, 22) as *mut i8, dialog);
             let mut len = dialog_len;
             wfifob(fd, len + 22, item_len as u8);
             len += 1;
-            libc::strcpy(
-                wfifop(fd, len + 23) as *mut i8,
-                item,
-            );
+            libc::strcpy(wfifop(fd, len + 23) as *mut i8, item);
             len += item_len + 1;
             wfifow(fd, len + 22, swap16(76));
             len += 2;
@@ -1508,23 +1538,19 @@ pub unsafe fn clif_input(
             wfifoset(fd, encrypt(fd) as usize);
         }
         1 => {
-            if nd.is_null() { return 0; }
+            if nd.is_null() {
+                return 0;
+            }
             write_npc_equip_look(fd, nd, 11);
             wfifob(fd, 54, 1);
             wfifow(fd, 55, swap16(graphic as u16));
             wfifob(fd, 57, color as u8);
             wfifow(fd, 58, swap16(dialog_len as u16));
-            libc::strcpy(
-                wfifop(fd, 60) as *mut i8,
-                dialog,
-            );
+            libc::strcpy(wfifop(fd, 60) as *mut i8, dialog);
             let mut len = dialog_len;
             wfifob(fd, len + 60, item_len as u8);
             len += 1;
-            libc::strcpy(
-                wfifop(fd, len + 61) as *mut i8,
-                item,
-            );
+            libc::strcpy(wfifop(fd, len + 61) as *mut i8, item);
             len += item_len + 1;
             wfifow(fd, len + 60, swap16(76));
             len += 2;
@@ -1533,23 +1559,19 @@ pub unsafe fn clif_input(
             wfifoset(fd, encrypt(fd) as usize);
         }
         2 => {
-            if nd.is_null() { return 0; }
+            if nd.is_null() {
+                return 0;
+            }
             write_npc_gfx_look(fd, nd, 11);
             wfifob(fd, 54, 1);
             wfifow(fd, 55, swap16(graphic as u16));
             wfifob(fd, 57, color as u8);
             wfifow(fd, 58, swap16(dialog_len as u16));
-            libc::strcpy(
-                wfifop(fd, 60) as *mut i8,
-                dialog,
-            );
+            libc::strcpy(wfifop(fd, 60) as *mut i8, dialog);
             let mut len = dialog_len;
             wfifob(fd, len + 60, item_len as u8);
             len += 1;
-            libc::strcpy(
-                wfifop(fd, len + 61) as *mut i8,
-                item,
-            );
+            libc::strcpy(wfifop(fd, len + 61) as *mut i8, item);
             len += item_len + 1;
             wfifow(fd, len + 60, swap16(76));
             len += 2;
@@ -1571,7 +1593,7 @@ pub unsafe fn clif_input(
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parseinput(pe: &PlayerEntity) -> i32 {
     let fd = pe.fd;
-    let mut output  = [0u8; 256];
+    let mut output = [0u8; 256];
     let mut output2 = [0u8; 256];
 
     let tag_len = rfifob(fd, 12) as usize;

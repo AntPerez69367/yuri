@@ -17,57 +17,53 @@ use std::ffi::CStr;
 use crate::database::get_pool;
 use crate::game::pc::MapSessionData;
 // map_delblock removed — now using map_delblock_id directly
-use crate::game::scripting::{sl_resumemenu, carray_to_str};
-use crate::game::map_parse::packet::{rfifob, rfifop, wfifohead, wfifop, wfifoset};
-use crate::game::map_server::{
-    boards_delete, boards_post, boards_readpost, boards_showposts, hasCoref,
-    map_changepostcolor, map_deliddb, map_getpostcolor, map_id2sd_pc, entity_position,
-    nmail_sendmessage, nmail_write,
-};
+use crate::config::Point;
 use crate::game::map_parse::chat::clif_sendminitext;
 use crate::game::map_parse::dialogs::{clif_parsebuy, clif_parseinput, clif_parsesell};
 use crate::game::map_parse::groups::clif_leavegroup;
 use crate::game::map_parse::movement::clif_charspecific;
+use crate::game::map_parse::packet::{rfifob, rfifop, wfifohead, wfifop, wfifoset};
 use crate::game::map_parse::player_state::clif_sendxy;
 use crate::game::map_parse::trading::{clif_exchange_close, clif_exchange_message};
 use crate::game::map_parse::visual::{clif_lookgone_by_id, clif_object_look_specific};
-use crate::game::mob::{BL_PC, MAX_MAGIC_TIMERS};
-use crate::game::player::prelude::*;
-use crate::game::player::entity::PlayerEntity;
-use crate::config::Point;
-use crate::game::pc::pc_stoptimer;
-
-
-
-use crate::game::pc::{
-    pc_changeitem, pc_readglobalreg,
-    pc_dropitemmap, pc_setpos,
-    addtokillreg,
+use crate::game::map_server::{
+    boards_delete, boards_post, boards_readpost, boards_showposts, entity_position, hasCoref,
+    map_changepostcolor, map_deliddb, map_getpostcolor, map_id2sd_pc, nmail_sendmessage,
+    nmail_write,
 };
-use crate::game::time_util::timer_remove;
-use crate::game::scripting::sl_async_freeco;
-use crate::game::map_char::intif_save_impl::sl_intif_savequit;
-use crate::game::client::visual::clif_showboards;
+use crate::game::mob::{BL_PC, MAX_MAGIC_TIMERS};
+use crate::game::pc::pc_stoptimer;
+use crate::game::player::entity::PlayerEntity;
+use crate::game::player::prelude::*;
+use crate::game::scripting::{carray_to_str, sl_resumemenu};
+
 use crate::database::board_db;
-use crate::game::map_parse::combat::clif_sendaction_pc;
 use crate::database::item_db;
 use crate::database::magic_db;
+use crate::game::client::visual::clif_showboards;
+use crate::game::map_char::intif_save_impl::sl_intif_savequit;
+use crate::game::map_parse::combat::clif_sendaction_pc;
+use crate::game::pc::{addtokillreg, pc_changeitem, pc_dropitemmap, pc_readglobalreg, pc_setpos};
+use crate::game::scripting::sl_async_freeco;
+use crate::game::time_util::timer_remove;
 use crate::session::{session_exists, session_set_eof, SessionId};
 
 use crate::game::block::AreaType;
 use crate::game::block_grid;
-use crate::game::map_parse::visual::{clif_object_look_by_id, clif_mob_look_start_func_inner, clif_mob_look_close_func_inner};
+use crate::game::lua::dispatch::dispatch;
+use crate::game::map_parse::visual::{
+    clif_mob_look_close_func_inner, clif_mob_look_start_func_inner, clif_object_look_by_id,
+};
 
 /// Dispatch a Lua event with a single entity ID argument.
-fn sl_doscript_simple(root: &str, method: Option<&str>, id: u32) -> i32 {
-    crate::game::scripting::doscript_blargs_id(root, method, &[id])
+fn sl_doscript_simple(root: &str, method: Option<&str>, id: u32) -> bool {
+    dispatch(root, method, &[id])
 }
 
 /// Dispatch a Lua event with two entity ID arguments.
-fn sl_doscript_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
-    crate::game::scripting::doscript_blargs_id(root, method, &[id1, id2])
+fn sl_doscript_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> bool {
+    dispatch(root, method, &[id1, id2])
 }
-
 
 // ─── Map data read helper ─────────────────────────────────────────────────────
 
@@ -75,7 +71,9 @@ fn sl_doscript_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
 unsafe fn read_obj(m: i32, x: i32, y: i32) -> u16 {
     use crate::database::map_db::raw_map_ptr;
     let md = &*raw_map_ptr().add(m as usize);
-    if md.obj.is_null() { return 0; }
+    if md.obj.is_null() {
+        return 0;
+    }
     *md.obj.add(x as usize + y as usize * md.xs as usize)
 }
 
@@ -89,14 +87,18 @@ unsafe fn rbyte(fd: SessionId, pos: usize) -> u8 {
 #[inline]
 unsafe fn rword_be(fd: SessionId, pos: usize) -> u16 {
     let p = rfifop(fd, pos);
-    if p.is_null() { return 0; }
+    if p.is_null() {
+        return 0;
+    }
     u16::from_be_bytes([*p, *p.add(1)])
 }
 
 #[inline]
 unsafe fn rlong_be(fd: SessionId, pos: usize) -> u32 {
     let p = rfifop(fd, pos);
-    if p.is_null() { return 0; }
+    if p.is_null() {
+        return 0;
+    }
     u32::from_be_bytes([*p, *p.add(1), *p.add(2), *p.add(3)])
 }
 
@@ -104,7 +106,10 @@ unsafe fn rlong_be(fd: SessionId, pos: usize) -> u32 {
 
 /// Remove `pe` from the block grid and broadcast a look-gone packet to visible players.
 pub fn clif_quit(pe: &PlayerEntity) -> i32 {
-    let (id, m) = { let r = pe.read(); (r.id, r.m) };
+    let (id, m) = {
+        let r = pe.read();
+        (r.id, r.m)
+    };
     crate::game::block::map_delblock_id(id, m);
     unsafe { clif_lookgone_by_id(id) };
     0
@@ -198,12 +203,26 @@ pub unsafe fn clif_handle_menuinput(pe: &PlayerEntity) -> i32 {
         return 0;
     }
     match rbyte(pe.fd, 5) {
-        0 => { let sd_ptr = &mut *pe.write() as *mut MapSessionData; sl_async_freeco(sd_ptr); }
-        1 => { clif_parsemenu(pe); }
-        2 => { clif_parsebuy(pe); }
-        3 => { clif_parseinput(pe); }
-        4 => { clif_parsesell(pe); }
-        _ => { let sd_ptr = &mut *pe.write() as *mut MapSessionData; sl_async_freeco(sd_ptr); }
+        0 => {
+            let sd_ptr = &mut *pe.write() as *mut MapSessionData;
+            sl_async_freeco(sd_ptr);
+        }
+        1 => {
+            clif_parsemenu(pe);
+        }
+        2 => {
+            clif_parsebuy(pe);
+        }
+        3 => {
+            clif_parseinput(pe);
+        }
+        4 => {
+            clif_parsesell(pe);
+        }
+        _ => {
+            let sd_ptr = &mut *pe.write() as *mut MapSessionData;
+            sl_async_freeco(sd_ptr);
+        }
     }
     0
 }
@@ -251,11 +270,7 @@ pub async unsafe fn clif_handle_boards(pe: &PlayerEntity) -> i32 {
         }
         3 => {
             let sd_ptr = &mut *pe.write() as *mut MapSessionData;
-            boards_readpost(
-                sd_ptr,
-                rword_be(pe.fd, 6) as i32,
-                rword_be(pe.fd, 8) as i32,
-            );
+            boards_readpost(sd_ptr, rword_be(pe.fd, 6) as i32, rword_be(pe.fd, 8) as i32);
         }
         4 => {
             let sd_ptr = &mut *pe.write() as *mut MapSessionData;
@@ -279,16 +294,25 @@ pub async unsafe fn clif_handle_boards(pe: &PlayerEntity) -> i32 {
         7 => {
             if pe.read().player.identity.gm_level != 0 {
                 let board = rword_be(pe.fd, 6) as i32;
-                let post  = rword_be(pe.fd, 8) as i32;
+                let post = rword_be(pe.fd, 8) as i32;
                 let color = map_getpostcolor(board, post).await ^ 1;
                 map_changepostcolor(board, post, color).await;
-                nmail_sendmessage(&mut *pe.write() as *mut MapSessionData, c"Post updated.".as_ptr(), 6, 0);
+                nmail_sendmessage(
+                    &mut *pe.write() as *mut MapSessionData,
+                    c"Post updated.".as_ptr(),
+                    6,
+                    0,
+                );
             }
         }
         8 => {
             // C fallthrough: case 8 runs the Lua write script, then falls into case 9.
             let board = rword_be(pe.fd, 6) as i32;
-            sl_doscript_simple(carray_to_str(&board_db::search(board).yname), Some("write"), pe.id);
+            sl_doscript_simple(
+                carray_to_str(&board_db::search(board).yname),
+                Some("write"),
+                pe.id,
+            );
             pe.write().bcount = 0;
             let sd_ptr = &mut *pe.write() as *mut MapSessionData;
             boards_showposts(sd_ptr, 0);
@@ -324,7 +348,10 @@ pub unsafe fn clif_handle_obstruction(pe: &PlayerEntity) -> i32 {
 
     pe.write().x = nx as u16;
     pe.write().y = ny as u16;
-    let (m, x, y) = { let r = pe.read(); (r.m, r.x, r.y) };
+    let (m, x, y) = {
+        let r = pe.read();
+        (r.m, r.x, r.y)
+    };
     pe.set_position(Point { m, x, y });
     clif_sendxy(pe);
     0
@@ -351,21 +378,47 @@ pub unsafe fn clif_postitem(pe: &PlayerEntity) -> i32 {
     let (mut x, mut y) = (0i32, 0i32);
     let (bx, by, side, m, last_click) = {
         let r = pe.read();
-        (r.x as i32, r.y as i32, r.player.combat.side, r.m, r.last_click)
+        (
+            r.x as i32,
+            r.y as i32,
+            r.player.combat.side,
+            r.m,
+            r.last_click,
+        )
     };
     match side {
-        0 => { x = bx;     y = by - 1; }
-        1 => { x = bx + 1; y = by;     }
-        2 => { x = bx;     y = by + 1; }
-        3 => { x = bx - 1; y = by;     }
+        0 => {
+            x = bx;
+            y = by - 1;
+        }
+        1 => {
+            x = bx + 1;
+            y = by;
+        }
+        2 => {
+            x = bx;
+            y = by + 1;
+        }
+        3 => {
+            x = bx - 1;
+            y = by;
+        }
         _ => {}
     }
-    if x < 0 || y < 0 { return 0; }
+    if x < 0 || y < 0 {
+        return 0;
+    }
     let obj = read_obj(m as i32, x, y) as i32;
     if (obj == 1619 || obj == 1620)
-        && pe.read().player.inventory.inventory[slot as usize].amount > 1 {
-            clif_input(pe, last_click as i32, c"How many would you like to post?".as_ptr(), c"".as_ptr());
-        }
+        && pe.read().player.inventory.inventory[slot as usize].amount > 1
+    {
+        clif_input(
+            pe,
+            last_click as i32,
+            c"How many would you like to post?".as_ptr(),
+            c"".as_ptr(),
+        );
+    }
     pe.write().invslot = slot as u8;
     0
 }
@@ -377,11 +430,7 @@ pub unsafe fn clif_postitem(pe: &PlayerEntity) -> i32 {
 pub unsafe fn clif_parsechangepos(pe: &PlayerEntity) -> i32 {
     use crate::game::map_parse::chat::clif_sendminitext;
     if rbyte(pe.fd, 5) == 0 {
-        pc_changeitem(
-            pe,
-            rbyte(pe.fd, 6) as i32 - 1,
-            rbyte(pe.fd, 7) as i32 - 1,
-        );
+        pc_changeitem(pe, rbyte(pe.fd, 6) as i32 - 1, rbyte(pe.fd, 7) as i32 - 1);
     } else {
         clif_sendminitext(pe, c"You are busy.".as_ptr());
     }
@@ -392,12 +441,10 @@ pub unsafe fn clif_parsechangepos(pe: &PlayerEntity) -> i32 {
 ///
 /// # Safety
 /// `friend_list` is a raw byte buffer of length `len`.
-pub async unsafe fn clif_parsefriends(
-    pe: &PlayerEntity,
-    friend_list: *const i8,
-    len: i32,
-) -> i32 {
-    if friend_list.is_null() || len <= 0 { return 0; }
+pub async unsafe fn clif_parsefriends(pe: &PlayerEntity, friend_list: *const i8, len: i32) -> i32 {
+    if friend_list.is_null() || len <= 0 {
+        return 0;
+    }
 
     // Parse up to 20 null-terminated names separated by 0x0C control bytes.
     let bytes = std::slice::from_raw_parts(friend_list as *const u8, len as usize);
@@ -421,13 +468,12 @@ pub async unsafe fn clif_parsefriends(
     let id = pe.read().player.identity.id;
     let pool = get_pool();
     // Upsert: ensure row exists
-    let exists: bool = sqlx::query_scalar(
-        "SELECT COUNT(*) > 0 FROM `Friends` WHERE `FndChaId` = ?"
-    )
-    .bind(id)
-    .fetch_one(pool)
-    .await
-    .unwrap_or(false);
+    let exists: bool =
+        sqlx::query_scalar("SELECT COUNT(*) > 0 FROM `Friends` WHERE `FndChaId` = ?")
+            .bind(id)
+            .fetch_one(pool)
+            .await
+            .unwrap_or(false);
     if !exists {
         if let Err(e) = sqlx::query("INSERT INTO `Friends` (`FndChaId`) VALUES (?)")
             .bind(id)
@@ -445,13 +491,28 @@ pub async unsafe fn clif_parsefriends(
          `FndChaName9`=?,`FndChaName10`=?,`FndChaName11`=?,`FndChaName12`=?,\
          `FndChaName13`=?,`FndChaName14`=?,`FndChaName15`=?,`FndChaName16`=?,\
          `FndChaName17`=?,`FndChaName18`=?,`FndChaName19`=?,`FndChaName20`=? \
-         WHERE `FndChaId` = ?"
+         WHERE `FndChaId` = ?",
     )
-    .bind(&friends[0])  .bind(&friends[1])  .bind(&friends[2])  .bind(&friends[3])
-    .bind(&friends[4])  .bind(&friends[5])  .bind(&friends[6])  .bind(&friends[7])
-    .bind(&friends[8])  .bind(&friends[9])  .bind(&friends[10]) .bind(&friends[11])
-    .bind(&friends[12]) .bind(&friends[13]) .bind(&friends[14]) .bind(&friends[15])
-    .bind(&friends[16]) .bind(&friends[17]) .bind(&friends[18]) .bind(&friends[19])
+    .bind(&friends[0])
+    .bind(&friends[1])
+    .bind(&friends[2])
+    .bind(&friends[3])
+    .bind(&friends[4])
+    .bind(&friends[5])
+    .bind(&friends[6])
+    .bind(&friends[7])
+    .bind(&friends[8])
+    .bind(&friends[9])
+    .bind(&friends[10])
+    .bind(&friends[11])
+    .bind(&friends[12])
+    .bind(&friends[13])
+    .bind(&friends[14])
+    .bind(&friends[15])
+    .bind(&friends[16])
+    .bind(&friends[17])
+    .bind(&friends[18])
+    .bind(&friends[19])
     .bind(id)
     .execute(pool)
     .await
@@ -469,9 +530,14 @@ pub async unsafe fn clif_isregistered(id: u32) -> i32 {
     sqlx::query_scalar::<_, u32>(
         "SELECT `AccountId` FROM `Accounts` WHERE \
          `AccountCharId1`=? OR `AccountCharId2`=? OR `AccountCharId3`=? OR \
-         `AccountCharId4`=? OR `AccountCharId5`=? OR `AccountCharId6`=?"
+         `AccountCharId4`=? OR `AccountCharId5`=? OR `AccountCharId6`=?",
     )
-    .bind(id).bind(id).bind(id).bind(id).bind(id).bind(id)
+    .bind(id)
+    .bind(id)
+    .bind(id)
+    .bind(id)
+    .bind(id)
+    .bind(id)
     .fetch_optional(get_pool())
     .await
     .ok()
@@ -486,14 +552,15 @@ pub async unsafe fn clif_isregistered(id: u32) -> i32 {
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub async unsafe fn clif_getaccountemail(id: u32) -> *const i8 {
     let acct_id = clif_isregistered(id).await;
-    if acct_id == 0 { return std::ptr::null(); }
-    let email: Option<String> = sqlx::query_scalar(
-        "SELECT `AccountEmail` FROM `Accounts` WHERE `AccountId` = ?"
-    )
-    .bind(acct_id as u32)
-    .fetch_optional(get_pool())
-    .await
-    .unwrap_or(None);
+    if acct_id == 0 {
+        return std::ptr::null();
+    }
+    let email: Option<String> =
+        sqlx::query_scalar("SELECT `AccountEmail` FROM `Accounts` WHERE `AccountId` = ?")
+            .bind(acct_id as u32)
+            .fetch_optional(get_pool())
+            .await
+            .unwrap_or(None);
     match email {
         Some(s) => match std::ffi::CString::new(s) {
             Ok(cs) => cs.into_raw() as *const i8, // leaked intentionally
@@ -530,7 +597,8 @@ pub unsafe fn clif_sendheartbeat(id: i32, _none: i32) -> i32 {
     wfifohead(fd, 13);
     let w = |off: usize| wfifop(fd, off);
     *w(0) = 0xAA;
-    *w(1) = 0x00; *w(2) = 0x07; // length = 7
+    *w(1) = 0x00;
+    *w(2) = 0x07; // length = 7
     *w(3) = 0x3B;
     *w(4) = 0x00;
     *w(5) = 0x5F;
@@ -547,10 +615,14 @@ pub unsafe fn clif_sendheartbeat(id: i32, _none: i32) -> i32 {
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_runfloor_sub_inner(entity_id: u32, pe: &PlayerEntity) -> i32 {
     use crate::game::pc::FLOOR;
-    let Some(arc) = crate::game::map_server::map_id2npc_ref(entity_id) else { return 0; };
+    let Some(arc) = crate::game::map_server::map_id2npc_ref(entity_id) else {
+        return 0;
+    };
     let (npc_name, npc_id) = {
         let nd = arc.read();
-        if nd.subtype as i32 != FLOOR as i32 { return 0; }
+        if nd.subtype as i32 != FLOOR as i32 {
+            return 0;
+        }
         (carray_to_str(&nd.name).to_owned(), nd.id)
     };
     let sd_ptr = &mut *pe.write() as *mut MapSessionData;
@@ -564,8 +636,8 @@ pub unsafe fn clif_runfloor_sub_inner(entity_id: u32, pe: &PlayerEntity) -> i32 
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_addtokillreg(pe: &PlayerEntity, mob: i32) -> i32 {
-    use crate::game::pc::groups;
     use crate::common::constants::world::MAX_GROUP_MEMBERS;
+    use crate::game::pc::groups;
     let grp = groups();
     let (group_count, groupid, pe_m) = {
         let r = pe.read();
@@ -587,8 +659,17 @@ pub unsafe fn clif_addtokillreg(pe: &PlayerEntity, mob: i32) -> i32 {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parsedropitem(pe: &PlayerEntity) -> i32 {
-    if pc_readglobalreg(&mut *pe.write() as *mut MapSessionData, c"goldbardupe".as_ptr()) != 0 { return 0; }
-    let (gm_level, state) = { let r = pe.read(); (r.player.identity.gm_level, r.player.combat.state) };
+    if pc_readglobalreg(
+        &mut *pe.write() as *mut MapSessionData,
+        c"goldbardupe".as_ptr(),
+    ) != 0
+    {
+        return 0;
+    }
+    let (gm_level, state) = {
+        let r = pe.read();
+        (r.player.identity.gm_level, r.player.combat.state)
+    };
     if gm_level == 0 {
         if state == 3 {
             clif_sendminitext(pe, c"You cannot do that while riding a mount.".as_ptr());
@@ -602,14 +683,15 @@ pub unsafe fn clif_parsedropitem(pe: &PlayerEntity) -> i32 {
     pe.write().fakeDrop = 0;
     let id = rbyte(pe.fd, 5) as i32 - 1;
     let all = rbyte(pe.fd, 6) as i32;
-    if id as usize >= pe.read().player.inventory.max_inv as usize { return 0; }
+    if id as usize >= pe.read().player.inventory.max_inv as usize {
+        return 0;
+    }
     {
         let inv_id = pe.read().player.inventory.inventory[id as usize].id;
-        if inv_id != 0
-            && item_db::search(inv_id as u32).droppable != 0 {
-                clif_sendminitext(pe, c"You can't drop this item.".as_ptr());
-                return 0;
-            }
+        if inv_id != 0 && item_db::search(inv_id as u32).droppable != 0 {
+            clif_sendminitext(pe, c"You can't drop this item.".as_ptr());
+            return 0;
+        }
     }
     clif_sendaction_pc(&mut pe.write(), 5, 20, 0);
     pe.write().invslot = id as u8;
@@ -619,20 +701,34 @@ pub unsafe fn clif_parsedropitem(pe: &PlayerEntity) -> i32 {
     };
     sl_doscript_simple(&drop_item_name, Some("on_drop"), pe.id);
     for x in 0..MAX_MAGIC_TIMERS {
-        let (spell_id, duration) = { let r = pe.read(); (r.player.spells.dura_aether[x].id, r.player.spells.dura_aether[x].duration) };
+        let (spell_id, duration) = {
+            let r = pe.read();
+            (
+                r.player.spells.dura_aether[x].id,
+                r.player.spells.dura_aether[x].duration,
+            )
+        };
         if spell_id > 0 && duration > 0 {
             let spell_name = carray_to_str(&magic_db::search(spell_id as i32).yname).to_owned();
             sl_doscript_simple(&spell_name, Some("on_drop_while_cast"), pe.id);
         }
     }
     for x in 0..MAX_MAGIC_TIMERS {
-        let (spell_id, aether) = { let r = pe.read(); (r.player.spells.dura_aether[x].id, r.player.spells.dura_aether[x].aether) };
+        let (spell_id, aether) = {
+            let r = pe.read();
+            (
+                r.player.spells.dura_aether[x].id,
+                r.player.spells.dura_aether[x].aether,
+            )
+        };
         if spell_id > 0 && aether > 0 {
             let spell_name = carray_to_str(&magic_db::search(spell_id as i32).yname).to_owned();
             sl_doscript_simple(&spell_name, Some("on_drop_while_aether"), pe.id);
         }
     }
-    if pe.read().fakeDrop != 0 { return 0; }
+    if pe.read().fakeDrop != 0 {
+        return 0;
+    }
     pc_dropitemmap(pe, id, all);
     0
 }
@@ -643,8 +739,8 @@ pub unsafe fn clif_parsedropitem(pe: &PlayerEntity) -> i32 {
 
 #[repr(C)]
 pub struct BoardQuestionaire {
-    pub header:     [u8; 255],
-    pub question:   [u8; 255],
+    pub header: [u8; 255],
+    pub question: [u8; 255],
     pub input_lines: u32,
 }
 
@@ -655,7 +751,9 @@ pub struct BoardQuestionaire {
 #[inline]
 unsafe fn wbe16(fd: SessionId, pos: usize, val: u16) {
     let p = wfifop(fd, pos) as *mut u16;
-    if !p.is_null() { p.write_unaligned(val.to_be()); }
+    if !p.is_null() {
+        p.write_unaligned(val.to_be());
+    }
 }
 
 /// Write big-endian u32 at `pos` in the send-FIFO.
@@ -663,7 +761,9 @@ unsafe fn wbe16(fd: SessionId, pos: usize, val: u16) {
 #[inline]
 unsafe fn wbe32(fd: SessionId, pos: usize, val: u32) {
     let p = wfifop(fd, pos) as *mut u32;
-    if !p.is_null() { p.write_unaligned(val.to_be()); }
+    if !p.is_null() {
+        p.write_unaligned(val.to_be());
+    }
 }
 
 /// Copy null-terminated string bytes starting at `pos`.
@@ -707,14 +807,19 @@ pub unsafe fn clif_getName(id: u32) -> *mut i8 {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_Hacker(name: *mut i8, reason: *const i8) -> i32 {
-    let name_s = if name.is_null() { "[?]" }
-        else { CStr::from_ptr(name).to_str().unwrap_or("[?]") };
-    let reason_s = if reason.is_null() { "" }
-        else { CStr::from_ptr(reason).to_str().unwrap_or("") };
+    let name_s = if name.is_null() {
+        "[?]"
+    } else {
+        CStr::from_ptr(name).to_str().unwrap_or("[?]")
+    };
+    let reason_s = if reason.is_null() {
+        ""
+    } else {
+        CStr::from_ptr(reason).to_str().unwrap_or("")
+    };
     tracing::warn!("{} possibly hacking{}", name_s, reason_s);
-    let msg = std::ffi::CString::new(
-        format!("{} possibly hacking: {}", name_s, reason_s)
-    ).unwrap_or_default();
+    let msg = std::ffi::CString::new(format!("{} possibly hacking: {}", name_s, reason_s))
+        .unwrap_or_default();
     crate::game::map_parse::chat::clif_broadcasttogm(msg.as_ptr(), -1);
     0
 }
@@ -723,9 +828,7 @@ pub unsafe fn clif_Hacker(name: *mut i8, reason: *const i8) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub async unsafe fn clif_accept2(
-    fd: SessionId, name: *mut i8, name_len: i32,
-) -> i32 {
+pub async unsafe fn clif_accept2(fd: SessionId, name: *mut i8, name_len: i32) -> i32 {
     if name_len <= 0 || name_len > 16 {
         session_set_eof(fd, 11);
         return 0;
@@ -737,7 +840,9 @@ pub async unsafe fn clif_accept2(
     let mut n = [0u8; 16];
     std::ptr::copy_nonoverlapping(name as *const u8, n.as_mut_ptr(), name_len as usize);
     let name_str = CStr::from_ptr(n.as_ptr() as *const i8)
-        .to_str().unwrap_or("").to_owned();
+        .to_str()
+        .unwrap_or("")
+        .to_owned();
 
     let world = match crate::world::get_world() {
         Some(w) => w,
@@ -759,12 +864,14 @@ pub async unsafe fn clif_accept2(
     };
 
     let char_id = entry.char_id;
-    tracing::info!("[map] [accept2] auth_db hit: name={} char_id={}", name_str, char_id);
+    tracing::info!(
+        "[map] [accept2] auth_db hit: name={} char_id={}",
+        name_str,
+        char_id
+    );
 
     // Load player directly from DB — no inter-server roundtrip.
-    let player = match crate::servers::char::db::load_player(
-        &world.db, char_id, &name_str
-    ).await {
+    let player = match crate::servers::char::db::load_player(&world.db, char_id, &name_str).await {
         Ok(p) => p,
         Err(e) => {
             tracing::error!("[map] [accept2] load_player failed: {}", e);
@@ -783,10 +890,7 @@ pub async unsafe fn clif_accept2(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_transfer(
-    pe: &PlayerEntity, serverid: i32,
-    _m: i32, _x: i32, _y: i32,
-) -> i32 {
+pub unsafe fn clif_transfer(pe: &PlayerEntity, serverid: i32, _m: i32, _x: i32, _y: i32) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
     }
@@ -808,7 +912,8 @@ pub unsafe fn clif_transfer(
     *w(0) = 0xAA;
     *w(3) = 0x03;
     // SWAP32(map_ip) — network-order IP → host-order, then LE write = network bytes on wire
-    let map_ip: u32 = crate::config::config().map_ip
+    let map_ip: u32 = crate::config::config()
+        .map_ip
         .parse::<std::net::Ipv4Addr>()
         .map(|a| u32::from_le_bytes(a.octets()))
         .unwrap_or(0);
@@ -833,9 +938,7 @@ pub unsafe fn clif_transfer(
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_transfer_test(
-    pe: &PlayerEntity, _m: i32, _x: i32, _y: i32,
-) -> i32 {
+pub unsafe fn clif_transfer_test(pe: &PlayerEntity, _m: i32, _x: i32, _y: i32) -> i32 {
     if !session_exists(pe.fd) {
         return 0;
     }
@@ -893,7 +996,9 @@ pub unsafe fn clif_sendBoardQuestionaire(
     let mut len: usize = 7;
     for i in 0..count as usize {
         let item = &*q.add(i);
-        let hlen = CStr::from_ptr(item.header.as_ptr() as *const i8).to_bytes().len();
+        let hlen = CStr::from_ptr(item.header.as_ptr() as *const i8)
+            .to_bytes()
+            .len();
         *w(len) = hlen as u8;
         len += 1;
         std::ptr::copy_nonoverlapping(item.header.as_ptr(), w(len), hlen);
@@ -903,7 +1008,9 @@ pub unsafe fn clif_sendBoardQuestionaire(
         len += 2;
         *w(len) = item.input_lines as u8;
         len += 1;
-        let qlen = CStr::from_ptr(item.question.as_ptr() as *const i8).to_bytes().len();
+        let qlen = CStr::from_ptr(item.question.as_ptr() as *const i8)
+            .to_bytes()
+            .len();
         *w(len) = qlen as u8;
         len += 1;
         std::ptr::copy_nonoverlapping(item.question.as_ptr(), w(len), qlen);
@@ -924,20 +1031,19 @@ pub unsafe fn clif_sendBoardQuestionaire(
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_changestatus(pe: &PlayerEntity, type_: i32) -> i32 {
-    use crate::game::pc::{
-        FLAG_WHISPER, FLAG_GROUP, FLAG_SHOUT, FLAG_ADVICE, FLAG_MAGIC,
-        FLAG_WEATHER, FLAG_REALM, FLAG_EXCHANGE, FLAG_FASTMOVE, FLAG_SOUND,
-        FLAG_HELM, FLAG_NECKLACE,
-    };
+    use crate::game::client::handlers::clif_quit;
     use crate::game::map_parse::{
+        chat::clif_sendminitext,
+        groups::clif_findmount,
         movement::clif_sendchararea,
         player_state::{clif_getchararea, clif_sendmapinfo, clif_sendstatus},
         visual::clif_spawn,
-        groups::clif_findmount,
-        chat::clif_sendminitext,
     };
-    use crate::game::client::handlers::clif_quit;
     use crate::game::pc::pc_setglobalreg;
+    use crate::game::pc::{
+        FLAG_ADVICE, FLAG_EXCHANGE, FLAG_FASTMOVE, FLAG_GROUP, FLAG_HELM, FLAG_MAGIC,
+        FLAG_NECKLACE, FLAG_REALM, FLAG_SHOUT, FLAG_SOUND, FLAG_WEATHER, FLAG_WHISPER,
+    };
 
     match type_ {
         0x00 => {
@@ -946,15 +1052,27 @@ pub unsafe fn clif_changestatus(pe: &PlayerEntity, type_: i32) -> i32 {
                     0 => {
                         clif_findmount(pe);
                         if pe.read().player.combat.state == 0 {
-                            clif_sendminitext(pe, c"Good try, but there is nothing here that you can ride.".as_ptr());
+                            clif_sendminitext(
+                                pe,
+                                c"Good try, but there is nothing here that you can ride.".as_ptr(),
+                            );
                         }
                     }
-                    1 => { clif_sendminitext(pe, c"Spirits can't do that.".as_ptr()); }
-                    2 => { clif_sendminitext(pe, c"Good try, but there is nothing here that you can ride.".as_ptr()); }
+                    1 => {
+                        clif_sendminitext(pe, c"Spirits can't do that.".as_ptr());
+                    }
+                    2 => {
+                        clif_sendminitext(
+                            pe,
+                            c"Good try, but there is nothing here that you can ride.".as_ptr(),
+                        );
+                    }
                     3 => {
                         sl_doscript_simple("onDismount", None, pe.id);
                     }
-                    4 => { clif_sendminitext(pe, c"You cannot do that while transformed.".as_ptr()); }
+                    4 => {
+                        clif_sendminitext(pe, c"You cannot do that while transformed.".as_ptr());
+                    }
                     _ => {}
                 }
             }
@@ -973,7 +1091,9 @@ pub unsafe fn clif_changestatus(pe: &PlayerEntity, type_: i32) -> i32 {
             if pe.read().player.appearance.setting_flags & FLAG_GROUP != 0 {
                 clif_sendminitext(pe, c"Join a group     :ON".as_ptr());
             } else {
-                if pe.read().group_count > 0 { clif_leavegroup(pe); }
+                if pe.read().group_count > 0 {
+                    clif_leavegroup(pe);
+                }
                 clif_sendminitext(pe, c"Join a group     :OFF".as_ptr());
             }
             clif_sendstatus(pe, 0);
@@ -1016,7 +1136,10 @@ pub unsafe fn clif_changestatus(pe: &PlayerEntity, type_: i32) -> i32 {
             clif_sendstatus(pe, 0);
         }
         0x07 => {
-            let (oldm, oldx, oldy) = { let r = pe.read(); (r.m as i32, r.x as i32, r.y as i32) };
+            let (oldm, oldx, oldy) = {
+                let r = pe.read();
+                (r.m as i32, r.x as i32, r.y as i32)
+            };
             pe.write().player.appearance.setting_flags ^= FLAG_REALM;
             clif_quit(pe);
             clif_sendmapinfo(pe);
@@ -1029,8 +1152,18 @@ pub unsafe fn clif_changestatus(pe: &PlayerEntity, type_: i32) -> i32 {
                 if let Some(grid) = block_grid::get_grid(pe.read().m as usize) {
                     let m = pe.read().m;
                     let slot = &*crate::database::map_db::raw_map_ptr().add(m as usize);
-                    let (x, y, identity_id) = { let r = pe.read(); (r.x as i32, r.y as i32, r.player.identity.id) };
-                    let ids = block_grid::ids_in_area(grid, x, y, AreaType::SameArea, slot.xs as i32, slot.ys as i32);
+                    let (x, y, identity_id) = {
+                        let r = pe.read();
+                        (r.x as i32, r.y as i32, r.player.identity.id)
+                    };
+                    let ids = block_grid::ids_in_area(
+                        grid,
+                        x,
+                        y,
+                        AreaType::SameArea,
+                        slot.xs as i32,
+                        slot.ys as i32,
+                    );
                     for id in ids {
                         clif_object_look_by_id(pe.fd, &mut net.look, identity_id, id);
                     }
@@ -1074,7 +1207,9 @@ pub unsafe fn clif_changestatus(pe: &PlayerEntity, type_: i32) -> i32 {
             }
         }
         13 => {
-            if rbyte(pe.fd, 4) == 3 { return 0; }
+            if rbyte(pe.fd, 4) == 3 {
+                return 0;
+            }
             pe.write().player.appearance.setting_flags ^= FLAG_SOUND;
             if pe.read().player.appearance.setting_flags & FLAG_SOUND != 0 {
                 clif_sendminitext(pe, c"Hear sounds      :ON".as_ptr());
@@ -1087,10 +1222,18 @@ pub unsafe fn clif_changestatus(pe: &PlayerEntity, type_: i32) -> i32 {
             pe.write().player.appearance.setting_flags ^= FLAG_HELM;
             if pe.read().player.appearance.setting_flags & FLAG_HELM != 0 {
                 clif_sendminitext(pe, c"Show Helmet      :ON".as_ptr());
-                pc_setglobalreg(&mut *pe.write() as *mut MapSessionData, c"show_helmet".as_ptr(), 1);
+                pc_setglobalreg(
+                    &mut *pe.write() as *mut MapSessionData,
+                    c"show_helmet".as_ptr(),
+                    1,
+                );
             } else {
                 clif_sendminitext(pe, c"Show Helmet      :OFF".as_ptr());
-                pc_setglobalreg(&mut *pe.write() as *mut MapSessionData, c"show_helmet".as_ptr(), 0);
+                pc_setglobalreg(
+                    &mut *pe.write() as *mut MapSessionData,
+                    c"show_helmet".as_ptr(),
+                    0,
+                );
             }
             clif_sendstatus(pe, 0);
             clif_sendchararea(pe);
@@ -1100,10 +1243,18 @@ pub unsafe fn clif_changestatus(pe: &PlayerEntity, type_: i32) -> i32 {
             pe.write().player.appearance.setting_flags ^= FLAG_NECKLACE;
             if pe.read().player.appearance.setting_flags & FLAG_NECKLACE != 0 {
                 clif_sendminitext(pe, c"Show Necklace      :ON".as_ptr());
-                pc_setglobalreg(&mut *pe.write() as *mut MapSessionData, c"show_necklace".as_ptr(), 1);
+                pc_setglobalreg(
+                    &mut *pe.write() as *mut MapSessionData,
+                    c"show_necklace".as_ptr(),
+                    1,
+                );
             } else {
                 clif_sendminitext(pe, c"Show Necklace      :OFF".as_ptr());
-                pc_setglobalreg(&mut *pe.write() as *mut MapSessionData, c"show_necklace".as_ptr(), 0);
+                pc_setglobalreg(
+                    &mut *pe.write() as *mut MapSessionData,
+                    c"show_necklace".as_ptr(),
+                    0,
+                );
             }
             clif_sendstatus(pe, 0);
             clif_sendchararea(pe);
@@ -1131,14 +1282,17 @@ pub unsafe fn createdb_start(pe: &PlayerEntity) -> i32 {
     let item_c = rfifob(fd, 5) as usize;
     let item_c = item_c.min(10);
 
-    let mut items   = [0u32; 10];
+    let mut items = [0u32; 10];
     let mut amounts = [1u32; 10];
     let mut len = 6usize;
 
     for x in 0..item_c {
         // RFIFOB(fd, len) - 1 = inventory slot index.
         let raw = rfifob(fd, len) as usize;
-        if raw == 0 { len += 1; continue; }
+        if raw == 0 {
+            len += 1;
+            continue;
+        }
         let curitem = raw - 1;
         let maxinv = pe.read().player.inventory.max_inv as usize;
         if curitem < maxinv {
@@ -1155,8 +1309,8 @@ pub unsafe fn createdb_start(pe: &PlayerEntity) -> i32 {
 
     {
         let mut w = pe.write();
-        w.creation_works      = 0;
-        w.creation_item       = 0;
+        w.creation_works = 0;
+        w.creation_item = 0;
         w.creation_itemamount = 0;
     }
 
@@ -1172,11 +1326,12 @@ pub unsafe fn createdb_start(pe: &PlayerEntity) -> i32 {
         Ok(())
     })();
 
-    { let sd_ptr = &mut *pe.write() as *mut MapSessionData; sl_async_freeco(sd_ptr); }
+    {
+        let sd_ptr = &mut *pe.write() as *mut MapSessionData;
+        sl_async_freeco(sd_ptr);
+    }
 
-    crate::game::scripting::doscript_blargs_id(
-        "itemCreation", None, &[pe.id],
-    );
+    dispatch("itemCreation", None, &[pe.id]);
     0
 }
 
@@ -1205,8 +1360,6 @@ pub unsafe fn clif_isregistered_sync(id: u32) -> i32 {
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_getaccountemail_sync(id: u32) -> *const i8 {
     // Transmit the raw pointer through usize (which is Send) to satisfy blocking_run_async.
-    let addr: usize = blocking_run_async(async move {
-        clif_getaccountemail(id).await as usize
-    });
+    let addr: usize = blocking_run_async(async move { clif_getaccountemail(id).await as usize });
     addr as *const i8
 }

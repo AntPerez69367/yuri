@@ -209,7 +209,7 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
             },
         )?,
     )?;
-    player_tbl.set_metatable(Some(player_mt));
+    let _ = player_tbl.set_metatable(Some(player_mt));
     g.set("Player", player_tbl)?;
 
     // Mob — callable namespace table for mob scripts.
@@ -245,7 +245,7 @@ fn register_types(lua: &Lua) -> mlua::Result<()> {
             },
         )?,
     )?;
-    mob_tbl.set_metatable(Some(mob_mt));
+    let _ = mob_tbl.set_metatable(Some(mob_mt));
     g.set("Mob", mob_tbl)?;
     g.set("REG", ctor!(lua, RegObject))?;
     g.set("REGS", ctor!(lua, RegStringObject))?;
@@ -465,7 +465,7 @@ pub fn id_to_lua(lua: &mlua::Lua, id: u32) -> mlua::Result<mlua::Value> {
 /// Safe Lua dispatch: resolve `root` (and optionally `root.method`) from globals,
 /// then call the function with the given arguments.
 fn call_lua_str(root: &str, method: Option<&str>, args: mlua::MultiValue) -> bool {
-    let lua = unsafe { sl_state() };
+    let lua = sl_state();
 
     match method {
         None => {
@@ -537,7 +537,7 @@ pub fn doscript_blargs_id(root: &str, method: Option<&str>, entity_ids: &[u32]) 
     if entity_ids.is_empty() {
         return call_lua_str(root, method, mlua::MultiValue::new()) as i32;
     }
-    let lua = unsafe { sl_state() };
+    let lua = sl_state();
     let mut mv = mlua::MultiValue::new();
     for &id in entity_ids {
         let val = if id == 0 {
@@ -557,7 +557,7 @@ pub fn doscript_blargs_id(root: &str, method: Option<&str>, entity_ids: &[u32]) 
 pub fn doscript_coro_id(root: &str, method: Option<&str>, entity_ids: &[u32]) -> i32 {
     use crate::game::mob::MOB_START_NUM;
 
-    let lua = unsafe { sl_state() };
+    let lua = sl_state();
 
     let func = match method {
         None => match lua.globals().get::<mlua::Function>(root) {

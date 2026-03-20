@@ -2,39 +2,32 @@
 
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
-
-use crate::database::map_db::{WarpList, BLOCK_SIZE};
 use crate::database::map_db::raw_map_ptr;
-use crate::session::session_exists;
+use crate::database::map_db::{WarpList, BLOCK_SIZE};
 use crate::game::mob::MOB_DEAD;
-use crate::game::pc::{
-    BL_PC,
-    EQ_WEAP, EQ_ARMOR, EQ_SHIELD, EQ_HELM, EQ_LEFT, EQ_RIGHT,
-    EQ_SUBLEFT, EQ_SUBRIGHT, EQ_FACEACC, EQ_CROWN, EQ_MANTLE, EQ_NECKLACE, EQ_BOOTS, EQ_COAT,
-    SFLAG_FULLSTATS, SFLAG_HPMP, SFLAG_XPMONEY,
-    map_msg,
-};
 use crate::game::pc::MapSessionData;
+use crate::game::pc::{
+    map_msg, BL_PC, EQ_ARMOR, EQ_BOOTS, EQ_COAT, EQ_CROWN, EQ_FACEACC, EQ_HELM, EQ_LEFT, EQ_MANTLE,
+    EQ_NECKLACE, EQ_RIGHT, EQ_SHIELD, EQ_SUBLEFT, EQ_SUBRIGHT, EQ_WEAP, SFLAG_FULLSTATS,
+    SFLAG_HPMP, SFLAG_XPMONEY,
+};
 use crate::game::player::entity::PlayerEntity;
 use crate::game::player::prelude::*;
+use crate::session::session_exists;
 
 // MAP_EQ* message indices
 use crate::common::constants::entity::player::{
-    MAP_EQHELM, MAP_EQWEAP, MAP_EQARMOR, MAP_EQSHIELD, MAP_EQLEFT, MAP_EQRIGHT,
-    MAP_EQSUBLEFT, MAP_EQSUBRIGHT, MAP_EQFACEACC, MAP_EQCROWN, MAP_EQMANTLE,
-    MAP_EQNECKLACE, MAP_EQBOOTS, MAP_EQCOAT,
+    MAP_EQARMOR, MAP_EQBOOTS, MAP_EQCOAT, MAP_EQCROWN, MAP_EQFACEACC, MAP_EQHELM, MAP_EQLEFT,
+    MAP_EQMANTLE, MAP_EQNECKLACE, MAP_EQRIGHT, MAP_EQSHIELD, MAP_EQSUBLEFT, MAP_EQSUBRIGHT,
+    MAP_EQWEAP,
 };
 
-use crate::game::scripting::types::floor::FloorItemData;
 use crate::common::player::inventory::MAX_INVENTORY;
 use crate::common::player::spells::MAX_MAGIC_TIMERS;
+use crate::game::scripting::types::floor::FloorItemData;
 
 use super::packet::{
-    encrypt,
-    wfifob, wfifow, wfifol, wfifop, wfifoset, wfifoheader,
-    rfifob,
-    clif_send,
-    SAMEAREA,
+    clif_send, encrypt, rfifob, wfifob, wfifoheader, wfifol, wfifop, wfifoset, wfifow, SAMEAREA,
 };
 
 use crate::common::constants::entity::player::OPT_FLAG_STEALTH;
@@ -42,36 +35,32 @@ use crate::common::constants::entity::player::OPT_FLAG_STEALTH;
 // SCRIPT subtype constant (enum { SCRIPT=0, FLOOR=1 } in map_server.h)
 const SCRIPT: u8 = 0;
 
-
-use crate::game::map_parse::player_state::clif_sendstatus;
-use crate::game::map_parse::chat::{clif_sendmsg, clif_sendminitext};
-use crate::game::client::visual::{clif_getequiptype, broadcast_update_state};
-use crate::game::client::BroadcastSrc;
-use crate::game::map_parse::combat::clif_sendaction_pc;
-use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from};
-use crate::game::map_server::{map_id2name, map_additem};
-use crate::game::pc::{
-    pc_readglobalreg,
-    pc_useitem, pc_unequip, pc_delitem, pc_loadmagic, pc_reload_aether,
-};
 use crate::database::item_db;
 use crate::database::magic_db;
+use crate::game::client::visual::{broadcast_update_state, clif_getequiptype};
+use crate::game::client::BroadcastSrc;
+use crate::game::map_parse::chat::{clif_sendminitext, clif_sendmsg};
+use crate::game::map_parse::combat::clif_sendaction_pc;
+use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from};
+use crate::game::map_parse::player_state::clif_sendstatus;
+use crate::game::map_server::{map_additem, map_id2name};
+use crate::game::pc::{
+    pc_delitem, pc_loadmagic, pc_readglobalreg, pc_reload_aether, pc_unequip, pc_useitem,
+};
 
-
-
-use crate::game::pc::pc_addtocurrent_inner;
 use crate::game::block::AreaType;
 use crate::game::block_grid;
+use crate::game::lua::dispatch::dispatch;
 use crate::game::map_parse::visual::clif_object_look2_item;
-
+use crate::game::pc::pc_addtocurrent_inner;
 // ─── Lua dispatch helpers ─────────────────────────────────────────────────────
 
-fn sl_doscript_simple(root: &str, method: Option<&str>, id: u32) -> i32 {
-    crate::game::scripting::doscript_blargs_id(root, method, &[id])
+fn sl_doscript_simple(root: &str, method: Option<&str>, id: u32) -> bool {
+    dispatch(root, method, &[id])
 }
 
-fn sl_doscript_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> i32 {
-    crate::game::scripting::doscript_blargs_id(root, method, &[id1, id2])
+fn sl_doscript_2(root: &str, method: Option<&str>, id1: u32, id2: u32) -> bool {
+    dispatch(root, method, &[id1, id2])
 }
 
 // ─── libc helpers ─────────────────────────────────────────────────────────────
@@ -114,7 +103,9 @@ pub unsafe fn clif_checkinvbod(pe: &PlayerEntity) -> i32 {
             )
         };
 
-        if item_id == 0 { continue; }
+        if item_id == 0 {
+            continue;
+        }
 
         let item = item_db::search(item_id);
 
@@ -163,7 +154,11 @@ pub unsafe fn clif_checkinvbod(pe: &PlayerEntity) -> i32 {
 
             pe.write().breakid = item_id;
             sl_doscript_simple("onBreak", None, pe.id);
-            sl_doscript_simple(crate::game::scripting::carray_to_str(&item.yname), Some("on_break"), pe.id);
+            sl_doscript_simple(
+                crate::game::scripting::carray_to_str(&item.yname),
+                Some("on_break"),
+                pe.id,
+            );
 
             pc_delitem(pe, x as i32, 1, 9);
             clif_sendmsg(pe, 5, buf.as_ptr());
@@ -234,11 +229,25 @@ pub unsafe fn clif_sendadditem(pe: &PlayerEntity, num: i32) -> i32 {
     let id = pe.read().player.inventory.inventory[n].id;
 
     let blank_item = crate::common::types::Item {
-        id: 0, owner: 0, custom: 0, time: 0, dura: 0, amount: 0,
-        pos: 0, _pad0: [0; 3], custom_look: 0, custom_icon: 0,
-        custom_look_color: 0, custom_icon_color: 0, protected: 0,
-        traps_table: [0; 100], buytext: [0; 64], note: [0; 300],
-        repair: 0, real_name: [0; 64], _pad1: [0; 3],
+        id: 0,
+        owner: 0,
+        custom: 0,
+        time: 0,
+        dura: 0,
+        amount: 0,
+        pos: 0,
+        _pad0: [0; 3],
+        custom_look: 0,
+        custom_icon: 0,
+        custom_look_color: 0,
+        custom_icon_color: 0,
+        protected: 0,
+        traps_table: [0; 100],
+        buytext: [0; 64],
+        note: [0; 300],
+        repair: 0,
+        real_name: [0; 64],
+        _pad1: [0; 3],
     };
 
     if id < 4 {
@@ -254,10 +263,28 @@ pub unsafe fn clif_sendadditem(pe: &PlayerEntity, num: i32) -> i32 {
     }
 
     // Snapshot inventory slot fields needed for display name and packet
-    let (inv_real_name_0, inv_real_name, inv_dura, inv_amount, inv_custom_icon, inv_custom_icon_color, inv_protected, inv_owner) = {
+    let (
+        inv_real_name_0,
+        inv_real_name,
+        inv_dura,
+        inv_amount,
+        inv_custom_icon,
+        inv_custom_icon_color,
+        inv_protected,
+        inv_owner,
+    ) = {
         let g = pe.read();
         let slot = &g.player.inventory.inventory[n];
-        (slot.real_name[0], slot.real_name, slot.dura, slot.amount, slot.custom_icon, slot.custom_icon_color, slot.protected, slot.owner)
+        (
+            slot.real_name[0],
+            slot.real_name,
+            slot.dura,
+            slot.amount,
+            slot.custom_icon,
+            slot.custom_icon_color,
+            slot.protected,
+            slot.owner,
+        )
     };
 
     // Choose display name
@@ -274,41 +301,24 @@ pub unsafe fn clif_sendadditem(pe: &PlayerEntity, num: i32) -> i32 {
         let dura = inv_dura;
         let amount = inv_amount;
         if amount > 1 {
-            libc::snprintf(
-                buf.as_mut_ptr(), 128,
-                c"%s (%d)".as_ptr(),
-                name_ptr, amount,
-            );
+            libc::snprintf(buf.as_mut_ptr(), 128, c"%s (%d)".as_ptr(), name_ptr, amount);
         } else if item_type == 2 {
             libc::snprintf(
-                buf.as_mut_ptr(), 128,
+                buf.as_mut_ptr(),
+                128,
                 c"%s [%d %s]".as_ptr(),
-                name_ptr, dura, item.text.as_ptr(),
+                name_ptr,
+                dura,
+                item.text.as_ptr(),
             );
         } else if item_type == 21 {
-            libc::snprintf(
-                buf.as_mut_ptr(), 128,
-                c"%s [%d]".as_ptr(),
-                name_ptr, dura,
-            );
+            libc::snprintf(buf.as_mut_ptr(), 128, c"%s [%d]".as_ptr(), name_ptr, dura);
         } else if item_type == 22 {
-            libc::snprintf(
-                buf.as_mut_ptr(), 128,
-                c"[T%d] %s".as_ptr(),
-                dura, name_ptr,
-            );
+            libc::snprintf(buf.as_mut_ptr(), 128, c"[T%d] %s".as_ptr(), dura, name_ptr);
         } else if item_type == 23 {
-            libc::snprintf(
-                buf.as_mut_ptr(), 128,
-                c"%s [%d]".as_ptr(),
-                name_ptr, dura,
-            );
+            libc::snprintf(buf.as_mut_ptr(), 128, c"%s [%d]".as_ptr(), name_ptr, dura);
         } else {
-            libc::snprintf(
-                buf.as_mut_ptr(), 128,
-                c"%s".as_ptr(),
-                name_ptr,
-            );
+            libc::snprintf(buf.as_mut_ptr(), 128, c"%s".as_ptr(), name_ptr);
         }
     }
 
@@ -360,7 +370,11 @@ pub unsafe fn clif_sendadditem(pe: &PlayerEntity, num: i32) -> i32 {
     // dura/protected block
     let item_type = item.typ as i32;
     let db_prot = item.protected as u32;
-    let final_prot = if inv_protected >= db_prot { inv_protected } else { db_prot };
+    let final_prot = if inv_protected >= db_prot {
+        inv_protected
+    } else {
+        db_prot
+    };
     if (3..=17).contains(&item_type) {
         wfifob(fd, len, 0);
         wfifol(fd, len + 1, (inv_dura as u32).swap_bytes());
@@ -379,9 +393,8 @@ pub unsafe fn clif_sendadditem(pe: &PlayerEntity, num: i32) -> i32 {
 
     // owner name
     if inv_owner != 0 {
-        let owner_name: String = crate::database::blocking_run_async(async move {
-            map_id2name(inv_owner).await
-        });
+        let owner_name: String =
+            crate::database::blocking_run_async(async move { map_id2name(inv_owner).await });
         let bytes = owner_name.as_bytes();
         let owner_len = bytes.len();
         wfifob(fd, len, owner_len as u8);
@@ -421,7 +434,14 @@ pub unsafe fn clif_equipit(pe: &PlayerEntity, id: i32) -> i32 {
     let (eq_id, eq_real_name_0, eq_real_name, eq_custom_icon, eq_custom_icon_color, eq_dura) = {
         let g = pe.read();
         let eq = &g.player.inventory.equip[slot];
-        (eq.id, eq.real_name[0], eq.real_name, eq.custom_icon, eq.custom_icon_color, eq.dura)
+        (
+            eq.id,
+            eq.real_name[0],
+            eq.real_name,
+            eq.custom_icon,
+            eq.custom_icon_color,
+            eq.dura,
+        )
     };
 
     let eq_item = item_db::search(eq_id);
@@ -489,21 +509,21 @@ pub unsafe fn clif_sendequip(pe: &PlayerEntity, id: i32) -> i32 {
     let slot = id as usize;
 
     let msgnum: usize = match id {
-        EQ_HELM     => MAP_EQHELM,
-        EQ_WEAP     => MAP_EQWEAP,
-        EQ_ARMOR    => MAP_EQARMOR,
-        EQ_SHIELD   => MAP_EQSHIELD,
-        EQ_RIGHT    => MAP_EQRIGHT,
-        EQ_LEFT     => MAP_EQLEFT,
-        EQ_SUBLEFT  => MAP_EQSUBLEFT,
+        EQ_HELM => MAP_EQHELM,
+        EQ_WEAP => MAP_EQWEAP,
+        EQ_ARMOR => MAP_EQARMOR,
+        EQ_SHIELD => MAP_EQSHIELD,
+        EQ_RIGHT => MAP_EQRIGHT,
+        EQ_LEFT => MAP_EQLEFT,
+        EQ_SUBLEFT => MAP_EQSUBLEFT,
         EQ_SUBRIGHT => MAP_EQSUBRIGHT,
-        EQ_FACEACC  => MAP_EQFACEACC,
-        EQ_CROWN    => MAP_EQCROWN,
-        EQ_BOOTS    => MAP_EQBOOTS,
-        EQ_MANTLE   => MAP_EQMANTLE,
-        EQ_COAT     => MAP_EQCOAT,
+        EQ_FACEACC => MAP_EQFACEACC,
+        EQ_CROWN => MAP_EQCROWN,
+        EQ_BOOTS => MAP_EQBOOTS,
+        EQ_MANTLE => MAP_EQMANTLE,
+        EQ_COAT => MAP_EQCOAT,
         EQ_NECKLACE => MAP_EQNECKLACE,
-        _           => return -1,
+        _ => return -1,
     };
 
     let (eq_id, eq_real_name_0, eq_real_name) = {
@@ -516,11 +536,25 @@ pub unsafe fn clif_sendequip(pe: &PlayerEntity, id: i32) -> i32 {
 
     if eq_id > 0 && strcasecmp_rs(eq_item.name.as_ptr(), c"??".as_ptr() as *const u8) == 0 {
         pe.write().player.inventory.equip[slot] = crate::common::types::Item {
-            id: 0, owner: 0, custom: 0, time: 0, dura: 0, amount: 0,
-            pos: 0, _pad0: [0; 3], custom_look: 0, custom_icon: 0,
-            custom_look_color: 0, custom_icon_color: 0, protected: 0,
-            traps_table: [0; 100], buytext: [0; 64], note: [0; 300],
-            repair: 0, real_name: [0; 64], _pad1: [0; 3],
+            id: 0,
+            owner: 0,
+            custom: 0,
+            time: 0,
+            dura: 0,
+            amount: 0,
+            pos: 0,
+            _pad0: [0; 3],
+            custom_look: 0,
+            custom_icon: 0,
+            custom_look_color: 0,
+            custom_icon_color: 0,
+            protected: 0,
+            traps_table: [0; 100],
+            buytext: [0; 64],
+            note: [0; 300],
+            repair: 0,
+            real_name: [0; 64],
+            _pad1: [0; 3],
         };
         return 0;
     }
@@ -533,7 +567,8 @@ pub unsafe fn clif_sendequip(pe: &PlayerEntity, id: i32) -> i32 {
 
     let mut buff = [0i8; 256];
     libc::snprintf(
-        buff.as_mut_ptr(), 256,
+        buff.as_mut_ptr(),
+        256,
         map_msg()[msgnum].message.as_ptr(),
         name,
     );
@@ -600,7 +635,11 @@ pub unsafe fn clif_parsegetitem(pe: &PlayerEntity) -> i32 {
     let dura_aether = pe.read().player.spells.dura_aether.clone();
     for da in dura_aether.iter().take(MAX_MAGIC_TIMERS) {
         if da.id > 0 && da.duration > 0 {
-            sl_doscript_simple(crate::game::scripting::carray_to_str(&magic_db::search(da.id as i32).yname), Some("on_pickup_while_cast"), pe.id);
+            sl_doscript_simple(
+                crate::game::scripting::carray_to_str(&magic_db::search(da.id as i32).yname),
+                Some("on_pickup_while_cast"),
+                pe.id,
+            );
         }
     }
 
@@ -650,14 +689,14 @@ pub unsafe fn clif_parseunequip(pe: &PlayerEntity) -> i32 {
         0x06 => EQ_NECKLACE,
         0x07 => EQ_LEFT,
         0x08 => EQ_RIGHT,
-        13   => EQ_BOOTS,
-        14   => EQ_MANTLE,
-        16   => EQ_COAT,
-        20   => EQ_SUBLEFT,
-        21   => EQ_SUBRIGHT,
-        22   => EQ_FACEACC,
-        23   => EQ_CROWN,
-        _    => return 0,
+        13 => EQ_BOOTS,
+        14 => EQ_MANTLE,
+        16 => EQ_COAT,
+        20 => EQ_SUBLEFT,
+        21 => EQ_SUBRIGHT,
+        22 => EQ_FACEACC,
+        23 => EQ_CROWN,
+        _ => return 0,
     };
 
     let (eq_id, gm_level, maxinv) = {
@@ -715,14 +754,25 @@ pub unsafe fn clif_parsewield(pe: &PlayerEntity) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_addtocurrent_inner(fl: *mut FloorItemData, def: *mut i32, amount: u32, _pe: Option<&PlayerEntity>) -> i32 {
-    if fl.is_null() { return 0; }
+pub unsafe fn clif_addtocurrent_inner(
+    fl: *mut FloorItemData,
+    def: *mut i32,
+    amount: u32,
+    _pe: Option<&PlayerEntity>,
+) -> i32 {
+    if fl.is_null() {
+        return 0;
+    }
 
-    if !def.is_null() && *def != 0 { return 0; }
+    if !def.is_null() && *def != 0 {
+        return 0;
+    }
 
     if (*fl).data.id <= 3 {
         (*fl).data.amount = ((*fl).data.amount as i64 + amount as i64) as i32;
-        if !def.is_null() { *def = 1; }
+        if !def.is_null() {
+            *def = 1;
+        }
     }
 
     0
@@ -737,14 +787,24 @@ pub unsafe fn clif_addtocurrent_inner(fl: *mut FloorItemData, def: *mut i32, amo
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_dropgold(pe: &PlayerEntity, amounts: u32) -> i32 {
     let reg_str = b"goldbardupe\0";
-    let dupe_times = pc_readglobalreg(&mut *pe.write() as *mut MapSessionData, reg_str.as_ptr().cast());
+    let dupe_times = pc_readglobalreg(
+        &mut *pe.write() as *mut MapSessionData,
+        reg_str.as_ptr().cast(),
+    );
     if dupe_times != 0 {
         return 0;
     }
 
     let (gm_level, combat_state, money, sd_m, sd_x, sd_y) = {
         let g = pe.read();
-        (g.player.identity.gm_level, g.player.combat.state, g.player.inventory.money, g.m, g.x, g.y)
+        (
+            g.player.identity.gm_level,
+            g.player.combat.state,
+            g.player.inventory.money,
+            g.m,
+            g.x,
+            g.y,
+        )
     };
 
     if gm_level == 0 {
@@ -762,8 +822,12 @@ pub unsafe fn clif_dropgold(pe: &PlayerEntity, amounts: u32) -> i32 {
         }
     }
 
-    if money == 0 { return 0; }
-    if amounts == 0 { return 0; }
+    if money == 0 {
+        return 0;
+    }
+    if amounts == 0 {
+        return 0;
+    }
 
     let mut amount = amounts;
 
@@ -782,10 +846,10 @@ pub unsafe fn clif_dropgold(pe: &PlayerEntity, amounts: u32) -> i32 {
     }
 
     fl.data.id = match amount {
-        1          => 0u32,
-        2..=99     => 1u32,
-        100..=999  => 2u32,
-        _          => 3u32,
+        1 => 0u32,
+        2..=99 => 1u32,
+        100..=999 => 2u32,
+        _ => 3u32,
     };
     fl.data.amount = amount as i32;
 
@@ -796,21 +860,34 @@ pub unsafe fn clif_dropgold(pe: &PlayerEntity, amounts: u32) -> i32 {
     let dura_aether = pe.read().player.spells.dura_aether.clone();
     for da in dura_aether.iter().take(MAX_MAGIC_TIMERS) {
         if da.id > 0 && da.duration > 0 {
-            sl_doscript_2(crate::game::scripting::carray_to_str(&magic_db::search(da.id as i32).yname), Some("on_drop_gold_while_cast"), pe.id, fl.id);
+            sl_doscript_2(
+                crate::game::scripting::carray_to_str(&magic_db::search(da.id as i32).yname),
+                Some("on_drop_gold_while_cast"),
+                pe.id,
+                fl.id,
+            );
         }
     }
 
     for da in dura_aether.iter().take(MAX_MAGIC_TIMERS) {
         if da.id > 0 && da.aether > 0 {
-            sl_doscript_2(crate::game::scripting::carray_to_str(&magic_db::search(da.id as i32).yname), Some("on_drop_gold_while_aether"), pe.id, fl.id);
+            sl_doscript_2(
+                crate::game::scripting::carray_to_str(&magic_db::search(da.id as i32).yname),
+                Some("on_drop_gold_while_aether"),
+                pe.id,
+                fl.id,
+            );
         }
     }
 
-    if pe.read().fakeDrop != 0 { return 0; }
+    if pe.read().fakeDrop != 0 {
+        return 0;
+    }
 
     let mut mini = [0i8; 64];
     libc::snprintf(
-        mini.as_mut_ptr(), 64,
+        mini.as_mut_ptr(),
+        64,
         c"You dropped %d coins".as_ptr(),
         fl.data.amount,
     );
@@ -820,7 +897,8 @@ pub unsafe fn clif_dropgold(pe: &PlayerEntity, amounts: u32) -> i32 {
     if let Some(grid) = block_grid::get_grid(sd_m as usize) {
         let cell_ids = grid.ids_at_tile(sd_x, sd_y);
         for id in cell_ids {
-            if let Some(fl_arc) = crate::game::map_server::map_id2fl_ref(id) { let fl = &mut *fl_arc.write();
+            if let Some(fl_arc) = crate::game::map_server::map_id2fl_ref(id) {
+                let fl = &mut *fl_arc.write();
                 clif_addtocurrent_inner(fl as *mut FloorItemData, def.as_mut_ptr(), amount, None);
             }
         }
@@ -835,13 +913,23 @@ pub unsafe fn clif_dropgold(pe: &PlayerEntity, amounts: u32) -> i32 {
         let dura_aether = pe.read().player.spells.dura_aether.clone();
         for da in dura_aether.iter().take(MAX_MAGIC_TIMERS) {
             if da.id > 0 && da.duration > 0 {
-                sl_doscript_2(crate::game::scripting::carray_to_str(&magic_db::search(da.id as i32).yname), Some("after_drop_gold_while_cast"), pe.id, (*fl_raw).id);
+                sl_doscript_2(
+                    crate::game::scripting::carray_to_str(&magic_db::search(da.id as i32).yname),
+                    Some("after_drop_gold_while_cast"),
+                    pe.id,
+                    (*fl_raw).id,
+                );
             }
         }
 
         for da in dura_aether.iter().take(MAX_MAGIC_TIMERS) {
             if da.id > 0 && da.aether > 0 {
-                sl_doscript_2(crate::game::scripting::carray_to_str(&magic_db::search(da.id as i32).yname), Some("after_drop_gold_while_aether"), pe.id, (*fl_raw).id);
+                sl_doscript_2(
+                    crate::game::scripting::carray_to_str(&magic_db::search(da.id as i32).yname),
+                    Some("after_drop_gold_while_aether"),
+                    pe.id,
+                    (*fl_raw).id,
+                );
             }
         }
 
@@ -849,7 +937,14 @@ pub unsafe fn clif_dropgold(pe: &PlayerEntity, amounts: u32) -> i32 {
 
         if let Some(grid) = block_grid::get_grid(sd_m as usize) {
             let slot = &*raw_map_ptr().add(sd_m as usize);
-            let ids = block_grid::ids_in_area(grid, sd_x as i32, sd_y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+            let ids = block_grid::ids_in_area(
+                grid,
+                sd_x as i32,
+                sd_y as i32,
+                AreaType::Area,
+                slot.xs as i32,
+                slot.ys as i32,
+            );
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
                     clif_object_look2_item(pc_arc.fd, pc_arc.read().player.identity.id, &*fl_raw);
@@ -909,11 +1004,14 @@ pub unsafe fn clif_removespell(pe: &PlayerEntity, pos: i32) -> i32 {
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parsechangespell(pe: &PlayerEntity) -> i32 {
     let start_pos = rfifob(pe.fd, 6) as usize - 1;
-    let stop_pos  = rfifob(pe.fd, 7) as usize - 1;
+    let stop_pos = rfifob(pe.fd, 7) as usize - 1;
 
     let (start_id, stop_id) = {
         let g = pe.read();
-        (g.player.spells.skills[start_pos], g.player.spells.skills[stop_pos])
+        (
+            g.player.spells.skills[start_pos],
+            g.player.spells.skills[stop_pos],
+        )
     };
 
     clif_removespell(pe, start_pos as i32);
@@ -922,7 +1020,7 @@ pub unsafe fn clif_parsechangespell(pe: &PlayerEntity) -> i32 {
     {
         let mut g = pe.write();
         g.player.spells.skills[start_pos] = stop_id;
-        g.player.spells.skills[stop_pos]  = start_id;
+        g.player.spells.skills[stop_pos] = start_id;
     }
 
     pc_loadmagic(&mut *pe.write() as *mut MapSessionData);
@@ -939,18 +1037,18 @@ pub unsafe fn clif_parsechangespell(pe: &PlayerEntity) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_throwitem_sub(
-    pe: &PlayerEntity,
-    id: i32,
-    _type: i32,
-    x: i32,
-    y: i32,
-) -> i32 {
+pub unsafe fn clif_throwitem_sub(pe: &PlayerEntity, id: i32, _type: i32, x: i32, y: i32) -> i32 {
     let (inv_id, inv_amount, sd_m) = {
         let g = pe.read();
-        (g.player.inventory.inventory[id as usize].id, g.player.inventory.inventory[id as usize].amount, g.m)
+        (
+            g.player.inventory.inventory[id as usize].id,
+            g.player.inventory.inventory[id as usize].amount,
+            g.m,
+        )
     };
-    if inv_id == 0 { return 0; }
+    if inv_id == 0 {
+        return 0;
+    }
 
     if inv_amount <= 0 {
         clif_senddelitem(pe, id, 4);
@@ -994,7 +1092,14 @@ pub unsafe fn clif_throwitem_sub(
 pub unsafe fn clif_throwitem_script(pe: &PlayerEntity) -> i32 {
     let (id, x, y, sd_m, sd_x, sd_y) = {
         let g = pe.read();
-        (g.invslot as usize, g.throwx as i32, g.throwy as i32, g.m, g.x, g.y)
+        (
+            g.invslot as usize,
+            g.throwx as i32,
+            g.throwy as i32,
+            g.m,
+            g.x,
+            g.y,
+        )
     };
     let item_type = 0i32;
 
@@ -1016,8 +1121,15 @@ pub unsafe fn clif_throwitem_script(pe: &PlayerEntity) -> i32 {
         if let Some(grid) = block_grid::get_grid(sd_m as usize) {
             let cell_ids = grid.ids_at_tile(x as u16, y as u16);
             for cid in cell_ids {
-                if let Some(fl_ref_arc) = crate::game::map_server::map_id2fl_ref(cid) { let fl_ref = &mut *fl_ref_arc.write();
-                    pc_addtocurrent_inner(&mut *fl_ref as *mut FloorItemData, def.as_mut_ptr(), id as i32, item_type, &mut *pe.write() as *mut MapSessionData);
+                if let Some(fl_ref_arc) = crate::game::map_server::map_id2fl_ref(cid) {
+                    let fl_ref = &mut *fl_ref_arc.write();
+                    pc_addtocurrent_inner(
+                        &mut *fl_ref as *mut FloorItemData,
+                        def.as_mut_ptr(),
+                        id as i32,
+                        item_type,
+                        &mut *pe.write() as *mut MapSessionData,
+                    );
                 }
             }
         }
@@ -1028,11 +1140,25 @@ pub unsafe fn clif_throwitem_script(pe: &PlayerEntity) -> i32 {
     let inv_amount = pe.read().player.inventory.inventory[id].amount;
     if item_type != 0 || inv_amount == 0 {
         pe.write().player.inventory.inventory[id] = crate::common::types::Item {
-            id: 0, owner: 0, custom: 0, time: 0, dura: 0, amount: 0,
-            pos: 0, _pad0: [0; 3], custom_look: 0, custom_icon: 0,
-            custom_look_color: 0, custom_icon_color: 0, protected: 0,
-            traps_table: [0; 100], buytext: [0; 64], note: [0; 300],
-            repair: 0, real_name: [0; 64], _pad1: [0; 3],
+            id: 0,
+            owner: 0,
+            custom: 0,
+            time: 0,
+            dura: 0,
+            amount: 0,
+            pos: 0,
+            _pad0: [0; 3],
+            custom_look: 0,
+            custom_icon: 0,
+            custom_look_color: 0,
+            custom_icon_color: 0,
+            protected: 0,
+            traps_table: [0; 100],
+            buytext: [0; 64],
+            note: [0; 300],
+            repair: 0,
+            real_name: [0; 64],
+            _pad1: [0; 3],
         };
         clif_senddelitem(pe, id as i32, 4);
     } else {
@@ -1049,18 +1175,20 @@ pub unsafe fn clif_throwitem_script(pe: &PlayerEntity) -> i32 {
         sndbuf[3] = 0x16;
         sndbuf[4] = 0x03;
         let id_be = pe.id.to_be_bytes();
-        sndbuf[5] = id_be[0]; sndbuf[6] = id_be[1];
-        sndbuf[7] = id_be[2]; sndbuf[8] = id_be[3];
+        sndbuf[5] = id_be[0];
+        sndbuf[6] = id_be[1];
+        sndbuf[7] = id_be[2];
+        sndbuf[8] = id_be[3];
 
         if fl.data.custom_icon != 0 {
             let icon_be = ((fl.data.custom_icon + 49152) as u16).to_be_bytes();
-            sndbuf[9]  = icon_be[0];
+            sndbuf[9] = icon_be[0];
             sndbuf[10] = icon_be[1];
             sndbuf[11] = fl.data.custom_icon_color as u8;
         } else {
             let fl_item = item_db::search(fl.data.id);
             let icon_be = (fl_item.icon as u16).to_be_bytes();
-            sndbuf[9]  = icon_be[0];
+            sndbuf[9] = icon_be[0];
             sndbuf[10] = icon_be[1];
             sndbuf[11] = fl_item.icon_color;
         }
@@ -1070,22 +1198,39 @@ pub unsafe fn clif_throwitem_script(pe: &PlayerEntity) -> i32 {
         } else {
             (fl.id).to_be_bytes()
         };
-        sndbuf[12] = fl_id_be[0]; sndbuf[13] = fl_id_be[1];
-        sndbuf[14] = fl_id_be[2]; sndbuf[15] = fl_id_be[3];
+        sndbuf[12] = fl_id_be[0];
+        sndbuf[13] = fl_id_be[1];
+        sndbuf[14] = fl_id_be[2];
+        sndbuf[15] = fl_id_be[3];
 
         let sx_be = sd_x.to_be_bytes();
-        sndbuf[16] = sx_be[0]; sndbuf[17] = sx_be[1];
+        sndbuf[16] = sx_be[0];
+        sndbuf[17] = sx_be[1];
         let sy_be = sd_y.to_be_bytes();
-        sndbuf[18] = sy_be[0]; sndbuf[19] = sy_be[1];
+        sndbuf[18] = sy_be[0];
+        sndbuf[19] = sy_be[1];
         let dx_be = (x as u16).to_be_bytes();
-        sndbuf[20] = dx_be[0]; sndbuf[21] = dx_be[1];
+        sndbuf[20] = dx_be[0];
+        sndbuf[21] = dx_be[1];
         let dy_be = (y as u16).to_be_bytes();
-        sndbuf[22] = dy_be[0]; sndbuf[23] = dy_be[1];
+        sndbuf[22] = dy_be[0];
+        sndbuf[23] = dy_be[1];
         // bytes 24..27 already 0
         sndbuf[28] = 0x02;
         sndbuf[29] = 0x00;
 
-        clif_send(sndbuf.as_ptr(), 48, BroadcastSrc { id: pe.id, m: sd_m, x: sd_x, y: sd_y, bl_type: BL_PC as u8 }, SAMEAREA);
+        clif_send(
+            sndbuf.as_ptr(),
+            48,
+            BroadcastSrc {
+                id: pe.id,
+                m: sd_m,
+                x: sd_x,
+                y: sd_y,
+                bl_type: BL_PC as u8,
+            },
+            SAMEAREA,
+        );
     } else {
         clif_sendaction_pc(&mut pe.write(), 2, 30, 0);
     }
@@ -1095,7 +1240,14 @@ pub unsafe fn clif_throwitem_script(pe: &PlayerEntity) -> i32 {
         map_additem(fl_raw);
         if let Some(grid) = block_grid::get_grid(sd_m as usize) {
             let slot = &*raw_map_ptr().add(sd_m as usize);
-            let ids = block_grid::ids_in_area(grid, sd_x as i32, sd_y as i32, AreaType::Area, slot.xs as i32, slot.ys as i32);
+            let ids = block_grid::ids_in_area(
+                grid,
+                sd_x as i32,
+                sd_y as i32,
+                AreaType::Area,
+                slot.xs as i32,
+                slot.ys as i32,
+            );
             for id in ids {
                 if let Some(pc_arc) = crate::game::map_server::map_id2sd_pc(id) {
                     clif_object_look2_item(pc_arc.fd, pc_arc.read().player.identity.id, &*fl_raw);
@@ -1117,15 +1269,21 @@ pub unsafe fn clif_throwitem_script(pe: &PlayerEntity) -> i32 {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_throw_check_id(entity_id: u32, found: *mut i32) -> i32 {
-    if !found.is_null() && *found != 0 { return 0; }
+    if !found.is_null() && *found != 0 {
+        return 0;
+    }
 
     // Check entity type and alive status via typed lookups
     if let Some(arc) = crate::game::map_server::map_id2npc_ref(entity_id) {
         let nd = arc.read();
-        if nd.subtype != SCRIPT { return 0; }
+        if nd.subtype != SCRIPT {
+            return 0;
+        }
     } else if let Some(arc) = crate::game::map_server::map_id2mob_ref(entity_id) {
         let mob = &*arc.data_ptr();
-        if mob.state == MOB_DEAD { return 0; }
+        if mob.state == MOB_DEAD {
+            return 0;
+        }
     } else if let Some(arc) = crate::game::map_server::map_id2sd_pc(entity_id) {
         let sd = arc.read();
         if sd.player.combat.state == 1 || (sd.optFlags & OPT_FLAG_STEALTH) != 0 {
@@ -1135,7 +1293,9 @@ pub unsafe fn clif_throw_check_id(entity_id: u32, found: *mut i32) -> i32 {
         return 0; // Entity not found
     }
 
-    if !found.is_null() { *found += 1; }
+    if !found.is_null() {
+        *found += 1;
+    }
 
     0
 }
@@ -1168,14 +1328,24 @@ pub unsafe fn clif_throwconfirm(pe: &PlayerEntity) -> i32 {
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn clif_parsethrow(pe: &PlayerEntity) -> i32 {
     let reg_str = b"goldbardupe\0";
-    let dupe_times = pc_readglobalreg(&mut *pe.write() as *mut MapSessionData, reg_str.as_ptr().cast());
+    let dupe_times = pc_readglobalreg(
+        &mut *pe.write() as *mut MapSessionData,
+        reg_str.as_ptr().cast(),
+    );
     if dupe_times != 0 {
         return 0;
     }
 
     let (gm_level, combat_state, combat_side, sd_m, sd_x, sd_y) = {
         let g = pe.read();
-        (g.player.identity.gm_level, g.player.combat.state, g.player.combat.side, g.m, g.x, g.y)
+        (
+            g.player.identity.gm_level,
+            g.player.combat.state,
+            g.player.combat.side,
+            g.m,
+            g.x,
+            g.y,
+        )
     };
 
     if gm_level == 0 {
@@ -1208,10 +1378,18 @@ pub unsafe fn clif_parsethrow(pe: &PlayerEntity) -> i32 {
     let mut found = [0i32; 1];
 
     match combat_side {
-        0 => { ymod = -1; } // up
-        1 => { xmod = 1; }  // left
-        2 => { ymod = 1; }  // down
-        3 => { xmod = -1; } // right
+        0 => {
+            ymod = -1;
+        } // up
+        1 => {
+            xmod = 1;
+        } // left
+        2 => {
+            ymod = 1;
+        } // down
+        3 => {
+            xmod = -1;
+        } // right
         _ => {}
     }
 
@@ -1221,10 +1399,18 @@ pub unsafe fn clif_parsethrow(pe: &PlayerEntity) -> i32 {
     'search: for i in 0..max {
         let mut x1: i32 = sd_x as i32 + (i * xmod) + xmod;
         let mut y1: i32 = sd_y as i32 + (i * ymod) + ymod;
-        if x1 < 0 { x1 = 0; }
-        if y1 < 0 { y1 = 0; }
-        if x1 >= map_data.xs as i32 { x1 = map_data.xs as i32 - 1; }
-        if y1 >= map_data.ys as i32 { y1 = map_data.ys as i32 - 1; }
+        if x1 < 0 {
+            x1 = 0;
+        }
+        if y1 < 0 {
+            y1 = 0;
+        }
+        if x1 >= map_data.xs as i32 {
+            x1 = map_data.xs as i32 - 1;
+        }
+        if y1 >= map_data.ys as i32 {
+            y1 = map_data.ys as i32 - 1;
+        }
 
         if let Some(grid) = block_grid::get_grid(m as usize) {
             let cell_ids = grid.ids_at_tile(x1 as u16, y1 as u16);
@@ -1233,9 +1419,15 @@ pub unsafe fn clif_parsethrow(pe: &PlayerEntity) -> i32 {
             }
         }
         // read_pass(m, x, y) — accesses map[m].pass[x + y*xs]
-        let pass_val = if raw_map_ptr().is_null() { 0 } else {
+        let pass_val = if raw_map_ptr().is_null() {
+            0
+        } else {
             let md = &*raw_map_ptr().add(m as usize);
-            if md.pass.is_null() { 0 } else { *md.pass.add(x1 as usize + y1 as usize * md.xs as usize) as i32 }
+            if md.pass.is_null() {
+                0
+            } else {
+                *md.pass.add(x1 as usize + y1 as usize * md.xs as usize) as i32
+            }
         };
         found[0] += pass_val;
         found[0] += clif_object_canmove(m, x1, y1, combat_side as i32);
@@ -1243,7 +1435,8 @@ pub unsafe fn clif_parsethrow(pe: &PlayerEntity) -> i32 {
 
         // Check warp list at this block cell
         if !map_data.warp.is_null() {
-            let bidx = x1 as usize / BLOCK_SIZE + (y1 as usize / BLOCK_SIZE) * map_data.bxs as usize;
+            let bidx =
+                x1 as usize / BLOCK_SIZE + (y1 as usize / BLOCK_SIZE) * map_data.bxs as usize;
             let mut warp: *mut WarpList = map_data.warp.add(bidx).read();
             while !warp.is_null() && found[0] == 0 {
                 if (*warp).x == x1 && (*warp).y == y1 {
