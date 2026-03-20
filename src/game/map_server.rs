@@ -1,14 +1,13 @@
 //! Map server utility functions.
-#![allow(non_upper_case_globals)]
-#![allow(non_snake_case)]
-
 use crate::common::traits::LegacyEntity;
 use crate::database::get_pool;
 use crate::database::{blocking_run_async, boards as db_boards};
 use crate::game::lua::coroutine::purge_player;
 use crate::game::lua::dispatch::dispatch;
-use crate::game::npc::NpcEntity;
+use crate::game::mob::MobSpawnData;
+use crate::game::npc::{NpcEntity, NPC_ID, NPC_START_NUM};
 use crate::game::pc::{MapSessionData, PlayerEntity, FLAG_MAIL, U_FLAG_UNPHYSICAL};
+use crate::game::scripting::types::floor::FloorItemData;
 use crate::servers::map::packet::ClientPacket;
 use parking_lot::RwLock;
 use std::collections::HashMap;
@@ -18,7 +17,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::game::map_parse::packet::{rfifob, rfifop, wfifohead, wfifop, wfifoset};
 
-use crate::common::types::Point;
 use crate::core::request_shutdown;
 use crate::database::board_db;
 use crate::game::map_char::intif_save_impl::sl_intif_save;
@@ -29,7 +27,6 @@ use crate::session::{
     session_exists, session_get_client_ip, session_get_data, session_get_eof, session_set_eof,
     SessionId,
 };
-use std::sync::atomic::AtomicU64;
 
 // ---------------------------------------------------------------------------
 // In-game time globals.
@@ -222,12 +219,9 @@ pub unsafe fn map_setmapip(id: i32, ip: u32, port: u16) -> i32 {
 // access patterns and is ready for future multi-threading.
 
 static PLAYER_MAP: OnceLock<Mutex<HashMap<u32, Arc<PlayerEntity>>>> = OnceLock::new();
-static MOB_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<crate::game::mob::MobSpawnData>>>>> =
-    OnceLock::new();
+static MOB_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<MobSpawnData>>>>> = OnceLock::new();
 static NPC_MAP: OnceLock<Mutex<HashMap<u32, Arc<NpcEntity>>>> = OnceLock::new();
-static ITEM_MAP: OnceLock<
-    Mutex<HashMap<u32, Arc<RwLock<crate::game::scripting::types::floor::FloorItemData>>>>,
-> = OnceLock::new();
+static ITEM_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<FloorItemData>>>>> = OnceLock::new();
 
 #[inline]
 fn player_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<PlayerEntity>>> {
@@ -237,8 +231,7 @@ fn player_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<PlayerEntity>
         .unwrap_or_else(|e| e.into_inner())
 }
 #[inline]
-fn mob_map(
-) -> std::sync::MutexGuard<'static, HashMap<u32, Arc<RwLock<crate::game::mob::MobSpawnData>>>> {
+fn mob_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<RwLock<MobSpawnData>>>> {
     MOB_MAP
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -252,10 +245,7 @@ fn npc_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<NpcEntity>>> {
         .unwrap_or_else(|e| e.into_inner())
 }
 #[inline]
-fn item_map() -> std::sync::MutexGuard<
-    'static,
-    HashMap<u32, Arc<RwLock<crate::game::scripting::types::floor::FloorItemData>>>,
-> {
+fn item_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<RwLock<FloorItemData>>>> {
     ITEM_MAP
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -343,13 +333,7 @@ pub fn map_addiddb_mob(id: u32, mob: Box<crate::game::mob::MobSpawnData>) {
 }
 
 /// Insert an NPC — takes ownership of the Box, wrapping it in Arc<NpcEntity>.
-pub fn map_addiddb_npc(id: u32, npc: Box<crate::game::npc::NpcData>) {
-    let pos = Point::new(npc.m, npc.x, npc.y).to_u64();
-    let entity = Arc::new(NpcEntity {
-        id: npc.id,
-        pos_atomic: AtomicU64::new(pos),
-        legacy: RwLock::new(*npc),
-    });
+pub fn map_addiddb_npc(id: u32, entity: Arc<NpcEntity>) {
     npc_map().insert(id, entity);
 }
 
@@ -390,34 +374,40 @@ pub fn map_deliddb(id: u32) {
 /// Typed lookup — returns `Arc<PlayerEntity>` if id is a player.
 #[must_use]
 #[inline]
-pub fn map_id2sd_pc(id: u32) -> Option<Arc<PlayerEntity>> {
+pub fn find_player_by_id(id: u32) -> Option<Arc<PlayerEntity>> {
     player_map().get(&id).cloned()
 }
 
-/// Typed lookup — returns `Arc<RwLock<MobSpawnData>>` if id is a mob.
-#[must_use]
-#[inline]
-pub fn map_id2mob_ref(id: u32) -> Option<Arc<RwLock<crate::game::mob::MobSpawnData>>> {
-    let map = mob_map();
-    map.get(&id).cloned()
+pub fn find_mob_by_id(id: u32) -> Option<Arc<RwLock<MobSpawnData>>> {
+    mob_map().get(&id).cloned()
 }
 
-/// Typed lookup — returns `Arc<RwLock<NpcData>>` if id is a npc.
-#[must_use]
-#[inline]
+pub fn find_npc_by_id(id: u32) -> Option<Arc<NpcEntity>> {
+    npc_map().get(&id).cloned()
+}
+
+pub fn find_item_by_id(id: u32) -> Option<Arc<RwLock<FloorItemData>>> {
+    item_map().get(&id).cloned()
+}
+
+// TODO: phase out — use find_player_by_id
+pub fn map_id2sd_pc(id: u32) -> Option<Arc<PlayerEntity>> {
+    find_player_by_id(id)
+}
+
+// TODO: phase out — use find_mob_by_id
+pub fn map_id2mob_ref(id: u32) -> Option<Arc<RwLock<MobSpawnData>>> {
+    find_mob_by_id(id)
+}
+
+// TODO: phase out — use find_npc_by_id
 pub fn map_id2npc_ref(id: u32) -> Option<Arc<NpcEntity>> {
-    let map = npc_map();
-    map.get(&id).cloned()
+    find_npc_by_id(id)
 }
 
-/// Typed lookup — returns `Arc<RwLock<FloorItemData>>` if id is a floor item.
-#[must_use]
-#[inline]
-pub fn map_id2fl_ref(
-    id: u32,
-) -> Option<Arc<RwLock<crate::game::scripting::types::floor::FloorItemData>>> {
-    let map = item_map();
-    map.get(&id).cloned()
+// TODO: phase out — use find_item_by_id
+pub fn map_id2fl_ref(id: u32) -> Option<Arc<RwLock<FloorItemData>>> {
+    find_item_by_id(id)
 }
 
 /// Polymorphic entity reference — used by code that handles any entity type.
@@ -426,9 +416,9 @@ pub fn map_id2fl_ref(
 /// (callback pattern) since a reference through a lock guard cannot be returned.
 pub enum GameEntity {
     Player(Arc<PlayerEntity>),
-    Mob(Arc<RwLock<crate::game::mob::MobSpawnData>>),
+    Mob(Arc<RwLock<MobSpawnData>>),
     Npc(Arc<NpcEntity>),
-    Item(Arc<RwLock<crate::game::scripting::types::floor::FloorItemData>>),
+    Item(Arc<RwLock<FloorItemData>>),
 }
 
 /// Extension trait for ergonomic entity access on `Option<Arc<RwLock<T>>>`.
@@ -523,26 +513,36 @@ pub unsafe fn map_name2sd(name: *const i8) -> *mut MapSessionData {
 
 /// Find an NPC by name (case-insensitive). Iterates NPC ID range.
 ///
+/// Find an NPC by display name (case-insensitive).
+pub fn find_npc_by_display_name(name: &str) -> Option<Arc<NpcEntity>> {
+    let max_npc_id = NPC_ID.load(Ordering::Relaxed);
+    for id in NPC_START_NUM..=max_npc_id {
+        if let Some(arc) = map_id2npc_ref(id) {
+            if arc.npc_name.eq_ignore_ascii_case(name) {
+                return Some(arc);
+            }
+        }
+    }
+    None
+}
+
+// TODO: dead code — replace callers with find_npc_by_display_name
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_name2npc(name: *const i8) -> *mut std::ffi::c_void {
-    use crate::game::npc::{NPC_ID, NPC_START_NUM};
-    use std::sync::atomic::Ordering;
     if name.is_null() {
         return std::ptr::null_mut();
     }
-    let mut i = NPC_START_NUM;
-    let npc_hi = NPC_ID.load(Ordering::Relaxed);
-    while i <= npc_hi {
-        if let Some(arc) = map_id2npc_ref(i) {
+    let max_npc_id = NPC_ID.load(Ordering::Relaxed);
+    for id in NPC_START_NUM..=max_npc_id {
+        if let Some(arc) = map_id2npc_ref(id) {
             let nd = arc.read();
             if libc::strcasecmp(nd.npc_name.as_ptr(), name) == 0 {
                 return &*nd as *const crate::game::npc::NpcData as *mut crate::game::npc::NpcData
                     as *mut std::ffi::c_void;
             }
         }
-        i += 1;
     }
     std::ptr::null_mut()
 }
@@ -558,18 +558,15 @@ pub unsafe fn map_loadregistry(id: i32) -> i32 {
 }
 
 /// Read a game-global registry value by name (case-insensitive).
-///
-/// # Safety
-///
-/// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn map_readglobalgamereg(reg: *const i8) -> i32 {
+pub fn map_readglobalgamereg(reg: &str) -> i32 {
     let gr = gamereg();
-    if reg.is_null() || gr.registry.is_null() {
+    if gr.registry.is_null() {
         return 0;
     }
+    let ckey = std::ffi::CString::new(reg).unwrap_or_default();
     for i in 0..gr.registry_num as usize {
-        let entry = &*gr.registry.add(i);
-        if reg_str_eq(&entry.str, reg) {
+        let entry = unsafe { &*gr.registry.add(i) };
+        if unsafe { reg_str_eq(&entry.str, ckey.as_ptr()) } {
             return entry.val;
         }
     }
@@ -1477,7 +1474,7 @@ pub async unsafe fn nmail_write(sd: *mut MapSessionData) -> i32 {
 
     // Case: "poems" / "poem"
     if to_user_lower == "poems" || to_user_lower == "poem" {
-        if map_readglobalgamereg(c"poemAccept".as_ptr()) == 0 {
+        if map_readglobalgamereg("poemAccept") == 0 {
             nmail_sendmessage(
                 sd,
                 c"Currently not accepting poem submissions.".as_ptr(),
@@ -2577,12 +2574,11 @@ pub async unsafe fn map_setglobalreg_str(m: i32, reg_name: String, val: i32) -> 
 /// Send-safe async function for persisting a game-global registry entry by name.
 ///
 /// Updates the in-memory `gamereg` and persists to DB. All parameters are owned/Copy
-/// types so the future is `Send` — safe to `.await` from Lua callback boundaries.
-/// # Safety
-///
-/// Caller must ensure all pointer arguments are valid and non-null.
-pub async unsafe fn map_setglobalgamereg_str(reg_name: String, val: i32) -> i32 {
-    let save_info: Option<(i32, bool)> = {
+/// Set a game-global registry value by name and persist to DB.
+/// Uses owned `String` so the future is `Send`.
+pub async fn map_setglobalgamereg_str(reg_name: String, val: i32) -> i32 {
+    // SAFETY: raw pointer access to the GlobalReg array — single-threaded, guarded by Mutex.
+    let save_info: Option<(i32, bool)> = unsafe {
         let mut gr = gamereg();
         if gr.registry.is_null() {
             return 0;
@@ -2645,12 +2641,14 @@ pub async unsafe fn map_setglobalgamereg_str(reg_name: String, val: i32) -> i32 
     }; // MutexGuard dropped here — safe to await below
 
     if let Some((save_idx, clear_str)) = save_info {
-        map_savegameregistry(save_idx).await;
+        (unsafe { map_savegameregistry(save_idx) }).await;
         if clear_str {
             let gr = gamereg();
             if !gr.registry.is_null() {
-                let entry = &mut *gr.registry.add(save_idx as usize);
-                entry.str = [0i8; 64];
+                unsafe {
+                    let entry = &mut *gr.registry.add(save_idx as usize);
+                    entry.str = [0i8; 64];
+                }
             }
         }
     }

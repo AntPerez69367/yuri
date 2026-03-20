@@ -259,14 +259,12 @@ impl UserData for MapRegObject {
 impl UserData for GameRegObject {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
         methods.add_meta_method(MetaMethod::Index, |_, _this, key: String| {
-            let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            let val = unsafe { map_readglobalgamereg(ckey.as_ptr()) };
-            Ok(val)
+            Ok(map_readglobalgamereg(&key))
         });
         methods.add_meta_method(MetaMethod::NewIndex, |_, _this, (key, val): (String, mlua::Value)| {
             let val_i = val_to_int(&val)?;
             crate::database::blocking_run_async(async move {
-                unsafe { crate::game::map_server::map_setglobalgamereg_str(key, val_i).await; }
+                crate::game::map_server::map_setglobalgamereg_str(key, val_i).await;
             });
             Ok(())
         });
