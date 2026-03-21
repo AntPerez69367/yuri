@@ -6,7 +6,7 @@ use crate::game::pc::{
     pc_readglobalreg, pc_setglobalreg, pc_readglobalregstring, pc_setglobalregstring,
     pc_readquestreg, pc_setquestreg,
 };
-use crate::game::npc::{npc_readglobalreg_ffi, npc_setglobalreg_ffi};
+use crate::game::npc::{npc_readglobalreg, npc_setglobalreg};
 use crate::game::mob::{mob_readglobalreg, mob_setglobalreg};
 use crate::game::map_server::map_readglobalgamereg;
 use crate::game::scripting::map_globals;
@@ -184,7 +184,7 @@ impl UserData for NpcRegObject {
                 return Err(mlua::Error::external("NpcRegObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            let val = unsafe { npc_readglobalreg_ffi(this.ptr as *mut _, ckey.as_ptr()) };
+            let val = unsafe { npc_readglobalreg(this.ptr as *mut _, ckey.as_ptr()) };
             Ok(val)
         });
         methods.add_meta_method(MetaMethod::NewIndex, |_, this, (key, val): (String, mlua::Value)| {
@@ -192,7 +192,7 @@ impl UserData for NpcRegObject {
                 return Err(mlua::Error::external("NpcRegObject: ptr is null"));
             }
             let ckey = CString::new(key).map_err(mlua::Error::external)?;
-            unsafe { npc_setglobalreg_ffi(this.ptr as *mut _, ckey.as_ptr(), val_to_int(&val)?); }
+            unsafe { npc_setglobalreg(this.ptr as *mut _, ckey.as_ptr(), val_to_int(&val)?); }
             Ok(())
         });
     }
