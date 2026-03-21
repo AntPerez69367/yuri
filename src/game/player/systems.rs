@@ -428,22 +428,14 @@ pub unsafe fn bl_duratimer(id: i32, _none: i32) -> i32 {
                         } else {
                             None
                         };
-                        let mut sd = pe.write();
-                        if caster_id == pe.id {
-                            // Self-cast: pass same pointer for both
-                            let sd_ptr = &mut *sd as *mut MapSessionData;
-                            clif_send_duration(&mut *sd_ptr, spell_id, 0, sd_ptr);
-                        } else if let Some(ref cpe) = caster_pe {
-                            let mut caster_sd = cpe.write();
-                            clif_send_duration(
-                                &mut sd,
-                                spell_id,
-                                0,
-                                &mut *caster_sd as *mut MapSessionData,
-                            );
+                        let fd = pe.fd;
+                        let caster_name: Option<String> = if caster_id == pe.id {
+                            // Self-cast
+                            Some(pe.name.clone())
                         } else {
-                            clif_send_duration(&mut sd, spell_id, 0, std::ptr::null_mut());
-                        }
+                            caster_pe.as_ref().map(|cpe| cpe.name.clone())
+                        };
+                        clif_send_duration(fd, spell_id, 0, caster_name.as_deref());
                     }
 
                     pe.write().player.spells.dura_aether[x].caster_id = 0;
@@ -1010,12 +1002,7 @@ pub unsafe fn pc_scripttimer(id: i32, _none: i32) -> i32 {
     {
         let dmgshield = pe.read().dmgshield;
         if dmgshield > 0.0 {
-            clif_send_duration(
-                &mut pe.write(),
-                0,
-                dmgshield as i32 + 1,
-                std::ptr::null_mut(),
-            );
+            clif_send_duration(pe.fd, 0, dmgshield as i32 + 1, None);
         }
     }
 
@@ -3940,20 +3927,13 @@ pub unsafe fn pc_magic_startup(sd: *mut MapSessionData) -> i32 {
                 } else {
                     None
                 };
-                if let Some(ref cpe) = caster_pe {
-                    let mut caster_sd = cpe.write();
+                {
+                    let caster_name = caster_pe.as_ref().map(|cpe| cpe.name.as_str());
                     clif_send_duration(
-                        &mut *sd,
+                        (*sd).fd,
                         p.id as i32,
                         p.duration / 1000,
-                        &mut *caster_sd as *mut MapSessionData,
-                    );
-                } else {
-                    clif_send_duration(
-                        &mut *sd,
-                        p.id as i32,
-                        p.duration / 1000,
-                        std::ptr::null_mut(),
+                        caster_name,
                     );
                 }
 

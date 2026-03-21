@@ -2033,8 +2033,8 @@ pub unsafe fn sl_pc_setduration(
         let da_aether = sd.player.spells.dura_aether[x].aether;
         let da_duration = sd.player.spells.dura_aether[x].duration;
         if da_id == id as u16 && time_ms <= 0 && da_caster == caster_id as u32 && alreadycast {
-            let tsd = map_id2sd_acc(da_caster);
-            clif_send_duration(&mut *sd, id, time_ms, tsd);
+            let caster_name = crate::game::map_server::map_id2sd_pc(da_caster).map(|pe| pe.name.clone());
+            clif_send_duration(sd.fd, id, time_ms, caster_name.as_deref());
             sd.player.spells.dura_aether[x].duration = 0;
             sd.player.spells.dura_aether[x].caster_id = 0;
             if da_aether == 0 {
@@ -2047,18 +2047,15 @@ pub unsafe fn sl_pc_setduration(
                 || ((da_duration > time_ms || recast != 0) && alreadycast))
         {
             sd.player.spells.dura_aether[x].duration = time_ms;
-            clif_send_duration(&mut *sd, id, time_ms / 1000, map_id2sd_acc(da_caster));
+            let caster_name = crate::game::map_server::map_id2sd_pc(da_caster).map(|pe| pe.name.clone());
+            clif_send_duration(sd.fd, id, time_ms / 1000, caster_name.as_deref());
             return;
         } else if da_id == 0 && da_duration == 0 && time_ms != 0 && !alreadycast {
             sd.player.spells.dura_aether[x].id = id as u16;
             sd.player.spells.dura_aether[x].duration = time_ms;
             sd.player.spells.dura_aether[x].caster_id = caster_id as u32;
-            clif_send_duration(
-                &mut *sd,
-                id,
-                time_ms / 1000,
-                map_id2sd_acc(caster_id as u32),
-            );
+            let caster_name = crate::game::map_server::map_id2sd_pc(caster_id as u32).map(|pe| pe.name.clone());
+            clif_send_duration(sd.fd, id, time_ms / 1000, caster_name.as_deref());
             return;
         }
     }
@@ -2084,8 +2081,8 @@ pub unsafe fn sl_pc_flushduration(
         if max_id > 0 && id > max_id {
             continue;
         }
-        let tsd = map_id2sd_acc(sd.player.spells.dura_aether[x].caster_id);
-        clif_send_duration(&mut *sd, id, 0, tsd);
+        let caster_name = crate::game::map_server::map_id2sd_pc(sd.player.spells.dura_aether[x].caster_id).map(|pe| pe.name.clone());
+        clif_send_duration(sd.fd, id, 0, caster_name.as_deref());
         sd.player.spells.dura_aether[x].duration = 0;
         sd.player.spells.dura_aether[x].caster_id = 0;
         if sd.player.spells.dura_aether[x].aether == 0 {
@@ -2113,8 +2110,8 @@ pub unsafe fn sl_pc_refreshdurations(sd: &mut MapSessionData) {
     for x in 0..MAX_MAGIC_TIMERS {
         let da = sd.player.spells.dura_aether[x];
         if da.id > 0 && da.duration > 0 {
-            let tsd = map_id2sd_acc(da.caster_id);
-            clif_send_duration(&mut *sd, da.id as i32, da.duration / 1000, tsd);
+            let caster_name = crate::game::map_server::map_id2sd_pc(da.caster_id).map(|pe| pe.name.clone());
+            clif_send_duration(sd.fd, da.id as i32, da.duration / 1000, caster_name.as_deref());
         }
     }
 }

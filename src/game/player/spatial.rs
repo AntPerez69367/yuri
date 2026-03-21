@@ -259,22 +259,13 @@ pub unsafe fn pc_diescript(sd: *mut MapSessionData) -> i32 {
             } else {
                 None
             };
-            if let Some(ref cpe) = caster_pe {
-                let mut caster_sd = cpe.write();
-                clif_send_duration(
-                    &mut *sd,
-                    (&(*sd).player.spells.dura_aether)[i].id as i32,
-                    0,
-                    &mut *caster_sd as *mut MapSessionData,
-                );
-            } else {
-                clif_send_duration(
-                    &mut *sd,
-                    (&(*sd).player.spells.dura_aether)[i].id as i32,
-                    0,
-                    std::ptr::null_mut(),
-                );
-            }
+            let caster_name = caster_pe.as_ref().map(|cpe| cpe.name.as_str());
+            clif_send_duration(
+                (*sd).fd,
+                (&(*sd).player.spells.dura_aether)[i].id as i32,
+                0,
+                caster_name,
+            );
         }
         (&mut (*sd).player.spells.dura_aether)[i].caster_id = 0;
 

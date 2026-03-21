@@ -569,79 +569,55 @@ pub fn clif_has_aethers(sd: &mut MapSessionData, spell: i32) -> i32 {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn clif_send_duration(
-    sd: &mut MapSessionData,
-    id: i32,
+pub fn clif_send_duration(
+    fd: SessionId,
+    spell_id: i32,
     time: i32,
-    tsd: *mut MapSessionData,
+    caster_name: Option<&str>,
 ) -> i32 {
-    let name = magic_db::name_ptr(id);
+    use crate::game::util::carray_to_str;
 
-    if magic_db::ticker(id) == 0 {
+    if magic_db::ticker(spell_id) == 0 {
         return 0;
     }
 
-    // Compute label string and its length.
-    // label is written directly into the WFIFO via copy.
-    let label: &[u8];
-    let mut composed_buf = [0u8; 512];
-    let label_len: usize;
-
-    if id == 0 {
-        label = b"Shield";
-        label_len = label.len();
-    } else if !tsd.is_null() {
-        // sprintf(buf, "%s (%s)", name, tsd->status.name)
-        unsafe {
-            let name_bytes = cstr_bytes(name as *const u8);
-            let char_name_bytes = (*tsd).player.identity.name.as_bytes();
-            let total = name_bytes.len() + 3 + char_name_bytes.len();
-            let total = if total < composed_buf.len() {
-                let mut pos = 0usize;
-                composed_buf[pos..pos + name_bytes.len()].copy_from_slice(name_bytes);
-                pos += name_bytes.len();
-                composed_buf[pos] = b' ';
-                composed_buf[pos + 1] = b'(';
-                pos += 2;
-                composed_buf[pos..pos + char_name_bytes.len()].copy_from_slice(char_name_bytes);
-                pos += char_name_bytes.len();
-                composed_buf[pos] = b')';
-                total
-            } else {
-                // Label too long for buffer: truncate to last valid index (no null terminator needed,
-                // length is tracked explicitly via label_len).
-                composed_buf.len() - 1
-            };
-            label = std::slice::from_raw_parts(composed_buf.as_ptr(), total);
-            label_len = total;
+    // Build the label: "Shield" for id 0, "SpellName (CasterName)" if caster, else "SpellName".
+    let spell_data = magic_db::search(spell_id);
+    let spell_name = carray_to_str(&spell_data.name);
+    let mut buf = [0u8; 512];
+    let label: &[u8] = if spell_id == 0 {
+        b"Shield"
+    } else if let Some(cname) = caster_name {
+        let parts: &[&[u8]] = &[spell_name.as_bytes(), b" (", cname.as_bytes(), b")"];
+        let total: usize = parts.iter().map(|p| p.len()).sum();
+        if total < buf.len() {
+            let mut pos = 0;
+            for part in parts {
+                buf[pos..pos + part.len()].copy_from_slice(part);
+                pos += part.len();
+            }
+            &buf[..total]
+        } else {
+            spell_name.as_bytes()
         }
     } else {
-        unsafe {
-            label = cstr_bytes(name as *const u8);
-            label_len = label.len();
-        }
-    }
+        spell_name.as_bytes()
+    };
 
-    if !session_exists(sd.fd) {
+    if !session_exists(fd) {
         return 0;
     }
 
-    let len = label_len as i32;
-    let fd = sd.fd;
+    let len = label.len();
     unsafe {
-        wfifohead(fd, (len + 10) as usize);
+        wfifohead(fd, len + 10);
         wfifob(fd, 5, len as u8);
-
-        // copy label bytes to WFIFOP(fd, 6)
-        {
-            let dst = wfifop(fd, 6);
-            if !dst.is_null() {
-                std::ptr::copy_nonoverlapping(label.as_ptr(), dst, label_len);
-            }
+        let dst = wfifop(fd, 6);
+        if !dst.is_null() {
+            std::ptr::copy_nonoverlapping(label.as_ptr(), dst, len);
         }
-
-        wfifol(fd, label_len + 6, (time as u32).swap_bytes());
-        wfifoheader(fd, 0x3A, (label_len as u16) + 7);
+        wfifol(fd, len + 6, (time as u32).swap_bytes());
+        wfifoheader(fd, 0x3A, (len as u16) + 7);
         wfifoset(fd, encrypt(fd) as usize);
     }
 
