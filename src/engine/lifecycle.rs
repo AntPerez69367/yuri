@@ -10,20 +10,15 @@ pub const SERVER_TICK_RATE_NS: u64 = 10_000_000;
 /// Server tick rate as a Duration for convenience
 pub const SERVER_TICK_RATE: Duration = Duration::from_nanos(SERVER_TICK_RATE_NS);
 
-/// Type alias for termination callback functions
-pub type TermFunc = Box<dyn Fn() + Send + 'static>;
-
 /// Global server state
 pub struct ServerState {
     pub shutdown_requested: bool,
-    pub term_func: Option<TermFunc>,
 }
 
 impl ServerState {
     pub fn new() -> Self {
         ServerState {
             shutdown_requested: false,
-            term_func: None,
         }
     }
 
@@ -33,19 +28,6 @@ impl ServerState {
 
     pub fn should_shutdown(&self) -> bool {
         self.shutdown_requested
-    }
-
-    pub fn set_term_func<F>(&mut self, func: F)
-    where
-        F: Fn() + Send + 'static,
-    {
-        self.term_func = Some(Box::new(func));
-    }
-
-    pub fn call_term_func(&self) {
-        if let Some(ref func) = self.term_func {
-            func();
-        }
     }
 }
 
@@ -101,19 +83,6 @@ pub fn core_cleanup() {
 }
 
 /// # Safety
-/// The callback function pointer must be valid for the lifetime of the server
-pub unsafe fn set_termfunc(func: Option<unsafe fn()>) {
-    if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
-        let mut state = state_lock.lock().unwrap();
-        if let Some(f) = func {
-            state.set_term_func(move || unsafe { f(); });
-        } else {
-            state.term_func = None;
-        }
-    }
-}
-
-/// # Safety
 /// Should only be called from signal handlers
 pub unsafe fn handle_signal(signum: i32) {
     if let Some(signal) = Signal::from_signal_num(signum) {
@@ -133,12 +102,8 @@ pub fn request_shutdown() {
 pub fn should_shutdown() -> bool {
     if SHUTDOWN_PENDING.load(Ordering::SeqCst) {
         tracing::info!("[engine] Processing shutdown signal");
-        if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
-            let mut state = state_lock.lock().unwrap();
-            state.call_term_func();
-            state.request_shutdown();
-        }
         SHUTDOWN_PENDING.store(false, Ordering::SeqCst);
+        request_shutdown();
     }
     if let Some(state_lock) = GLOBAL_SERVER_STATE.lock().unwrap().as_ref() {
         let state = state_lock.lock().unwrap();
@@ -159,7 +124,6 @@ mod tests {
     fn test_server_state_creation() {
         let state = ServerState::new();
         assert!(!state.should_shutdown());
-        assert!(state.term_func.is_none());
     }
 
     #[test]
@@ -168,23 +132,6 @@ mod tests {
         assert!(!state.should_shutdown());
         state.request_shutdown();
         assert!(state.should_shutdown());
-    }
-
-    #[test]
-    fn test_term_func() {
-        use std::sync::atomic::{AtomicBool, Ordering};
-
-        let called = Arc::new(AtomicBool::new(false));
-        let called_clone = called.clone();
-
-        let mut state = ServerState::new();
-        state.set_term_func(move || {
-            called_clone.store(true, Ordering::SeqCst);
-        });
-
-        assert!(!called.load(Ordering::SeqCst));
-        state.call_term_func();
-        assert!(called.load(Ordering::SeqCst));
     }
 
     #[test]

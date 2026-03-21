@@ -2,16 +2,28 @@ use anyhow::{Context, Result};
 use sqlx::mysql::MySqlPoolOptions;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use yuri::engine::{core_init, set_termfunc};
+
+use yuri::config::{config, config_read};
+use yuri::database::map_db::map_init;
+use yuri::database::{initialize, set_pool};
+use yuri::engine::core_init;
+use yuri::engine::game_loop::run_game_loop;
 use yuri::game::block::map_initblock;
-use yuri::game::client::visual::clif_timeout;
+use yuri::game::client::{clif_parse, visual::clif_timeout};
+use yuri::game::lifecycle::map_do_term;
 use yuri::game::lua::dispatch::dispatch;
-use yuri::game::map_server::{lang_read, map_do_term, map_initiddb, map_loadgameregistry};
+use yuri::game::map_server::{
+    lang_read, map_id2sd_pc, map_initiddb, map_loadgameregistry, object_flag_init,
+};
 use yuri::game::mob::mobspawn_read;
+use yuri::game::npc::{npc_init_async, warp_init_async};
 use yuri::game::scripting::sl_init;
 use yuri::servers::login::{parse_lang_file, LoginState};
-use yuri::session::{get_session_manager, make_listen_port, sync_callback};
-use yuri::world::{KickRequest, WorldState};
+use yuri::session::{
+    get_session_manager, make_listen_port, session_set_eof, sync_callback, CallbackFuture,
+    SessionId,
+};
+use yuri::world::{set_world, KickRequest, WorldState};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -49,10 +61,10 @@ async fn main() -> Result<()> {
     }
 
     // Load config into global CONFIG static.
-    if yuri::config::config_read(&conf_file) != 0 {
+    if config_read(&conf_file) != 0 {
         anyhow::bail!("config_read failed for {}", conf_file);
     }
-    let config = yuri::config::config();
+    let config = config();
 
     // Load lang strings for map server.
     {
@@ -79,7 +91,7 @@ async fn main() -> Result<()> {
             .with_context(|| format!("Cannot connect to MySQL: {}", db_url))?
     };
 
-    yuri::database::set_pool(pool.clone()).context("Failed to register DB pool")?;
+    set_pool(pool.clone()).context("Failed to register DB pool")?;
 
     // Reset online flags.
     sqlx::query("UPDATE `Character` SET `ChaOnline` = 0 WHERE `ChaOnline` = 1")
@@ -99,32 +111,37 @@ async fn main() -> Result<()> {
         kick_tx,
     });
 
-    yuri::world::set_world(Arc::clone(&world));
+    set_world(Arc::clone(&world));
 
     // ── Map init (sync, requires game thread) ────────────────────────
     unsafe {
-        if yuri::database::map_db::map_init(&config.maps_dir, config.server_id) != 0 {
+        if map_init(&config.maps_dir, config.server_id) != 0 {
             anyhow::bail!("map_init failed");
         }
         map_initblock();
         map_initiddb();
     }
 
-    // ── Async DB loads (parallel) ────────────────────────────────────
-    let (npc_res, warp_res) = tokio::join!(
-        async { unsafe { yuri::game::npc::npc_init_async().await } },
-        async { unsafe { yuri::game::npc::warp_init_async().await } },
-    );
-    if npc_res != 0 { anyhow::bail!("npc_init_async failed"); }
-    if warp_res != 0 { anyhow::bail!("warp_init_async failed"); }
+    // ── Static database tables (parallel) ────────────────────────────
+    initialize().await?;
 
-    yuri::database::initialize().await?;
+    // ── Entity spawning (after statics are loaded) ────────────────────
+    let (npc_res, warp_res) = tokio::join!(
+        async { unsafe { npc_init_async().await } },
+        async { unsafe { warp_init_async().await } },
+    );
+    if npc_res != 0 {
+        anyhow::bail!("npc_init_async failed");
+    }
+    if warp_res != 0 {
+        anyhow::bail!("warp_init_async failed");
+    }
 
     unsafe { mobspawn_read().await };
 
     // ── Game state init (sync, after DB) ─────────────────────────────
     unsafe {
-        yuri::game::map_server::object_flag_init();
+        object_flag_init();
         sl_init();
     }
     unsafe { map_loadgameregistry().await };
@@ -133,9 +150,9 @@ async fn main() -> Result<()> {
     {
         let manager = get_session_manager();
         let mut cbs = manager.default_callbacks.lock().unwrap();
-        cbs.parse = Some(std::sync::Arc::new(
-            |fd: yuri::session::SessionId| -> yuri::session::CallbackFuture {
-                Box::pin(yuri::game::client::clif_parse(fd))
+        cbs.parse = Some(Arc::new(
+            |fd: SessionId| -> CallbackFuture {
+                Box::pin(clif_parse(fd))
             },
         ));
         cbs.timeout = Some(sync_callback(clif_timeout));
@@ -143,7 +160,6 @@ async fn main() -> Result<()> {
     make_listen_port(config.map_port as i32);
 
     dispatch("startup", None, &[]);
-    unsafe { set_termfunc(Some(map_do_term)) };
 
     // ── Login listener ───────────────────────────────────────────────
     {
@@ -212,9 +228,9 @@ async fn main() -> Result<()> {
         let mut kick_rx = kick_rx;
         local.spawn_local(async move {
             while let Some(req) = kick_rx.recv().await {
-                if let Some(arc) = yuri::game::map_server::map_id2sd_pc(req.char_id) {
+                if let Some(arc) = map_id2sd_pc(req.char_id) {
                     let fd = arc.fd;
-                    yuri::session::session_set_eof(fd, 12);
+                    session_set_eof(fd, 12);
                     tracing::info!(
                         "[world] [kick] char_id={} fd={:?} kicked (duplicate login)",
                         req.char_id,
@@ -226,14 +242,11 @@ async fn main() -> Result<()> {
     }
 
     local
-        .run_until(yuri::engine::game_loop::run_game_loop(config.map_port))
+        .run_until(run_game_loop(config.map_port))
         .await
         .map_err(|e| anyhow::anyhow!("game loop error: {}", e))?;
 
     tracing::info!("[world] Shutting down...");
-    unsafe {
-        set_termfunc(None);
-        map_do_term();
-    }
+    map_do_term();
     Ok(())
 }
