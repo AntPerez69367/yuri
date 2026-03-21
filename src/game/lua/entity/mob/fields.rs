@@ -1,3 +1,4 @@
+use crate::common::traits::LegacyEntity;
 use crate::game::lua::entity::mob::LuaMob;
 use crate::game::lua::entity::types::EntityType;
 use crate::game::map_server::map_id2mob_ref;

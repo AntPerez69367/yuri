@@ -1,34 +1,19 @@
+//! Spatial query methods shared across all entity types.
+
 use mlua::prelude::*;
 use tealr::mlu::TealDataMethods;
 use tealr::ToTypename;
 
 use crate::game::lua::dispatch::id_to_lua;
-use crate::game::lua::registry::game_registry::LuaGameRegistry;
 use crate::game::map_server::entity_position;
 use crate::game::scripting::object_collect::{
     get_alive_objects_area, get_alive_objects_cell, get_alive_objects_same_map, get_objects_area,
     get_objects_cell, get_objects_cell_with_traps, get_objects_in_map, get_objects_same_map,
 };
 
-/// Trait for entity types that have an `id` field.
-/// Allows shared method registration to work across all entity types.
-pub trait HasEntityId {
-    fn entity_id(&self) -> u32;
-}
+use super::{ids_to_lua_table, HasEntityId};
 
-/// Convert entity IDs to a Lua table of typed entity objects.
-fn ids_to_lua_table(lua: &Lua, ids: &[u32]) -> LuaResult<LuaTable> {
-    let tbl = lua.create_table()?;
-    for (i, &id) in ids.iter().enumerate() {
-        let val = id_to_lua(lua, id)?;
-        tbl.raw_set(i + 1, val)?;
-    }
-    Ok(tbl)
-}
-
-/// Register shared methods available on all entity types.
-/// Call from `TealData::add_methods` on each entity.
-pub fn register_shared_methods<T>(methods: &mut impl TealDataMethods<T>)
+pub fn register<T>(methods: &mut impl TealDataMethods<T>)
 where
     T: 'static + Clone + Send + Sync + HasEntityId + ToTypename,
 {
@@ -136,12 +121,4 @@ where
     methods.add_method("getBlock", |lua, _this, id: u32| {
         id_to_lua(lua, id)
     });
-}
-
-/// Fallback for __index — handles keys not matched by registered fields/methods.
-pub fn try_shared_index(lua: &Lua, key: &str, _entity_id: u32) -> Option<LuaResult<LuaValue>> {
-    match key {
-        "gameRegistry" => Some(LuaGameRegistry.into_lua(lua)),
-        _ => None,
-    }
 }
