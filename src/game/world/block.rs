@@ -11,7 +11,7 @@
 #![allow(non_upper_case_globals)]
 
 use crate::common::traits::LegacyEntity;
-use crate::database::map_db::MAP_SLOTS;
+use crate::database::map_db::{map_data, MAP_SLOTS};
 use crate::game::entity_store::map_id2sd_pc;
 use crate::game::mob::MOB_DEAD;
 use crate::game::pc::U_FLAG_UNPHYSICAL;
@@ -43,29 +43,20 @@ pub enum AreaType {
 // ─── map_is_loaded ───────────────────────────────────────────────────────────
 
 /// Return `true` if map slot `m` is loaded (has a non-null registry pointer).
-///
-/// # Safety
-/// `map` global must be initialized.
-pub unsafe fn map_is_loaded(m: i32) -> bool {
-    if m < 0 || map_ptr().is_null() {
+pub fn map_is_loaded(m: i32) -> bool {
+    if m < 0 {
         return false;
     }
-    let m_idx = m as usize;
-    if m_idx >= MAP_SLOTS {
-        return false;
-    }
-    let slot = &*map_ptr().add(m_idx);
-    !slot.registry.is_null()
+    map_data(m as usize).map_or(false, |slot| !slot.registry.is_null())
 }
 
 // ─── is_alive ────────────────────────────────────────────────────────────────
 
-
 /// Return `true` if the entity with the given ID is alive, using typed lookups.
 pub fn is_alive_id(id: u32) -> bool {
-    use crate::game::mob::{MOB_START_NUM, FLOORITEM_START_NUM, NPC_START_NUM};
+    use crate::game::map_server::{map_id2mob_ref, map_id2sd_pc};
+    use crate::game::mob::{FLOORITEM_START_NUM, MOB_START_NUM, NPC_START_NUM};
     use crate::game::pc::{OPT_FLAG_STEALTH, PC_DIE};
-    use crate::game::map_server::{map_id2sd_pc, map_id2mob_ref};
 
     if id < MOB_START_NUM {
         // PC
@@ -98,10 +89,14 @@ pub fn is_alive_id(id: u32) -> bool {
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_initblock() {
     crate::game::block_grid::init_grids();
-    if map_ptr().is_null() { return; }
+    if map_ptr().is_null() {
+        return;
+    }
     let slots = std::slice::from_raw_parts_mut(map_ptr(), crate::database::map_db::MAP_SLOTS);
     for (n, slot) in slots.iter_mut().enumerate() {
-        if slot.bxs == 0 || slot.bys == 0 { continue; }
+        if slot.bxs == 0 || slot.bys == 0 {
+            continue;
+        }
         let cells = slot.bxs as usize * slot.bys as usize;
         // Allocate warp array (still used by warp system).
         slot.warp = alloc_ptr_array::<crate::database::map_db::WarpList>(cells);
@@ -129,7 +124,9 @@ pub unsafe fn map_termblock() {}
 /// Insert entity into the block grid by ID and coordinates.
 pub fn map_addblock_id(id: u32, bl_type: u8, m: u16, x: u16, y: u16) -> i32 {
     let m = m as usize;
-    if m >= crate::database::map_db::MAP_SLOTS { return 1; }
+    if m >= crate::database::map_db::MAP_SLOTS {
+        return 1;
+    }
     if let Some(g) = crate::game::block_grid::get_grid_mut(m) {
         g.add(id, x, y, bl_type);
     }
@@ -139,7 +136,9 @@ pub fn map_addblock_id(id: u32, bl_type: u8, m: u16, x: u16, y: u16) -> i32 {
 /// Remove entity from the block grid by ID and map.
 pub fn map_delblock_id(id: u32, m: u16) -> i32 {
     let m = m as usize;
-    if m >= crate::database::map_db::MAP_SLOTS { return 0; }
+    if m >= crate::database::map_db::MAP_SLOTS {
+        return 0;
+    }
     if let Some(g) = crate::game::block_grid::get_grid_mut(m) {
         g.remove(id);
     }
@@ -149,7 +148,9 @@ pub fn map_delblock_id(id: u32, m: u16) -> i32 {
 /// Move entity on the grid by ID and coordinates.
 pub fn map_moveblock_id(id: u32, m: u16, old_x: u16, old_y: u16, new_x: u16, new_y: u16) -> i32 {
     let m = m as usize;
-    if m >= crate::database::map_db::MAP_SLOTS { return 0; }
+    if m >= crate::database::map_db::MAP_SLOTS {
+        return 0;
+    }
     if let Some(g) = crate::game::block_grid::get_grid_mut(m) {
         g.move_entity(id, old_x, old_y, new_x, new_y);
     }
@@ -158,7 +159,9 @@ pub fn map_moveblock_id(id: u32, m: u16, old_x: u16, old_y: u16, new_x: u16, new
 
 /// Return the number of players on map `m`, using the block grid's user_count.
 pub fn map_user_count(m: usize) -> i32 {
-    crate::game::block_grid::get_grid(m).map(|g| g.user_count).unwrap_or(0)
+    crate::game::block_grid::get_grid(m)
+        .map(|g| g.user_count)
+        .unwrap_or(0)
 }
 
 /// Returns 1 if the cell `(x, y)` on map `m` is passable, 0 otherwise.
@@ -205,4 +208,3 @@ pub unsafe fn hasCoref(sd: *mut crate::game::pc::MapSessionData) -> i32 {
     }
     0
 }
-

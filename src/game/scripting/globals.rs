@@ -8,7 +8,7 @@ use crate::common::traits::LegacyEntity;
 
 use crate::common::constants::entity::{BL_ALL, BL_ITEM, BL_MOB, BL_NPC, BL_PC};
 use crate::database::get_pool;
-use crate::database::map_db::get_map_ptr;
+use crate::database::map_db::{get_map_ptr, map_is_loaded};
 use crate::game::map_parse::chat::{clif_broadcast, clif_gmbroadcast};
 use crate::game::map_server::{
     map_changepostcolor, CURRENT_DAY, CURRENT_SEASON, CURRENT_TIME, CURRENT_YEAR,
@@ -890,7 +890,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     g.set(
         "addMob",
         lua.create_async_function(|_, (m, x, y, mobid): (i32, i32, i32, i32)| async move {
-            if !unsafe { crate::database::map_db::map_is_loaded(m as u16) } {
+            if !map_is_loaded(m as u16) {
                 return Ok(false);
             }
             let sid = crate::config::config().server_id;

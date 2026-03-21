@@ -106,7 +106,7 @@ pub fn intif_install_player(fd: i32, player: PlayerData) -> i32 {
         sd_box.optFlags |= OPT_FLAG_WALKTHROUGH;
     }
 
-    if !unsafe { map_is_loaded(sd_box.player.identity.last_pos.m as i32) } {
+    if !map_is_loaded(sd_box.player.identity.last_pos.m as i32) {
         sd_box.player.identity.last_pos.m = 0;
         sd_box.player.identity.last_pos.x = 8;
         sd_box.player.identity.last_pos.y = 7;

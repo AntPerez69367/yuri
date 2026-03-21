@@ -20,11 +20,11 @@ pub use crate::common::types::GlobalReg;
 /// Warp portal entry for map-to-map teleportation. 40 bytes on 64-bit.
 #[repr(C)]
 pub struct WarpList {
-    pub x:    i32,
-    pub y:    i32,
-    pub tm:   i32,
-    pub tx:   i32,
-    pub ty:   i32,
+    pub x: i32,
+    pub y: i32,
+    pub tm: i32,
+    pub tx: i32,
+    pub ty: i32,
     pub next: *mut WarpList,
     pub prev: *mut WarpList,
 }
@@ -41,9 +41,9 @@ pub struct MapData {
     pub title: [i8; 64],
     pub mapfile: [i8; 1024],
     pub maprejectmsg: [i8; 64],
-    pub block:     *mut *mut u8,     // legacy — spatial indexing uses block_grid
-    pub block_mob: *mut *mut u8,     // legacy — spatial indexing uses block_grid
-    pub warp:      *mut *mut WarpList,
+    pub block: *mut *mut u8,     // legacy — spatial indexing uses block_grid
+    pub block_mob: *mut *mut u8, // legacy — spatial indexing uses block_grid
+    pub warp: *mut *mut WarpList,
     pub registry: *mut GlobalReg,
     pub max_sweep_count: i32,
     pub user: i32,
@@ -280,7 +280,10 @@ fn load_all_registries(
         let map_id: u32 = row.try_get("mrg_map_id")?;
         let identifier: String = row.try_get("mrg_identifier")?;
         let value: u32 = row.try_get("mrg_value")?;
-        registry.entry(map_id).or_default().push((identifier, value));
+        registry
+            .entry(map_id)
+            .or_default()
+            .push((identifier, value));
     }
     Ok(registry)
 }
@@ -568,31 +571,6 @@ pub fn reload_maps(
     Ok(rows.len())
 }
 
-#[cfg(test)]
-mod layout_tests {
-    use super::*;
-
-    #[test]
-    fn global_reg_layout() {
-        // struct global_reg { char str[64]; int val; } = 68 bytes
-        assert_eq!(std::mem::size_of::<GlobalReg>(), 68);
-        assert_eq!(std::mem::offset_of!(GlobalReg, val), 64);
-    }
-
-    #[test]
-    fn map_data_size() {
-        let size = std::mem::size_of::<MapData>();
-        println!("MapData size = {size}");
-        assert_eq!(size, 1304, "MapData size mismatch");
-    }
-
-    #[test]
-    fn warp_list_layout() {
-        assert_eq!(std::mem::size_of::<WarpList>(), 40);
-        assert_eq!(std::mem::offset_of!(WarpList, next), 24);
-    }
-}
-
 // ─── Public API exports ────────────────────────────────────────────────────
 
 /// Newtype wrapping the heap-allocated MapData array pointer.
@@ -616,7 +594,9 @@ pub fn raw_map_ptr() -> *mut MapData {
 /// Returns `None` if the map array isn't initialized or `m` is out of bounds.
 pub fn map_data(m: usize) -> Option<&'static MapData> {
     let ptr = MAP_PTR.get()?.0;
-    if ptr.is_null() || m >= MAP_SLOTS { return None; }
+    if ptr.is_null() || m >= MAP_SLOTS {
+        return None;
+    }
     Some(unsafe { &*ptr.add(m) })
 }
 
@@ -624,7 +604,9 @@ pub fn map_data(m: usize) -> Option<&'static MapData> {
 /// Returns `None` if the map array isn't initialized or `m` is out of bounds.
 pub fn map_data_mut(m: usize) -> Option<&'static mut MapData> {
     let ptr = MAP_PTR.get()?.0;
-    if ptr.is_null() || m >= MAP_SLOTS { return None; }
+    if ptr.is_null() || m >= MAP_SLOTS {
+        return None;
+    }
     Some(unsafe { &mut *ptr.add(m) })
 }
 
@@ -642,7 +624,9 @@ pub unsafe fn map_init(maps_dir: &str, server_id: i32) -> i32 {
         ptr as *mut MapData
     };
 
-    match load_maps(maps_dir, server_id, unsafe { &mut *(raw as *mut [MapData; MAP_SLOTS]) }) {
+    match load_maps(maps_dir, server_id, unsafe {
+        &mut *(raw as *mut [MapData; MAP_SLOTS])
+    }) {
         Ok(count) => {
             if MAP_PTR.set(MapPtr(raw)).is_err() {
                 tracing::warn!("[map] map_init called more than once — ignoring duplicate init");
@@ -672,11 +656,16 @@ pub unsafe fn map_init(maps_dir: &str, server_id: i32) -> i32 {
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_reload(maps_dir: &str, server_id: i32) -> i32 {
-    if raw_map_ptr().is_null() { return -1; }
+    if raw_map_ptr().is_null() {
+        return -1;
+    }
     let slots = unsafe { &mut *(raw_map_ptr() as *mut [MapData; MAP_SLOTS]) };
     match reload_maps(maps_dir, server_id, slots) {
         Ok(_) => 0,
-        Err(e) => { tracing::error!("[map] map_reload failed: {e:#}"); -1 }
+        Err(e) => {
+            tracing::error!("[map] map_reload failed: {e:#}");
+            -1
+        }
     }
 }
 
@@ -697,15 +686,25 @@ pub fn get_map_ptr(id: u16) -> *mut MapData {
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn map_get_warp(m: u16, dx: u16, dy: u16) -> *mut WarpList {
     let md_ptr = get_map_ptr(m);
-    if md_ptr.is_null() { return std::ptr::null_mut(); }
+    if md_ptr.is_null() {
+        return std::ptr::null_mut();
+    }
     let md = &*md_ptr;
-    if md.xs == 0 || md.ys == 0 { return std::ptr::null_mut(); }
-    if dx >= md.xs || dy >= md.ys { return std::ptr::null_mut(); }
-    if md.warp.is_null() { return std::ptr::null_mut(); }
+    if md.xs == 0 || md.ys == 0 {
+        return std::ptr::null_mut();
+    }
+    if dx >= md.xs || dy >= md.ys {
+        return std::ptr::null_mut();
+    }
+    if md.warp.is_null() {
+        return std::ptr::null_mut();
+    }
     let block_size = BLOCK_SIZE;
     let bx = dx as usize / block_size;
     let by = dy as usize / block_size;
-    if bx >= md.bxs as usize || by >= md.bys as usize { return std::ptr::null_mut(); }
+    if bx >= md.bxs as usize || by >= md.bys as usize {
+        return std::ptr::null_mut();
+    }
     let idx = bx + by * md.bxs as usize;
     md.warp.add(idx).read()
 }
@@ -714,19 +713,51 @@ pub unsafe fn map_get_warp(m: u16, dx: u16, dy: u16) -> *mut WarpList {
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn map_is_loaded(id: u16) -> bool {
+pub fn map_is_loaded(id: u16) -> bool {
     let ptr = get_map_ptr(id);
-    !ptr.is_null() && (*ptr).xs > 0
+    !ptr.is_null() && unsafe { (*ptr).xs > 0 }
 }
 
 /// Reload the MapRegistry for a single map.
 pub fn map_loadregistry(map_id: i32) -> i32 {
-    if raw_map_ptr().is_null() { return -1; }
+    if raw_map_ptr().is_null() {
+        return -1;
+    }
     let id = map_id as usize;
-    if id >= MAP_SLOTS { return -1; }
+    if id >= MAP_SLOTS {
+        return -1;
+    }
     let slot = unsafe { &mut *raw_map_ptr().add(id) };
     match load_registry(slot, map_id as u32) {
         Ok(_) => 0,
-        Err(e) => { tracing::error!("[map] map_loadregistry map_id={map_id} failed: {e:#}"); -1 }
+        Err(e) => {
+            tracing::error!("[map] map_loadregistry map_id={map_id} failed: {e:#}");
+            -1
+        }
+    }
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    #[test]
+    fn global_reg_layout() {
+        // struct global_reg { char str[64]; int val; } = 68 bytes
+        assert_eq!(std::mem::size_of::<GlobalReg>(), 68);
+        assert_eq!(std::mem::offset_of!(GlobalReg, val), 64);
+    }
+
+    #[test]
+    fn map_data_size() {
+        let size = std::mem::size_of::<MapData>();
+        println!("MapData size = {size}");
+        assert_eq!(size, 1304, "MapData size mismatch");
+    }
+
+    #[test]
+    fn warp_list_layout() {
+        assert_eq!(std::mem::size_of::<WarpList>(), 40);
+        assert_eq!(std::mem::offset_of!(WarpList, next), 24);
     }
 }
