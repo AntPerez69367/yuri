@@ -71,7 +71,7 @@ pub unsafe fn lang_read(cfg_file: *const i8) -> i32 {
     let file = match std::fs::File::open(path.as_ref()) {
         Ok(f) => f,
         Err(_) => {
-            println!("CFG_ERR: Language file ({path}) not found.");
+            tracing::error!("CFG_ERR: Language file ({path}) not found.");
             return 1;
         }
     };
@@ -115,6 +115,6 @@ pub unsafe fn lang_read(cfg_file: *const i8) -> i32 {
     }
 
     let _ = MAP_MSG.set(msgs);
-    println!("[map] [lang_read] file={path}");
+    tracing::info!("Language messages loaded.");
     0
 }
