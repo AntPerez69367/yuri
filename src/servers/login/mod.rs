@@ -83,7 +83,7 @@ impl LoginState {
     }
 
     pub fn test_only() -> Self {
-        let config: ServerConfig = serde_yaml::from_str(r#"
+        let config = ServerConfig::from_yaml_str(r#"
 login_id: "loginid"
 login_pw: "loginpw"
 login_ip: "127.0.0.1"

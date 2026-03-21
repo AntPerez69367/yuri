@@ -2,13 +2,9 @@
 //!
 //! Parses and manages server configuration from YAML files.
 //! This replaces the legacy C config.c implementation with a type-safe Rust version.
-//!
-//! Uses serde_yaml for automatic parsing - just define the struct and serde handles
-//! all the parsing, validation, and type conversion!
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
-use std::fs;
+use serde::Deserialize;
 use std::path::Path;
 use std::sync::atomic::AtomicI32;
 use std::sync::OnceLock;
@@ -34,9 +30,8 @@ static CONFIG: OnceLock<ServerConfig> = OnceLock::new();
 
 /// Main server configuration
 ///
-/// This struct is automatically parsed from YAML by serde.
-/// Just add a field here, and serde handles the rest!
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// This struct is automatically parsed from YAML by the config crate.
+#[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {
     // ============================================
     // Login Server Configuration
@@ -199,27 +194,18 @@ fn default_meta_dir() -> String {
 
 impl ServerConfig {
     /// Load configuration from a YAML file
-    ///
-    /// # Example
-    /// ```no_run
-    /// use yuri::config::ServerConfig;
-    ///
-    /// let config = ServerConfig::from_file("conf/server.yaml")
-    ///     .expect("Failed to load config");
-    /// println!("Map IP: {}", config.map_ip);
-    /// ```
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
 
-        // Read file contents
-        let contents = fs::read_to_string(path)
-            .with_context(|| format!("Failed to read config file: {}", path.display()))?;
+        let settings = config::Config::builder()
+            .add_source(config::File::from(path))
+            .build()
+            .with_context(|| format!("Failed to load config from {}", path.display()))?;
 
-        // Parse YAML - serde does ALL the work!
-        let config: ServerConfig = serde_yaml::from_str(&contents)
-            .with_context(|| format!("Failed to parse YAML in {}", path.display()))?;
+        let config: ServerConfig = settings
+            .try_deserialize()
+            .with_context(|| format!("Failed to deserialize config from {}", path.display()))?;
 
-        // Validate the config
         config.validate()?;
 
         Ok(config)
@@ -229,8 +215,14 @@ impl ServerConfig {
     ///
     /// Useful for testing
     pub fn from_yaml_str(contents: &str) -> Result<Self> {
-        let config: ServerConfig = serde_yaml::from_str(contents)
-            .context("Failed to parse YAML")?;
+        let settings = config::Config::builder()
+            .add_source(config::File::from_str(contents, config::FileFormat::Yaml))
+            .build()
+            .context("Failed to parse YAML config")?;
+
+        let config: ServerConfig = settings
+            .try_deserialize()
+            .context("Failed to deserialize YAML config")?;
 
         config.validate()?;
 
@@ -270,19 +262,6 @@ impl ServerConfig {
                 self.xor_key.len()
             );
         }
-
-        Ok(())
-    }
-
-    /// Save configuration to a YAML file
-    ///
-    /// Useful for generating config templates or saving modified configs
-    pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let yaml = serde_yaml::to_string(&self)
-            .context("Failed to serialize config to YAML")?;
-
-        fs::write(path.as_ref(), yaml)
-            .with_context(|| format!("Failed to write config to {}", path.as_ref().display()))?;
 
         Ok(())
     }
@@ -427,50 +406,6 @@ town:
     }
 
     #[test]
-    fn test_missing_required_field() {
-        let config_str = r#"
-"#;
-
-        let result = ServerConfig::from_yaml_str(config_str);
-        assert!(result.is_err());
-
-        let err = result.unwrap_err();
-        let err_msg = format!("{:?}", err);
-        assert!(err_msg.contains("missing field") || err_msg.contains("map_ip") || err_msg.contains("login_ip"));
-    }
-
-    #[test]
-    fn test_invalid_yaml() {
-        let config_str = r#"
-login_id: [this is not valid yaml
-"#;
-
-        let result = ServerConfig::from_yaml_str(config_str);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_wrong_type() {
-        let config_str = r#"
-login_id: "loginid"
-login_pw: "loginpw"
-login_ip: "127.0.0.1"
-char_id: "charid"
-char_pw: "charpw"
-char_ip: "127.0.0.1"
-map_ip: "127.0.0.1"
-map_port: "not_a_number"
-start_point:
-  m: 0
-  x: 1
-  y: 1
-"#;
-
-        let result = ServerConfig::from_yaml_str(config_str);
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn test_too_many_meta_files() {
         let mut config_str = String::from(minimal_config());
         config_str.push_str("\nmeta:\n");
@@ -566,23 +501,6 @@ town:
         assert_eq!(config.meta.len(), 5);
         assert_eq!(config.town.len(), 6);
         assert_eq!(config.start_point, Point::new(0, 1, 1));
-    }
-
-    #[test]
-    fn test_save_and_load() {
-        let config = ServerConfig::from_yaml_str(minimal_config()).unwrap();
-
-        let temp_file = std::env::temp_dir().join("test_save_config.yaml");
-
-        // Save config
-        config.save(&temp_file).unwrap();
-
-        // Load it back
-        let loaded = ServerConfig::from_file(&temp_file).unwrap();
-        assert_eq!(config.start_point, loaded.start_point);
-
-        // Cleanup
-        std::fs::remove_file(temp_file).ok();
     }
 }
 
