@@ -1,23 +1,23 @@
 #![allow(non_snake_case)]
 
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
+use super::types::MapSessionData;
 use crate::common::traits::LegacyEntity;
 use crate::session::SessionId;
-use super::types::MapSessionData;
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 
 /// Linked-list node for parcels/NPC posts.
 #[repr(C)]
 pub struct NPost {
     pub prev: *mut NPost,
-    pub pos:  u32,
+    pub pos: u32,
 }
 
 /// Tracks batched "object look" packet assembly for one viewer.
 #[derive(Clone, Copy, Default)]
 pub struct LookAccum {
-    pub len:   i32,
+    pub len: i32,
     pub count: i32,
-    pub item:  i32,
+    pub item: i32,
 }
 
 /// Network-facing session state for a connected player.
@@ -57,26 +57,33 @@ unsafe impl Send for PlayerEntity {}
 unsafe impl Sync for PlayerEntity {}
 
 impl PlayerEntity {
-
-    pub fn new(id: u32, fd: SessionId, name: String, gm_level: i8, sd: Box<MapSessionData>) -> Box<Self> {
-          let exp = sd.player.progression.exp;
-          let class = sd.player.progression.class;
-          let level = sd.player.progression.level;
-          Box::new(Self {
-              id,
-              fd,
-              name,
-              gm_level,
-              hp_atomic: AtomicI32::new(0),
-              mp_atomic: AtomicI32::new(0),
-              exp_atomic: AtomicU32::new(exp),
-              class_level_atomic: AtomicU32::new((class as u32) << 8 | level as u32),
-              state_flags: AtomicU64::new(0),
-              pos_atomic: AtomicU64::new(0),
-              net:    parking_lot::RwLock::new(PcNetworkState { look: LookAccum::default() }),
-              legacy: parking_lot::RwLock::new(sd),
-          })
-        }
+    pub fn new(
+        id: u32,
+        fd: SessionId,
+        name: String,
+        gm_level: i8,
+        sd: Box<MapSessionData>,
+    ) -> Box<Self> {
+        let exp = sd.player.progression.exp;
+        let class = sd.player.progression.class;
+        let level = sd.player.progression.level;
+        Box::new(Self {
+            id,
+            fd,
+            name,
+            gm_level,
+            hp_atomic: AtomicI32::new(0),
+            mp_atomic: AtomicI32::new(0),
+            exp_atomic: AtomicU32::new(exp),
+            class_level_atomic: AtomicU32::new((class as u32) << 8 | level as u32),
+            state_flags: AtomicU64::new(0),
+            pos_atomic: AtomicU64::new(0),
+            net: parking_lot::RwLock::new(PcNetworkState {
+                look: LookAccum::default(),
+            }),
+            legacy: parking_lot::RwLock::new(sd),
+        })
+    }
 
     #[inline]
     pub fn position(&self) -> crate::config::Point {
@@ -105,14 +112,9 @@ impl PlayerEntity {
 
     #[inline]
     pub fn set_class_level(&self, class: u8, level: u8) {
-        self.class_level_atomic.store((class as u32) << 8 | level as u32, Ordering::Relaxed);
+        self.class_level_atomic
+            .store((class as u32) << 8 | level as u32, Ordering::Relaxed);
     }
-
-    #[inline]
-    #[deprecated(note = "Prefer domain-specific accessors, e.g. player.read().player for persistence data.")]
-    pub fn data_ptr(&self) -> *mut MapSessionData {                                                                    
-      unsafe { &mut **self.legacy.data_ptr() as *mut MapSessionData }                                                
-    } 
 }
 
 impl LegacyEntity for PlayerEntity {
@@ -131,14 +133,14 @@ impl LegacyEntity for PlayerEntity {
 #[repr(C)]
 pub struct ScriptReg {
     pub index: i32,
-    pub data:  i32,
+    pub data: i32,
 }
 
 /// String registry slot.
 #[repr(C)]
 pub struct ScriptRegStr {
     pub index: i32,
-    pub data:  [i8; 256],
+    pub data: [i8; 256],
 }
 
 /// Linked-list node for the player ignore list.
