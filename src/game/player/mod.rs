@@ -40,7 +40,7 @@ pub use systems::{
     bl_duratimer, bl_secondduratimer, bl_thirdduratimer,
     bl_fourthduratimer, bl_fifthduratimer, bl_aethertimer,
     // Stats
-    pc_requestmp, pc_checklevel, pc_givexp, pc_calcstat, pc_calcdamage,
+    pc_requestmp, pc_checklevel, pc_checklevel_pe, pc_givexp, pc_calcstat, pc_calcdamage,
     // Registries
     pc_readreg, pc_setreg, pc_readregstr, pc_setregstr,
     pc_readglobalregstring, pc_setglobalregstring,
@@ -60,7 +60,7 @@ pub use systems::{
     pc_equipitem, pc_equipscript, pc_unequip, pc_unequipscript,
     pc_getitemscript,
     // Magic
-    pc_loadmagic, pc_magic_startup, pc_reload_aether,
+    pc_loadmagic, pc_magic_startup, pc_magic_startup_pe, pc_reload_aether,
 };
 
 // ── Constant re-exports (preserve game::pc::* surface) ────────────────────

@@ -15,7 +15,7 @@ use crate::common::constants::entity::BL_NPC;
 use crate::common::constants::entity::SUBTYPE_FLOOR as FLOOR;
 use crate::common::constants::world::MAX_GROUP_MEMBERS;
 use crate::common::player::spells::MAX_SPELLS;
-use crate::common::types::Item;
+use crate::common::types::{Item, SkillInfo};
 use crate::database::class_db::{level as classdb_level, path as classdb_path};
 use crate::database::{self, item_db, magic_db, map_db};
 use crate::game::block::AreaType;
@@ -1213,7 +1213,7 @@ pub unsafe fn pc_checklevel(sd: *mut MapSessionData) -> i32 {
 
 /// Like `pc_checklevel` but takes a `PlayerEntity` reference, properly
 /// scoping lock guards so they are never held across Lua calls.
-unsafe fn pc_checklevel_pe(pe: &PlayerEntity) -> i32 {
+pub unsafe fn pc_checklevel_pe(pe: &PlayerEntity) -> i32 {
     let id = pe.id;
     let (path, level) = {
         let sd = pe.read();
@@ -3960,6 +3960,64 @@ pub unsafe fn pc_magic_startup(sd: *mut MapSessionData) -> i32 {
             if p.aether > 0 {
                 clif_send_aether(&mut *sd, p.id as i32, p.aether / 1000);
             }
+        }
+    }
+
+    0
+}
+
+/// Like `pc_magic_startup` but takes `&PlayerEntity`, properly scoping lock
+/// guards so they are never held across Lua calls.
+pub fn pc_magic_startup_pe(pe: &PlayerEntity) -> i32 {
+    let id = pe.id;
+
+    // Snapshot active spells under a read guard (SkillInfo is Copy).
+    let spells: Vec<SkillInfo> = {
+        let sd = pe.read();
+        sd.player.spells.dura_aether.iter().copied().collect()
+    };
+
+    for p in &spells {
+        if p.id == 0 {
+            continue;
+        }
+
+        if p.duration > 0 {
+            let caster_pe = if p.caster_id > 0 {
+                map_server::map_id2sd_pc(p.caster_id)
+            } else {
+                None
+            };
+
+            // Send duration packet — no locks needed, only fd + caster name.
+            {
+                let caster_name = caster_pe.as_ref().map(|cpe| cpe.name.as_str());
+                clif_send_duration(pe.fd, p.id as i32, p.duration / 1000, caster_name);
+            }
+            // Guard dropped — safe to call Lua.
+
+            let spell_entry = magic_db::search(p.id as i32);
+            let spell_name = scripting::carray_to_str(&spell_entry.yname);
+            if let Some(ref cpe) = caster_pe {
+                {
+                    let mut sd = pe.write();
+                    sd.target = p.caster_id as i32;
+                    sd.attacker = p.caster_id;
+                }
+                sl_doscript_2_pc(spell_name, Some("recast"), id, cpe.id);
+            } else {
+                {
+                    let mut sd = pe.write();
+                    sd.target = sd.player.identity.id as i32;
+                    sd.attacker = sd.player.identity.id;
+                }
+                sl_doscript_simple_pc(spell_name, Some("recast"), id);
+            }
+        }
+
+        if p.aether > 0 {
+            let mut sd = pe.write();
+            clif_send_aether(&mut *sd, p.id as i32, p.aether / 1000);
         }
     }
 
