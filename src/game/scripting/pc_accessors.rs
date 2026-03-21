@@ -1780,7 +1780,7 @@ pub unsafe fn sl_pc_sendurl(sd: &mut MapSessionData, kind: i32, url: *const i8) 
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn sl_pc_swingtarget(sd: &mut MapSessionData, id: i32) {
     if let Some(arc) = crate::game::map_server::map_id2mob_ref(id as u32) {
-        clif_mob_damage(sd, &mut *arc.data_ptr());
+        clif_mob_damage(sd, &mut arc.write());
     } else if let Some(arc) = crate::game::map_server::map_id2sd_pc(id as u32) {
         clif_pc_damage(sd, &mut arc.write());
     }

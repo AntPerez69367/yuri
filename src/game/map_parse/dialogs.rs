@@ -7,6 +7,7 @@ use super::packet::{
     encrypt, rfifob, rfifol, rfifop, swap16, swap32, wfifob, wfifohead, wfifol, wfifop, wfifoset,
     wfifow,
 };
+use crate::common::traits::LegacyEntity;
 use crate::common::types::Item;
 use crate::game::lua::dispatch::dispatch_coro;
 use crate::game::npc::NpcData;
@@ -1100,11 +1101,20 @@ pub async unsafe fn clif_handle_clickgetinfo(pe: &PlayerEntity) -> i32 {
         let Some(arc) = crate::game::map_server::map_id2mob_ref(target_id) else {
             return 0;
         };
-        let mob = &*arc.data_ptr();
-        let mut radius = 10i32;
-        if !mob.data.is_null() && (*mob.data).mobtype == 3 {
-            radius = 0;
-        }
+        // Extract needed values under the read guard, then drop before Lua calls.
+        let (radius, mob_yname) = {
+            let mob = arc.read();
+            let mut radius = 10i32;
+            let yname: Option<String> = if !mob.data.is_null() {
+                if (*mob.data).mobtype == 3 {
+                    radius = 0;
+                }
+                Some(crate::game::scripting::carray_to_str(&(*mob.data).yname).to_owned())
+            } else {
+                None
+            };
+            (radius, yname)
+        };
 
         // proximity check: same map, within radius tiles
         let pe_m = pe.read().m;
@@ -1117,9 +1127,9 @@ pub async unsafe fn clif_handle_clickgetinfo(pe: &PlayerEntity) -> i32 {
             pe.write().last_click = target_id;
             sl_async_freeco(&mut *pe.write() as *mut MapSessionData);
             sl_doscript_coro_2("onLook", None, pe.id, target_id);
-            if !mob.data.is_null() {
+            if let Some(ref yname) = mob_yname {
                 sl_doscript_coro_2(
-                    crate::game::scripting::carray_to_str(&(*mob.data).yname),
+                    yname,
                     Some("click"),
                     pe.id,
                     target_id,

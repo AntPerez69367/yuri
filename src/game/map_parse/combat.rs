@@ -8,7 +8,7 @@ use crate::common::traits::LegacyEntity;
 use crate::database::map_db::raw_map_ptr;
 use crate::database::mob_db::MobDbData;
 use crate::game::lua::dispatch::dispatch;
-use crate::game::mob::{MobSpawnData, MAX_MAGIC_TIMERS, MAX_THREATCOUNT, MOB_DEAD};
+use crate::game::mob::{MobEntity, MobSpawnData, MAX_MAGIC_TIMERS, MAX_THREATCOUNT, MOB_DEAD};
 use crate::game::pc::{
     MapSessionData, BL_MOB, BL_PC, EQ_ARMOR, EQ_BOOTS, EQ_COAT, EQ_CROWN, EQ_FACEACC, EQ_HELM,
     EQ_LEFT, EQ_MANTLE, EQ_NECKLACE, EQ_RIGHT, EQ_SHIELD, EQ_SUBLEFT, EQ_SUBRIGHT, EQ_WEAP,
@@ -39,7 +39,6 @@ use crate::game::mob::mob_flushmagic;
 use crate::game::pc::{addtokillreg, pc_calcstat, pc_checklevel, pc_isequip};
 use crate::game::scripting::sl_async_freeco;
 
-use parking_lot::RwLock;
 use std::sync::Arc;
 
 /// Arc-based player lookup.
@@ -50,7 +49,7 @@ fn map_id2sd_arc(id: u32) -> Option<Arc<crate::game::pc::PlayerEntity>> {
 
 /// Arc-based mob lookup.
 #[inline]
-fn map_id2mob_arc(id: u32) -> Option<Arc<RwLock<MobSpawnData>>> {
+fn map_id2mob_arc(id: u32) -> Option<Arc<MobEntity>> {
     crate::game::map_server::map_id2mob_ref(id)
 }
 
@@ -218,9 +217,9 @@ pub fn clif_send_pc_healthscript(sd: &mut MapSessionData, damage: i32, critical:
     if let Some(arc) = crate::game::map_server::map_id2sd_pc(attacker_id) {
         tsd = &mut *arc.write();
     } else if let Some(arc) = crate::game::map_server::map_id2mob_ref(attacker_id) {
-        let mob = unsafe { &*arc.data_ptr() };
-        if mob.owner < crate::game::mob::MOB_START_NUM && mob.owner > 0 {
-            tsd = map_id2sd_local(mob.owner);
+        let owner = arc.read().owner;
+        if owner < crate::game::mob::MOB_START_NUM && owner > 0 {
+            tsd = map_id2sd_local(owner);
         }
     }
 
@@ -894,17 +893,16 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
     let _ = critical;
 
     let mut sd: *mut MapSessionData = std::ptr::null_mut();
-    let mut tmob: *mut MobSpawnData = std::ptr::null_mut();
+    let mut attacker_mob_id: Option<u32> = None;
 
     if mob.attacker > 0 {
         if let Some(arc) = crate::game::map_server::map_id2sd_pc(mob.attacker) {
             sd = &mut *arc.write();
         } else if let Some(arc) = crate::game::map_server::map_id2mob_ref(mob.attacker) {
-            tmob = unsafe { &mut *arc.data_ptr() };
-            unsafe {
-                if (*tmob).owner < crate::game::mob::MOB_START_NUM && (*tmob).owner > 0 {
-                    sd = map_id2sd_local((*tmob).owner);
-                }
+            let owner = arc.read().owner;
+            attacker_mob_id = Some(mob.attacker);
+            if owner < crate::game::mob::MOB_START_NUM && owner > 0 {
+                sd = map_id2sd_local(owner);
             }
         }
     }
@@ -1047,25 +1045,32 @@ pub async fn clif_send_mob_healthscript(mob: &mut MobSpawnData, damage: i32, cri
         }
         clif_mob_kill(mob).await;
 
-        if !tmob.is_null() && mob.summon == 0 {
-            unsafe {
-                let tmob_bl_id = (*tmob).id;
-                for x in 0..MAX_MAGIC_TIMERS {
-                    if (*tmob).da[x].id > 0 && (*tmob).da[x].duration > 0 {
-                        sl_doscript_2(
-                            carray_to_str(&magic_db::search((*tmob).da[x].id as i32).yname),
-                            Some("on_kill_while_cast"),
-                            tmob_bl_id,
-                            mob.id,
-                        );
-                    }
+        if let Some(amob_id) = attacker_mob_id {
+            if mob.summon == 0 {
+                // Collect active spell IDs under the read guard, then drop before Lua calls.
+                let spell_ids: Vec<i32> = if let Some(amob_arc) = crate::game::map_server::map_id2mob_ref(amob_id) {
+                    let amob = amob_arc.read();
+                    amob.da.iter()
+                        .filter(|s| s.id > 0 && s.duration > 0)
+                        .map(|s| s.id as i32)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                for spell_id in spell_ids {
+                    sl_doscript_2(
+                        carray_to_str(&magic_db::search(spell_id).yname),
+                        Some("on_kill_while_cast"),
+                        amob_id,
+                        mob.id,
+                    );
                 }
             }
         }
 
         if !sd.is_null() && mob.summon == 0 {
             unsafe {
-                if tmob.is_null() {
+                if attacker_mob_id.is_none() {
                     let sd_ref = &*sd;
                     for x in 0..MAX_MAGIC_TIMERS {
                         if sd_ref.player.spells.dura_aether[x].id > 0

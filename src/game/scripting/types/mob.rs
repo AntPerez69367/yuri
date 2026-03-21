@@ -2,7 +2,8 @@ use mlua::{MetaMethod, UserData, UserDataMethods};
 use std::ffi::CString;
 
 
-use crate::database::map_db::MapData;
+use crate::common::traits::LegacyEntity;
+use crate::common::types::Point;
 use crate::database::map_db::get_map_ptr;
 use crate::game::mob::{
     mob_calcstat, mob_warp, move_mob, move_mob_ignore_object, move_mob_intent, moveghost_mob,
@@ -31,10 +32,6 @@ use crate::database::magic_db;
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-unsafe fn mob_map(mob: *const MobSpawnData) -> *mut MapData {
-    get_map_ptr((*mob).m)
-}
 
 fn val_to_int(v: &mlua::Value) -> i32 {
     match v {
@@ -71,7 +68,7 @@ impl UserData for MobObject {
                 Some(a) => a,
                 None => return Ok(mlua::Value::Nil),
             };
-            let mob = unsafe { &mut *arc.data_ptr() };
+            let mob = arc.read();
             let mob_id = this.id;
 
             macro_rules! int {
@@ -93,7 +90,7 @@ impl UserData for MobObject {
             #[allow(unused_macros)]
             macro_rules! map_int {
                 ($field:ident) => {{
-                    let mp = unsafe { mob_map(mob as *const MobSpawnData) };
+                    let mp = get_map_ptr(mob.m);
                     if mp.is_null() {
                         return Ok(mlua::Value::Nil);
                     }
@@ -126,8 +123,7 @@ impl UserData for MobObject {
                                 Some(a) => a,
                                 None => return Ok(0i32),
                             };
-                            let mob = unsafe { &mut *arc.data_ptr() };
-                            Ok(unsafe { mob_attack(mob as *mut MobSpawnData, id) })
+                            Ok(unsafe { mob_attack(arc.legacy.data_ptr(), id) })
                         },
                     )?))
                 }
@@ -138,7 +134,7 @@ impl UserData for MobObject {
                                 Some(a) => a,
                                 None => return Ok(()),
                             };
-                            let ptr_usize = arc.data_ptr() as usize;
+                            let ptr_usize = arc.legacy.data_ptr() as usize;
                             // Fire-and-forget from LocalSet: spawn_local avoids Send requirement.
                             tokio::task::spawn_local(async move {
                                 unsafe { sl_mob_addhealth(ptr_usize as *mut MobSpawnData, damage).await; }
@@ -154,7 +150,7 @@ impl UserData for MobObject {
                                 Some(a) => a,
                                 None => return Ok(()),
                             };
-                            let ptr_usize = arc.data_ptr() as usize;
+                            let ptr_usize = arc.legacy.data_ptr() as usize;
                             tokio::task::spawn_local(async move {
                                 unsafe { sl_mob_removehealth(ptr_usize as *mut MobSpawnData, damage, caster_id).await; }
                             });
@@ -169,8 +165,7 @@ impl UserData for MobObject {
                                 Some(a) => a,
                                 None => return Ok(false),
                             };
-                            let mob = unsafe { &mut *arc.data_ptr() };
-                            Ok(unsafe { move_mob(mob as *mut MobSpawnData) } != 0)
+                            Ok(unsafe { move_mob(arc.legacy.data_ptr()) } != 0)
                         },
                     )?))
                 }
@@ -181,8 +176,7 @@ impl UserData for MobObject {
                                 Some(a) => a,
                                 None => return Ok(false),
                             };
-                            let mob = unsafe { &mut *arc.data_ptr() };
-                            Ok(unsafe { move_mob_ignore_object(mob as *mut MobSpawnData) } != 0)
+                            Ok(unsafe { move_mob_ignore_object(arc.legacy.data_ptr()) } != 0)
                         },
                     )?))
                 }
@@ -193,8 +187,7 @@ impl UserData for MobObject {
                                 Some(a) => a,
                                 None => return Ok(0i32),
                             };
-                            let mob = unsafe { &mut *arc.data_ptr() };
-                            Ok(unsafe { moveghost_mob(mob as *mut MobSpawnData) })
+                            Ok(unsafe { moveghost_mob(arc.legacy.data_ptr()) })
                         },
                     )?))
                 }
@@ -205,11 +198,10 @@ impl UserData for MobObject {
                                 Some(a) => a,
                                 None => return Ok(0i32),
                             };
-                            let mob = unsafe { &mut *arc.data_ptr() };
                             let Some((pos, _)) = crate::game::map_server::entity_position(target_id) else {
                                 return Ok(0i32);
                             };
-                            Ok(unsafe { move_mob_intent(mob as *mut MobSpawnData, pos.x as i32, pos.y as i32) })
+                            Ok(unsafe { move_mob_intent(arc.legacy.data_ptr(), pos.x as i32, pos.y as i32) })
                         },
                     )?))
                 }
@@ -217,8 +209,7 @@ impl UserData for MobObject {
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, (_, m, x, y): (mlua::Value, i32, i32, i32)| {
                             if let Some(arc) = crate::game::map_server::map_id2mob_ref(mob_id) {
-                                let mob = unsafe { &mut *arc.data_ptr() };
-                                unsafe { mob_warp(mob as *mut MobSpawnData, m, x, y); }
+                                unsafe { mob_warp(arc.legacy.data_ptr(), m, x, y); }
                             }
                             Ok(())
                         },
@@ -245,7 +236,7 @@ impl UserData for MobObject {
                             };
                             let mob_arc = arc.clone();
                             tokio::task::spawn_local(async move {
-                                clif_send_mob_healthscript(unsafe { &mut *mob_arc.data_ptr() }, damage, crit).await;
+                                clif_send_mob_healthscript(unsafe { &mut *mob_arc.legacy.data_ptr() }, damage, crit).await;
                             });
                             Ok(())
                         },
@@ -266,11 +257,10 @@ impl UserData for MobObject {
                                     Some(a) => a,
                                     None => return Ok(()),
                                 };
-                                let mob = unsafe { &mut *arc.data_ptr() };
                                 let cs =
                                     CString::new(name.as_bytes()).map_err(mlua::Error::external)?;
                                 unsafe {
-                                    sl_mob_setduration(mob as *mut MobSpawnData, cs.as_ptr(), time, caster_id, recast);
+                                    sl_mob_setduration(arc.legacy.data_ptr(), cs.as_ptr(), time, caster_id, recast);
                                 }
                                 Ok(())
                             },
@@ -284,9 +274,8 @@ impl UserData for MobObject {
                                 Some(a) => a,
                                 None => return Ok(()),
                             };
-                            let mob = unsafe { &mut *arc.data_ptr() };
                             unsafe {
-                                sl_mob_flushduration(mob as *mut MobSpawnData, dis, minid, maxid);
+                                sl_mob_flushduration(arc.legacy.data_ptr(), dis, minid, maxid);
                             }
                             Ok(())
                         },
@@ -299,9 +288,8 @@ impl UserData for MobObject {
                                 Some(a) => a,
                                 None => return Ok(()),
                             };
-                            let mob = unsafe { &mut *arc.data_ptr() };
                             unsafe {
-                                sl_mob_flushdurationnouncast(mob as *mut MobSpawnData, dis, minid, maxid);
+                                sl_mob_flushdurationnouncast(arc.legacy.data_ptr(), dis, minid, maxid);
                             }
                             Ok(())
                         },
@@ -384,8 +372,7 @@ impl UserData for MobObject {
                                 Some(a) => a,
                                 None => return Ok(0i32),
                             };
-                            let mob = unsafe { &mut *arc.data_ptr() };
-                            Ok(unsafe { sl_mob_checkthreat(mob as *mut MobSpawnData, player_id) })
+                            Ok(unsafe { sl_mob_checkthreat(arc.legacy.data_ptr(), player_id) })
                         },
                     )?))
                 }
@@ -396,8 +383,7 @@ impl UserData for MobObject {
                                 Some(a) => a,
                                 None => return Ok(false),
                             };
-                            let mob = unsafe { &mut *arc.data_ptr() };
-                            Ok(unsafe { sl_mob_callbase(mob as *mut MobSpawnData, &script) } != 0)
+                            Ok(unsafe { sl_mob_callbase(arc.legacy.data_ptr(), &script) } != 0)
                         },
                     )?))
                 }
@@ -408,8 +394,7 @@ impl UserData for MobObject {
                                 Some(a) => a,
                                 None => return Ok(false),
                             };
-                            let mob = unsafe { &mut *arc.data_ptr() };
-                            Ok(unsafe { sl_mob_checkmove(mob as *mut MobSpawnData) } != 0)
+                            Ok(unsafe { sl_mob_checkmove(arc.legacy.data_ptr()) } != 0)
                         },
                     )?))
                 }
@@ -420,8 +405,7 @@ impl UserData for MobObject {
                                 Some(a) => a,
                                 None => return Ok(false),
                             };
-                            let mob = unsafe { &mut *arc.data_ptr() };
-                            Ok(unsafe { sl_mob_setinddmg(mob as *mut MobSpawnData, player_id, dmg) } != 0)
+                            Ok(unsafe { sl_mob_setinddmg(arc.legacy.data_ptr(), player_id, dmg) } != 0)
                         },
                     )?))
                 }
@@ -432,8 +416,7 @@ impl UserData for MobObject {
                                 Some(a) => a,
                                 None => return Ok(false),
                             };
-                            let mob = unsafe { &mut *arc.data_ptr() };
-                            Ok(unsafe { sl_mob_setgrpdmg(mob as *mut MobSpawnData, player_id, dmg) } != 0)
+                            Ok(unsafe { sl_mob_setgrpdmg(arc.legacy.data_ptr(), player_id, dmg) } != 0)
                         },
                     )?))
                 }
@@ -507,8 +490,7 @@ impl UserData for MobObject {
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, _: mlua::MultiValue| {
                             if let Some(arc) = crate::game::map_server::map_id2mob_ref(mob_id) {
-                                let mob = unsafe { &mut *arc.data_ptr() };
-                                unsafe { mob_calcstat(mob as *mut MobSpawnData); }
+                                unsafe { mob_calcstat(arc.legacy.data_ptr()); }
                             }
                             Ok(())
                         },
@@ -547,11 +529,9 @@ impl UserData for MobObject {
                 "talk" => {
                     return Ok(mlua::Value::Function(lua.create_function(
                         move |_, args: mlua::MultiValue| {
-                            let arc = match crate::game::map_server::map_id2mob_ref(mob_id) {
-                                Some(a) => a,
-                                None => return Ok(()),
-                            };
-                            let mob = unsafe { &mut *arc.data_ptr() };
+                            if crate::game::map_server::map_id2mob_ref(mob_id).is_none() {
+                                return Ok(());
+                            }
                             let a: Vec<mlua::Value> = args.into_iter().collect();
                             let talk_type = a.get(1).map(val_to_int).unwrap_or(0);
                             let msg = match a.get(2) {
@@ -568,8 +548,8 @@ impl UserData for MobObject {
                     )?));
                 }
                 // Registry sub-objects (set during mobl_init; exposed via __index here)
-                "registry" => return lua.pack(MobRegObject { ptr: mob as *const _ as *mut std::ffi::c_void }),
-                "mapRegistry" => return lua.pack(MapRegObject { ptr: mob as *const _ as *mut std::ffi::c_void }),
+                "registry" => return lua.pack(MobRegObject { ptr: arc.legacy.data_ptr() as *mut std::ffi::c_void }),
+                "mapRegistry" => return lua.pack(MapRegObject { ptr: arc.legacy.data_ptr() as *mut std::ffi::c_void }),
                 "gameRegistry" => {
                     return lua.pack(GameRegObject {
                         ptr: std::ptr::null_mut(),
@@ -595,12 +575,12 @@ impl UserData for MobObject {
                 "blType" => int!(mob.bl_type),
                 "ID" => int!(mob.id),
                 "xmax" => {
-                    let mp = unsafe { mob_map(mob as *const MobSpawnData) };
+                    let mp = get_map_ptr(mob.m);
                     if mp.is_null() { return Ok(mlua::Value::Nil); }
                     int!(unsafe { (*mp).xs.saturating_sub(1) })
                 }
                 "ymax" => {
-                    let mp = unsafe { mob_map(mob as *const MobSpawnData) };
+                    let mp = get_map_ptr(mob.m);
                     if mp.is_null() { return Ok(mlua::Value::Nil); }
                     int!(unsafe { (*mp).ys.saturating_sub(1) })
                 }
@@ -764,7 +744,7 @@ impl UserData for MobObject {
                             let tbl = lua.create_table()?;
                             if amount <= 0 { return Ok(mlua::Value::Table(tbl)); }
                             let spawned = unsafe {
-                                mobspawn_onetime(spawn_mob_id, m, x, y, SpawnConfig { times: amount, start: 0, end: 0, replace: 0, owner })
+                                mobspawn_onetime(spawn_mob_id, Point::new(m as u16, x as u16, y as u16), SpawnConfig { times: amount, start: 0, end: 0, replace: 0, owner })
                             };
                             if spawned.is_empty() { return Ok(mlua::Value::Table(tbl)); }
                             for (i, spawned_id) in spawned.into_iter().enumerate() {
@@ -811,8 +791,8 @@ impl UserData for MobObject {
                     Some(a) => a,
                     None => return Ok(()),
                 };
-                let mob = unsafe { &mut *arc.data_ptr() };
-                let mp = unsafe { mob_map(mob as *const MobSpawnData) };
+                let mut mob = arc.write();
+                let mp = get_map_ptr(mob.m);
 
                 macro_rules! map_set {
                     ($field:ident) => {

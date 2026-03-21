@@ -12,7 +12,7 @@ use parking_lot::RwLock;
 use crate::common::traits::LegacyEntity;
 use crate::common::types::Point;
 use crate::game::lua::coroutine::purge_player;
-use crate::game::mob::{MobSpawnData, FLOORITEM_START_NUM, MOB_START_NUM};
+use crate::game::mob::{MobEntity, MobSpawnData, FLOORITEM_START_NUM, MOB_START_NUM};
 use crate::game::npc::{NpcEntity, NPC_ID, NPC_START_NUM};
 use crate::game::pc::{MapSessionData, PlayerEntity};
 use crate::game::scripting::types::floor::FloorItemData;
@@ -28,7 +28,7 @@ use crate::session::{get_fd_max, session_exists, session_get_data, session_get_e
 // OnceLock<T>: Sync but never actually contends.
 
 static PLAYER_MAP: OnceLock<Mutex<HashMap<u32, Arc<PlayerEntity>>>> = OnceLock::new();
-static MOB_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<MobSpawnData>>>>> = OnceLock::new();
+static MOB_MAP: OnceLock<Mutex<HashMap<u32, Arc<MobEntity>>>> = OnceLock::new();
 static NPC_MAP: OnceLock<Mutex<HashMap<u32, Arc<NpcEntity>>>> = OnceLock::new();
 static ITEM_MAP: OnceLock<Mutex<HashMap<u32, Arc<RwLock<FloorItemData>>>>> = OnceLock::new();
 
@@ -41,7 +41,7 @@ fn player_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<PlayerEntity>
 }
 
 #[inline]
-fn mob_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<RwLock<MobSpawnData>>>> {
+fn mob_map() -> std::sync::MutexGuard<'static, HashMap<u32, Arc<MobEntity>>> {
     MOB_MAP
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
@@ -85,9 +85,16 @@ pub fn map_addiddb_player(id: u32, fd: SessionId, sd: Box<MapSessionData>) {
     player_map().insert(id, arc);
 }
 
-/// Insert a mob — takes ownership of the Box, wrapping it in Arc<RwLock>.
+/// Insert a mob — takes ownership of the Box, wrapping it in Arc<MobEntity>.
 pub fn map_addiddb_mob(id: u32, mob: Box<MobSpawnData>) {
-    mob_map().insert(id, unsafe { box_into_arc_rwlock(mob) });
+    use std::sync::atomic::AtomicU64;
+    let pos = Point::new(mob.m, mob.x, mob.y);
+    let entity = Arc::new(MobEntity {
+        id,
+        pos_atomic: AtomicU64::new(pos.to_u64()),
+        legacy: parking_lot::RwLock::new(*mob),
+    });
+    mob_map().insert(id, entity);
 }
 
 /// Insert an NPC — takes an already-constructed Arc<NpcEntity>.
@@ -146,7 +153,7 @@ pub fn find_player_by_id(id: u32) -> Option<Arc<PlayerEntity>> {
 
 #[must_use]
 #[inline]
-pub fn find_mob_by_id(id: u32) -> Option<Arc<RwLock<MobSpawnData>>> {
+pub fn find_mob_by_id(id: u32) -> Option<Arc<MobEntity>> {
     mob_map().get(&id).cloned()
 }
 
@@ -168,7 +175,7 @@ pub fn map_id2sd_pc(id: u32) -> Option<Arc<PlayerEntity>> {
 }
 
 // TODO: phase out — use find_mob_by_id
-pub fn map_id2mob_ref(id: u32) -> Option<Arc<RwLock<MobSpawnData>>> {
+pub fn map_id2mob_ref(id: u32) -> Option<Arc<MobEntity>> {
     find_mob_by_id(id)
 }
 
@@ -185,7 +192,7 @@ pub fn map_id2fl_ref(id: u32) -> Option<Arc<RwLock<FloorItemData>>> {
 /// Polymorphic entity reference — used by code that handles any entity type.
 pub enum GameEntity {
     Player(Arc<PlayerEntity>),
-    Mob(Arc<RwLock<MobSpawnData>>),
+    Mob(Arc<MobEntity>),
     Npc(Arc<NpcEntity>),
     Item(Arc<RwLock<FloorItemData>>),
 }

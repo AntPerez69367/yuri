@@ -7,6 +7,7 @@
 use std::sync::atomic::Ordering;
 
 use crate::game::block::map_addblock_id;
+use crate::common::traits::LegacyEntity;
 use crate::game::mob::{MobSpawnData, MOB_DEAD};
 use crate::game::npc::NpcData;
 use crate::game::npc::prelude::*;
@@ -426,7 +427,7 @@ pub unsafe fn clif_object_look_specific(sd: *mut MapSessionData, id: u32) -> i32
 
     if bl_type == BL_MOB_U8 {
         let Some(arc) = crate::game::map_server::map_id2mob_ref(id) else { return 0; };
-        let mob = &*arc.data_ptr();
+        let mob = arc.read();
         if mob.state == MOB_DEAD || (*mob.data).mobtype == 1 { return 0; }
 
         if (*mob.data).isnpc == 0 {

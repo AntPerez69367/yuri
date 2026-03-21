@@ -8,7 +8,7 @@ pub use crate::common::constants::entity::mob::{
 };
 pub use crate::common::constants::entity::npc::NPC_START_NUM;
 pub use crate::common::constants::entity::{BL_ITEM, BL_MOB, BL_NPC, BL_PC};
-use crate::common::types::{Item, SkillInfo};
+use crate::common::types::{Item, Point, SkillInfo};
 use crate::database::map_db::BLOCK_SIZE;
 use crate::database::map_db::{get_map_ptr as ffi_get_map_ptr, map_is_loaded as ffi_map_is_loaded};
 use crate::database::map_db::{GlobalReg, WarpList};
@@ -17,7 +17,7 @@ use crate::game::lua::dispatch::dispatch;
 use crate::game::pc::MapSessionData;
 use crate::game::player::prelude::*;
 use crate::game::types::GfxViewer;
-use std::sync::atomic::{AtomicU32, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 // mob state constants
 pub use crate::common::constants::entity::mob::{
@@ -25,6 +25,47 @@ pub use crate::common::constants::entity::mob::{
 };
 
 use crate::common::constants::entity::SUBTYPE_FLOOR;
+use crate::common::traits::{LegacyEntity, Spatial};
+
+// ─── MobEntity ───────────────────────────────────────────────────────────────
+
+pub struct MobEntity {
+    pub id: u32,
+    pub pos_atomic: AtomicU64,
+    pub legacy: parking_lot::RwLock<MobSpawnData>,
+}
+
+impl LegacyEntity for MobEntity {
+    type Data = MobSpawnData;
+
+    #[inline]
+    fn read(&self) -> parking_lot::MappedRwLockReadGuard<'_, Self::Data> {
+        parking_lot::RwLockReadGuard::map(self.legacy.read(), |d| d)
+    }
+
+    #[inline]
+    fn write(&self) -> parking_lot::MappedRwLockWriteGuard<'_, Self::Data> {
+        parking_lot::RwLockWriteGuard::map(self.legacy.write(), |d| d)
+    }
+}
+
+impl Spatial for MobEntity {
+    fn id(&self) -> u32 {
+        self.id
+    }
+
+    fn position(&self) -> Point {
+        Point::from_u64(self.pos_atomic.load(Ordering::Relaxed))
+    }
+
+    fn set_position(&self, p: Point) {
+        self.pos_atomic.store(p.to_u64(), Ordering::Relaxed);
+    }
+
+    fn map_id(&self) -> u16 {
+        self.position().m
+    }
+}
 
 // ─── ThreatTable ─────────────────────────────────────────────────────────────
 
@@ -186,7 +227,7 @@ use crate::game::map_parse::combat::{
 use crate::game::map_parse::movement::{clif_object_canmove, clif_object_canmove_from};
 use crate::game::map_parse::player_state::clif_sendstatus as clif_sendstatus_mob;
 use crate::game::map_parse::visual::clif_lookgone_by_id;
-use crate::game::map_server::{map_additem, map_canmove, map_deliddb};
+use crate::game::map_server::{map_additem, map_canmove, map_deliddb, map_id2mob_ref};
 use std::sync::Arc;
 
 /// Helper: get magic yname as `&str` by spell ID (for sl_doscript calls).
@@ -537,11 +578,12 @@ pub async unsafe fn mobspawn_read() -> i32 {
         if let Some(b) = new_box_option {
             crate::game::map_server::map_addiddb_mob(mob_id, b);
         }
-        // Get the live pointer from the Arc<RwLock> (not the freed Box).
-        let db = crate::game::map_server::map_id2mob_ref(mob_id)
-            .expect("mob just inserted")
-            .data_ptr();
-        map_addblock_id((*db).id, (*db).bl_type, (*db).m, (*db).x, (*db).y);
+        // Read fields from the live Arc<MobEntity> (not the freed Box).
+        {
+            let mob_arc = map_id2mob_ref(mob_id).expect("mob just inserted");
+            let guard = mob_arc.read();
+            map_addblock_id(guard.id, guard.bl_type, guard.m, guard.x, guard.y);
+        }
         mstr += 1;
     }
 
@@ -1231,11 +1273,11 @@ pub unsafe fn mob_timer_spawns() {
     if spawn_start != spawn_max {
         let mut x = spawn_start;
         while x < spawn_max {
-            if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(x) {
-                // data_ptr() returns raw pointer WITHOUT acquiring any lock.
+            if let Some(mob_arc) = map_id2mob_ref(x) {
                 // SAFETY: single-threaded game loop, Arc keeps allocation alive.
-                // tick_mob → Lua → MobObject.__index acquires its own lock.
-                let ptr: *mut MobSpawnData = mob_arc.data_ptr();
+                // tick_mob → Lua → MobObject.__index acquires its own lock,
+                // so we must NOT hold any guard across this call.
+                let ptr: *mut MobSpawnData = mob_arc.legacy.data_ptr();
                 tick_mob(&mut *ptr);
             }
             x += 1;
@@ -1247,8 +1289,9 @@ pub unsafe fn mob_timer_spawns() {
     if onetime_start != onetime_max {
         let mut x = onetime_start;
         while x < onetime_max {
-            if let Some(mob_arc) = crate::game::map_server::map_id2mob_ref(x) {
-                let ptr: *mut MobSpawnData = mob_arc.data_ptr();
+            if let Some(mob_arc) = map_id2mob_ref(x) {
+                // SAFETY: same as above — no guard held across tick_mob/Lua.
+                let ptr: *mut MobSpawnData = mob_arc.legacy.data_ptr();
                 tick_mob(&mut *ptr);
             }
             x += 1;
@@ -2163,8 +2206,8 @@ pub unsafe fn mob_attack(mob: *mut MobSpawnData, id: i32) -> i32 {
         .map(|pe| &mut *pe.write() as *mut MapSessionData)
         .unwrap_or(std::ptr::null_mut());
     let tmob: *mut MobSpawnData = if sd.is_null() {
-        crate::game::map_server::map_id2mob_ref(target)
-            .map(|arc| arc.data_ptr())
+        map_id2mob_ref(target)
+            .map(|arc| arc.legacy.data_ptr())
             .unwrap_or(std::ptr::null_mut())
     } else {
         std::ptr::null_mut()
@@ -2268,8 +2311,8 @@ pub unsafe fn mob_move_inner_id(entity_id: u32, mob: *mut MobSpawnData) -> i32 {
         if arc.read().subtype != 0 {
             return 0;
         }
-    } else if let Some(arc) = crate::game::map_server::map_id2mob_ref(entity_id) {
-        let m2 = &*arc.data_ptr();
+    } else if let Some(arc) = map_id2mob_ref(entity_id) {
+        let m2 = arc.read();
         if m2.state == MOB_DEAD {
             return 0;
         }
@@ -2305,12 +2348,13 @@ pub struct SpawnConfig {
     pub owner: u32,
 }
 
-/// Spawn `cfg.times` one-time instances of mob `id` at `(m, x, y)`.
+/// Spawn `cfg.times` one-time instances of mob `id` at `pos`.
 ///
 /// # Safety
 ///
 /// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn mobspawn_onetime(id: u32, m: i32, x: i32, y: i32, cfg: SpawnConfig) -> Vec<u32> {
+pub unsafe fn mobspawn_onetime(id: u32, pos: Point, cfg: SpawnConfig) -> Vec<u32> {
+    let (m, x, y) = (pos.m, pos.x, pos.y);
     let SpawnConfig {
         times,
         start,
@@ -2330,18 +2374,18 @@ pub unsafe fn mobspawn_onetime(id: u32, m: i32, x: i32, y: i32, cfg: SpawnConfig
         if (*db).exp == 0 {
             (*db).exp = mob_db::experience(id);
         }
-        (*db).startm = m as u16;
-        (*db).startx = x as u16;
-        (*db).starty = y as u16;
+        (*db).startm = m;
+        (*db).startx = x;
+        (*db).starty = y;
         (*db).mobid = id;
         (*db).start = start as i8;
         (*db).end = end as i8;
         (*db).replace = replace;
         (*db).state = MOB_DEAD;
         (*db).bl_type = BL_MOB as u8;
-        (*db).m = m as u16;
-        (*db).x = x as u16;
-        (*db).y = y as u16;
+        (*db).m = m;
+        (*db).x = x;
+        (*db).y = y;
         (*db).owner = owner;
         (*db).onetime = 1;
         (*db).spawncheck = 0;
@@ -2358,14 +2402,19 @@ pub unsafe fn mobspawn_onetime(id: u32, m: i32, x: i32, y: i32, cfg: SpawnConfig
         // Insert into MOB_MAP first — this moves the Box data into Arc<RwLock>,
         // freeing the Box. After this, `db` is dangling and must not be used.
         crate::game::map_server::map_addiddb_mob(new_id, mob_box);
-        // Get the live pointer from the Arc<RwLock>.
-        let db = crate::game::map_server::map_id2mob_ref(new_id)
-            .expect("mob just inserted")
-            .data_ptr();
-        map_addblock_id((*db).id, (*db).bl_type, (*db).m, (*db).x, (*db).y);
+        // Read fields from the live Arc<MobEntity>, then use raw ptr for
+        // mob_respawn/mob_respawn_nousers which still take *mut MobSpawnData.
+        let mob_arc = map_id2mob_ref(new_id).expect("mob just inserted");
+        let (id, bl_type, m, x, y) = {
+            let guard = mob_arc.read();
+            (guard.id, guard.bl_type, guard.m, guard.x, guard.y)
+        };
+        map_addblock_id(id, bl_type, m, x, y);
 
-        let has_users =
-            ffi_map_is_loaded((*db).m) && crate::game::block::map_user_count((*db).m as usize) > 0;
+        // SAFETY: single-threaded game loop, Arc keeps allocation alive.
+        // mob_respawn/mob_respawn_nousers call Lua — no guard held.
+        let db = mob_arc.legacy.data_ptr();
+        let has_users = ffi_map_is_loaded(m) && crate::game::block::map_user_count(m as usize) > 0;
         if has_users {
             mob_respawn(db);
         } else {
@@ -2423,10 +2472,10 @@ pub async unsafe fn sl_mob_removehealth(mob: *mut MobSpawnData, damage: i32, cas
             sd.damage = damage as f32;
             sd.critchance = 0;
             set_on_attacker = true;
-        } else if let Some(arc) = crate::game::map_server::map_id2mob_ref(resolved_id) {
-            let tmob = arc.data_ptr();
-            (*tmob).damage = damage as f32;
-            (*tmob).critchance = 0;
+        } else if let Some(arc) = map_id2mob_ref(resolved_id) {
+            let mut tmob = arc.write();
+            tmob.damage = damage as f32;
+            tmob.critchance = 0;
             set_on_attacker = true;
         }
     }

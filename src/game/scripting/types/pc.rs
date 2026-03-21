@@ -1548,7 +1548,7 @@ fn extract_bl_ptr(ud: &mlua::AnyUserData) -> *mut std::ffi::c_void {
     if let Ok(pc) = ud.borrow::<PcObject>() { return pc.sd_ptr_raw() as *mut std::ffi::c_void; }
     if let Ok(mob) = ud.borrow::<crate::game::scripting::types::mob::MobObject>() {
         return crate::game::map_server::map_id2mob_ref(mob.id)
-            .map(|arc| arc.data_ptr() as *mut std::ffi::c_void)
+            .map(|arc| arc.legacy.data_ptr() as *mut std::ffi::c_void)
             .unwrap_or(std::ptr::null_mut());
     }
     if let Ok(npc) = ud.borrow::<crate::game::scripting::types::npc::NpcObject>() {

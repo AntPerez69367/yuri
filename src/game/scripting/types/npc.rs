@@ -247,7 +247,7 @@ impl UserData for NpcObject {
                             let tbl = lua.create_table()?;
                             if amount <= 0 { return Ok(mlua::Value::Table(tbl)); }
                             let spawned = unsafe {
-                                mobspawn_onetime(mob_id, m, x, y, SpawnConfig { times: amount, start: 0, end: 0, replace: 0, owner })
+                                mobspawn_onetime(mob_id, Point::new(m as u16, x as u16, y as u16), SpawnConfig { times: amount, start: 0, end: 0, replace: 0, owner })
                             };
                             if spawned.is_empty() { return Ok(mlua::Value::Table(tbl)); }
                             for (i, spawn_id) in spawned.into_iter().enumerate() {

@@ -4,6 +4,7 @@
 
 use crate::database::map_db::raw_map_ptr;
 use crate::database::map_db::{WarpList, BLOCK_SIZE};
+use crate::common::traits::LegacyEntity;
 use crate::game::mob::MOB_DEAD;
 use crate::game::pc::MapSessionData;
 use crate::game::pc::{
@@ -1280,8 +1281,7 @@ pub unsafe fn clif_throw_check_id(entity_id: u32, found: *mut i32) -> i32 {
             return 0;
         }
     } else if let Some(arc) = crate::game::map_server::map_id2mob_ref(entity_id) {
-        let mob = &*arc.data_ptr();
-        if mob.state == MOB_DEAD {
+        if arc.read().state == MOB_DEAD {
             return 0;
         }
     } else if let Some(arc) = crate::game::map_server::map_id2sd_pc(entity_id) {

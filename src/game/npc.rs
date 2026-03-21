@@ -1019,8 +1019,7 @@ pub unsafe fn npc_move_sub_id(entity_id: u32, nd: *mut NpcData) -> i32 {
             return 0;
         }
     } else if let Some(arc) = crate::game::map_server::map_id2mob_ref(entity_id) {
-        let mob = &*arc.data_ptr();
-        if mob.state == crate::game::mob::MOB_DEAD {
+        if arc.read().state == crate::game::mob::MOB_DEAD {
             return 0;
         }
     } else if let Some(arc) = crate::game::map_server::map_id2sd_pc(entity_id) {
