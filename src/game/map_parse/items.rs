@@ -2,9 +2,9 @@
 
 #![allow(non_snake_case, clippy::wildcard_imports)]
 
+use crate::common::traits::LegacyEntity;
 use crate::database::map_db::raw_map_ptr;
 use crate::database::map_db::{WarpList, BLOCK_SIZE};
-use crate::common::traits::LegacyEntity;
 use crate::game::mob::MOB_DEAD;
 use crate::game::pc::MapSessionData;
 use crate::game::pc::{
@@ -13,7 +13,6 @@ use crate::game::pc::{
     SFLAG_HPMP, SFLAG_XPMONEY,
 };
 use crate::game::player::entity::PlayerEntity;
-use crate::game::player::prelude::*;
 use crate::session::session_exists;
 
 // MAP_EQ* message indices

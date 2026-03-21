@@ -15,7 +15,6 @@ use crate::database::map_db::{GlobalReg, WarpList};
 use crate::database::mob_db::MobDbData;
 use crate::game::lua::dispatch::dispatch;
 use crate::game::pc::MapSessionData;
-use crate::game::player::prelude::*;
 use crate::game::types::GfxViewer;
 use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
 

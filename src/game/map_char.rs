@@ -32,7 +32,6 @@ use crate::game::pc::{
     pc_calcstat, pc_checklevel_pe, pc_loadequip, pc_loaditem, pc_loadmagic, pc_magic_startup_pe,
     pc_requestmp, pc_setpos, pc_starttimer, MapSessionData,
 };
-use crate::game::player::entity::PlayerEntity;
 use crate::network::crypt::populate_table;
 use crate::session::{get_session_manager, session_get_client_ip, SessionId};
 // ---------------------------------------------------------------------------

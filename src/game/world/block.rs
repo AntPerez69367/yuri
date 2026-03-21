@@ -11,7 +11,7 @@
 #![allow(non_upper_case_globals)]
 
 use crate::common::traits::LegacyEntity;
-use crate::database::map_db::{map_data, MAP_SLOTS};
+use crate::database::map_db::map_data;
 use crate::game::entity_store::map_id2sd_pc;
 use crate::game::mob::MOB_DEAD;
 use crate::game::pc::U_FLAG_UNPHYSICAL;

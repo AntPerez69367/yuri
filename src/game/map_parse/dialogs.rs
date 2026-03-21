@@ -16,7 +16,6 @@ use crate::game::pc::{
     EQ_FACEACCTWO, EQ_HELM, EQ_MANTLE, EQ_NECKLACE, EQ_SHIELD, EQ_WEAP,
 };
 use crate::game::player::entity::PlayerEntity;
-use crate::game::player::prelude::*;
 use crate::session::{session_exists, SessionId};
 
 // ─── External C globals ───────────────────────────────────────────────────────
@@ -1128,12 +1127,7 @@ pub async unsafe fn clif_handle_clickgetinfo(pe: &PlayerEntity) -> i32 {
             sl_async_freeco(&mut *pe.write() as *mut MapSessionData);
             sl_doscript_coro_2("onLook", None, pe.id, target_id);
             if let Some(ref yname) = mob_yname {
-                sl_doscript_coro_2(
-                    yname,
-                    Some("click"),
-                    pe.id,
-                    target_id,
-                );
+                sl_doscript_coro_2(yname, Some("click"), pe.id, target_id);
             }
         }
     }
