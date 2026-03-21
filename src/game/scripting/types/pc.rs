@@ -708,7 +708,7 @@ impl UserData for PcObject {
             this.with_sd((), |sd| unsafe { sl_pc_freeasync(sd) }); Ok(())
         });
         methods.add_method("forceSave", |_, this, ()| {
-            this.with_sd((), |sd| unsafe { sl_pc_forcesave(sd); }); Ok(())
+            this.with_pe((), |pe| { sl_pc_forcesave(pe); }); Ok(())
         });
         methods.add_method("calcStat", |_, this, ()| {
             this.with_pe((), |pe| unsafe { sl_pc_calcstat(pe) }); Ok(())

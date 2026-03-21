@@ -90,7 +90,7 @@ pub unsafe fn pc_item_timer(id: i32, _none: i32) -> i32 {
 /// Caller must ensure all pointer arguments are valid and non-null.
 pub unsafe fn pc_savetimer(id: i32, _none: i32) -> i32 {
     if let Some(pe) = map_server::map_id2sd_pc(id as u32) {
-        sl_pc_forcesave(&mut pe.write());
+        sl_pc_forcesave(&pe);
     }
     0
 }

@@ -20,8 +20,8 @@ use crate::game::block_grid;
 use crate::game::client::visual::broadcast_update_state;
 use crate::game::lua::dispatch::dispatch;
 use crate::game::map_parse::player_state::{
-    clif_getchararea, clif_mystatus, clif_refresh, clif_retrieveprofile, clif_sendack,
-    clif_sendid, clif_sendmapinfo, clif_sendstatus, clif_sendtime, clif_sendxy,
+    clif_getchararea, clif_mystatus, clif_refresh, clif_retrieveprofile, clif_sendack, clif_sendid,
+    clif_sendmapinfo, clif_sendstatus, clif_sendtime, clif_sendxy,
 };
 use crate::game::map_parse::visual::{
     clif_mob_look_close_func_inner, clif_mob_look_start_func_inner, clif_object_look_by_id,
@@ -32,9 +32,9 @@ use crate::game::pc::{
     pc_calcstat, pc_checklevel_pe, pc_loadequip, pc_loaditem, pc_loadmagic, pc_magic_startup_pe,
     pc_requestmp, pc_setpos, pc_starttimer, MapSessionData,
 };
+use crate::game::player::entity::PlayerEntity;
 use crate::network::crypt::populate_table;
 use crate::session::{get_session_manager, session_get_client_ip, SessionId};
-
 // ---------------------------------------------------------------------------
 // intif_install_player — replaces intif_mmo_tosd (bincode era)
 // ---------------------------------------------------------------------------
@@ -116,7 +116,12 @@ pub fn intif_install_player(fd: i32, player: PlayerData) -> i32 {
     let last_pos = sd_box.player.identity.last_pos;
     let sd_ptr: *mut MapSessionData = &mut *sd_box;
     unsafe {
-        pc_setpos(sd_ptr, last_pos.m as i32, last_pos.x as i32, last_pos.y as i32);
+        pc_setpos(
+            sd_ptr,
+            last_pos.m as i32,
+            last_pos.x as i32,
+            last_pos.y as i32,
+        );
         pc_loadmagic(sd_ptr);
         pc_starttimer(sd_ptr);
         pc_requestmp(sd_ptr);
@@ -198,9 +203,7 @@ pub fn intif_install_player(fd: i32, player: PlayerData) -> i32 {
         let sd = arc.read();
         (sd.player.identity.id, sd.player.identity.name.clone())
     };
-    let fire_login_hook = unsafe {
-        blocking_run_async(assert_send(mmo_setonline(player_id, 1)))
-    };
+    let fire_login_hook = unsafe { blocking_run_async(assert_send(mmo_setonline(player_id, 1))) };
     if fire_login_hook {
         let raw_ip = session_get_client_ip(fd);
         let addr = format!(
@@ -237,29 +240,25 @@ pub fn intif_install_player(fd: i32, player: PlayerData) -> i32 {
 
 pub mod intif_save_impl {
     use crate::common::traits::LegacyEntity;
+    use crate::database::{blocking_run_async, get_pool};
     use crate::game::block::map_is_loaded;
-    use crate::game::pc::MapSessionData;
-    use crate::game::player::entity::PlayerEntity;
+    use crate::game::player::PlayerEntity;
+    use crate::servers::char::db::{save_player, set_online};
 
-    /// # Safety
-    ///
-    /// Caller must ensure all pointer arguments are valid and non-null.
-    pub unsafe fn sl_intif_save(sd: *mut MapSessionData) -> i32 {
-        if sd.is_null() {
-            return -1;
-        }
+    pub fn sl_intif_save(pe: &PlayerEntity) -> i32 {
+        let player = {
+            let mut sd = pe.write();
+            sd.player.identity.last_pos.m = sd.m;
+            sd.player.identity.last_pos.x = sd.x;
+            sd.player.identity.last_pos.y = sd.y;
+            sd.player.appearance.disguise = sd.disguise;
+            sd.player.appearance.disguise_color = sd.disguise_color;
+            sd.player.clone()
+        };
 
-        // Sync runtime shadow fields into player before save.
-        (*sd).player.identity.last_pos.m = (*sd).m;
-        (*sd).player.identity.last_pos.x = (*sd).x;
-        (*sd).player.identity.last_pos.y = (*sd).y;
-        (*sd).player.appearance.disguise = (*sd).disguise;
-        (*sd).player.appearance.disguise_color = (*sd).disguise_color;
-
-        let player = (*sd).player.clone();
-        crate::database::blocking_run_async(async move {
-            let pool = crate::database::get_pool();
-            if let Err(e) = crate::servers::char::db::save_player(pool, &player).await {
+        blocking_run_async(async move {
+            let pool = get_pool();
+            if let Err(e) = save_player(pool, &player).await {
                 tracing::error!(
                     "[map] [save] save_player failed for id={}: {}",
                     player.identity.id,
@@ -271,39 +270,39 @@ pub mod intif_save_impl {
     }
 
     pub fn sl_intif_savequit(pe: &PlayerEntity) -> i32 {
-        let sd = &mut *pe.write() as *mut MapSessionData;
-        unsafe {
-            if !map_is_loaded((*sd).player.identity.dest_pos.m as i32) {
-                if (*sd).player.identity.dest_pos.m == 0 {
-                    (*sd).player.identity.dest_pos.m = (*sd).m;
-                    (*sd).player.identity.dest_pos.x = (*sd).x;
-                    (*sd).player.identity.dest_pos.y = (*sd).y;
+        let (player, char_id) = {
+            let mut sd = pe.write();
+            if map_is_loaded(sd.player.identity.dest_pos.m as i32) {
+                if sd.player.identity.dest_pos.m == 0 {
+                    sd.player.identity.dest_pos.m = sd.m;
+                    sd.player.identity.dest_pos.x = sd.x;
+                    sd.player.identity.dest_pos.y = sd.y;
                 }
-                (*sd).player.identity.last_pos = (*sd).player.identity.dest_pos;
+                sd.player.identity.last_pos = sd.player.identity.dest_pos;
             } else {
-                (*sd).player.identity.last_pos.m = (*sd).m;
-                (*sd).player.identity.last_pos.x = (*sd).x;
-                (*sd).player.identity.last_pos.y = (*sd).y;
+                sd.player.identity.last_pos.m = sd.m;
+                sd.player.identity.last_pos.x = sd.x;
+                sd.player.identity.last_pos.y = sd.y;
             }
 
-            (*sd).player.appearance.disguise = (*sd).disguise;
-            (*sd).player.appearance.disguise_color = (*sd).disguise_color;
+            sd.player.appearance.disguise = sd.disguise;
+            sd.player.appearance.disguise_color = sd.disguise_color;
 
-            let player = (*sd).player.clone();
-            let char_id = player.identity.id;
-            crate::database::blocking_run_async(async move {
-                let pool = crate::database::get_pool();
-                if let Err(e) = crate::servers::char::db::save_player(pool, &player).await {
-                    tracing::error!("[map] [save] save_player failed for id={}: {}", char_id, e);
-                }
-                crate::servers::char::db::set_online(pool, char_id, false).await;
-            });
+            let char_id = sd.player.identity.id;
+            (sd.player.clone(), char_id)
+        };
 
-            // Remove from online tracking
-            if let Some(world) = crate::world::get_world() {
-                world.online.remove(&char_id);
+        blocking_run_async(async move {
+            let pool = get_pool();
+            if let Err(e) = save_player(pool, &player).await {
+                tracing::error!("[map] [save] save_player failed for id={}: {}", char_id, e);
             }
-        } // end unsafe
+            set_online(pool, char_id, false).await;
+        });
+
+        if let Some(world) = crate::world::get_world() {
+            world.online.remove(&char_id);
+        }
         0
     }
 }

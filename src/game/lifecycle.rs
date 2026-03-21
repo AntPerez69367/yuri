@@ -1,14 +1,14 @@
 //! Map server lifecycle — shutdown, reload, and countdown timer.
 
-use crate::common::traits::LegacyEntity;
+use crate::database::map_db::{raw_map_ptr, GlobalReg, WarpList, MAP_SLOTS, MAX_MAPREG};
 use crate::engine::request_shutdown;
+use crate::game::block::map_termblock;
 use crate::game::entity_store::{map_id2sd_pc, map_termiddb};
 use crate::game::floor_items::map_clritem;
 use crate::game::map_char::intif_save_impl::sl_intif_save;
-use crate::game::pc::MapSessionData;
 use crate::session::{
-    get_session_manager, session_call_parse, session_exists, session_get_data, session_get_eof,
-    session_set_eof, SessionId,
+    get_fd_max, get_session_manager, session_call_parse, session_exists, session_get_data,
+    session_get_eof, session_set_eof, SessionId,
 };
 use std::sync::atomic::{AtomicI32, Ordering};
 
@@ -17,23 +17,16 @@ use std::sync::atomic::{AtomicI32, Ordering};
 // ---------------------------------------------------------------------------
 
 /// Save all online character sessions to the char server.
-///
-/// # Safety
-/// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn map_savechars(_none: i32, _nonetoo: i32) -> i32 {
-    for x in 0..crate::session::get_fd_max() {
+pub fn map_savechars() {
+    for x in 0..get_fd_max() {
         let fd = SessionId::from_raw(x);
-        if !session_exists(fd) {
+        if !session_exists(fd) || session_get_eof(fd) != 0 {
             continue;
         }
-        if session_get_eof(fd) != 0 {
-            continue;
-        }
-        if let Some(sd) = session_get_data(fd) {
-            sl_intif_save(&mut *sd.write() as *mut MapSessionData);
+        if let Some(pe) = session_get_data(fd) {
+            sl_intif_save(&pe);
         }
     }
-    0
 }
 
 // ---------------------------------------------------------------------------
@@ -43,58 +36,52 @@ pub unsafe fn map_savechars(_none: i32, _nonetoo: i32) -> i32 {
 /// Shuts down the map server: save characters, free all map tile/grid
 /// allocations, and terminate all subsystem databases.
 ///
-/// # Safety
-/// Must be called exactly once at shutdown, on the game thread, after all
-/// clients have been disconnected.
-pub unsafe fn map_do_term() {
-    use crate::database::map_db::WarpList;
-    use crate::database::map_db::{GlobalReg, MAP_SLOTS, MAX_MAPREG};
-
-    map_savechars(0, 0);
+/// Must be called exactly once at shutdown, on the game thread.
+pub fn map_do_term() {
+    map_savechars();
     map_clritem();
     map_termiddb();
 
     // Free per-slot tile arrays (Rust Vec alloc) and block grid arrays.
-    if !crate::database::map_db::raw_map_ptr().is_null() {
-        let slots =
-            std::slice::from_raw_parts_mut(crate::database::map_db::raw_map_ptr(), MAP_SLOTS);
+    let ptr = raw_map_ptr();
+    if !ptr.is_null() {
+        let slots = unsafe { std::slice::from_raw_parts_mut(ptr, MAP_SLOTS) };
         for slot in slots.iter_mut() {
             let cells = slot.xs as usize * slot.ys as usize;
             let bcells = slot.bxs as usize * slot.bys as usize;
 
-            if !slot.tile.is_null() && cells > 0 {
-                drop(Vec::from_raw_parts(slot.tile, cells, cells));
-                slot.tile = std::ptr::null_mut();
-            }
-            if !slot.obj.is_null() && cells > 0 {
-                drop(Vec::from_raw_parts(slot.obj, cells, cells));
-                slot.obj = std::ptr::null_mut();
-            }
-            if !slot.map.is_null() && cells > 0 {
-                drop(Vec::from_raw_parts(slot.map, cells, cells));
-                slot.map = std::ptr::null_mut();
-            }
-            if !slot.pass.is_null() && cells > 0 {
-                drop(Vec::from_raw_parts(slot.pass, cells, cells));
-                slot.pass = std::ptr::null_mut();
-            }
-            // block/block_mob are no longer allocated (block_grid handles spatial indexing).
-            if !slot.warp.is_null() && bcells > 0 {
-                drop(Vec::<*mut WarpList>::from_raw_parts(
-                    slot.warp, bcells, bcells,
-                ));
-                slot.warp = std::ptr::null_mut();
-            }
-            if !slot.registry.is_null() {
-                let layout = std::alloc::Layout::array::<GlobalReg>(MAX_MAPREG)
-                    .expect("GlobalReg layout overflow");
-                std::alloc::dealloc(slot.registry as *mut u8, layout);
-                slot.registry = std::ptr::null_mut();
+            unsafe {
+                if !slot.tile.is_null() && cells > 0 {
+                    drop(Vec::from_raw_parts(slot.tile, cells, cells));
+                    slot.tile = std::ptr::null_mut();
+                }
+                if !slot.obj.is_null() && cells > 0 {
+                    drop(Vec::from_raw_parts(slot.obj, cells, cells));
+                    slot.obj = std::ptr::null_mut();
+                }
+                if !slot.map.is_null() && cells > 0 {
+                    drop(Vec::from_raw_parts(slot.map, cells, cells));
+                    slot.map = std::ptr::null_mut();
+                }
+                if !slot.pass.is_null() && cells > 0 {
+                    drop(Vec::from_raw_parts(slot.pass, cells, cells));
+                    slot.pass = std::ptr::null_mut();
+                }
+                if !slot.warp.is_null() && bcells > 0 {
+                    drop(Vec::<*mut WarpList>::from_raw_parts(slot.warp, bcells, bcells));
+                    slot.warp = std::ptr::null_mut();
+                }
+                if !slot.registry.is_null() {
+                    let layout = std::alloc::Layout::array::<GlobalReg>(MAX_MAPREG)
+                        .expect("GlobalReg layout overflow");
+                    std::alloc::dealloc(slot.registry as *mut u8, layout);
+                    slot.registry = std::ptr::null_mut();
+                }
             }
         }
     }
 
-    crate::game::block::map_termblock();
+    unsafe { map_termblock() };
     crate::database::item_db::term();
     crate::database::magic_db::term();
     crate::database::class_db::term();

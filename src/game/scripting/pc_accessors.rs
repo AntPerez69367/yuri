@@ -1372,11 +1372,8 @@ pub unsafe fn sl_pc_freeasync(sd: &mut MapSessionData) {
     sl_async_freeco(sd as *mut MapSessionData);
 }
 
-/// # Safety
-///
-/// Caller must ensure all pointer arguments are valid and non-null.
-pub unsafe fn sl_pc_forcesave(sd: &mut MapSessionData) -> i32 {
-    sl_intif_save(sd as *mut MapSessionData)
+pub fn sl_pc_forcesave(pe: &PlayerEntity) -> i32 {
+    sl_intif_save(pe)
 }
 
 /// # Safety
