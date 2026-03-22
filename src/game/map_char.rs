@@ -121,12 +121,11 @@ pub fn intif_install_player(fd: i32, player: PlayerData) -> i32 {
             last_pos.x as i32,
             last_pos.y as i32,
         );
-        pc_loadmagic(sd_ptr);
-        pc_starttimer(sd_ptr);
-        pc_requestmp(sd_ptr);
     }
 
-    // ── Phase 2: Insert into PLAYER_MAP — use Arc from here on ──────────────
+    // ── Phase 2: Insert into PLAYER_MAP and link session ─────────────────────
+    // Must happen BEFORE pc_loadmagic/pc_starttimer because those send packets
+    // that call encrypt(), which needs session_data to find the EncHash.
     let sd_id = sd_box.id;
     let sd_fd = sd_box.fd;
     tracing::info!("[map] [login] fd={:?} step=addiddb", sid);
@@ -135,10 +134,37 @@ pub fn intif_install_player(fd: i32, player: PlayerData) -> i32 {
 
     // Store Arc in session so encrypt/decrypt can find the EncHash.
     if let Some(session_arc) = get_session_manager().get_session(sd_fd) {
-        if let Ok(mut session) = session_arc.try_lock() {
-            session.session_data = Some(arc.clone());
+        match session_arc.try_lock() {
+            Ok(mut session) => {
+                session.session_data = Some(arc.clone());
+            }
+            Err(_) => {
+                tracing::error!(
+                    "[map] [login] fd={:?} failed to lock session — session_data not set!",
+                    sd_fd
+                );
+            }
         }
+    } else {
+        tracing::error!("[map] [login] fd={:?} session not found in manager", sd_fd);
     }
+
+    // These legacy functions need session_data for encrypt(). Extract raw pointer
+    // by briefly acquiring the write guard, then dropping it before calls — encrypt()
+    // internally does pe.read() which would deadlock if write is held.
+    // The heap allocation (Box) survives the guard drop; single-threaded LocalSet
+    // guarantees no concurrent write access.
+    // TODO: refactor pc_starttimer, pc_requestmp to take &PlayerEntity
+    let sd_ptr: *mut MapSessionData = {
+        let mut guard = arc.legacy.write();
+        &mut **guard as *mut MapSessionData
+    };
+    unsafe {
+        pc_starttimer(sd_ptr);
+        pc_requestmp(sd_ptr);
+    }
+    // NOTE: pc_loadmagic moved to after login packet sequence (sends spell packets
+    // that the client can only handle after receiving map info).
 
     // ── Phase 3: Login packet sequence (unsafe — raw packet writes) ────────
     let fd = arc.fd;
@@ -193,6 +219,9 @@ pub fn intif_install_player(fd: i32, player: PlayerData) -> i32 {
         pc_loaditem(&arc);
         tracing::info!("[map] [login] fd={} step=loadequip", fd);
         pc_loadequip(&arc);
+        // TODO: refactor pc_loadmagic to take &PlayerEntity
+        tracing::info!("[map] [login] fd={} step=loadmagic", fd);
+        pc_loadmagic(sd_ptr);
     }
 
     tracing::info!("[map] [login] fd={} step=magic_startup", fd);
@@ -222,7 +251,7 @@ pub fn intif_install_player(fd: i32, player: PlayerData) -> i32 {
         tracing::info!("[map] [login] fd={} step=calcstat", fd);
         pc_calcstat(&arc);
         pc_checklevel_pe(&arc);
-        tracing::info!("[map] [login] fd={} step=mystaytus_2", fd);
+        tracing::info!("[map] [login] fd={} step=mystatus", fd);
         clif_mystatus(&arc);
 
         tracing::info!("[map] [login] fd={} step=updatestate", fd);
