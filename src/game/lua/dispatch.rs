@@ -41,7 +41,7 @@ fn resolve_func(lua: &Lua, root: &str, method: Option<&str>) -> Option<LuaFuncti
 pub fn dispatch(root: &str, method: Option<&str>, entity_ids: &[u32]) -> bool {
     let lua = sl_state();
     let Some(func) = resolve_func(lua, root, method) else {
-        tracing::warn!(
+        tracing::trace!(
             "[lua] {}{}: function not found",
             root,
             method.map(|m| format!(".{}", m)).unwrap_or_default()
@@ -55,7 +55,7 @@ pub fn dispatch(root: &str, method: Option<&str>, entity_ids: &[u32]) -> bool {
     match func.call::<LuaMultiValue>(args) {
         Ok(_) => true,
         Err(e) => {
-            tracing::warn!(
+            tracing::trace!(
                 "[lua] {}{}: {}",
                 root,
                 method.map(|m| format!(".{}", m)).unwrap_or_default(),
@@ -75,7 +75,7 @@ pub fn dispatch_coro(root: &str, method: Option<&str>, entity_ids: &[u32]) -> bo
     let thread = match lua.create_thread(func) {
         Ok(t) => t,
         Err(e) => {
-            tracing::warn!("[lua] create_thread for {}: {}", root, e);
+            tracing::trace!("[lua] create_thread for {}: {}", root, e);
             return false;
         }
     };
@@ -104,12 +104,12 @@ pub fn dispatch_coro(root: &str, method: Option<&str>, entity_ids: &[u32]) -> bo
                     context_id,
                 };
                 if let Err(e) = coroutine::store(lua, key, &thread) {
-                    tracing::warn!("[lua] store coroutine for {}: {}", root, e);
+                    tracing::trace!("[lua] store coroutine for {}: {}", root, e);
                 }
             }
         }
         Err(e) => {
-            tracing::warn!("[lua] {}: {}", root, e);
+            tracing::trace!("[lua] {}: {}", root, e);
         }
     }
     true
@@ -127,7 +127,7 @@ pub fn dispatch_strings(root: &str, method: Option<&str>, args: &[&str]) -> bool
     match func.call::<LuaMultiValue>(mv) {
         Ok(_) => true,
         Err(e) => {
-            tracing::warn!("[lua] {}: {}", root, e);
+            tracing::trace!("[lua] {}: {}", root, e);
             false
         }
     }

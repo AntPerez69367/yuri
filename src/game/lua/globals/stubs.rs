@@ -6,11 +6,26 @@ pub fn register(lua: &Lua) -> LuaResult<()> {
     let g = lua.globals();
 
     // ── No-ops (intentionally empty) ──
-    g.set("getKanDonationPoints", lua.create_function(|_, ()| Ok(0i64))?)?;
-    g.set("setKanDonationPoints", lua.create_function(|_, _: i32| Ok(()))?)?;
-    g.set("addKanDonationPoints", lua.create_function(|_, _: i32| Ok(()))?)?;
-    g.set("guitext", lua.create_function(|_, _: LuaMultiValue| Ok(()))?)?;
-    g.set("setOfflinePlayerRegistry", lua.create_function(|_, _: LuaMultiValue| Ok(()))?)?;
+    g.set(
+        "getKanDonationPoints",
+        lua.create_function(|_, ()| Ok(0i64))?,
+    )?;
+    g.set(
+        "setKanDonationPoints",
+        lua.create_function(|_, _: i32| Ok(()))?,
+    )?;
+    g.set(
+        "addKanDonationPoints",
+        lua.create_function(|_, _: i32| Ok(()))?,
+    )?;
+    g.set(
+        "guitext",
+        lua.create_function(|_, _: LuaMultiValue| Ok(()))?,
+    )?;
+    g.set(
+        "setOfflinePlayerRegistry",
+        lua.create_function(|_, _: LuaMultiValue| Ok(()))?,
+    )?;
 
     // ── Not yet implemented ──
     stub_warn(lua, "processKanDonations")?;
@@ -61,19 +76,25 @@ pub fn register(lua: &Lua) -> LuaResult<()> {
 /// Register a stub that logs a warning and returns nil.
 fn stub_warn(lua: &Lua, name: &str) -> LuaResult<()> {
     let owned_name = name.to_owned();
-    lua.globals().set(name, lua.create_function(move |_, _: LuaMultiValue| {
-        tracing::warn!("[lua] {}: not yet implemented", owned_name);
-        Ok(LuaValue::Nil)
-    })?)?;
+    lua.globals().set(
+        name,
+        lua.create_function(move |_, _: LuaMultiValue| {
+            tracing::trace!("[lua] {}: not yet implemented", owned_name);
+            Ok(LuaValue::Nil)
+        })?,
+    )?;
     Ok(())
 }
 
 /// Register a stub that logs a warning and returns an empty table.
 fn stub_table(lua: &Lua, name: &str) -> LuaResult<()> {
     let owned_name = name.to_owned();
-    lua.globals().set(name, lua.create_function(move |lua, _: LuaMultiValue| {
-        tracing::warn!("[lua] {}: not yet implemented", owned_name);
-        lua.create_table()
-    })?)?;
+    lua.globals().set(
+        name,
+        lua.create_function(move |lua, _: LuaMultiValue| {
+            tracing::trace!("[lua] {}: not yet implemented", owned_name);
+            lua.create_table()
+        })?,
+    )?;
     Ok(())
 }

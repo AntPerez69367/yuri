@@ -18,7 +18,7 @@ pub fn log_missing(entity_type: EntityType, key: &str, lua: &Lua) {
             format!("{}:{}", src_name, dbg.current_line().unwrap_or(0))
         })
         .unwrap_or_else(|| "unknown".to_string());
-    tracing::warn!(
+    tracing::trace!(
         "[LUA-MISSING] {}:{} called from {}",
         entity_type,
         key,
