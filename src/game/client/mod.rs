@@ -91,74 +91,127 @@ use crate::database::item_db;
 use crate::game::pc::pc_atkspeed;
 use crate::game::time_util::timer_insert;
 
+use crate::game::map_parse::chat::{
+    clif_isignore as chat_clif_isignore, clif_parseemotion as chat_parseemotion,
+    clif_parsesay as chat_parsesay, clif_parsewisp as chat_parsewisp,
+    clif_parseignore as chat_parseignore, clif_sendminitext as chat_sendminitext,
+};
+use crate::game::map_parse::combat::{
+    clif_parsemagic as combat_parsemagic, clif_parseattack as combat_parseattack,
+};
+use crate::game::map_parse::dialogs::{
+    clif_closeit as dialogs_closeit, clif_handle_clickgetinfo as dialogs_clickgetinfo,
+    clif_parsenpcdialog as dialogs_parsenpcdialog, clif_sendtowns as dialogs_sendtowns,
+};
+use crate::game::map_parse::groups::{
+    clif_groupstatus as groups_groupstatus, clif_addgroup as groups_addgroup,
+    clif_parseparcel as groups_parseparcel, clif_huntertoggle as groups_huntertoggle,
+    clif_sendhunternote as groups_sendhunternote,
+};
+use crate::game::map_parse::items::{
+    clif_open_sub as items_open_sub, clif_parsegetitem as items_parsegetitem,
+    clif_parseeatitem as items_parseeatitem, clif_parseuseitem as items_parseuseitem,
+    clif_parseunequip as items_parseunequip, clif_parsewield as items_parsewield,
+    clif_parsethrow as items_parsethrow, clif_throwconfirm as items_throwconfirm,
+    clif_dropgold as items_dropgold, clif_parsechangespell as items_parsechangespell,
+};
+use crate::game::map_parse::movement::{
+    clif_parsemap as movement_parsemap, clif_parsewalk as movement_parsewalk,
+    clif_parsewalkpong as movement_parsewalkpong, clif_parselookat as movement_parselookat,
+    clif_parselookat_2 as movement_parselookat_2, clif_parseviewchange as movement_parseviewchange,
+    clif_parseside as movement_parseside,
+};
+use crate::game::map_parse::player_state::{
+    clif_mystatus as ps_mystatus, clif_refresh as ps_refresh,
+    clif_sendminimap as ps_sendminimap,
+};
+use crate::game::map_parse::trading::{
+    clif_handitem as trading_handitem, clif_handgold as trading_handgold,
+    clif_parse_exchange as trading_parse_exchange,
+};
+use crate::game::map_parse::events::{
+    clif_parseranking as events_parseranking,
+    clif_sendRewardInfo as events_sendRewardInfo,
+    clif_getReward as events_getReward,
+};
+use crate::game::map_server::map_id2sd_pc;
+
 #[inline]
 unsafe fn clif_isignore(src: &PlayerEntity, dst: &PlayerEntity) -> i32 {
-    crate::game::map_parse::chat::clif_isignore(src, dst)
+    chat_clif_isignore(src, dst)
 }
 #[allow(dead_code)]
 #[inline] unsafe fn decrypt_fd(fd: SessionId) { decrypt(fd); }
-#[inline] async unsafe fn clif_handle_disconnect(pe: &PlayerEntity) { crate::game::client::handlers::clif_handle_disconnect(pe).await; }
-#[inline] unsafe fn clif_closeit(pe: &PlayerEntity) { crate::game::map_parse::dialogs::clif_closeit(pe); }
-#[inline] unsafe fn clif_mystatus(pe: &PlayerEntity) { crate::game::map_parse::player_state::clif_mystatus(pe); }
-#[inline] unsafe fn clif_groupstatus(pe: &PlayerEntity) { crate::game::map_parse::groups::clif_groupstatus(pe); }
-#[inline] unsafe fn clif_refresh(pe: &PlayerEntity) { crate::game::map_parse::player_state::clif_refresh(pe); }
-#[inline] unsafe fn clif_changestatus(pe: &PlayerEntity, status: u8) { crate::game::client::handlers::clif_changestatus(pe, status as i32); }
-#[inline] async unsafe fn clif_accept2(fd: SessionId, name: *const i8, val: u8) { crate::game::client::handlers::clif_accept2(fd, name as *mut i8, val as i32).await; }
-#[inline] unsafe fn clif_parsemap(pe: &PlayerEntity) { crate::game::map_parse::movement::clif_parsemap(pe); }
-#[inline] unsafe fn clif_parsewalk(pe: &PlayerEntity) { crate::game::map_parse::movement::clif_parsewalk(pe); }
-#[inline] unsafe fn clif_parsewalkpong(pe: &PlayerEntity) { crate::game::map_parse::movement::clif_parsewalkpong(pe); }
-#[inline] unsafe fn clif_handle_missingobject(pe: &PlayerEntity) { crate::game::client::handlers::clif_handle_missingobject(pe); }
-#[inline] unsafe fn clif_parselookat(pe: &PlayerEntity) { crate::game::map_parse::movement::clif_parselookat(pe); }
-#[inline] unsafe fn clif_parselookat_2(pe: &PlayerEntity) { crate::game::map_parse::movement::clif_parselookat_2(pe); }
-#[inline] unsafe fn clif_open_sub(pe: &PlayerEntity) { crate::game::map_parse::items::clif_open_sub(pe); }
-#[inline] async unsafe fn clif_handle_clickgetinfo(pe: &PlayerEntity) { crate::game::map_parse::dialogs::clif_handle_clickgetinfo(pe).await; }
-#[inline] unsafe fn clif_parseviewchange(pe: &PlayerEntity) { crate::game::map_parse::movement::clif_parseviewchange(pe); }
-#[inline] unsafe fn clif_parseside(pe: &PlayerEntity) { crate::game::map_parse::movement::clif_parseside(pe); }
-#[inline] unsafe fn clif_parseemotion(pe: &PlayerEntity) { crate::game::map_parse::chat::clif_parseemotion(pe); }
-#[inline] unsafe fn clif_parsesay(pe: &PlayerEntity) { crate::game::map_parse::chat::clif_parsesay(pe); }
-#[inline] unsafe fn clif_parsewisp(pe: &PlayerEntity) { crate::game::map_parse::chat::clif_parsewisp(pe); }
-#[inline] unsafe fn clif_parseignore(pe: &PlayerEntity) { crate::game::map_parse::chat::clif_parseignore(pe); }
-#[inline] async unsafe fn clif_parsefriends(pe: &PlayerEntity, list: *const i8, len: i32) { crate::game::client::handlers::clif_parsefriends(pe, list, len).await; }
-#[inline] unsafe fn clif_user_list(pe: &PlayerEntity) { crate::game::client::visual::clif_user_list(pe); }
-#[inline] unsafe fn clif_addgroup(pe: &PlayerEntity) { crate::game::map_parse::groups::clif_addgroup(pe); }
-#[inline] unsafe fn clif_parsegetitem(pe: &PlayerEntity) { crate::game::map_parse::items::clif_parsegetitem(pe); }
-#[inline] unsafe fn clif_parsedropitem(pe: &PlayerEntity) { crate::game::client::handlers::clif_parsedropitem(pe); }
-#[inline] unsafe fn clif_parseeatitem(pe: &PlayerEntity) { crate::game::map_parse::items::clif_parseeatitem(pe); }
-#[inline] unsafe fn clif_parseuseitem(pe: &PlayerEntity) { crate::game::map_parse::items::clif_parseuseitem(pe); }
-#[inline] unsafe fn clif_parseunequip(pe: &PlayerEntity) { crate::game::map_parse::items::clif_parseunequip(pe); }
-#[inline] unsafe fn clif_parsewield(pe: &PlayerEntity) { crate::game::map_parse::items::clif_parsewield(pe); }
-#[inline] unsafe fn clif_parsethrow(pe: &PlayerEntity) { crate::game::map_parse::items::clif_parsethrow(pe); }
-#[inline] unsafe fn clif_throwconfirm(pe: &PlayerEntity) { crate::game::map_parse::items::clif_throwconfirm(pe); }
-#[inline] unsafe fn clif_dropgold(pe: &PlayerEntity, amount: u32) { crate::game::map_parse::items::clif_dropgold(pe, amount); }
-#[inline] unsafe fn clif_postitem(pe: &PlayerEntity) { crate::game::client::handlers::clif_postitem(pe); }
-#[inline] unsafe fn clif_handitem(pe: &PlayerEntity) { crate::game::map_parse::trading::clif_handitem(pe); }
-#[inline] unsafe fn clif_handgold(pe: &PlayerEntity) { crate::game::map_parse::trading::clif_handgold(pe); }
-#[inline] unsafe fn clif_parsemagic(pe: &PlayerEntity) { crate::game::map_parse::combat::clif_parsemagic(&mut pe.write()); }
-#[inline] unsafe fn clif_parseattack(pe: &PlayerEntity) { crate::game::map_parse::combat::clif_parseattack(&mut pe.write()); }
-#[inline] unsafe fn clif_sendminitext(pe: &PlayerEntity, msg: *const i8) { crate::game::map_parse::chat::clif_sendminitext(pe, msg); }
-#[inline] unsafe fn clif_parsenpcdialog(pe: &PlayerEntity) { crate::game::map_parse::dialogs::clif_parsenpcdialog(pe); }
-#[inline] unsafe fn clif_handle_menuinput(pe: &PlayerEntity) { crate::game::client::handlers::clif_handle_menuinput(pe); }
-#[inline] unsafe fn clif_paperpopupwrite_save(pe: &PlayerEntity) { crate::game::client::visual::clif_paperpopupwrite_save(pe); }
-#[inline] unsafe fn clif_parsechangespell(pe: &PlayerEntity) { crate::game::map_parse::items::clif_parsechangespell(pe); }
-#[inline] unsafe fn clif_parsechangepos(pe: &PlayerEntity) { crate::game::client::handlers::clif_parsechangepos(pe); }
+#[inline] async unsafe fn clif_handle_disconnect(pe: &PlayerEntity) { handlers::clif_handle_disconnect(pe).await; }
+#[inline] unsafe fn clif_closeit(pe: &PlayerEntity) { dialogs_closeit(pe); }
+#[inline] unsafe fn clif_mystatus(pe: &PlayerEntity) { ps_mystatus(pe); }
+#[inline] unsafe fn clif_groupstatus(pe: &PlayerEntity) { groups_groupstatus(pe); }
+#[inline] unsafe fn clif_refresh(pe: &PlayerEntity) { ps_refresh(pe); }
+#[inline] unsafe fn clif_changestatus(pe: &PlayerEntity, status: u8) { handlers::clif_changestatus(pe, status as i32); }
+#[inline] async unsafe fn clif_accept2(fd: SessionId, name: *const i8, val: u8) { handlers::clif_accept2(fd, name as *mut i8, val as i32).await; }
+#[inline] unsafe fn clif_parsemap(pe: &PlayerEntity) { movement_parsemap(pe); }
+#[inline] unsafe fn clif_parsewalk(pe: &PlayerEntity) { movement_parsewalk(pe); }
+#[inline] unsafe fn clif_parsewalkpong(pe: &PlayerEntity) { movement_parsewalkpong(pe); }
+#[inline] unsafe fn clif_handle_missingobject(pe: &PlayerEntity) { handlers::clif_handle_missingobject(pe); }
+#[inline] unsafe fn clif_parselookat(pe: &PlayerEntity) { movement_parselookat(pe); }
+#[inline] unsafe fn clif_parselookat_2(pe: &PlayerEntity) { movement_parselookat_2(pe); }
+#[inline] unsafe fn clif_open_sub(pe: &PlayerEntity) { items_open_sub(pe); }
+#[inline] async unsafe fn clif_handle_clickgetinfo(pe: &PlayerEntity) { dialogs_clickgetinfo(pe).await; }
+#[inline] unsafe fn clif_parseviewchange(pe: &PlayerEntity) { movement_parseviewchange(pe); }
+#[inline] unsafe fn clif_parseside(pe: &PlayerEntity) { movement_parseside(pe); }
+#[inline] unsafe fn clif_parseemotion(pe: &PlayerEntity) { chat_parseemotion(pe); }
+#[inline] unsafe fn clif_parsesay(pe: &PlayerEntity) { chat_parsesay(pe); }
+#[inline] unsafe fn clif_parsewisp(pe: &PlayerEntity) { chat_parsewisp(pe); }
+#[inline] unsafe fn clif_parseignore(pe: &PlayerEntity) { chat_parseignore(pe); }
+#[inline] async unsafe fn clif_parsefriends(pe: &PlayerEntity, list: *const i8, len: i32) { handlers::clif_parsefriends(pe, list, len).await; }
+#[inline] unsafe fn clif_user_list(pe: &PlayerEntity) { visual::clif_user_list(pe); }
+#[inline] unsafe fn clif_addgroup(pe: &PlayerEntity) { groups_addgroup(pe); }
+#[inline] unsafe fn clif_parsegetitem(pe: &PlayerEntity) { items_parsegetitem(pe); }
+#[inline] unsafe fn clif_parsedropitem(pe: &PlayerEntity) { handlers::clif_parsedropitem(pe); }
+#[inline] unsafe fn clif_parseeatitem(pe: &PlayerEntity) { items_parseeatitem(pe); }
+#[inline] unsafe fn clif_parseuseitem(pe: &PlayerEntity) { items_parseuseitem(pe); }
+#[inline] unsafe fn clif_parseunequip(pe: &PlayerEntity) { items_parseunequip(pe); }
+#[inline] unsafe fn clif_parsewield(pe: &PlayerEntity) { items_parsewield(pe); }
+#[inline] unsafe fn clif_parsethrow(pe: &PlayerEntity) { items_parsethrow(pe); }
+#[inline] unsafe fn clif_throwconfirm(pe: &PlayerEntity) { items_throwconfirm(pe); }
+#[inline] unsafe fn clif_dropgold(pe: &PlayerEntity, amount: u32) { items_dropgold(pe, amount); }
+#[inline] unsafe fn clif_postitem(pe: &PlayerEntity) { handlers::clif_postitem(pe); }
+#[inline] unsafe fn clif_handitem(pe: &PlayerEntity) { trading_handitem(pe); }
+#[inline] unsafe fn clif_handgold(pe: &PlayerEntity) { trading_handgold(pe); }
+// TODO: refactor clif_parsemagic to take &PlayerEntity
+#[inline] unsafe fn clif_parsemagic(pe: &PlayerEntity) { combat_parsemagic(&mut pe.write()); }
+// TODO: refactor clif_parseattack to take &PlayerEntity
+#[inline] unsafe fn clif_parseattack(pe: &PlayerEntity) {
+    let sd_ptr: *mut MapSessionData = {
+        let mut guard = pe.legacy.write();
+        &mut **guard as *mut MapSessionData
+    };
+    combat_parseattack(&mut *sd_ptr);
+}
+#[inline] unsafe fn clif_sendminitext(pe: &PlayerEntity, msg: *const i8) { chat_sendminitext(pe, msg); }
+#[inline] unsafe fn clif_parsenpcdialog(pe: &PlayerEntity) { dialogs_parsenpcdialog(pe); }
+#[inline] unsafe fn clif_handle_menuinput(pe: &PlayerEntity) { handlers::clif_handle_menuinput(pe); }
+#[inline] unsafe fn clif_paperpopupwrite_save(pe: &PlayerEntity) { visual::clif_paperpopupwrite_save(pe); }
+#[inline] unsafe fn clif_parsechangespell(pe: &PlayerEntity) { items_parsechangespell(pe); }
+#[inline] unsafe fn clif_parsechangepos(pe: &PlayerEntity) { handlers::clif_parsechangepos(pe); }
 #[inline] unsafe fn pc_warp(pe: &PlayerEntity, m: i32, x: i32, y: i32) -> i32 {
     let sd_ptr: *mut MapSessionData = { &mut *pe.write() as *mut MapSessionData };
-    crate::game::pc::pc_warp(sd_ptr, m, x, y)
+    crate::game::pc::pc_warp(sd_ptr, m, x, y) // TODO: refactor pc_warp to take &PlayerEntity
 }
-#[inline] unsafe fn clif_changeprofile(pe: &PlayerEntity) { crate::game::client::visual::clif_changeprofile(pe); }
-#[inline] async unsafe fn clif_handle_boards(pe: &PlayerEntity) { crate::game::client::handlers::clif_handle_boards(pe).await; }
-#[inline] unsafe fn clif_handle_powerboards(pe: &PlayerEntity) { crate::game::client::handlers::clif_handle_powerboards(pe); }
-#[inline] unsafe fn clif_parseparcel(pe: &PlayerEntity) { crate::game::map_parse::groups::clif_parseparcel(pe); }
-#[inline] async unsafe fn clif_parseranking(pe: &PlayerEntity, fd: SessionId) { crate::game::map_parse::events::clif_parseranking(pe, fd).await; }
+#[inline] unsafe fn clif_changeprofile(pe: &PlayerEntity) { visual::clif_changeprofile(pe); }
+#[inline] async unsafe fn clif_handle_boards(pe: &PlayerEntity) { handlers::clif_handle_boards(pe).await; }
+#[inline] unsafe fn clif_handle_powerboards(pe: &PlayerEntity) { handlers::clif_handle_powerboards(pe); }
+#[inline] unsafe fn clif_parseparcel(pe: &PlayerEntity) { groups_parseparcel(pe); }
+#[inline] async unsafe fn clif_parseranking(pe: &PlayerEntity, fd: SessionId) { events_parseranking(pe, fd).await; }
 #[allow(dead_code, non_snake_case)]
-#[inline] async unsafe fn clif_sendRewardInfo(pe: &PlayerEntity, fd: SessionId) { crate::game::map_parse::events::clif_sendRewardInfo(pe, fd).await; }
+#[inline] async unsafe fn clif_sendRewardInfo(pe: &PlayerEntity, fd: SessionId) { events_sendRewardInfo(pe, fd).await; }
 #[allow(dead_code, non_snake_case)]
-#[inline] async unsafe fn clif_getReward(pe: &PlayerEntity, fd: SessionId) { crate::game::map_parse::events::clif_getReward(pe, fd).await; }
-#[inline] unsafe fn clif_sendtowns(pe: &PlayerEntity) { crate::game::map_parse::dialogs::clif_sendtowns(pe); }
-#[inline] async unsafe fn clif_huntertoggle(pe: &PlayerEntity) { crate::game::map_parse::groups::clif_huntertoggle(pe).await; }
-#[inline] async unsafe fn clif_sendhunternote(pe: &PlayerEntity) { crate::game::map_parse::groups::clif_sendhunternote(pe).await; }
-#[inline] unsafe fn clif_sendminimap(pe: &PlayerEntity) { crate::game::map_parse::player_state::clif_sendminimap(pe); }
-#[inline] unsafe fn clif_parse_exchange(pe: &PlayerEntity) { crate::game::map_parse::trading::clif_parse_exchange(pe); }
+#[inline] async unsafe fn clif_getReward(pe: &PlayerEntity, fd: SessionId) { events_getReward(pe, fd).await; }
+#[inline] unsafe fn clif_sendtowns(pe: &PlayerEntity) { dialogs_sendtowns(pe); }
+#[inline] async unsafe fn clif_huntertoggle(pe: &PlayerEntity) { groups_huntertoggle(pe).await; }
+#[inline] async unsafe fn clif_sendhunternote(pe: &PlayerEntity) { groups_sendhunternote(pe).await; }
+#[inline] unsafe fn clif_sendminimap(pe: &PlayerEntity) { ps_sendminimap(pe); }
+#[inline] unsafe fn clif_parse_exchange(pe: &PlayerEntity) { trading_parse_exchange(pe); }
 #[inline] unsafe fn send_meta(pe: &PlayerEntity) {
     let mut guard = pe.write();
     crate::network::crypt::send_meta(&mut *guard as *mut MapSessionData);
@@ -167,7 +220,7 @@ unsafe fn clif_isignore(src: &PlayerEntity, dst: &PlayerEntity) -> i32 {
     let mut guard = pe.write();
     crate::network::crypt::send_metalist(&mut *guard as *mut MapSessionData);
 }
-#[inline] unsafe fn createdb_start(pe: &PlayerEntity) { crate::game::client::handlers::createdb_start(pe); }
+#[inline] unsafe fn createdb_start(pe: &PlayerEntity) { handlers::createdb_start(pe); }
 
 // ─── Send-type constants (from map_parse.h) ───────────────────────────────────
 
@@ -205,7 +258,7 @@ pub unsafe fn clif_send(
 ) -> i32 {
     let BroadcastSrc { id: src_id, m, x, y, bl_type } = src;
     // Source player arc (non-null only when src is BL_PC). Kept alive for full function scope.
-    let src_arc = if bl_type == BL_PC_U8 { crate::game::map_server::map_id2sd_pc(src_id) } else { None };
+    let src_arc = if bl_type == BL_PC_U8 { map_id2sd_pc(src_id) } else { None };
 
     match send_type {
         ALL_CLIENT | SAMESRV => {
@@ -279,7 +332,7 @@ pub unsafe fn clif_send(
             clif_send_area(CORNER, send_type, buf, len, BroadcastSrc { id: src_id, m, x, y, bl_type });
         }
         SELF => {
-            if let Some(arc) = crate::game::map_server::map_id2sd_pc(src_id) {
+            if let Some(arc) = map_id2sd_pc(src_id) {
                 send_to_fd(arc.fd, buf, len);
             }
         }
@@ -345,7 +398,7 @@ pub unsafe fn clif_sendtogm(
             clif_send_area(CORNER, send_type, buf, len, BroadcastSrc { id: src_id, m, x, y, bl_type });
         }
         SELF => {
-            if let Some(arc) = crate::game::map_server::map_id2sd_pc(src_id) {
+            if let Some(arc) = map_id2sd_pc(src_id) {
                 send_to_fd(arc.fd, buf, len);
             }
         }
@@ -499,11 +552,11 @@ unsafe fn send_to_area(
     let ids = block_grid::ids_in_area(grid, x, y, area, slot.xs as i32, slot.ys as i32);
 
     // Source player arc kept alive for the duration of the area send.
-    let src_arc = if bl_type == BL_PC_U8 { crate::game::map_server::map_id2sd_pc(src_id) } else { None };
+    let src_arc = if bl_type == BL_PC_U8 { map_id2sd_pc(src_id) } else { None };
 
     let mut _send_count = 0i32;
     for id in ids {
-        let Some(dst_arc) = crate::game::map_server::map_id2sd_pc(id) else { continue; };
+        let Some(dst_arc) = map_id2sd_pc(id) else { continue; };
         let dst_pe: &PlayerEntity = &dst_arc;
 
         if !should_send_to(dst_pe, &src_arc, src_id, bl_type, send_type, buf as *const u8, len) {
