@@ -46,7 +46,7 @@ use crate::game::map_parse::combat::clif_sendaction_pc;
 use crate::game::pc::{addtokillreg, pc_changeitem, pc_dropitemmap, pc_readglobalreg, pc_setpos};
 use crate::game::scripting::sl_async_freeco;
 use crate::game::time_util::timer_remove;
-use crate::session::{session_exists, session_set_eof, SessionId};
+use crate::session::{session_clear_data, session_exists, session_set_eof, SessionId};
 
 use crate::game::block::AreaType;
 use crate::game::block_grid;
@@ -130,8 +130,21 @@ pub fn clif_stoptimers(pe: &PlayerEntity) -> i32 {
     0
 }
 
-/// Handle a clean disconnect: cancel exchange, run logout script, save, remove from world.
-pub async fn clif_handle_disconnect(pe: &PlayerEntity) -> i32 {
+/// Save character and set offline — safe to call from any thread.
+/// Returns (char_id, name) for logging.
+pub fn clif_disconnect_save(pe: &PlayerEntity) -> (u32, String) {
+    let id = pe.read().player.identity.id;
+    let name = pe.read().player.identity.name.clone();
+    tracing::info!("[map] [disconnect_save] name={name}");
+    sl_intif_savequit(pe);
+    (id, name)
+}
+
+/// Game-thread cleanup: cancel exchange, stop timers, leave group, run Lua
+/// logout, remove from world.  Must run on the LocalSet (game thread) where
+/// pe locks are uncontested.
+pub fn clif_disconnect_cleanup(pe: &PlayerEntity) {
+    let name = pe.read().player.identity.name.clone();
     let exchange_target = pe.read().exchange.target;
     if exchange_target != 0 {
         let tpe = map_id2sd_pc(exchange_target);
@@ -147,22 +160,43 @@ pub async fn clif_handle_disconnect(pe: &PlayerEntity) -> i32 {
         }
     }
 
-    unsafe {
-        pc_stoptimer(&mut *pe.write() as *mut MapSessionData);
-        let sd_ptr = &mut *pe.write() as *mut MapSessionData;
-        sl_async_freeco(sd_ptr);
-        clif_leavegroup(pe);
+    let sd_ptr: *mut MapSessionData = match pe.legacy.try_write() {
+        Some(mut guard) => &mut **guard as *mut MapSessionData,
+        None => {
+            tracing::error!("[map] [disconnect_cleanup] name={name} pe.legacy LOCKED — skipping timer/group cleanup");
+            // Still do entity removal below.
+            std::ptr::null_mut()
+        }
+    };
+    if !sd_ptr.is_null() {
+        unsafe {
+            pc_stoptimer(sd_ptr);
+            sl_async_freeco(sd_ptr);
+        }
+        // Minimal group cleanup — skip clif_leavegroup which sends packets
+        // to a disconnected session and has lock-ordering issues.
+        {
+            let mut w = pe.write();
+            w.group_count = 0;
+            w.groupid = 0;
+        }
     }
     clif_stoptimers(pe);
-    sl_doscript_simple("logout", None, pe.id);
-    sl_intif_savequit(pe);
 
-    // Capture fields before map_deliddb drops the Box.
-    let id = pe.read().player.identity.id;
-    let name = pe.read().player.identity.name.clone();
+    sl_doscript_simple("logout", None, pe.id);
 
     clif_quit(pe);
     map_deliddb(pe.id);
+
+    session_clear_data(pe.fd);
+    tracing::info!("[map] [disconnect_cleanup] name={name}");
+}
+
+/// Full disconnect handler — used by the EOF path (runs on I/O task).
+/// For voluntary logout (0x0B), use clif_disconnect_save + GameThreadMsg::DisconnectCleanup instead.
+pub async fn clif_handle_disconnect(pe: &PlayerEntity) -> i32 {
+    let (id, name) = clif_disconnect_save(pe);
+    clif_disconnect_cleanup(pe);
 
     if let Err(e) = sqlx::query("UPDATE `Character` SET `ChaOnline` = '0' WHERE `ChaId` = ?")
         .bind(id)

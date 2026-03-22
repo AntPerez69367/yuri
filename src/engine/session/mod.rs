@@ -368,6 +368,12 @@ pub fn session_get_data(fd: SessionId) -> Option<Arc<PlayerEntity>> {
     with_session(fd, None, |session| session.session_data.clone())
 }
 
+pub fn session_clear_data(fd: SessionId) {
+    with_session(fd, (), |session| {
+        session.session_data = None;
+    });
+}
+
 pub fn session_get_eof(fd: SessionId) -> i32 {
     with_session(fd, -1, |session| session.eof)
 }

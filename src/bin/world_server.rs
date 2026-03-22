@@ -23,7 +23,7 @@ use yuri::session::{
     get_session_manager, make_listen_port, session_set_eof, sync_callback, CallbackFuture,
     SessionId,
 };
-use yuri::world::{set_world, KickRequest, WorldState};
+use yuri::world::{set_world, GameThreadMsg, WorldState};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -100,7 +100,7 @@ async fn main() -> Result<()> {
         .ok();
 
     // ── World state ──────────────────────────────────────────────────
-    let (kick_tx, kick_rx) = mpsc::channel::<KickRequest>(64);
+    let (game_tx, game_rx) = mpsc::channel::<GameThreadMsg>(64);
 
     let world = Arc::new(WorldState {
         db: pool.clone(),
@@ -108,7 +108,7 @@ async fn main() -> Result<()> {
         messages,
         online: dashmap::DashSet::new(),
         auth_db: dashmap::DashMap::new(),
-        kick_tx,
+        game_tx,
     });
 
     set_world(Arc::clone(&world));
@@ -225,17 +225,26 @@ async fn main() -> Result<()> {
     let local = tokio::task::LocalSet::new();
 
     {
-        let mut kick_rx = kick_rx;
+        let mut game_rx = game_rx;
         local.spawn_local(async move {
-            while let Some(req) = kick_rx.recv().await {
-                if let Some(arc) = map_id2sd_pc(req.char_id) {
-                    let fd = arc.fd;
-                    session_set_eof(fd, 12);
-                    tracing::info!(
-                        "[world] [kick] char_id={} fd={:?} kicked (duplicate login)",
-                        req.char_id,
-                        fd
-                    );
+            while let Some(msg) = game_rx.recv().await {
+                match msg {
+                    GameThreadMsg::Kick { char_id } => {
+                        if let Some(arc) = map_id2sd_pc(char_id) {
+                            let fd = arc.fd;
+                            session_set_eof(fd, 12);
+                            tracing::info!(
+                                "[world] [kick] char_id={} fd={:?} kicked (duplicate login)",
+                                char_id,
+                                fd
+                            );
+                        }
+                    }
+                    GameThreadMsg::DisconnectCleanup { char_id } => {
+                        if let Some(arc) = map_id2sd_pc(char_id) {
+                            yuri::game::client::handlers::clif_disconnect_cleanup(&arc);
+                        }
+                    }
                 }
             }
         });

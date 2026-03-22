@@ -293,7 +293,7 @@ async fn dispatch_login_direct(
     if world.online.contains(&char_info.char_id) {
         let _ = stream.write_all(&build_message(0x03, &state.messages.0[super::LGN_DBLLOGIN], xk)).await;
         // Send kick request to LocalSet
-        let _ = world.kick_tx.send(crate::world::KickRequest { char_id: char_info.char_id }).await;
+        let _ = world.game_tx.send(crate::world::GameThreadMsg::Kick { char_id: char_info.char_id }).await;
         return;
     }
 

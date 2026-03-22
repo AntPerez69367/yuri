@@ -27,7 +27,7 @@ unsafe fn clif_sendprofile(pe: &PlayerEntity) { visual::clif_sendprofile(pe); }
 unsafe fn clif_sendboard(pe: &PlayerEntity) { visual::clif_sendboard(pe); }
 
 use crate::session::{
-    session_exists, session_get_data, session_get_eof,
+    session_clear_data, session_exists, session_get_data, session_get_eof,
     session_set_eof, SessionId,
 };
 use crate::session::get_session_manager;
@@ -632,11 +632,13 @@ pub async fn clif_parse(fd: SessionId) -> i32 {
         let sd = session_get_data(fd);
 
         // EOF → disconnect and clean up
+        // Don't call clif_closeit here — the redirect was already sent when
+        // the client requested logout (0x0B). By the time EOF fires, the
+        // client has already disconnected and map_deliddb will drop the entity.
         if session_get_eof(fd) != 0 {
             tracing::info!("[map] [parse] fd={} eof reason={} sd_none={}", fd, session_get_eof(fd), sd.is_none());
             if let Some(pe) = sd.as_deref() {
                 clif_handle_disconnect(pe).await;
-                clif_closeit(pe);
             }
             visual::clif_print_disconnect(fd);
             session_set_eof(fd, 1);
@@ -709,6 +711,19 @@ pub async fn clif_parse(fd: SessionId) -> i32 {
             0x0B => {
                 clif_cancelafk(pe);
                 clif_closeit(pe);
+                // Save + set offline on this thread (safe, no lock contention).
+                handlers::clif_disconnect_save(pe);
+                // Clear session data so the EOF path (when the client disconnects
+                // after processing the redirect) won't call clif_handle_disconnect.
+                session_clear_data(pe.fd);
+                // Post cleanup to the game thread where pe locks are uncontested.
+                if let Some(world) = crate::world::get_world() {
+                    let _ = world.game_tx.try_send(
+                        crate::world::GameThreadMsg::DisconnectCleanup { char_id: pe.id },
+                    );
+                }
+                // Don't set EOF — let the client disconnect naturally after
+                // receiving the redirect. Server-side close confuses the client.
             }
             0x0C => {
                 clif_handle_missingobject(pe);

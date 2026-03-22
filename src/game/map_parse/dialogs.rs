@@ -394,7 +394,9 @@ pub unsafe fn clif_closeit(pe: &PlayerEntity) -> i32 {
     len += 4;
     wfifob(fd, 10, len as u8);
     wfifow(fd, 1, swap16((len + 8) as u16));
-    wfifoset(fd, encrypt(fd) as usize);
+    // No encryption and no set_packet_indexes — matches original C behavior.
+    // The client expects this redirect packet raw.
+    wfifoset(fd, len + 11);
     0
 }
 

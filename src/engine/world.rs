@@ -6,10 +6,14 @@ use tokio::sync::mpsc;
 use crate::config::ServerConfig;
 use crate::servers::login::LoginMessages;
 
-/// Request to kick an existing session (login listener → LocalSet).
-/// The LocalSet task calls `session_set_eof` for the matching char_id.
-pub struct KickRequest {
-    pub char_id: u32,
+/// Messages sent to the game thread (LocalSet) for operations that must
+/// run where pe locks are uncontested.
+pub enum GameThreadMsg {
+    /// Kick a duplicate login (login listener → game thread).
+    Kick { char_id: u32 },
+    /// Run post-save cleanup for a voluntary logout (I/O task → game thread).
+    /// Save + set-offline already happened on the I/O task.
+    DisconnectCleanup { char_id: u32 },
 }
 
 /// Pending auth token — consumed on use (one-time, 30s expiry).
@@ -34,8 +38,8 @@ pub struct WorldState {
     pub online: DashSet<u32>,
     /// Pending auth tokens keyed by normalized (lowercased) char_name.
     pub auth_db: DashMap<String, AuthEntry>,
-    /// Login listener → LocalSet kick channel.
-    pub kick_tx: mpsc::Sender<KickRequest>,
+    /// Login listener / I/O tasks → game thread channel.
+    pub game_tx: mpsc::Sender<GameThreadMsg>,
 }
 
 static WORLD: OnceLock<Arc<WorldState>> = OnceLock::new();
