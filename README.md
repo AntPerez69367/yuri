@@ -1,3 +1,5 @@
+** This project is archived. I have abandoned the work because there was just too much tech debt and problems from the original C. I have a new project which is rewriting the entire server from the ground up referencing the C rather than porting from it. Feel free to reference this branch if you want to but it is essentially non functional due to deadlocks between lua and the main thread.** 
+
 # Yuri MMORPG Server
 
 ## Project Goals
